@@ -73,9 +73,11 @@ chmod +x PixelCraft-*-x86_64.AppImage
 ./PixelCraft-v0.1.0-x86_64.AppImage
 ```
 
-Use the filename you downloaded. Releases target Linux x86-64 with glibc 2.35 or newer (Ubuntu 22.04+), a graphical desktop and working OpenGL drivers. File dialogs use the desktop's XDG portal. If FUSE is unavailable, run the AppImage with `--appimage-extract-and-run` before any app arguments. A SHA-256 checksum accompanies each release.
+Use the filename you downloaded. Releases target Linux x86-64 with glibc 2.35 or newer (Ubuntu 22.04+), a graphical desktop and working OpenGL drivers. On Wayland, the app uses your system's Wayland libraries alongside its graphics drivers; these libraries are deliberately excluded from the AppImage. File dialogs use the desktop's XDG portal. If FUSE is unavailable, run the AppImage with `--appimage-extract-and-run` before any app arguments. A SHA-256 checksum accompanies each release.
 
 Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. The workflow tests and builds the app, packages it using [linuxdeploy](https://docs.appimage.org/packaging-guide/from-source/native-binaries.html), checks the packaged app's save/export/Lua functionality, and uploads the AppImage and checksum to the tag's GitHub release. It builds on Ubuntu 22.04 and embeds that runner's Lua 5.4 library instead of the development binary to avoid newer glibc requirements. **Actions → Linux AppImage release → Run workflow** also creates downloadable build artifacts; branch runs do not publish a release. The version tag controls the artifact name; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
+
+Before uploading a release, the workflow also opens the packaged AppImage on an Xvfb X11 display and a headless Weston Wayland display using Mesa software rendering. Each check must exit successfully and produce a nonblank editor screenshot within 60 seconds. Wayland runs without `DISPLAY` so it cannot fall back to X11. Screenshots and startup/compositor logs are saved in the `PixelCraft-startup-diagnostics` Actions artifact, including on failure. Packaging fails if any `libwayland-*.so*` files or symlinks enter the AppDir. These checks validate startup on the Ubuntu release runner; they do not cover every Linux distribution or graphics driver.
 
 ### Build from source
 

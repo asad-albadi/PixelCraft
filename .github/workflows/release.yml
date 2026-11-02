@@ -31,7 +31,8 @@ jobs:
             build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
             libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev \
             libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev \
-            desktop-file-utils patchelf
+            desktop-file-utils patchelf xvfb xauth weston \
+            libgl1-mesa-dri libegl-mesa0 python3-pil
 
       - name: Install stable Rust
         run: |
@@ -76,17 +77,23 @@ jobs:
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
             --output "$RUNNER_TEMP/linuxdeploy.AppImage"
           chmod +x "$RUNNER_TEMP/linuxdeploy.AppImage"
-          # Window-system libraries are loaded dynamically, so list them explicitly.
+          # X11 is loaded dynamically. Wayland must come from the host, together
+          # with its Mesa/EGL drivers, to avoid mixing incompatible Wayland ABIs.
           "$RUNNER_TEMP/linuxdeploy.AppImage" --appdir AppDir \
             --executable target/release/pixelcraft \
             --desktop-file packaging/pixelcraft.desktop \
             --icon-file packaging/pixelcraft.svg \
             --library /usr/lib/x86_64-linux-gnu/libX11.so.6 \
-            --library /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 \
-            --library /usr/lib/x86_64-linux-gnu/libwayland-cursor.so.0 \
-            --library /usr/lib/x86_64-linux-gnu/libwayland-egl.so.1 \
+            --exclude-library 'libwayland-*.so*' \
             --library /usr/lib/x86_64-linux-gnu/libxkbcommon.so.0 \
             --output appimage
+          # Also catch accidental/transitive bundling, including symlinks.
+          bundled_wayland=$(find AppDir -name 'libwayland-*.so*' -print)
+          if [[ -n "$bundled_wayland" ]]; then
+            echo "Wayland libraries must be supplied by the host:" >&2
+            printf '%s\n' "$bundled_wayland" >&2
+            exit 1
+          fi
           mv "$OUTPUT" dist/
 
       - name: Smoke test packaged app and create checksum
@@ -99,6 +106,55 @@ jobs:
           "dist/$OUTPUT" --standalone-check "$RUNNER_TEMP/pixelcraft-appimage-check"
           cd dist
           sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+
+      - name: Graphical startup on X11
+        shell: bash
+        run: |
+          env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET \
+            xvfb-run --auto-servernum --server-args='-screen 0 1280x960x24 +extension GLX' \
+            bash checks/graphical-startup.sh "dist/$OUTPUT" "$RUNNER_TEMP/startup-x11"
+
+      - name: Graphical startup on native Wayland
+        shell: bash
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/pixelcraft-wayland-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export WAYLAND_DISPLAY=pixelcraft-test
+          weston --backend=headless-backend.so --use-gl --no-config \
+            --socket="$WAYLAND_DISPLAY" --idle-time=0 --width=1280 --height=960 \
+            --log="$RUNNER_TEMP/weston.log" &
+          weston_pid=$!
+          trap 'kill "$weston_pid" 2>/dev/null || true; wait "$weston_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..100}; do
+            [[ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]] && break
+            if ! kill -0 "$weston_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/weston.log"
+              exit 1
+            fi
+            sleep 0.1
+          done
+          if [[ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]]; then
+            cat "$RUNNER_TEMP/weston.log"
+            echo 'Wayland compositor did not become ready.' >&2
+            exit 1
+          fi
+          # Removing DISPLAY prevents a successful X11 fallback hiding a failure.
+          env -u DISPLAY -u WAYLAND_SOCKET bash checks/graphical-startup.sh \
+            "dist/$OUTPUT" "$RUNNER_TEMP/startup-wayland"
+
+      - name: Upload graphical startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelCraft-startup-diagnostics
+          path: |
+            ${{ runner.temp }}/startup-x11/startup.*
+            ${{ runner.temp }}/startup-wayland/startup.*
+            ${{ runner.temp }}/weston.log
+          if-no-files-found: ignore
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
