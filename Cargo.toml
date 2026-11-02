@@ -1,0 +1,23 @@
+[package]
+name = "pixelcraft"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
+rfd = "0.17.2"
+flate2 = "1.1.10"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.151"
+libloading = "0.8.8"
+png = "0.18.1"
+
+[profile.dev]
+debug = 0
+incremental = false
+
+[profile.release]
+opt-level = 2
+strip = true

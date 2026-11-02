@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "values": [
+    {
+      "name": "default frame duration",
+      "group": "animation",
+      "value": 100,
+      "unit": "ms",
+      "source": "doc::Sprite::Sprite 0x617e40"
+    },
+    {
+      "name": "minimum frame duration",
+      "group": "animation",
+      "value": 1,
+      "unit": "ms",
+      "source": "doc::Sprite::setFrameDuration 0x61a420; native_function_disassemble ev_191ac27d385689c1e5621fa4eb0a424e4668ed37a2667562269756a622e1b04d"
+    },
+    {
+      "name": "maximum frame duration",
+      "group": "animation",
+      "value": 65535,
+      "unit": "ms",
+      "source": "doc::Sprite::setFrameDuration 0x61a420; native_function_disassemble ev_191ac27d385689c1e5621fa4eb0a424e4668ed37a2667562269756a622e1b04d"
+    },
+    {
+      "name": "default brush size",
+      "group": "drawing",
+      "value": 1,
+      "unit": "px",
+      "source": "ToolPref::Brush constructor 0x375c10; ev_84819a165a6528e2aacd600293a4c08d6cf235425805c93ccaeb89eb59a88bea"
+    },
+    {
+      "name": "fill connectivity",
+      "group": "drawing",
+      "value": 4,
+      "source": "ToolPref::Floodfill constructor 0x376670 enum 0; installed pref.xml maps 0 to FOUR_CONNECTED"
+    },
+    {
+      "name": "line rasterization",
+      "group": "drawing",
+      "value": "integer continuous endpoints",
+      "source": "doc::algo_line_continuous 0x5cb800"
+    },
+    {
+      "name": "new canvas width",
+      "group": "canvas",
+      "value": 32,
+      "unit": "px",
+      "source": "GlobalPref::NewFile constructor 0x36b560; ev_0b33fe42bcb4cbfeca2e092fbfb90845652cf5cd31e40f3e5c8dc9d4b711b17c"
+    },
+    {
+      "name": "new canvas height",
+      "group": "canvas",
+      "value": 32,
+      "unit": "px",
+      "source": "GlobalPref::NewFile constructor 0x36b560; ev_0b33fe42bcb4cbfeca2e092fbfb90845652cf5cd31e40f3e5c8dc9d4b711b17c"
+    },
+    {
+      "name": "demo width",
+      "group": "canvas",
+      "value": 48,
+      "unit": "px",
+      "estimated": true
+    },
+    {
+      "name": "maximum brush size",
+      "group": "drawing",
+      "value": 64,
+      "unit": "px",
+      "source": "app::ContextBar::BrushSizeField 0x253050; native_function_pseudocode ev_5598869494a7abf4f39d06f29193b9deac86fc01207474f0ccd7a81a49d45115 (UI input limit)"
+    },
+    {
+      "name": "normal alpha blend",
+      "group": "drawing",
+      "value": "M(a,b)=((a*b+128)+((a*b+128)>>8))>>8; A=s+d-M(s,d); C=dst+trunc((src-dst)*s/A)",
+      "source": "doc::rgba_blender_normal 0x5e81e0; ev_821f8fa80d93b2ce55cfbe7f3c6809a9e49134f116f8f8af3a438d864fbec6fa; transparent branches in MECHANICS.md"
+    },
+    {
+      "name": "grayscale luma conversion",
+      "group": "color",
+      "value": "Y=floor((2126*R+7152*G+722*B)/10000); preserve alpha",
+      "source": "doc::rgba_to_graya_using_luma 0x5f7170; native_function_pseudocode ev_b3bd20c7de1394f17ad16847d892a2a329bcbbe24c08c58abb94cb04374eece9; assembly ev_e86fd3d67feb70ea03f414eac482181d11c32b8605b6293211b326b621c63028"
+    }
+  ]
+}

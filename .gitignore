@@ -1,0 +1,13 @@
+/target/
+
+# Generated verification logs and local development notes.
+/checks/*.log
+/PROGRESS.md
+/IMPLEMENTATION.md
+
+# Local environment files and desktop metadata.
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

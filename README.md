@@ -1,0 +1,154 @@
+<h1 align="center">PixelCraft</h1>
+
+<p align="center">
+  <b>Pixel art, sprites and animation, in a standalone desktop editor.</b><br>
+  Draw frame by frame, build with tiles, and keep your layers editable.<br>
+  Open source, local, and yours.
+</p>
+
+<p align="center">
+  <img alt="Built with Rust" src="https://img.shields.io/badge/built_with-Rust-b7410e?style=flat-square&amp;logo=rust">
+  <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-267477?style=flat-square&amp;logo=linux&amp;logoColor=white">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square">
+  <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-d69e2e?style=flat-square">
+</p>
+
+<p align="center">
+  <b>Made via <a href="https://github.com/storytold/craft-anything">CraftAnything</a> by <a href="https://getartcraft.com/">ArtCraft</a>.</b><br>
+  An independent project created with Craft Anything's study, build and check workflow.
+</p>
+
+<p align="center">
+  <a href="#get-started"><b>Build and run</b></a> ·
+  <a href="https://github.com/storytold/craft-anything">Craft Anything</a> ·
+  <a href="https://getartcraft.com/">ArtCraft</a> ·
+  <a href="https://getartcraft.com/apps">The Crafting Apps</a>
+</p>
+
+<p align="center">
+  <img src="shots/pixelcraft.png" alt="PixelCraft's dark teal interface editing a mushroom garden sprite, with its color palette, drawing tools, layer controls and four-frame animation timeline" width="100%">
+  <br>
+  <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
+</p>
+
+<p align="center">
+  <a href="#features">Features</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="#editing">Editing</a> ·
+  <a href="#projects-and-interchange">File formats</a> ·
+  <a href="#independent-extensions-and-storage">Extensions</a> ·
+  <a href="#status">Status</a> ·
+  <a href="#license-and-credits">License and credits</a>
+</p>
+
+## Features
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>Draw pixel by pixel</h3>
+      Pencil, fill, shapes, selections and five brush shapes. Work in RGB, grayscale or indexed color, with editable palettes and undo.
+    </td>
+    <td width="33%" valign="top">
+      <h3>Bring sprites to life</h3>
+      Layers, groups, blend modes and cel opacity. Preview frames, name animation ranges, loop playback and paint with tiles.
+    </td>
+    <td width="33%" valign="top">
+      <h3>Keep your work editable</h3>
+      Save native .pixel projects. Exchange supported ASE sprites, export PNG sheets and animated GIFs, and extend the editor with bundled Lua.
+    </td>
+  </tr>
+</table>
+
+PixelCraft runs independently of Aseprite. Its executable includes a Lua 5.4 runtime and uses its own preferences, extensions and project storage. Aseprite's executable, configuration and assets are not needed.
+
+## Get started
+
+Build from the repository root with a Rust toolchain supporting edition 2024 and Cargo. Linux graphics and window-system libraries are required; a graphical desktop session is needed to open the editor. The bundled Lua runtime currently targets Linux x86-64.
+
+```bash
+cargo build --release
+cargo run --release
+```
+
+The first build downloads dependencies. After Cargo has cached them, add `--offline` to build or run without network access. The release executable is `target/release/pixelcraft`.
+
+The editor opens with an editable garden sample. Choose **File → New sprite** to start a transparent canvas, or open an existing project. Save your editable work as **.pixel**; use PNG, sprite-sheet or GIF export for sharing.
+
+## Editing
+
+Pencil B, eraser E, fill G, eyedropper I, line L, rectangle U, ellipse O, selection M, hand H. Left-click uses foreground; right-click uses background. X swaps colors; Alt-click samples. Scroll zooms around the pointer; middle-drag pans. Ctrl+Z undoes; Ctrl+Y redoes; Ctrl+S saves. Copy/cut/paste/delete work on image-layer selections. A stroke is one undo step.
+
+Use **Sprite → Properties, layers, tiles & ranges** (also available beside the timeline) for:
+
+- RGB, grayscale with alpha, and indexed modes with editable 1–256-color palettes. Drawing is constrained to the selected mode; indexed palette slots retain their identity even when colors match. Select a swatch, change foreground, then **Edit selected swatch** to recolor it. Imported animated palettes are retained.
+- Groups and nested group membership, all 19 ASE blend modes, separate layer/cel opacity and cel stacking order. Parent visibility and locks apply to children. Groups composite separately. Layer removal and reordering retain membership.
+- Importing PNG tilesheets using a chosen tile size, capturing a selection as a tile, and creating tile layers. Select a tile ID in Properties and use Pencil/Eraser to place/remove whole tiles. Tile references, tilesets and flip flags are preserved.
+- Named frame tags/ranges, editable endpoints and forward/reverse/ping-pong playback. Frame insertion/deletion adjusts ranges. Select **Use for playback** to loop one range. The timeline shows frame previews; previews are generated for the first 256 frames to limit memory.
+
+The context bar offers round, square, diamond, horizontal and vertical brushes. Ellipses use a symmetric integer rasterizer, including small and degenerate bounds. Pixel-exact agreement with every original editor brush mask is not claimed.
+
+Canvases support up to 16384 pixels per side and 64 million stored canvas pixels across layers/frames. Dimensions and project structures are validated. Cel pixels and indexed buffers use copy-on-write sharing across frame copies and undo snapshots. Undo retains up to 64 steps with a 192 MB allocation budget; a single oversized step is retained. Unchanged frame textures are cached and the checkerboard is clipped to the viewport.
+
+## Projects and interchange
+
+**`.pixel` is the default editable project format**, a versioned, compressed native document containing all editor properties, tiles, ranges, metadata, profiles and off-canvas image pixels. Saving uses a temporary file and replacement. New/open/close protect unsaved changes.
+
+`.ase` and `.aseprite` are optional, native import/export formats. RGB, grayscale and indexed cels, raw/zlib/linked cels, groups, blend modes, cel opacity/order, embedded tilesets, aligned tilemaps, palettes, tags, layer flags/UUIDs and opaque metadata chunks are supported. Unknown chunks retain their bytes and object association. ASE layers are serialized in hierarchy order. Image artwork beyond the canvas is retained and written back; normal canvas exports clip it.
+
+PNG import/export retains text, gamma, chromaticities, profiles, EXIF, pixel density and timestamps. Export an active-frame PNG, horizontal PNG sprite sheet or animated GIF. GIF has binary transparency and 10 ms timing precision. ICC profiles are preserved, including through native saves, but the preview uses sRGB rather than a complete ICC color-management engine.
+
+Files with external-only tilesets, nonsequential tileset IDs, off-grid/off-canvas tilemap geometry or unsupported encodings return an explicit error. They are not silently flattened. Arbitrary future metadata remains opaque; the editor does not interpret every external metadata schema. Prefer `.pixel` for preserving PixelCraft's full editable state.
+
+The ASE implementation follows the [published format specification](https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md); no original program is required.
+
+## Independent extensions and storage
+
+**Extensions → Extensions & scripts** runs Lua scripts and installs `.lua`, `.zip`, `.aseprite-extension`, or folders containing `package.json`. Supported manifest contributions are `scripts`, `themes`, `palettes`, and `shortcuts`, each with a `path`. Installed packages can be enabled, disabled and uninstalled here; registered plugin commands run in this interface. ZIP extraction supports stored/deflated entries, checks CRC and size, and rejects path traversal, symlinks and encryption. Installation is staged; existing packages are not overwritten.
+
+`examples/pixelcraft-starter` is an original installable package demonstrating a Lua command, JSON theme, palette and shortcuts. It is also embedded into the standalone verification mode.
+
+- Data and projects: `$XDG_DATA_HOME/pixelcraft/{extensions,projects}`, normally `~/.local/share/pixelcraft`.
+- Preferences: `$XDG_CONFIG_HOME/pixelcraft`, normally `~/.config/pixelcraft`.
+- `PIXELCRAFT_HOME` optionally sets an independent portable root, with preferences beneath `preferences/`.
+- AppData is used when present as a fallback. There is no migration or lookup of another editor's settings.
+
+Themes are JSON with `dark`, `panel`, `text`, `accent` (RGB arrays). Palettes are JSON arrays of RGBA bytes, GIMP `.gpl` palettes, or ASE palettes. Shortcuts are JSON maps such as `{"P":"pencil","Ctrl+S":"save"}`; supported actions include tools, file/edit commands and playback. Applied theme/shortcut settings are copied into PixelCraft's preferences and remembered.
+
+Lua runs transactionally on a separate document copy; successful results import as one undoable change. Errors, unsupported APIs and resource limits leave the original document unchanged. Lua has a 256 MiB allocation budget, an instruction/CPU-time budget, and a one-million-stored-pixel invocation limit. Filesystem/process/package/coroutine APIs are unavailable. Interactive Lua dialogs and arbitrary Aseprite API compatibility are not implemented; only packages using the documented API below are supported. Original XML/sprite-based themes, languages and proprietary API-dependent plugins are not translated automatically.
+
+## Supported native Lua API
+
+- `app.activeSprite`, `activeLayer`, `activeFrame`, `activeCel`, `activeImage`, `sprites`, `params`, `apiVersion`, `isUIAvailable`, `transaction(fn)`, `refresh()`, `alert()`.
+- Sprite width/height/layers/frames/cels/palettes/colorMode, `newCel`, `deleteCel`, `newLayer`, `newGroup`, `newFrame`, `newEmptyFrame`, `newTag`.
+- Layer name/opacity/visibility/editability/blendMode/parent/group/cels and `cel(frame)`; frame number/duration; cel image/opacity/frame/layer. Frame API durations are seconds.
+- `Image(width,height)` or `Image(image)`, `drawPixel`, `getPixel`, `clear`, `clone`, `drawImage` (source-over), and `pixels()` iterators.
+- `Color`, `Point`, `Size`, `Rectangle`, `ColorMode`, `BlendMode`, `AniDir`, packed RGBA functions under `app.pixelColor`.
+- Palette `getColor`, `setColor`, `resize`; tag name/fromFrame/toFrame/aniDir. Pixel coordinates and palette indices are zero-based; frame/layer Lua handles are one-based.
+- `init(plugin)`, `plugin:newCommand{id,title,onclick}`, menu grouping/separator declarations. Supported command calls: `NewLayer`, `NewFrame`, `NewEmptyFrame`. Unlisted commands and interactive facilities return errors.
+
+## Verification
+
+`cargo test --offline` covers model behavior, real pointer editing, undo, rendering caches, palettes, groups, tilemaps, tags, file round trips, PNG metadata, embedded Lua, package lifecycle and error rollback. `cargo build --offline` builds the app; Craft Anything's `rebuild_check` builds and captures its window.
+
+`target/debug/pixelcraft --standalone-check /tmp/workshop-check` exercises drawing, project save/open, PNG/sheet/GIF exports, embedded Lua plugin installation/execution, theme/palette/shortcut application, disable and uninstall without opening a window. `checks/standalone.sh` runs it in an otherwise empty Bubblewrap filesystem containing only the binary, basic Linux libraries and a writable output directory—no original editor, system Lua interpreter, home configuration or assets are mounted.
+
+## Status
+
+PixelCraft is an early-alpha Linux desktop app. Drawing, animation, advanced document features, native project persistence and independent Lua extensions have automated coverage. The standalone check also exercises saving, exports and plugins in an isolated filesystem without Aseprite or an installed Lua interpreter.
+
+Compatibility has boundaries: Lua exposes the API documented above, full ICC color-managed preview is not implemented, and some external ASE encodings and tileset arrangements are unsupported. See the file-format and extension sections before bringing an existing project or plugin into the editor. Other operating systems and architectures have not been validated.
+
+## License and credits
+
+PixelCraft is licensed under the [MIT License](LICENSE).
+
+**Made via [CraftAnything](https://github.com/storytold/craft-anything) by [ArtCraft](https://getartcraft.com/).** Craft Anything provided the workflow used to study the reference application, build this independent editor and check the result.
+
+The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LICENSE.txt). Rust dependencies retain their respective licenses; exact versions are recorded in [Cargo.lock](Cargo.lock). ASE interoperability follows the published file specification linked above. The sample garden artwork is original to this project.
+
+<p align="center">
+  <a href="https://github.com/storytold/craft-anything">Made with CraftAnything</a> ·
+  <a href="https://getartcraft.com/">ArtCraft</a> ·
+  <a href="https://getartcraft.com/apps">Explore the Crafting Apps</a>
+</p>
