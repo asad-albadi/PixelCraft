@@ -152,6 +152,18 @@
       "group": "scripting",
       "value": "RGB assignment replaces signed32(I(v)); alpha clamps signed32(I(v)) to 0..255; rgbaPixel packs current low-byte channels per read, read-only",
       "source": "Color_get_rgbaPixel 0x3c69b0 -> color_for_target_mask 0x16dc90; RGB setters 0x3c5c90/0x3c5d70/0x3c5e50 -> fromRgb 0x16a5c0; alpha 0x3c5f30 -> setAlpha 0x16cdc0; ev_7105ca60f7d8b9ede0e31635a0e90e9346c63858a01e2b66a620d411433cd0b0; evidence/color_mutation.asm; limits in MECHANICS.md"
+    },
+    {
+      "name": "Lua RGB Color gray conversion",
+      "group": "scripting",
+      "value": "trunc(((signed32(max(R,G,B)+min(R,G,B)))/255.0)*0.5*255.0)",
+      "source": "Color::getGray 0x16c2b0 -> gfx::Hsl(Rgb) 0x6913b0; ev_cb4b93a186f1ca43bf524dca5698f19da1edac3405b8c0dbc13919067ec6c73c; ev_06449ab7507c36c2a8b586137de8358ba30c262c7019c03032beab4787c89ee7"
+    },
+    {
+      "name": "Lua Color grayPixel packing",
+      "group": "scripting",
+      "value": "(gray&255)|((alpha&255)<<8)",
+      "source": "Color_get_grayPixel 0x3c6a20 -> color_for_target_mask 0x16dc90; ev_83e556a462e586246746ec902ef1327e4b5dc8af53ba1c97c63702001d9b98a4; ev_81ff27c9fa2eef77eb90f338c9be7f72be01081fd912576bce5d73f3dd93d69e"
     }
   ]
 }

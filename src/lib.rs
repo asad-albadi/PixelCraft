@@ -6,3 +6,5 @@ mod lua;
 
 pub mod color;
 pub mod contributions;
+
+pub mod updates;

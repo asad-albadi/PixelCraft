@@ -1,3 +1,32 @@
+## Current native audit — Lua RGB grayscale properties (2026-11-02)
+
+Opened `aseprite-reference` again with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. The previous audits below retain the recovered drawing, timing, blending, settings and constructor rules.
+
+`native_strings_find` searched names, settings and messages with `^grayPixel$|^gray$|^color_bar$|invalid_fg_or_bg` and returned all six matches (`ev_7348714f1d8b0ab7cdcb872223addd8e4bd4fddebd60f9a1b783c5adafcc9f32`). Followed `grayPixel` at `0xf3fbe7` through `native_xrefs_list` to property registration `0x1cbafd8` (`ev_49720b40f2dee56b4fa41299a77678c050b107fd6a5d2fcda782a7d0be0420a4`). Its getter pointer at `0x1cbafe0` is `0x3c6a20`, followed by a null setter. Outgoing references lead to `color_for_target_mask` (`ev_87e6df250bcc836d02573cc7861b5b4cd7ac521c4c8f7f92efa0551c24ca3fc3`), then named references locate `Color::getGray` and the RGB-to-HSL constructor (`ev_6cf018b3d3cbf18d1a37147cb57f407af239301689ccd097c6683e023772f425`, `ev_de28f65a87b3ae766010999bc2bd3c5860fe91a3ed64c1944f294c6b59a0b169`). The setting and alert strings are navigation anchors; this audit makes no new behavior claims about them.
+
+Read seven sequential `native_function_pseudocode` results, awaiting completion and reading each before requesting the next:
+
+| Function | Entry | Completed pseudocode evidence |
+| --- | --- | --- |
+| Color_get_grayPixel | `0x3c6a20` | `ev_83e556a462e586246746ec902ef1327e4b5dc8af53ba1c97c63702001d9b98a4` |
+| color_utils::color_for_target_mask | `0x16dc90` | `ev_81ff27c9fa2eef77eb90f338c9be7f72be01081fd912576bce5d73f3dd93d69e` |
+| Color::getGray | `0x16c2b0` | `ev_cb4b93a186f1ca43bf524dca5698f19da1edac3405b8c0dbc13919067ec6c73c` |
+| gfx::Hsl::Hsl(Rgb const&) | `0x6913b0` | `ev_06449ab7507c36c2a8b586137de8358ba30c262c7019c03032beab4787c89ee7` |
+| gfx::Rgb::maxComponent | `0x691a30` | `ev_7e35986139593a464677ec61e59228167285070385823f419fcfa66309cd9fdc` |
+| gfx::Rgb::minComponent | `0x691a50` | `ev_ef8ed1e80021affe74990ae4913bb4721523f73bd614781a6bba6e85773efbd3` |
+| Color_get_gray | `0x3c68f0` | `ev_f9fabce67a8be45e9d82b985957d56caf8e01e535cb03cd42c453e03445b0c53` |
+
+Ghidra timed out; completed results use the built-in register-level decompiler. Its conditional moves flatten in the min/max pseudocode and floating operations appear as inline assembly. Checked the actual signed `cmov` instructions, complete HSL constructor, gray conversion and packing instructions, and double constants; saved them in `evidence/color_gray.asm`. Temporarily used a 15-second Ghidra startup timeout and restored its original null value.
+
+Recovered rules now used by `src/lua_api.lua` for RGB Color properties:
+
+- Let `hi=max(R,G,B)`, `lo=min(R,G,B)`, and `S=signed32(hi+lo)`. The native HSL constructor computes double `L=(S/255.0)*0.5` at `0x6913d2..0x691403`, storing lightness at `+16`. Constants are **255.0** at `0xf7c200` and **0.5** at `0xf7b498`. `Color::getGray` loads that lightness and returns `G=trunc_toward_zero(L*255.0)` using `CVTTSD2SI` at `0x16c3a2..0x16c3b0`. Preserve the floating evaluation order. For ordinary channels this is approximately `(hi+lo)/2` truncated; all three pure primaries yield **127**.
+- `Color_get_gray` exposes this integer as a Lua number. `grayPixel` selects grayscale target format **1**, mask **0**; the helper calls `getGray` and `getAlpha`, then packs `P=(G&255)|((A&255)<<8)` at `0x16dd1b..0x16dd37`. It recomputes per read and remains read-only. Constructor alpha **258** therefore packs to **2**.
+- Corrected the RGB `gray` getter's previous weighted-luma calculation and `grayPixel`'s previous direct-red packing and alpha saturation. This API conversion uses HSL lightness; the separately recovered sprite conversion still uses its own luma formula.
+- Existing explicit-gray, indexed, HSV/HSL object representation, type-changing mutations and copying retain their prior implementation limits. This correction and its tests establish RGB property behavior, not full Color/API or ecosystem parity.
+
+Both regressions exercise the real embedded Lua interpreter and painted document pixels. Before correction, primaries painted gray **54/182/18**, and packed green with alpha 258 painted **[0,0,0,255]**. After correction, primaries paint **127/127/127**, packed green paints **[127,127,127,2]**, and an RGB mutation to **[10,20,30,99]** packs/paints **[20,20,20,99]**. Both tests now pass. Fresh `cargo test --offline --locked`: **105 passed, zero failures** (`checks/native-gray-tests.log`); `cargo fmt --check` and `cargo build --offline --locked` also pass (`checks/native-gray-build.log`). Craft Anything `rebuild_check` also passes build, desktop startup/screenshot (938×990), and mechanics validation (26 values: 25 sourced, one estimated).
+
 ## Current native audit — RGB table construction (2026-11-02)
 
 Freshly opened the original main program `aseprite-reference` with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. The earlier audits below continue to document drawing, timing, blending, settings and other recovered behavior.

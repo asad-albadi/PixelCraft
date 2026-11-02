@@ -1,6 +1,54 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_rgb_gray_uses_native_hsl_lightness() {
+    // Luma weighting would make the three primary colors different shades.
+    let edited = run_source(
+        &Document::new(3, 1),
+        r#"
+        for x,c in ipairs({Color{r=255},Color{r=0,g=255},Color{r=0,b=255}}) do
+            app.activeImage:drawPixel(x-1,0,app.pixelColor.rgba(c.gray,c.gray,c.gray))
+        end
+        "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        edited.layers[0].cels[0],
+        vec![[127, 127, 127, 255]; 3].into()
+    );
+}
+
+#[test]
+fn lua_rgb_gray_pixel_converts_color_and_masks_alpha() {
+    // Packing red directly or clamping alpha corrupts these painted pixels.
+    let edited = run_source(
+        &Document::new(2, 1),
+        r#"
+        local c=Color{r=0,g=255,b=0,a=258}
+        local function paint(x)
+            local p=c.grayPixel
+            app.activeImage:drawPixel(x,0,app.pixelColor.rgba(p&255,p&255,p&255,(p>>8)&255))
+        end
+        paint(0)
+        c.red=10;c.green=20;c.blue=30;c.alpha=99
+        paint(1)
+        assert(not pcall(function()c.grayPixel=123 end))
+        "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        edited.layers[0].cels[0],
+        vec![[127, 127, 127, 2], [20, 20, 20, 99]].into()
+    );
+}
+
+#[test]
 fn lua_rgb_constructor_preserves_native_integer_channels() {
     let d = Document::new(1, 1);
     let edited = run_source(

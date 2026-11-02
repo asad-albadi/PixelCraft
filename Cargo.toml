@@ -1,6 +1,6 @@
 [package]
 name = "pixelcraft"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 
@@ -15,6 +15,8 @@ libloading = "0.8.8"
 png = "0.18.1"
 moxcms = "0.8.1"
 roxmltree = "0.20.0"
+ureq = { version = "3.4.2", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
+semver = "1.0.28"
 
 [profile.dev]
 debug = 0

@@ -9,6 +9,7 @@ use pixelcraft::{
     extensions::{self, Manager, PluginCommand, Session},
     formats,
     model::*,
+    updates::{self, AboutInfo, INSTALLED_VERSION, Release},
 };
 use std::{
     path::PathBuf,
@@ -203,6 +204,13 @@ struct PixelCraft {
     new_h: usize,
     rename: Option<String>,
     help: bool,
+    about: bool,
+    github_texture: egui::TextureHandle,
+    about_info: AboutInfo,
+    update_job: Option<std::sync::mpsc::Receiver<Result<Release, String>>>,
+    latest_release: Option<Release>,
+    update_status: String,
+    next_update_check: Option<Instant>,
     extensions_open: bool,
     extension_manager: Option<Manager>,
     plugin_commands: Vec<PluginCommand>,
@@ -236,6 +244,8 @@ impl PixelCraft {
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("custom-theme.json")) {
             let _ = app.apply_theme_asset(&cc.egui_ctx, &bytes);
         }
+        app.about_info = AboutInfo::load();
+        app.check_updates(&cc.egui_ctx);
         app.refresh_extensions();
         app
     }
@@ -298,6 +308,22 @@ impl PixelCraft {
             new_h: 32,
             rename: None,
             help: false,
+            about: false,
+            github_texture: {
+                let icon = image::load_from_memory(include_bytes!("../assets/github-mark.png"))
+                    .expect("bundled GitHub icon")
+                    .to_rgba8();
+                ctx.load_texture(
+                    "github-mark",
+                    egui::ColorImage::from_rgba_unmultiplied([64, 64], icon.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                )
+            },
+            about_info: AboutInfo::default(),
+            update_job: None,
+            latest_release: None,
+            update_status: "Not checked yet.".into(),
+            next_update_check: None,
             extensions_open: false,
             extension_manager: Manager::new().ok(),
             plugin_commands: vec![],
@@ -1201,6 +1227,7 @@ impl PixelCraft {
             "selection" => self.tool = Tool::Select,
             "hand" => self.tool = Tool::Hand,
             "help" => self.help = true,
+            "about" => self.about = true,
             "extensions" => {
                 self.refresh_extensions();
                 self.extensions_open = true;
@@ -1477,6 +1504,16 @@ impl PixelCraft {
     fn menu(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         egui::MenuBar::new().ui(ui, |ui| {
+            let bar_rect = ui.max_rect();
+            let has_update = self
+                .latest_release
+                .as_ref()
+                .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION));
+            let compact = has_update && bar_rect.width() < 1000.;
+            if compact {
+                ui.spacing_mut().item_spacing.x = 2.;
+                ui.spacing_mut().button_padding.x = 3.;
+            }
             for (title, items) in [
                 (
                     "File",
@@ -1542,14 +1579,22 @@ impl PixelCraft {
                     ],
                 ),
                 ("Extensions", vec![("Extensions & scripts…", "extensions")]),
-                ("Help", vec![("Tools and file support", "help")]),
+                (
+                    "Help",
+                    vec![("Tools and file support", "help"), ("About", "about")],
+                ),
             ] {
                 let translated = self
                     .translations
                     .get(&format!("menu.{}", title.to_lowercase()))
                     .cloned()
                     .unwrap_or_else(|| title.to_string());
-                ui.menu_button(translated, |ui| {
+                let title_text = if compact {
+                    RichText::new(translated).size(12.)
+                } else {
+                    RichText::new(translated)
+                };
+                ui.menu_button(title_text, |ui| {
                     if title == "View" {
                         let mut dark = self.dark_mode;
                         if ui.checkbox(&mut dark, "Dark mode").changed() {
@@ -1566,7 +1611,26 @@ impl PixelCraft {
                     }
                 });
             }
+            let menus_right = ui.cursor().left();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (github_rect, github) =
+                    ui.allocate_exact_size(Vec2::splat(22.), Sense::click());
+                ui.painter().image(
+                    self.github_texture.id(),
+                    github_rect.shrink(2.),
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
+                    ui.visuals().text_color(),
+                );
+                let github = github
+                    .on_hover_text("PixelCraft on GitHub")
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if github.clicked() {
+                    if let Some(url) = self.about_info.github_url() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                    } else {
+                        self.about = true;
+                    }
+                }
                 ui.label(RichText::new("PixelCraft").strong());
                 let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.), Sense::hover());
                 for (y, row) in BRAND_MARK.iter().enumerate() {
@@ -1585,6 +1649,33 @@ impl PixelCraft {
                                 0.,
                                 color,
                             );
+                        }
+                    }
+                }
+                if self
+                    .latest_release
+                    .as_ref()
+                    .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION))
+                {
+                    let notice = Rect::from_center_size(bar_rect.center(), Vec2::new(148., 22.));
+                    // Keep the notice at the true center, hiding only when there is no room.
+                    if notice.left() > menus_right + 8. && notice.right() < rect.left() - 8. {
+                        ui.painter().text(
+                            notice.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "New version found",
+                            egui::FontId::proportional(14.),
+                            Color32::from_rgb(241, 190, 93),
+                        );
+                        if ui
+                            .interact(notice, egui::Id::new("update_notice"), Sense::click())
+                            .on_hover_text("Download the latest PixelCraft release")
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .clicked()
+                        {
+                            if let Some(url) = self.about_info.releases_url() {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                            }
                         }
                     }
                 }
@@ -2422,6 +2513,33 @@ impl PixelCraft {
 impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        if let Some(next_check) = self.next_update_check {
+            if Instant::now() >= next_check && self.update_job.is_none() {
+                self.check_updates(&ctx);
+            } else {
+                ctx.request_repaint_after(next_check.saturating_duration_since(Instant::now()));
+            }
+        }
+        if let Some(job) = &self.update_job {
+            if let Ok(result) = job.try_recv() {
+                match result {
+                    Ok(release) => {
+                        self.update_status = if release.is_newer_than(INSTALLED_VERSION) {
+                            "A new version is available.".into()
+                        } else {
+                            "You are up to date.".into()
+                        };
+                        self.latest_release = Some(release);
+                    }
+                    Err(error) => {
+                        self.latest_release = None;
+                        self.update_status = error;
+                    }
+                }
+                self.update_job = None;
+            }
+        }
+        self.about_dialog(&ctx);
         if self.script_ui.modeless
             && self
                 .script_preview_doc
@@ -3324,5 +3442,157 @@ mod tests {
         assert_eq!(a.doc.layers[0].cel_meta[0].indices.as_ref().unwrap()[0], 2);
         a.doc.set_palette_color(2, [0, 255, 0, 255]);
         assert_eq!(a.doc.composite(0)[0], [0, 255, 0, 255]);
+    }
+}
+
+impl PixelCraft {
+    fn check_updates(&mut self, ctx: &egui::Context) {
+        self.latest_release = None;
+        if let Some(slug) = updates::repository_slug(&self.about_info.repository) {
+            self.next_update_check = Some(Instant::now() + Duration::from_secs(3600));
+            self.update_status = "Checking GitHub releases…".into();
+            self.update_job = Some(updates::check(&slug, ctx.clone()));
+        } else {
+            self.next_update_check = None;
+            self.update_job = None;
+            self.update_status =
+                "Set PixelCraft’s GitHub repository below to check for updates.".into();
+        }
+    }
+
+    fn about_dialog(&mut self, ctx: &egui::Context) {
+        if !self.about {
+            return;
+        }
+        let mut open = self.about;
+        egui::Window::new("About PixelCraft")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(430.)
+            .show(ctx, |ui| {
+                ui.heading("PixelCraft");
+                ui.label("Small pixels. Endless possibilities.");
+                ui.separator();
+                ui.label(format!("Developed by {}", self.about_info.developer));
+                ui.horizontal(|ui| {
+                    ui.label("Made with");
+                    ui.hyperlink_to(
+                        "Craft Anything",
+                        "https://github.com/storytold/craft-anything",
+                    );
+                    ui.label("by");
+                    ui.hyperlink_to("ArtCraft", "https://getartcraft.com/");
+                });
+                if let Some(url) = self.about_info.github_url() {
+                    ui.hyperlink_to("PixelCraft on GitHub", url);
+                }
+                ui.separator();
+                ui.label(format!("Installed version: {INSTALLED_VERSION}"));
+                ui.label(format!(
+                    "Latest GitHub release: {}",
+                    self.latest_release
+                        .as_ref()
+                        .map(|r| r.tag.as_str())
+                        .unwrap_or("Not available")
+                ));
+                ui.label(&self.update_status);
+                if self
+                    .latest_release
+                    .as_ref()
+                    .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION))
+                {
+                    if let Some(url) = self.about_info.releases_url() {
+                        ui.hyperlink_to("Download the latest update ↗", url);
+                    }
+                }
+                if ui
+                    .add_enabled(
+                        self.update_job.is_none(),
+                        egui::Button::new("Check for updates"),
+                    )
+                    .clicked()
+                {
+                    self.check_updates(ctx);
+                }
+                ui.separator();
+                ui.collapsing("Developer and repository", |ui| {
+                    ui.label("Developer name");
+                    ui.text_edit_singleline(&mut self.about_info.developer);
+                    ui.label("PixelCraft GitHub repository");
+                    let changed = ui
+                        .text_edit_singleline(&mut self.about_info.repository)
+                        .changed();
+                    if changed {
+                        self.latest_release = None;
+                        self.update_job = None;
+                        self.next_update_check = None;
+                        self.update_status = "Save the repository to check its releases.".into();
+                    }
+                    ui.small("Enter https://github.com/owner/repository");
+                    if ui.button("Save and check").clicked() {
+                        if let Some(slug) = updates::repository_slug(&self.about_info.repository) {
+                            self.about_info.repository = slug;
+                            match self.about_info.save() {
+                                Ok(()) => self.check_updates(ctx),
+                                Err(e) => {
+                                    self.update_status = format!("Could not save settings: {e}")
+                                }
+                            }
+                        } else {
+                            self.update_status = "Enter a valid GitHub repository URL.".into();
+                        }
+                    }
+                });
+                ui.separator();
+                ui.small("MIT License · © 2026 PixelCraft contributors");
+            });
+        self.about = open;
+    }
+}
+
+#[cfg(test)]
+mod update_ui_tests {
+    use super::*;
+
+    fn has_notice(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Text(text) => text.galley.job.text == "New version found",
+            egui::Shape::Vec(shapes) => shapes.iter().any(has_notice),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn top_bar_shows_update_only_for_a_newer_release() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        for width in [800., 938., 1180.] {
+            for (tag, expected) in [
+                (None, false),
+                (Some("v0.2.0"), false),
+                (Some("v0.3.0"), true),
+            ] {
+                app.latest_release =
+                    tag.map(|tag| Release::parse(&format!(r#"{{"tag_name":"{tag}"}}"#)).unwrap());
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 1005.))),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        egui::Panel::top("menu")
+                            .exact_size(34.)
+                            .show(ui, |ui| app.menu(ui));
+                    },
+                );
+                output.textures_delta.clear();
+                assert_eq!(
+                    output.shapes.iter().any(|s| has_notice(&s.shape)),
+                    expected,
+                    "{tag:?} at {width}"
+                );
+            }
+        }
     }
 }

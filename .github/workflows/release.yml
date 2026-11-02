@@ -20,6 +20,8 @@ jobs:
       contents: write
     env:
       CARGO_TERM_COLOR: always
+      PIXELCRAFT_REPOSITORY: ${{ github.repository }}
+      PIXELCRAFT_DEVELOPER: ${{ github.repository_owner }}
       APPIMAGE_EXTRACT_AND_RUN: '1'
     steps:
       - uses: actions/checkout@v4
@@ -169,6 +171,8 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: always
+      PIXELCRAFT_REPOSITORY: ${{ github.repository }}
+      PIXELCRAFT_DEVELOPER: ${{ github.repository_owner }}
       # Statically link the MSVC runtime so a separate redistributable is unnecessary.
       RUSTFLAGS: '-C target-feature=+crt-static'
     defaults:

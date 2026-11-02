@@ -51,6 +51,13 @@ local function rgbToHsv(p)
  local h=d==0 and 0 or hi==r and ((g-b)/d)%6 or hi==g and (b-r)/d+2 or (r-g)/d+4
  return h*60,hi==0 and 0 or d/hi,hi,(hi+lo)/2,d
 end
+-- Color::getGray 0x16c2b0 uses Hsl(Rgb).lightness, not sprite luma.
+-- Match the native signed32 sum and double division/multiplication order.
+local function rgbGray(p)
+ local sum=colorInteger(math.max(p[1],p[2],p[3])+math.min(p[1],p[2],p[3]))
+ local n=(sum/255.0)*0.5*255.0
+ return n<0 and math.ceil(n) or math.floor(n)
+end
 function Color(c,g,b,a)
  local index,gray
  if type(c)=='string' then
@@ -86,11 +93,11 @@ function Color(c,g,b,a)
    local i=colorChannels[k];if i then return p[i] end
    local h,sat,v,l,d=rgbToHsv(p)
    if k=='rgbaPixel' then return pixelRgba(table.unpack(p))
-   elseif k=='grayPixel' then return byte(p[1])|(byte(p[4])<<8)
+   elseif k=='grayPixel' then return (pixelInteger(gray or rgbGray(p))&255)|((pixelInteger(p[4])&255)<<8)
    elseif k=='index' then
     if index then return index end;local best,dist=0,math.huge
     for n,c in ipairs(doc.palette) do local e=0;for j=1,4 do e=e+(p[j]-c[j])^2 end;if e<dist then best,dist=n-1,e end end;return best
-   elseif k=='gray' then return gray or byte((p[1]*2126+p[2]*7152+p[3]*722)/10000)
+   elseif k=='gray' then return gray or rgbGray(p)
    elseif k=='hue' or k=='hsvHue' or k=='hslHue' then return h
    elseif k=='saturation' or k=='hsvSaturation' then return sat
    elseif k=='value' or k=='hsvValue' then return v

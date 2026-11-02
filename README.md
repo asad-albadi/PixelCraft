@@ -179,3 +179,11 @@ The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LI
   <a href="https://getartcraft.com/">ArtCraft</a> ·
   <a href="https://getartcraft.com/apps">Explore the Crafting Apps</a>
 </p>
+
+## About and updates
+
+**Help → About** shows the developer, installed version (from Cargo), latest stable GitHub release, and a download link when an update is available. The GitHub icon beside PixelCraft opens the project repository. A centered **New version found** link appears when a newer release is confirmed. Checks run in the background at startup, hourly while the editor is open, and through **Check for updates**; failed checks never announce an update.
+
+Tagged GitHub Actions builds automatically embed their repository and repository owner. For local builds, set `PIXELCRAFT_REPOSITORY=owner/repository` and optionally `PIXELCRAFT_DEVELOPER` when building, or enter the repository URL and developer name under **About → Developer and repository → Save and check**. These settings are remembered in PixelCraft's preferences. Local builds require this setting before GitHub links and release checks can work.
+
+The GitHub mark in `assets/github-mark.svg` is from [GitHub Octicons](https://github.com/primer/octicons), licensed under the MIT License; the PNG is a rendered copy.
