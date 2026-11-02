@@ -1,0 +1,92 @@
+[
+  {
+    "name": "2x2tilemap2x2tile.aseprite",
+    "sha": "7f215ac5afe296996ed9f9cf0b5a16d7b58ea355",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/2x2tilemap2x2tile.aseprite",
+    "display_title": "2x2tilemap2x2tile.aseprite",
+    "sha256": "fbd2a4805c9adcc8be0f367332186236e053170571b69cb6c49bf4108ac5996e",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "408362a7aaed68751a668755edc248401565840b6add15e3d36f47d3d365a915"
+  },
+  {
+    "name": "2x3tilemap-indexed.aseprite",
+    "sha": "714b0abe3ce5c3e80cee79c1d32366e37416165a",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/2x3tilemap-indexed.aseprite",
+    "display_title": "2x3tilemap-indexed.aseprite",
+    "sha256": "890124153f1ef51516bf8e4ae00cb7cdc1ef429cfcaa32226742268b48e61018",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "450e9e5ba03e94bb6f6e6b3e753f635f94f58bc2e323cf67db7c45bcb221c321"
+  },
+  {
+    "name": "3x2tilemap-grayscale.aseprite",
+    "sha": "3a4293388e368b06716c04813baa74d7366e3e39",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/3x2tilemap-grayscale.aseprite",
+    "display_title": "3x2tilemap-grayscale.aseprite",
+    "sha256": "8789ed762aab045e8466195917590d241942141a8269ede0474e32598eb609d8",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "96ed87bcb452d22799b6f3ed474344bfde64b8ba83a203ba8073e235db875520"
+  },
+  {
+    "name": "2f-index-3x3.aseprite",
+    "sha": "55d2ce4101e9a7a2150337e935f059fe78208dc1",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/2f-index-3x3.aseprite",
+    "display_title": "2f-index-3x3.aseprite",
+    "sha256": "05cc2706363f7b3a0d0be280b3f3165853c8306232d5bb8129fbdeab9b1d3432",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "da240e2c9b0de2f4cfc1a629922cd8d467645eb5d66dbf7b92d158ac860d7680"
+  },
+  {
+    "name": "groups3abc.aseprite",
+    "sha": "baced93490dbfcc9c191db909510af39d73e26ef",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/groups3abc.aseprite",
+    "display_title": "groups3abc.aseprite",
+    "sha256": "6111eee8c2e09dc6a1ffb5300767411470c47975ed8bc0e251dccbffe4d0673f",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "471779e58327ef1e9a4d967853a1d0745f810902aae175dc1d84b0d0589b2cb2"
+  },
+  {
+    "name": "link.aseprite",
+    "sha": "461eba73e91e4b5e084337189943ebe88c1a4c26",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/link.aseprite",
+    "display_title": "link.aseprite",
+    "sha256": "b97ffaee6943f5f9a895827925dc3bc898c1f13ae284da8aa6ccd24c7c8aa765",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "7a330f384c3065c13bb2e4c5f3a36426a00924ff0d2afb6b98de2cf2d639c22b"
+  },
+  {
+    "name": "file-tests-props.aseprite",
+    "sha": "dd26e60a3a2e9ba65f4b2fe0fabf4bd180f19f6b",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/file-tests-props.aseprite",
+    "display_title": "file-tests-props.aseprite",
+    "sha256": "657e2549cd74a94137aec6502957d18662f4e4d50f565009d60f9a4189b22087",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "c7f4b748561f326d7d3170f79b0e62049b55f5b1e440d048b54cc547f318fc3c"
+  },
+  {
+    "name": "z-order.aseprite",
+    "sha": "d7c3e3975956bd8ac7cc0ca8bd27352cfd3b3fc0",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/z-order.aseprite",
+    "display_title": "z-order.aseprite",
+    "sha256": "c99a296e87d3ed1393926e2fb06a52dccf7cf09054355c4ea22c8c5ab01f0e6e",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "f440ff3c5b647e2c8e2ee422842e586828726ba45b03a8c20a38f9c945ff3d17"
+  },
+  {
+    "name": "slices-moving.aseprite",
+    "sha": "42d2a3f1f3cdbc4634320c53ea0d69a1d18197e9",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/slices-moving.aseprite",
+    "display_title": "slices-moving.aseprite",
+    "sha256": "1ee4025d891b7a943fb0ef98ba30e2c9fe61b7987c8b91d85ff28511da3ebe69",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "73e4e322c94cc1b16af8c866eb2c81b83f064b00501f010522dcee05361aba31"
+  },
+  {
+    "name": "tags3x123reps.aseprite",
+    "sha": "1e8d950c575f2f4cc7a73a8feaf0196b3f5d1aec",
+    "display_url": "https://github.com/aseprite/aseprite/blob/main/tests/sprites/tags3x123reps.aseprite",
+    "display_title": "tags3x123reps.aseprite",
+    "sha256": "93c0613b9cbe784368d6ab4e914abbd9deb48599541d7fb78eaded8bb8e51272",
+    "reference_renderer": "Aseprite 1.3.18.6-dev, --batch INPUT --color-mode rgb --sheet OUTPUT --sheet-type horizontal",
+    "reference_sha256": "912b2c4bd36d12cd33bf6d7c8a0062da0c624d63ead4f3b0793b2602d458222a"
+  }
+]

@@ -90,8 +90,12 @@ pub struct Contributions {
     pub themes: Vec<Contribution>,
     #[serde(default)]
     pub palettes: Vec<Contribution>,
-    #[serde(default)]
+    #[serde(default, alias = "keys")]
     pub shortcuts: Vec<Contribution>,
+    #[serde(default)]
+    pub languages: Vec<Contribution>,
+    #[serde(default, rename = "ditheringMatrices")]
+    pub dithering_matrices: Vec<Contribution>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
@@ -135,7 +139,8 @@ fn valid_id(id: &str) -> bool {
 fn safe_path(p: &str) -> Result<PathBuf, String> {
     let p = Path::new(p);
     if p.as_os_str().is_empty()
-        || p.components().any(|c| !matches!(c, Component::Normal(_)))
+        || p.components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
         || p.to_string_lossy().contains('\\')
     {
         return Err("Extension path must stay inside its package".into());
@@ -275,9 +280,14 @@ impl Manager {
                 .chain(&c.themes)
                 .chain(&c.palettes)
                 .chain(&c.shortcuts)
+                .chain(&c.languages)
+                .chain(&c.dithering_matrices)
             {
                 let p = safe_path(&contribution.path)?;
-                if !package_dir.join(p).is_file() {
+                if !package_dir.join(&p).is_file()
+                    && !(package_dir.join(&p).is_dir()
+                        && package_dir.join(&p).join("theme.xml").is_file())
+                {
                     return Err(format!("Missing extension asset: {}", contribution.path));
                 }
                 count += 1;
@@ -299,9 +309,11 @@ impl Manager {
             for s in &p.manifest.contributes.scripts {
                 let script = p.directory.join(safe_path(&s.path)?);
                 let source = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
+                // Plain scripts can open dialogs immediately. A discovery-only
+                // failure must not hide them from the explicit Run action.
                 let json =
                     crate::lua::execute(&Document::new(1, 1), &source, 0, 0, None, true, None)
-                        .map_err(|e| format!("{}: {e}", p.id))?;
+                        .unwrap_or_else(|_| "[]".into());
                 let mut commands: Vec<PluginCommand> =
                     serde_json::from_str(&json).map_err(|e| e.to_string())?;
                 if commands.is_empty() {
@@ -494,5 +506,84 @@ impl Session {
     }
     pub fn load_result(&self) -> Result<Document, String> {
         formats::load(&self.result_path())
+    }
+}
+
+/// Interactive hosts receive declarative widgets and validated document snapshots;
+/// Lua stays on its worker thread while the editor owns all UI operations.
+pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
+pub fn run_source_with_host(
+    doc: &Document,
+    source: &str,
+    frame: usize,
+    layer: usize,
+    command: Option<&str>,
+    colors: Option<[[u8; 4]; 2]>,
+    options: serde_json::Value,
+    host: ScriptHost,
+) -> Result<Document, String> {
+    let json = crate::lua::execute_with_host(
+        doc,
+        source,
+        frame,
+        layer,
+        command,
+        false,
+        colors,
+        options,
+        Some(host),
+    )?;
+    let mut edited: Document =
+        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
+    edited.validate()?;
+    edited.set_color_mode(edited.color_mode);
+    Ok(edited)
+}
+
+/// Filesystem bridge used only by explicitly executed scripts. Relative filenames
+/// follow the script folder; it never searches Aseprite's installation or settings.
+pub fn script_file_request(
+    base: &Path,
+    request: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    let path = base.join(request["path"].as_str().unwrap_or(""));
+    match request["op"].as_str().unwrap_or("") {
+        "open" => Ok(json!({"document":formats::load(&path)?})),
+        "readScript" => {
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            if bytes.len() > 2 * 1024 * 1024 {
+                return Err("Lua module exceeds 2 MiB".into());
+            }
+            Ok(json!({"source":String::from_utf8(bytes).map_err(|e|e.to_string())?}))
+        }
+        "save" => {
+            let d: Document =
+                serde_json::from_value(request["document"].clone()).map_err(|e| e.to_string())?;
+            d.validate()?;
+            match path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_lowercase()
+                .as_str()
+            {
+                "png" => formats::export_png(&path, &d, 0, false)?,
+                "gif" => formats::export_gif(&path, &d)?,
+                _ => formats::save(&path, &d)?,
+            };
+            Ok(json!({}))
+        }
+        "isFile" => Ok(json!({"value":path.is_file()})),
+        "isDirectory" => Ok(json!({"value":path.is_dir()})),
+        "listFiles" => Ok(
+            json!({"value":std::fs::read_dir(path).map_err(|e|e.to_string())?.filter_map(Result::ok).map(|e|e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()}),
+        ),
+        "makeDirectory" => {
+            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+            Ok(json!({"value":true}))
+        }
+        "close" => Ok(json!({})),
+        _ => Err("Unknown file operation".into()),
     }
 }

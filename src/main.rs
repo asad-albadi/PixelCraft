@@ -1,3 +1,4 @@
+mod script_ui;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use pixelcraft::{
     extensions::{self, Manager, PluginCommand, Session},
@@ -188,6 +189,7 @@ struct PixelCraft {
     tag_name: String,
     playback_reverse: bool,
     custom_shortcuts: std::collections::BTreeMap<String, String>,
+    translations: std::collections::BTreeMap<String, String>,
     status: String,
     hover: Option<(i32, i32)>,
     pending: Option<Pending>,
@@ -201,6 +203,8 @@ struct PixelCraft {
     plugin_commands: Vec<PluginCommand>,
     extension_error: String,
     extension_session: Option<Session>,
+    script_ui: script_ui::ScriptUi,
+    script_preview_doc: Option<Document>,
     script_job: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     shot: Option<PathBuf>,
     shot_frames: u32,
@@ -220,6 +224,9 @@ impl PixelCraft {
         }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("shortcuts.json")) {
             app.custom_shortcuts = serde_json::from_slice(&bytes).unwrap_or_default();
+        }
+        if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
+            app.translations = pixelcraft::contributions::language(&bytes).unwrap_or_default();
         }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("custom-theme.json")) {
             let _ = app.apply_theme_asset(&cc.egui_ctx, &bytes);
@@ -277,6 +284,7 @@ impl PixelCraft {
             tag_name: "Animation".into(),
             playback_reverse: false,
             custom_shortcuts: std::collections::BTreeMap::new(),
+            translations: std::collections::BTreeMap::new(),
             status: "Ready. Draw on the canvas, or create a new sprite.".into(),
             hover: None,
             pending: None,
@@ -291,6 +299,8 @@ impl PixelCraft {
             extension_error: String::new(),
             extension_session: None,
             script_job: None,
+            script_ui: script_ui::ScriptUi::default(),
+            script_preview_doc: None,
             shot,
             shot_frames: 0,
             shot_requested: false,
@@ -386,7 +396,10 @@ impl PixelCraft {
             self.render_snapshot = Some(self.doc.clone());
         }
         if self.frame_textures[f].is_none() {
-            let pixels = self.doc.composite(f);
+            let pixels = pixelcraft::color::display_pixels(&self.doc, f).unwrap_or_else(|error| {
+                self.status = format!("Color profile: {error}; showing unconverted values");
+                self.doc.composite(f)
+            });
             self.frame_textures[f] = Some(ctx.load_texture(
                 format!("frame-{f}"),
                 color_image(&pixels, self.doc.width, self.doc.height),
@@ -399,7 +412,18 @@ impl PixelCraft {
         self.doc.drawing_index = self.drawing_palette_index(color);
         if let Some(ti) = self.doc.layers[self.layer].tileset {
             let t = &self.doc.tilesets[ti];
-            let (x, y) = (p.0 as usize / t.width, p.1 as usize / t.height);
+            let (ox, oy) = self.doc.layers[self.layer].cel_meta[self.frame]
+                .tilemap
+                .as_ref()
+                .map_or((0, 0), |g| (g.x, g.y));
+            if p.0 < ox || p.1 < oy {
+                self.status = "Point is outside this tilemap cel".into();
+                return;
+            }
+            let (x, y) = (
+                (p.0 - ox) as usize / t.width,
+                (p.1 - oy) as usize / t.height,
+            );
             let id = if self.tool == Tool::Eraser {
                 0
             } else {
@@ -447,7 +471,7 @@ impl PixelCraft {
         }
     }
     fn apply_theme_asset(&mut self, ctx: &egui::Context, bytes: &[u8]) -> Result<(), String> {
-        let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        let v = pixelcraft::contributions::theme(bytes)?;
         let dark = v.get("dark").and_then(|v| v.as_bool()).unwrap_or(true);
         self.set_dark_mode(ctx, dark);
         fn color(v: &serde_json::Value, k: &str) -> Option<Color32> {
@@ -488,6 +512,11 @@ impl PixelCraft {
             .as_ref()
             .ok_or("Storage unavailable")?
             .asset(id, contribution)?;
+        let path = if path.is_dir() && kind == "theme" {
+            path.join("theme.xml")
+        } else {
+            path
+        };
         let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
         match kind {
             "palette" => {
@@ -531,8 +560,14 @@ impl PixelCraft {
                 .map_err(|e| e.to_string())?;
             }
             "shortcuts" => {
-                let shortcuts: std::collections::BTreeMap<String, String> =
-                    serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                let parsed = pixelcraft::contributions::shortcuts(&bytes)?;
+                if !parsed.unsupported.is_empty() {
+                    self.extension_error = format!(
+                        "{} shortcut entries use unavailable commands or parameters",
+                        parsed.unsupported.len()
+                    );
+                }
+                let shortcuts = parsed.bindings;
                 for binding in shortcuts.keys() {
                     if Key::from_name(binding.split('+').next_back().unwrap_or("")).is_none() {
                         return Err(format!("Unknown shortcut key: {binding}"));
@@ -543,9 +578,23 @@ impl PixelCraft {
                     .map_err(|e| e.to_string())?;
                 std::fs::write(
                     extensions::config_directory().join("shortcuts.json"),
-                    &bytes,
+                    serde_json::to_vec(&self.custom_shortcuts).map_err(|e| e.to_string())?,
                 )
                 .map_err(|e| e.to_string())?;
+            }
+            "language" => {
+                self.translations = pixelcraft::contributions::language(&bytes)?;
+                std::fs::create_dir_all(extensions::config_directory())
+                    .map_err(|e| e.to_string())?;
+                std::fs::write(extensions::config_directory().join("language.ini"), &bytes)
+                    .map_err(|e| e.to_string())?;
+            }
+            "dither" => {
+                let matrix = pixelcraft::contributions::DitheringMatrix::load(&path)?;
+                self.remember();
+                self.doc.dithering = Some(matrix);
+                self.status =
+                    "Dithering matrix selected; use Indexed color mode to apply it".into();
             }
             _ => return Err("Unsupported asset kind".into()),
         }
@@ -750,7 +799,7 @@ impl PixelCraft {
             || self.help
             || self.properties_open
             || self.extensions_open
-            || self.script_job.is_some()
+            || (self.script_job.is_some() && !self.script_ui.modeless)
             || self.status.starts_with("Could not")
             || self.status.starts_with("Export failed")
     }
@@ -1187,17 +1236,69 @@ impl PixelCraft {
         let doc = self.doc.clone();
         let (frame, layer) = (self.frame, self.layer);
         let colors = [self.fg, self.bg];
+        let (ui_tx, ui_rx) = std::sync::mpsc::channel::<script_ui::Request>();
+        self.script_ui.connect(ui_rx);
+        self.script_preview_doc = Some(self.doc.clone());
+        let preferences_path = extensions::config_directory().join("lua-preferences.json");
+        let saved_preferences: serde_json::Value = std::fs::read(&preferences_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or(serde_json::json!({}));
+        let selection=self.selection.map(|(x0,y0,x1,y1)|serde_json::json!({"x":x0.min(x1),"y":y0.min(y1),"width":(x1-x0).abs()+1,"height":(y1-y0).abs()+1}));
+        let options = serde_json::json!({"selection":selection,"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
                 .and_then(|source| {
-                    extensions::run_source_with_colors(
+                    let base = script
+                        .parent()
+                        .unwrap_or(std::path::Path::new("."))
+                        .to_path_buf();
+                    let mut preferences = saved_preferences;
+                    extensions::run_source_with_host(
                         &doc,
                         &source,
                         frame,
                         layer,
                         command.as_deref(),
                         Some(colors),
+                        options,
+                        Box::new(move |request| {
+                            let op = request["op"].as_str().unwrap_or("");
+                            if matches!(
+                                op,
+                                "open"
+                                    | "save"
+                                    | "isFile"
+                                    | "isDirectory"
+                                    | "listFiles"
+                                    | "makeDirectory"
+                                    | "close"
+                                    | "readScript"
+                            ) {
+                                return extensions::script_file_request(&base, &request);
+                            }
+                            if op == "preferences" {
+                                preferences["preferences"] = request["preferences"].clone();
+                                preferences[script.to_string_lossy().as_ref()] =
+                                    request["pluginPreferences"].clone();
+                                std::fs::create_dir_all(preferences_path.parent().unwrap())
+                                    .map_err(|e| e.to_string())?;
+                                std::fs::write(
+                                    &preferences_path,
+                                    serde_json::to_vec(&preferences).map_err(|e| e.to_string())?,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            }
+                            let (reply, rx) = std::sync::mpsc::channel();
+                            ui_tx
+                                .send(script_ui::Request {
+                                    value: request,
+                                    reply,
+                                })
+                                .map_err(|_| "Editor closed".to_string())?;
+                            rx.recv().map_err(|_| "Editor closed".to_string())
+                        }),
                     )
                 })
                 .and_then(|d| formats::save(&work.result_path(), &d));
@@ -1259,6 +1360,12 @@ impl PixelCraft {
         match result {
             Some(Ok(result)) => {
                 self.script_job = None;
+                self.script_ui.disconnect();
+                if let Some(session) = &self.extension_session {
+                    if let Ok(original) = formats::load(&session.input_path()) {
+                        self.doc = original;
+                    }
+                }
                 let result = result.and_then(|()| self.import_extension_result());
                 if let Err(e) = result {
                     self.status = format!("Extension failed: {e}");
@@ -1266,6 +1373,12 @@ impl PixelCraft {
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.script_job = None;
+                self.script_ui.disconnect();
+                if let Some(session) = &self.extension_session {
+                    if let Ok(original) = formats::load(&session.input_path()) {
+                        self.doc = original;
+                    }
+                }
                 self.status =
                     "Extension failed: the Lua worker stopped. Your sprite is unchanged.".into();
             }
@@ -1426,7 +1539,12 @@ impl PixelCraft {
                 ("Extensions", vec![("Extensions & scripts…", "extensions")]),
                 ("Help", vec![("Tools and file support", "help")]),
             ] {
-                ui.menu_button(title, |ui| {
+                let translated = self
+                    .translations
+                    .get(&format!("menu.{}", title.to_lowercase()))
+                    .cloned()
+                    .unwrap_or_else(|| title.to_string());
+                ui.menu_button(translated, |ui| {
                     if title == "View" {
                         let mut dark = self.dark_mode;
                         if ui.checkbox(&mut dark, "Dark mode").changed() {
@@ -1954,6 +2072,8 @@ impl PixelCraft {
             for (p, s) in pixels.iter_mut().zip(self.doc.composite(self.frame - 1)) {
                 *p = over([150, 185, 220, s[3] / 4], *p, 255);
             }
+            let pixels =
+                pixelcraft::color::to_srgb(&self.doc.color_profile, &pixels).unwrap_or(pixels);
             let im = color_image(&pixels, self.doc.width, self.doc.height);
             if let Some(t) = &mut self.onion_texture {
                 t.set(im, egui::TextureOptions::NEAREST);
@@ -2240,12 +2360,13 @@ impl PixelCraft {
             let mut asset = None;
             egui::Window::new("PixelCraft extensions").open(&mut open).default_width(560.).show(ctx,|ui|{
                 ui.label("Install plugins, themes, palettes and shortcuts for PixelCraft.");
-                ui.small("Lua runs inside PixelCraft. Supported API: app, Sprite, Layer, Cel, Image, Color, palettes, tags and plugin commands. Interactive dialogs and unlisted APIs return an error.");
+                ui.collapsing("Aseprite compatibility",|ui|{egui::ScrollArea::vertical().max_height(260.).show(ui,|ui|{ui.label(include_str!("../COMPATIBILITY.md"));});});
+                ui.small("Lua runs inside PixelCraft. Supported API: app, Sprite, Layer, Cel, Image, Color, palettes, tags and plugin commands. Dialogs, callbacks, events and timers run in the editor. See COMPATIBILITY.md for supported APIs and limitations.");
                 ui.horizontal_wrapped(|ui|{for(label,id)in [("Run .lua…","run-lua"),("Install package…","install-extension"),("Install folder…","install-folder")]{if ui.add_enabled(self.script_job.is_none(),egui::Button::new(label)).clicked(){action=Some(id);}}});
                 ui.separator();
                 if let Some(manager)=&self.extension_manager {
                     ui.small(format!("Storage: {}",manager.root.display()));
-                    match manager.list(){Ok(packages)=>{if packages.is_empty(){ui.label("No extensions installed yet.");}for p in packages{ui.horizontal(|ui|{let mut enabled=p.enabled;if ui.checkbox(&mut enabled,if p.manifest.display_name.is_empty(){&p.id}else{&p.manifest.display_name}).changed(){change=Some((p.id.clone(),Some(enabled)));}if ui.small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}});if p.enabled{for a in &p.manifest.contributes.palettes{if ui.button(format!("Use palette: {}",a.path)).clicked(){asset=Some(("palette",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.themes{if ui.button(format!("Use theme: {}",a.path)).clicked(){asset=Some(("theme",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.shortcuts{if ui.button(format!("Use shortcuts: {}",a.path)).clicked(){asset=Some(("shortcuts",p.id.clone(),a.clone()));}}}}},Err(e)=>{ui.label(e);}}
+                    match manager.list(){Ok(packages)=>{if packages.is_empty(){ui.label("No extensions installed yet.");}for p in packages{ui.horizontal(|ui|{let mut enabled=p.enabled;if ui.checkbox(&mut enabled,if p.manifest.display_name.is_empty(){&p.id}else{&p.manifest.display_name}).changed(){change=Some((p.id.clone(),Some(enabled)));}if ui.small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}});if p.enabled{for a in &p.manifest.contributes.palettes{if ui.button(format!("Use palette: {}",a.path)).clicked(){asset=Some(("palette",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.themes{if ui.button(format!("Use theme: {}",a.path)).clicked(){asset=Some(("theme",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.languages{if ui.button(format!("Use language: {}",a.id)).clicked(){asset=Some(("language",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.dithering_matrices{if ui.button(format!("Use dithering: {}",a.id)).clicked(){asset=Some(("dither",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.shortcuts{if ui.button(format!("Use shortcuts: {}",a.path)).clicked(){asset=Some(("shortcuts",p.id.clone(),a.clone()));}}}}},Err(e)=>{ui.label(e);}}
                 }else{ui.label("Extension storage could not be created.");}
                 ui.separator();ui.strong("Plugin commands");
                 for c in &self.plugin_commands{if ui.add_enabled(self.script_job.is_none(),egui::Button::new(format!("{} · {}",c.package,c.title))).clicked(){run=Some(c.clone());}}
@@ -2288,22 +2409,59 @@ impl PixelCraft {
                 }
             }
         }
-        if self.script_job.is_some() && !self.extensions_open {
-            egui::Modal::new(egui::Id::new("Running Lua script")).show(ctx, |ui| {
-                ui.spinner();
-                ui.label("Running embedded Lua script…");
-            });
-            ctx.request_repaint_after(Duration::from_millis(100));
-        }
         if self.help {
-            egui::Window::new("PixelCraft — help").open(&mut self.help).default_width(440.).show(ctx,|ui|{ui.heading("PixelCraft");ui.label("Small pixels. Endless possibilities.");ui.separator();ui.strong("Draw, layer, animate");ui.label("B Pencil · E Eraser · G Fill · I Eyedropper\nL Line · U Rectangle · O Ellipse · M Selection · H Hand\nX Swap colors · Alt-click Pick color\nScroll Zoom · Middle drag Pan · Space Play\nCtrl+Z Undo · Ctrl+Y Redo · Ctrl+S Save");ui.separator();ui.label("Selections support copy, cut, paste and delete on the active layer. Paste starts at the selection's top-left, or the canvas origin.");ui.separator();ui.strong("File support");ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets and GIF animations.");ui.label("Sprite → Properties opens color modes, groups, blend modes, cel opacity, tile editing and named animation ranges. ASE profiles, metadata and off-canvas image pixels are retained. Embedded profiles are preserved; preview uses sRGB.");ui.label("PixelCraft is standalone. Extensions install into its own data directory. Lua, JSON themes, palettes and shortcuts run here through the documented supported native API.");});
+            egui::Window::new("PixelCraft — help").open(&mut self.help).default_width(440.).show(ctx,|ui|{ui.heading("PixelCraft");ui.label("Small pixels. Endless possibilities.");ui.separator();ui.strong("Draw, layer, animate");ui.label("B Pencil · E Eraser · G Fill · I Eyedropper\nL Line · U Rectangle · O Ellipse · M Selection · H Hand\nX Swap colors · Alt-click Pick color\nScroll Zoom · Middle drag Pan · Space Play\nCtrl+Z Undo · Ctrl+Y Redo · Ctrl+S Save");ui.separator();ui.label("Selections support copy, cut, paste and delete on the active layer. Paste starts at the selection's top-left, or the canvas origin.");ui.separator();ui.strong("File support");ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets and GIF animations.");ui.label("Sprite → Properties opens color modes, groups, blend modes, cel opacity, tile editing and named animation ranges. ASE profiles, metadata and off-canvas image pixels are retained. Embedded ICC profiles are converted to sRGB for display; source pixels are retained.");ui.label("PixelCraft is standalone. Extensions install into its own data directory. Lua, JSON themes, palettes and shortcuts run here through the documented supported native API.");});
         }
     }
 }
 impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        if self.script_ui.modeless
+            && self
+                .script_preview_doc
+                .as_ref()
+                .is_some_and(|d| d != &self.doc)
+        {
+            self.script_ui.editor_update = Some(
+                serde_json::json!({"document":self.doc,"frame":self.frame+1,"layer":self.layer+1}),
+            );
+            self.script_preview_doc = Some(self.doc.clone());
+        }
+        self.script_ui.show(&ctx);
+        if let Some(request) = self.script_ui.preview.take() {
+            if let Ok(document) = serde_json::from_value::<Document>(request["document"].clone()) {
+                if document.validate().is_ok() && self.script_ui.editor_update.is_none() {
+                    self.doc = document;
+                    self.script_preview_doc = Some(self.doc.clone());
+                }
+            }
+        }
+        if let Some(context) = self.script_ui.final_context.take() {
+            let s = &context["selection"];
+            self.selection = match (
+                s["x"].as_i64(),
+                s["y"].as_i64(),
+                s["width"].as_i64(),
+                s["height"].as_i64(),
+            ) {
+                (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => {
+                    Some((x as i32, y as i32, (x + w - 1) as i32, (y + h - 1) as i32))
+                }
+                _ => None,
+            };
+            if let Ok(colors) = serde_json::from_value::<[Pixel; 2]>(context["colors"].clone()) {
+                self.fg = colors[0];
+                self.bg = colors[1];
+                self.set_active_color(self.fg);
+            }
+            self.frame = context["frame"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
+            self.layer = context["layer"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
+        }
         self.poll_script();
+        if self.script_job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !self.dirty() {
             if let Some(i) = self
                 .tabs

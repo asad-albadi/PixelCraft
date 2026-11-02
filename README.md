@@ -121,17 +121,17 @@ Canvases support up to 16384 pixels per side and 64 million stored canvas pixels
 
 **`.pixel` is the default editable project format**, a versioned, compressed native document containing all editor properties, tiles, ranges, metadata, profiles and off-canvas image pixels. Saving uses a temporary file and replacement. New/open/close protect unsaved changes.
 
-`.ase` and `.aseprite` are optional, native import/export formats. RGB, grayscale and indexed cels, raw/zlib/linked cels, groups, blend modes, cel opacity/order, embedded tilesets, aligned tilemaps, palettes, tags, layer flags/UUIDs and opaque metadata chunks are supported. Unknown chunks retain their bytes and object association. ASE layers are serialized in hierarchy order. Image artwork beyond the canvas is retained and written back; normal canvas exports clip it.
+`.ase` and `.aseprite` are optional, native import/export formats. RGB, grayscale and indexed cels, raw/zlib/linked cels, groups, blend modes, cel opacity/order, embedded tilesets, tilemaps with per-cel geometry, palettes, tags, layer flags/UUIDs and opaque metadata chunks are supported. Unknown chunks retain their bytes and object association. ASE layers are serialized in hierarchy order. Image artwork beyond the canvas is retained and written back; normal canvas exports clip it.
 
-PNG import/export retains text, gamma, chromaticities, profiles, EXIF, pixel density and timestamps. Export an active-frame PNG, horizontal PNG sprite sheet or animated GIF. GIF has binary transparency and 10 ms timing precision. ICC profiles are preserved, including through native saves, but the preview uses sRGB rather than a complete ICC color-management engine.
+PNG import/export retains text, gamma, chromaticities, profiles, EXIF, pixel density and timestamps. Export an active-frame PNG, horizontal PNG sprite sheet or animated GIF. GIF has binary transparency and 10 ms timing precision. ICC profiles are retained losslessly, and RGB/grayscale profiles and fixed-gamma sRGB are converted to sRGB for display with moxcms. Source pixels are unchanged.
 
-Files with external-only tilesets, nonsequential tileset IDs, off-grid/off-canvas tilemap geometry or unsupported encodings return an explicit error. They are not silently flattened. Arbitrary future metadata remains opaque; the editor does not interpret every external metadata schema. Prefer `.pixel` for preserving PixelCraft's full editable state.
+External tilesets resolve relative to the project and are embedded on save. Sparse tileset IDs, off-grid/off-canvas tilemap geometry, linked tilemaps, compact 8/16-bit entries and legacy empty-tile encodings are supported. Missing references and unsupported future encodings return explicit errors. Arbitrary future metadata remains opaque; the editor does not interpret every external metadata schema. Prefer `.pixel` for preserving PixelCraft's full editable state.
 
 The ASE implementation follows the [published format specification](https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md); no original program is required.
 
 ## Independent extensions and storage
 
-**Extensions → Extensions & scripts** runs Lua scripts and installs `.lua`, `.zip`, `.aseprite-extension`, or folders containing `package.json`. Supported manifest contributions are `scripts`, `themes`, `palettes`, and `shortcuts`, each with a `path`. Installed packages can be enabled, disabled and uninstalled here; registered plugin commands run in this interface. ZIP extraction supports stored/deflated entries, checks CRC and size, and rejects path traversal, symlinks and encryption. Installation is staged; existing packages are not overwritten.
+**Extensions → Extensions & scripts** runs Lua scripts and installs `.lua`, `.zip`, `.aseprite-extension`, or folders containing `package.json`. Manifest contributions include `scripts`, `themes`, `palettes`, `keys`/`shortcuts`, `languages`, and `ditheringMatrices`, each with a `path`. Original theme directory paths beginning with `./` are accepted. Installed packages can be enabled, disabled and uninstalled here; registered plugin commands run in this interface. ZIP extraction supports stored/deflated entries, checks CRC and size, and rejects path traversal, symlinks and encryption. Installation is staged; existing packages are not overwritten.
 
 `examples/pixelcraft-starter` is an original installable package demonstrating a Lua command, JSON theme, palette and shortcuts. It is also embedded into the standalone verification mode.
 
@@ -140,9 +140,9 @@ The ASE implementation follows the [published format specification](https://gith
 - `PIXELCRAFT_HOME` optionally sets an independent portable root, with preferences beneath `preferences/`.
 - AppData is used when present as a fallback. There is no migration or lookup of another editor's settings.
 
-Themes are JSON with `dark`, `panel`, `text`, `accent` (RGB arrays). Palettes are JSON arrays of RGBA bytes, GIMP `.gpl` palettes, or ASE palettes. Shortcuts are JSON maps such as `{"P":"pencil","Ctrl+S":"save"}`; supported actions include tools, file/edit commands and playback. Applied theme/shortcut settings are copied into PixelCraft's preferences and remembered.
+Themes accept original XML color definitions or JSON with `dark`, `panel`, `text`, `accent` (RGB arrays). Palettes are JSON arrays of RGBA bytes, GIMP `.gpl` palettes, or ASE palettes. Shortcuts accept original `.aseprite-keys`/XML files for supported commands and tools, or JSON maps such as `{"P":"pencil","Ctrl+S":"save"}`; supported actions include tools, file/edit commands and playback. Applied theme/shortcut settings are copied into PixelCraft's preferences and remembered.
 
-Lua runs transactionally on a separate document copy; successful results import as one undoable change. Errors, unsupported APIs and resource limits leave the original document unchanged. Lua has a 256 MiB allocation budget, an instruction/CPU-time budget, and a one-million-stored-pixel invocation limit. Filesystem/process/package/coroutine APIs are unavailable. Interactive Lua dialogs and arbitrary Aseprite API compatibility are not implemented; only packages using the documented API below are supported. Original XML/sprite-based themes, languages and proprietary API-dependent plugins are not translated automatically.
+Lua runs transactionally on a separate document copy; successful results import as one undoable change. Errors, unsupported APIs and resource limits leave the original document unchanged. Lua has a 256 MiB allocation budget, an instruction/CPU-time budget, and a one-million-stored-pixel invocation limit. Interactive editor sessions support dialogs, events, timers, preferences, file operations and local modules. Process execution and Lua io remain unavailable. Original language INI and BMP/PNG dithering contributions are supported; themes adapt XML colors to native widgets. See [the compatibility list](COMPATIBILITY.md) for the tested API and remaining limitations.
 
 ## Supported native Lua API
 
@@ -152,7 +152,7 @@ Lua runs transactionally on a separate document copy; successful results import 
 - `Image(width,height)` or `Image(image)`, `drawPixel`, `getPixel`, `clear`, `clone`, `drawImage` (source-over), and `pixels()` iterators.
 - `Color`, `Point`, `Size`, `Rectangle`, `ColorMode`, `BlendMode`, `AniDir`, packed RGBA functions under `app.pixelColor`.
 - Palette `getColor`, `setColor`, `resize`; tag name/fromFrame/toFrame/aniDir. Pixel coordinates and palette indices are zero-based; frame/layer Lua handles are one-based.
-- `init(plugin)`, `plugin:newCommand{id,title,onclick}`, menu grouping/separator declarations. Supported command calls: `NewLayer`, `NewFrame`, `NewEmptyFrame`. Unlisted commands and interactive facilities return errors.
+- `init(plugin)`, `plugin:newCommand{id,title,onclick}`, menu grouping/separator declarations. Supported command calls: `NewLayer`, `NewFrame`, `NewEmptyFrame`. Additional selection, undo, file and interactive APIs are listed in [COMPATIBILITY.md](COMPATIBILITY.md). Unlisted commands return errors.
 
 ## Verification
 
@@ -164,7 +164,7 @@ Lua runs transactionally on a separate document copy; successful results import 
 
 PixelCraft is an early-alpha desktop app with Linux AppImage and Windows installer release workflows. Drawing, animation, advanced document features, native project persistence and independent Lua extensions have automated coverage. The standalone check also exercises saving, exports and plugins in an isolated filesystem without Aseprite or an installed Lua interpreter.
 
-Compatibility has boundaries: Lua exposes the API documented above, full ICC color-managed preview is not implemented, and some external ASE encodings and tileset arrangements are unsupported. See the file-format and extension sections before bringing an existing project or plugin into the editor. Other operating systems and architectures have not been validated.
+Compatibility is partial and explicitly documented in [COMPATIBILITY.md](COMPATIBILITY.md). Ten real Aseprite projects (33 frames) have reference-image and metadata round-trip coverage, and four unchanged upstream scripts have automated coverage. Exact original widget skins, every API/command, multi-document Lua objects and monitor-specific ICC calibration are outside the supported surface. Other operating systems and architectures have not been validated.
 
 ## License and credits
 

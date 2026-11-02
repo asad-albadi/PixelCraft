@@ -69,7 +69,7 @@ Disassembly of section .text:
   3e21c0:	5b                   	pop    %rbx
   3e21c1:	c3                   	ret
   3e21c2:	66 66 66 66 66 2e 0f 	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
-  3e21c9:	1f 84 00 00 00 00 00 
+  3e21c9:	1f 84 00 00 00 00 00
 
 00000000003e21d0 <app::script::(anonymous namespace)::PixelColor_rgbaG(lua_State*)>:
   3e21d0:	53                   	push   %rbx
@@ -84,7 +84,7 @@ Disassembly of section .text:
   3e21f0:	5b                   	pop    %rbx
   3e21f1:	c3                   	ret
   3e21f2:	66 66 66 66 66 2e 0f 	data16 data16 data16 data16 cs nopw 0x0(%rax,%rax,1)
-  3e21f9:	1f 84 00 00 00 00 00 
+  3e21f9:	1f 84 00 00 00 00 00
 
 00000000003e2200 <app::script::(anonymous namespace)::PixelColor_rgbaB(lua_State*)>:
   3e2200:	53                   	push   %rbx
@@ -100,7 +100,7 @@ Disassembly of section .text:
   3e2223:	5b                   	pop    %rbx
   3e2224:	c3                   	ret
   3e2225:	66 66 2e 0f 1f 84 00 	data16 cs nopw 0x0(%rax,%rax,1)
-  3e222c:	00 00 00 00 
+  3e222c:	00 00 00 00
 
 00000000003e2230 <app::script::(anonymous namespace)::PixelColor_rgbaA(lua_State*)>:
   3e2230:	53                   	push   %rbx

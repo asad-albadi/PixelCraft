@@ -11,6 +11,40 @@ unsafe extern "C" {
     fn realloc(p: *mut c_void, n: usize) -> *mut c_void;
     fn free(p: *mut c_void);
 }
+pub type HostCallback =
+    Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
+struct HostContext {
+    callback: HostCallback,
+    string: unsafe extern "C" fn(State, c_int, *mut usize) -> *const c_char,
+    push: unsafe extern "C" fn(State, *const c_char, usize) -> *const c_char,
+}
+thread_local! { static HOST: std::cell::Cell<*mut HostContext> = const { std::cell::Cell::new(std::ptr::null_mut()) }; }
+unsafe extern "C" fn host_call(state: State) -> c_int {
+    HOST.with(|slot| {
+        let ptr = slot.get();
+        if ptr.is_null() {
+            return 0;
+        }
+        let ctx = unsafe { &mut *ptr };
+        let mut len = 0;
+        let input = unsafe { (ctx.string)(state, 1, &mut len) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if input.is_null() {
+                return Err("Host request must be a string".to_string());
+            }
+            let bytes = unsafe { std::slice::from_raw_parts(input.cast::<u8>(), len) };
+            let value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+            (ctx.callback)(value)
+        }))
+        .unwrap_or_else(|_| Err("Extension host failed".into()));
+        let value = result.unwrap_or_else(|e| serde_json::json!({"error":e}));
+        let output = format!("return {}", literal(&value));
+        unsafe {
+            (ctx.push)(state, output.as_ptr().cast(), output.len());
+        }
+        1
+    })
+}
 struct Budget {
     used: usize,
 }
@@ -44,6 +78,7 @@ impl Drop for RuntimeDirectory {
     }
 }
 struct Runtime {
+    host: Option<Box<HostContext>>,
     library: Library,
     state: State,
     // Fields drop in declaration order: unload the DLL before deleting it on Windows.
@@ -51,7 +86,7 @@ struct Runtime {
     _budget: Box<Budget>,
 }
 impl Runtime {
-    fn new() -> Result<Self, String> {
+    fn new(callback: Option<HostCallback>) -> Result<Self, String> {
         // Clock timestamps can repeat for concurrent calls on Windows.
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
@@ -94,7 +129,38 @@ impl Runtime {
                 .get::<unsafe extern "C" fn(State)>(b"luaL_openlibs\0")
                 .map_err(|e| e.to_string())?(state)
         };
+        let mut host = if let Some(callback) = callback {
+            Some(Box::new(HostContext {
+                callback,
+                string: unsafe {
+                    *library
+                        .get::<unsafe extern "C" fn(State, c_int, *mut usize) -> *const c_char>(
+                            b"lua_tolstring\0",
+                        )
+                        .map_err(|e| e.to_string())?
+                },
+                push: unsafe {
+                    *library
+                        .get::<unsafe extern "C" fn(State, *const c_char, usize) -> *const c_char>(
+                            b"lua_pushlstring\0",
+                        )
+                        .map_err(|e| e.to_string())?
+                },
+            }))
+        } else {
+            None
+        };
+        if let Some(context) = host.as_mut() {
+            HOST.with(|slot| slot.set(&mut **context));
+            unsafe {
+                library.get::<unsafe extern "C" fn(State,unsafe extern "C" fn(State)->c_int,c_int)>(b"lua_pushcclosure\0").map_err(|e|e.to_string())?(state,host_call,0);
+                library
+                    .get::<unsafe extern "C" fn(State, *const c_char)>(b"lua_setglobal\0")
+                    .map_err(|e| e.to_string())?(state, c"_pw_host".as_ptr());
+            }
+        }
         Ok(Self {
+            host,
             library,
             state,
             _directory: directory,
@@ -155,6 +221,9 @@ impl Runtime {
 }
 impl Drop for Runtime {
     fn drop(&mut self) {
+        if self.host.is_some() {
+            HOST.with(|slot| slot.set(std::ptr::null_mut()));
+        }
         unsafe {
             if let Ok(close) = self
                 .library
@@ -204,6 +273,29 @@ pub fn execute(
     discover: bool,
     colors: Option<[[u8; 4]; 2]>,
 ) -> Result<String, String> {
+    execute_with_host(
+        doc,
+        source,
+        frame,
+        layer,
+        command,
+        discover,
+        colors,
+        serde_json::json!({}),
+        None,
+    )
+}
+pub fn execute_with_host(
+    doc: &Document,
+    source: &str,
+    frame: usize,
+    layer: usize,
+    command: Option<&str>,
+    discover: bool,
+    colors: Option<[[u8; 4]; 2]>,
+    options: serde_json::Value,
+    host: Option<HostCallback>,
+) -> Result<String, String> {
     doc.validate()?;
     if frame >= doc.durations.len() || layer >= doc.layers.len() {
         return Err("Invalid script context".into());
@@ -213,7 +305,8 @@ pub fn execute(
             "Native scripts are limited to one million stored pixels per invocation".into(),
         );
     }
-    let runtime = Runtime::new()?;
+    let runtime = Runtime::new(host)?;
+    runtime.eval(&format!("_pw_options={}", literal(&options)))?;
     runtime.eval(&format!(
         "_pw_document={}; _pw_frame={frame}; _pw_layer={layer}; _pw_colors={}",
         literal(&serde_json::to_value(doc).map_err(|e| e.to_string())?),
@@ -221,7 +314,11 @@ pub fn execute(
             colors.unwrap_or([[255, 255, 255, 255], [0, 0, 0, 255]])
         ))
     ))?;
-    runtime.eval(include_str!("lua_api.lua"))?;
+    runtime.eval(&format!(
+        "{}\n{}",
+        include_str!("lua_api.lua"),
+        include_str!("lua_compat.lua")
+    ))?;
     let finish_ref = unsafe {
         runtime
             .library

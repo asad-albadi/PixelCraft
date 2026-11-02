@@ -20,7 +20,7 @@ aseprite-reference:     file format elf64-x86-64
 
 Contents of section .data.rel.ro:
  1cbafc0 ddfbf300 00000000 b0693c00 00000000  .........i<.....
- 1cbafd0 00000000 00000000                    ........        
+ 1cbafd0 00000000 00000000                    ........
 
 
 aseprite-reference:     file format elf64-x86-64
@@ -52,7 +52,7 @@ Disassembly of section .text:
   3c5c96:	48 83 ec 38          	sub    $0x38,%rsp
   3c5c9a:	49 89 fe             	mov    %rdi,%r14
   3c5c9d:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c5ca4:	00 00 
+  3c5ca4:	00 00
   3c5ca6:	48 89 44 24 30       	mov    %rax,0x30(%rsp)
   3c5cab:	48 8d 15 9a 9e b7 00 	lea    0xb79e9a(%rip),%rdx        # f3fb4c <gUnaryActiveEdge+0xc3e8>
   3c5cb2:	be 01 00 00 00       	mov    $0x1,%esi
@@ -84,7 +84,7 @@ Disassembly of section .text:
   3c5d16:	0f 11 4b 10          	movups %xmm1,0x10(%rbx)
   3c5d1a:	0f 11 03             	movups %xmm0,(%rbx)
   3c5d1d:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c5d24:	00 00 
+  3c5d24:	00 00
   3c5d26:	48 3b 44 24 30       	cmp    0x30(%rsp),%rax
   3c5d2b:	75 0d                	jne    3c5d3a <app::script::(anonymous namespace)::Color_set_red(lua_State*)+0xaa>
   3c5d2d:	31 c0                	xor    %eax,%eax
@@ -121,7 +121,7 @@ Disassembly of section .text:
   3c5d76:	48 83 ec 38          	sub    $0x38,%rsp
   3c5d7a:	49 89 fe             	mov    %rdi,%r14
   3c5d7d:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c5d84:	00 00 
+  3c5d84:	00 00
   3c5d86:	48 89 44 24 30       	mov    %rax,0x30(%rsp)
   3c5d8b:	48 8d 15 ba 9d b7 00 	lea    0xb79dba(%rip),%rdx        # f3fb4c <gUnaryActiveEdge+0xc3e8>
   3c5d92:	be 01 00 00 00       	mov    $0x1,%esi
@@ -153,7 +153,7 @@ Disassembly of section .text:
   3c5df6:	0f 11 4b 10          	movups %xmm1,0x10(%rbx)
   3c5dfa:	0f 11 03             	movups %xmm0,(%rbx)
   3c5dfd:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c5e04:	00 00 
+  3c5e04:	00 00
   3c5e06:	48 3b 44 24 30       	cmp    0x30(%rsp),%rax
   3c5e0b:	75 0d                	jne    3c5e1a <app::script::(anonymous namespace)::Color_set_green(lua_State*)+0xaa>
   3c5e0d:	31 c0                	xor    %eax,%eax
@@ -190,7 +190,7 @@ Disassembly of section .text:
   3c5e56:	48 83 ec 38          	sub    $0x38,%rsp
   3c5e5a:	49 89 fe             	mov    %rdi,%r14
   3c5e5d:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c5e64:	00 00 
+  3c5e64:	00 00
   3c5e66:	48 89 44 24 30       	mov    %rax,0x30(%rsp)
   3c5e6b:	48 8d 15 da 9c b7 00 	lea    0xb79cda(%rip),%rdx        # f3fb4c <gUnaryActiveEdge+0xc3e8>
   3c5e72:	be 01 00 00 00       	mov    $0x1,%esi
@@ -222,7 +222,7 @@ Disassembly of section .text:
   3c5ed6:	0f 11 4b 10          	movups %xmm1,0x10(%rbx)
   3c5eda:	0f 11 03             	movups %xmm0,(%rbx)
   3c5edd:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c5ee4:	00 00 
+  3c5ee4:	00 00
   3c5ee6:	48 3b 44 24 30       	cmp    0x30(%rsp),%rax
   3c5eeb:	75 0d                	jne    3c5efa <app::script::(anonymous namespace)::Color_set_blue(lua_State*)+0xaa>
   3c5eed:	31 c0                	xor    %eax,%eax
@@ -285,15 +285,15 @@ Disassembly of section .text:
   3c69b1:	48 83 ec 20          	sub    $0x20,%rsp
   3c69b5:	48 89 fb             	mov    %rdi,%rbx
   3c69b8:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c69bf:	00 00 
+  3c69bf:	00 00
   3c69c1:	48 89 44 24 18       	mov    %rax,0x18(%rsp)
   3c69c6:	48 8d 15 7f 91 b7 00 	lea    0xb7917f(%rip),%rdx        # f3fb4c <gUnaryActiveEdge+0xc3e8>
   3c69cd:	be 01 00 00 00       	mov    $0x1,%esi
   3c69d2:	e8 a9 89 16 00       	call   52f380 <luaL_checkudata(lua_State*, int, char const*)>
   3c69d7:	48 c7 44 24 0c 01 00 	movq   $0x1,0xc(%rsp)
-  3c69de:	00 00 
+  3c69de:	00 00
   3c69e0:	c7 44 24 14 00 00 00 	movl   $0x0,0x14(%rsp)
-  3c69e7:	00 
+  3c69e7:	00
   3c69e8:	48 8d 74 24 0c       	lea    0xc(%rsp),%rsi
   3c69ed:	48 89 c7             	mov    %rax,%rdi
   3c69f0:	e8 9b 72 da ff       	call   16dc90 <app::color_utils::color_for_target_mask(app::Color const&, app::ColorTarget const&)>
@@ -301,7 +301,7 @@ Disassembly of section .text:
   3c69f7:	48 89 df             	mov    %rbx,%rdi
   3c69fa:	e8 11 88 17 00       	call   53f210 <lua_pushinteger(lua_State*, long long)>
   3c69ff:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  3c6a06:	00 00 
+  3c6a06:	00 00
   3c6a08:	48 3b 44 24 18       	cmp    0x18(%rsp),%rax
   3c6a0d:	75 0b                	jne    3c6a1a <app::script::(anonymous namespace)::Color_get_rgbaPixel(lua_State*)+0x6a>
   3c6a0f:	b8 01 00 00 00       	mov    $0x1,%eax
@@ -444,7 +444,7 @@ Disassembly of section .text:
   16a5d6:	c3                   	ret
   16a5d7:	90                   	nop
   16a5d8:	0f 1f 84 00 00 00 00 	nopl   0x0(%rax,%rax,1)
-  16a5df:	00 
+  16a5df:	00
 
 000000000016a5e0 <app::Color::fromHsv(double, double, double, int)>:
   16a5e0:	48 89 f8             	mov    %rdi,%rax
@@ -507,7 +507,7 @@ Disassembly of section .text:
   16ce42:	5d                   	pop    %rbp
   16ce43:	c3                   	ret
   16ce44:	66 2e 0f 1f 84 00 00 	cs nopw 0x0(%rax,%rax,1)
-  16ce4b:	00 00 00 
+  16ce4b:	00 00 00
   16ce4e:	66 90                	xchg   %ax,%ax
 
 aseprite-reference:     file format elf64-x86-64
@@ -519,7 +519,7 @@ Disassembly of section .text:
   16ae40:	53                   	push   %rbx
   16ae41:	48 83 ec 30          	sub    $0x30,%rsp
   16ae45:	64 48 8b 04 25 28 00 	mov    %fs:0x28,%rax
-  16ae4c:	00 00 
+  16ae4c:	00 00
   16ae4e:	48 89 44 24 28       	mov    %rax,0x28(%rsp)
   16ae53:	8b 07                	mov    (%rdi),%eax
   16ae55:	48 83 f8 05          	cmp    $0x5,%rax
@@ -530,7 +530,7 @@ Disassembly of section .text:
   16ae6d:	ff e2                	jmp    *%rdx
   16ae6f:	8b 47 08             	mov    0x8(%rdi),%eax
   16ae72:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
-  16ae79:	00 00 
+  16ae79:	00 00
   16ae7b:	48 3b 4c 24 28       	cmp    0x28(%rsp),%rcx
   16ae80:	0f 84 f5 00 00 00    	je     16af7b <app::Color::getRed() const+0x13b>
   16ae86:	e8 55 b7 fd ff       	call   1465e0 <__stack_chk_fail@plt>
@@ -545,7 +545,7 @@ Disassembly of section .text:
   16aead:	e8 fe 68 52 00       	call   6917b0 <gfx::Rgb::Rgb(gfx::Hsv const&)>
   16aeb2:	8b 44 24 1c          	mov    0x1c(%rsp),%eax
   16aeb6:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
-  16aebd:	00 00 
+  16aebd:	00 00
   16aebf:	48 3b 4c 24 28       	cmp    0x28(%rsp),%rcx
   16aec4:	0f 84 b1 00 00 00    	je     16af7b <app::Color::getRed() const+0x13b>
   16aeca:	eb ba                	jmp    16ae86 <app::Color::getRed() const+0x46>
@@ -560,7 +560,7 @@ Disassembly of section .text:
   16aeee:	e8 ed 69 52 00       	call   6918e0 <gfx::Rgb::Rgb(gfx::Hsl const&)>
   16aef3:	8b 44 24 1c          	mov    0x1c(%rsp),%eax
   16aef7:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
-  16aefe:	00 00 
+  16aefe:	00 00
   16af00:	48 3b 4c 24 28       	cmp    0x28(%rsp),%rcx
   16af05:	74 74                	je     16af7b <app::Color::getRed() const+0x13b>
   16af07:	e9 7a ff ff ff       	jmp    16ae86 <app::Color::getRed() const+0x46>
@@ -584,13 +584,13 @@ Disassembly of section .text:
   16af47:	7d 1e                	jge    16af67 <app::Color::getRed() const+0x127>
   16af49:	0f b6 04 99          	movzbl (%rcx,%rbx,4),%eax
   16af4d:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
-  16af54:	00 00 
+  16af54:	00 00
   16af56:	48 3b 4c 24 28       	cmp    0x28(%rsp),%rcx
   16af5b:	74 1e                	je     16af7b <app::Color::getRed() const+0x13b>
   16af5d:	e9 24 ff ff ff       	jmp    16ae86 <app::Color::getRed() const+0x46>
   16af62:	b8 ff ff ff ff       	mov    $0xffffffff,%eax
   16af67:	64 48 8b 0c 25 28 00 	mov    %fs:0x28,%rcx
-  16af6e:	00 00 
+  16af6e:	00 00
   16af70:	48 3b 4c 24 28       	cmp    0x28(%rsp),%rcx
   16af75:	0f 85 0b ff ff ff    	jne    16ae86 <app::Color::getRed() const+0x46>
   16af7b:	48 83 c4 30          	add    $0x30,%rsp

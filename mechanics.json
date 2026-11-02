@@ -142,6 +142,12 @@
       "source": "App_get_fgColor 0x50ac90 (Preferences+0x4730), App_get_bgColor 0x50ae00 (+0x4820), GlobalPref::ColorBar 0x366d20; ev_dd3e21f9df2a8bbdb3a24fb25f9af88c21424bdc2aeba043dbffd052ee0ed767; ev_8ad8c2afe2eadf8448626ef623d57ef4be2b096cfba254d2d81f5410f72fb0f3; limits in MECHANICS.md"
     },
     {
+      "name": "Lua RGB table construction",
+      "group": "scripting",
+      "value": "Non-nil r selects r/g/b/a, else non-nil red selects red/green/blue/alpha; missing RGB=0, missing alpha=255; supplied channels signed32(I(v)) without saturation; RGB copies preserve values",
+      "source": "Color_new 0x3c54a0 -> Color::fromRgb 0x16a5c0 and lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; completed pseudocode ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309; assembly ev_e15bd624ea78eb0761226710ff962f1b10fe28ec27bdbc385597543d6746b2e6; evidence/color_constructor.asm; limits in MECHANICS.md"
+    },
+    {
       "name": "Lua mutable RGB Color packing",
       "group": "scripting",
       "value": "RGB assignment replaces signed32(I(v)); alpha clamps signed32(I(v)) to 0..255; rgbaPixel packs current low-byte channels per read, read-only",

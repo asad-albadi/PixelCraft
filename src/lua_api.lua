@@ -6,7 +6,7 @@ local start,instructions,expired=clock(),0,false
 hook(function() instructions=instructions+10000;if instructions>20000000 or clock()-start>3 then expired=true;fail('Script instruction/time budget exceeded') end end,'',10000)
 pcall=function(...)local result=table.pack(raw_pcall(...));if expired then fail('Script instruction/time budget exceeded') end;return table.unpack(result,1,result.n)end
 xpcall=function(...)local result=table.pack(raw_xpcall(...));if expired then fail('Script instruction/time budget exceeded') end;return table.unpack(result,1,result.n)end
-io=nil;os=nil;package=nil;require=nil;dofile=nil;loadfile=nil;debug=nil;collectgarbage=nil;coroutine=nil
+io=nil;os={clock=clock,time=os.time,date=os.date,difftime=os.difftime};package=nil;require=nil;dofile=nil;loadfile=nil;debug=nil;collectgarbage=nil;coroutine=nil
 local function copy(t) if type(t)~='table' then return t end local c={} for k,v in pairs(t) do c[k]=copy(v) end return c end
 local function byte(n) return math.max(0,math.min(255,math.floor(n or 0))) end
 -- Original opacity setters call lua_tointegerx in floor mode. Failed
@@ -30,35 +30,87 @@ end
 local function pixelRgba(r,g,b,a)
  return (pixelInteger(r)&255)|((pixelInteger(g)&255)<<8)|((pixelInteger(b)&255)<<16)|(((a==nil and 255 or pixelInteger(a))&255)<<24)
 end
+local function colorInteger(v)
+ local n=pixelInteger(v)&0xffffffff
+ return n>=0x80000000 and n-0x100000000 or n
+end
 local function unpackColor(c)
  if type(c)=='table' then return {byte(c.r or c.red or c[1]),byte(c.g or c.green or c[2]),byte(c.b or c.blue or c[3]),byte(c.a or c.alpha or c[4] or 255)} end
  c=math.tointeger(c or 0) or 0;return {c&255,(c>>8)&255,(c>>16)&255,(c>>24)&255}
 end
+local doc=_pw_document
 local colorChannels={r=1,red=1,g=2,green=2,b=3,blue=3,a=4,alpha=4}
+local function hsvToRgb(h,s,v)
+ h=(h%360)/60;s=math.max(0,math.min(1,s));v=math.max(0,math.min(1,v))
+ local c=v*s;local x=c*(1-math.abs(h%2-1));local m=v-c
+ local t= h<1 and {c,x,0} or h<2 and {x,c,0} or h<3 and {0,c,x} or h<4 and {0,x,c} or h<5 and {x,0,c} or {c,0,x}
+ return {byte((t[1]+m)*255+0.5),byte((t[2]+m)*255+0.5),byte((t[3]+m)*255+0.5),255}
+end
+local function rgbToHsv(p)
+ local r,g,b=p[1]/255,p[2]/255,p[3]/255;local hi,lo=math.max(r,g,b),math.min(r,g,b);local d=hi-lo
+ local h=d==0 and 0 or hi==r and ((g-b)/d)%6 or hi==g and (b-r)/d+2 or (r-g)/d+4
+ return h*60,hi==0 and 0 or d/hi,hi,(hi+lo)/2,d
+end
 function Color(c,g,b,a)
- local p=type(c)=='number' and (g and {c,g,b,a or 255} or unpackColor(c)) or unpackColor(c or {})
- -- Native RGB setters replace a channel, not a separate alias field.
- -- rgbaPixel (0x3c69b0 -> 0x16dc90) packs current state on every read.
+ local index,gray
+ if type(c)=='string' then
+  local hex=c:gsub('^#','');assert(#hex==6 or #hex==8,'Color requires #RRGGBB or #RRGGBBAA')
+  c={tonumber(hex:sub(1,2),16),tonumber(hex:sub(3,4),16),tonumber(hex:sub(5,6),16),#hex==8 and tonumber(hex:sub(7,8),16) or 255}
+ end
+ -- Color_new 0x3c54a0 selects short or long RGB fields as a family.
+ -- fromRgb 0x16a5c0 stores signed32 channels without saturation.
+ local p
+ if type(c)=='table' and getmetatable(c) and getmetatable(c).__name=='Color' then
+  p={c.red,c.green,c.blue,c.alpha}
+ elseif type(c)=='table' and c.r~=nil then
+  p={colorInteger(c.r),colorInteger(c.g),colorInteger(c.b),c.a==nil and 255 or colorInteger(c.a)}
+ elseif type(c)=='table' and c.red~=nil then
+  p={colorInteger(c.red),colorInteger(c.green),colorInteger(c.blue),c.alpha==nil and 255 or colorInteger(c.alpha)}
+ else
+  p=type(c)=='number' and (g and {c,g,b,a or 255} or unpackColor(c)) or unpackColor(c or {})
+ end
+ if type(c)=='table' and not (getmetatable(c) and getmetatable(c).__name=='Color') then
+  if c.r~=nil or c.red~=nil then -- RGB has priority over other table forms.
+  elseif c.index~=nil then index=c.index;p=copy((doc.palette or {})[index+1] or {0,0,0,255})
+  elseif c.gray~=nil then gray=c.gray;p={gray,gray,gray,c.alpha or c.a or 255}
+  elseif c.h~=nil or c.hue~=nil then
+   local h,sat,v=c.h or c.hue or 0,c.s or c.saturation or 0,c.v or c.value or 0
+   if c.l~=nil or c.lightness~=nil then local l=c.l or c.lightness;v=l+sat*math.min(l,1-l);sat=v==0 and 0 or 2*(1-l/v) end
+   p=hsvToRgb(h,sat,v);p[4]=c.a or c.alpha or 255
+  end
+ end
  return setmetatable({}, {
+  __name='Color',
+  __eq=function(x,y)return x.rgbaPixel==y.rgbaPixel end,
   __index=function(_,k)
-   local i=colorChannels[k]
-   if i then return p[i] end
-   if k=='rgbaPixel' then return pixelRgba(table.unpack(p)) end
+   local i=colorChannels[k];if i then return p[i] end
+   local h,sat,v,l,d=rgbToHsv(p)
+   if k=='rgbaPixel' then return pixelRgba(table.unpack(p))
+   elseif k=='grayPixel' then return byte(p[1])|(byte(p[4])<<8)
+   elseif k=='index' then
+    if index then return index end;local best,dist=0,math.huge
+    for n,c in ipairs(doc.palette) do local e=0;for j=1,4 do e=e+(p[j]-c[j])^2 end;if e<dist then best,dist=n-1,e end end;return best
+   elseif k=='gray' then return gray or byte((p[1]*2126+p[2]*7152+p[3]*722)/10000)
+   elseif k=='hue' or k=='hsvHue' or k=='hslHue' then return h
+   elseif k=='saturation' or k=='hsvSaturation' then return sat
+   elseif k=='value' or k=='hsvValue' then return v
+   elseif k=='lightness' or k=='hslLightness' then return l
+   elseif k=='hslSaturation' then return d==0 and 0 or d/(1-math.abs(2*l-1)) end
   end,
   __newindex=function(t,k,v)
    local i=colorChannels[k]
-   if i then
-    -- lua_tointegerx -> low signed int32 passed to native Color methods.
-    local n=pixelInteger(v)&0xffffffff
-    if n>=0x80000000 then n=n-0x100000000 end
-    p[i]=i==4 and byte(n) or n
-   elseif k=='rgbaPixel' then error('Color.rgbaPixel is read-only')
+   if i then local n=colorInteger(v);p[i]=i==4 and byte(n) or n;index=nil
+   elseif k=='index' then index=v;p=copy(doc.palette[v+1] or {0,0,0,255})
+   elseif k=='gray' then gray=byte(v);p={gray,gray,gray,p[4]}
+   elseif k=='rgbaPixel' or k=='grayPixel' then error('Color.'..k..' is read-only')
+   elseif k=='hue' or k=='hsvHue' or k=='hsvSaturation' or k=='saturation' or k=='value' or k=='hsvValue' then
+    local h,sat,val=rgbToHsv(p);if k=='hue' or k=='hsvHue' then h=v elseif k=='saturation' or k=='hsvSaturation' then sat=v else val=v end;local alpha=p[4];p=hsvToRgb(h,sat,val);p[4]=alpha;index=nil
    else rawset(t,k,v) end
   end
  })
 end
 function Point(x,y) if type(x)=='table' then return {x=x.x or x[1] or 0,y=x.y or x[2] or 0} end return {x=x or 0,y=y or 0} end
-function Size(w,h) return {width=w or 0,height=h or 0} end
+function Size(w,h) if type(w)=='table' then return {width=w.width or w[1] or 0,height=w.height or w[2] or 0} end return {width=w or 0,height=h or 0} end
 function Rectangle(x,y,w,h) if type(x)=='table' then return copy(x) end return {x=x or 0,y=y or 0,width=w or 0,height=h or 0} end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}
@@ -66,18 +118,17 @@ AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}
 -- Native App_get_fgColor 0x50ac90 / App_get_bgColor 0x50ae00 copy
 -- the preference Color into fresh Lua userdata on every read.
 local scriptColors=_pw_colors
-local doc=_pw_document
 local imageMethods={}
-local function image(p,w,h) return setmetatable({_pixels=p,width=w,height=h,colorMode=doc.color_mode,bytesPerPixel=4},{__index=imageMethods}) end
+local function image(p,w,h) return setmetatable({_pixels=p,width=w,height=h,colorMode=doc.color_mode,bytesPerPixel=doc.color_mode=='Rgba' and 4 or doc.color_mode=='Grayscale' and 2 or 1,spec={width=w,height=h,colorMode=doc.color_mode,transparentColor=doc.transparent_index}},{__index=imageMethods}) end
 function Image(w,h,mode)
  if type(w)=='table' and w._pixels then return image(copy(w._pixels),w.width,w.height) end
  if type(w)=='table' then h=w.height;w=w.width end
  assert(type(w)=='number' and type(h)=='number' and w>0 and h>0 and w*h<=16000000,'Image dimensions exceed budget')
  local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h)
 end
-function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 and y>=0 and x<self.width and y<self.height then self._pixels[y*self.width+x+1]=unpackColor(c) end end
+function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 and y>=0 and x<self.width and y<self.height then local value=unpackColor(c);self._pixels[y*self.width+x+1]=value;if self._put then self._put(x,y,value)end end end
 function imageMethods:getPixel(x,y) if x<0 or y<0 or x>=self.width or y>=self.height then return 0 end return rgba(table.unpack(self._pixels[y*self.width+x+1])) end
-function imageMethods:clear(c) for i=1,#self._pixels do self._pixels[i]=unpackColor(c or 0) end end
+function imageMethods:clear(c) for y=0,self.height-1 do for x=0,self.width-1 do self:drawPixel(x,y,c or 0)end end end
 function imageMethods:clone() return Image(self) end
 -- doc::rgba_blender_normal (0x5e81e0): rounded byte products, signed
 -- channel division truncated toward zero. Keep transparent branch ordering.
@@ -93,11 +144,11 @@ end
 function imageMethods:drawImage(src,pos,opacity)
  pos=pos or Point();opacity=byte(opacity or 255)
  for y=0,src.height-1 do for x=0,src.width-1 do
-  local packed=src:getPixel(x,y)
+  local packed=rgba(table.unpack(src._pixels[y*src.width+x+1]))
   -- blend_image_templ<RgbTraits,RgbTraits> (0x5eff40) skips mask zero.
   if packed~=0 then
-   local p=unpackColor(packed);local dst=unpackColor(self:getPixel(x+pos.x,y+pos.y))
-   self:drawPixel(x+pos.x,y+pos.y,rgba(table.unpack(normalOver(dst,p,opacity))))
+   local p=src._pixels[y*src.width+x+1];local dx,dy=x+pos.x,y+pos.y;local dst=(dx>=0 and dy>=0 and dx<self.width and dy<self.height) and self._pixels[dy*self.width+dx+1] or {0,0,0,0}
+   self:drawPixel(x+pos.x,y+pos.y,normalOver(dst,p,opacity))
   end
  end end
 end
@@ -113,12 +164,43 @@ local function frameMilliseconds(seconds)
  ms=math.modf(ms)
  return math.max(1,math.min(65535,ms))
 end
+local function celImage(l,fi)
+ local m=l.cel_meta[fi];local b=m.bounds or {0,0,doc.width,doc.height};local p={}
+ for y=0,b[4]-1 do for x=0,b[3]-1 do local px,py=x+b[1],y+b[2];local color={0,0,0,0}
+  if px>=0 and py>=0 and px<doc.width and py<doc.height then color=l.cels[fi][py*doc.width+px+1]
+  else for _,o in ipairs(m.outside)do if o.x==px and o.y==py then color=o.color;break end end end;p[#p+1]=copy(color)
+ end end
+ local im=image(p,b[3],b[4])
+ im._put=function(x,y,color)
+  local px,py=x+b[1],y+b[2]
+  if px>=0 and py>=0 and px<doc.width and py<doc.height then l.cels[fi][py*doc.width+px+1]=copy(color)
+  else for _,o in ipairs(m.outside)do if o.x==px and o.y==py then o.color=copy(color);return end end;m.outside[#m.outside+1]={x=px,y=py,color=copy(color)} end
+ end
+ return im
+end
+local function putCelImage(l,fi,im,pos)
+ local m=l.cel_meta[fi];m.outside={};m.indices=nil
+ local pixels={} for i=1,doc.width*doc.height do pixels[i]={0,0,0,0}end;l.cels[fi]=pixels
+ m.bounds=(pos.x==0 and pos.y==0 and im.width==doc.width and im.height==doc.height) and nil or {pos.x,pos.y,im.width,im.height}
+ for y=0,im.height-1 do for x=0,im.width-1 do local px,py=pos.x+x,pos.y+y;local color=copy(im._pixels[y*im.width+x+1])
+  if px>=0 and py>=0 and px<doc.width and py<doc.height then pixels[py*doc.width+px+1]=color elseif color[4]~=0 then m.outside[#m.outside+1]={x=px,y=py,color=color} end
+ end end
+end
 local function cel(li,fi)
  local l=assert(doc.layers[li],'Missing layer');assert(doc.durations[fi],'Missing frame');local m=l.cel_meta[fi]
- return setmetatable({},{__index=function(_,k)if k=='image' then return image(l.cels[fi],doc.width,doc.height) elseif k=='opacity' then return m.opacity elseif k=='position' then return Point() elseif k=='frame' then return frameHandles[fi] elseif k=='layer' then return layerHandles[li] end end,__newindex=function(_,k,v)if k=='opacity' then m.opacity=opacityByte(v) elseif k=='image' then assert(v.width==doc.width and v.height==doc.height,'Replacement image must match sprite');l.cels[fi]=copy(v._pixels) elseif k=='position' then error('Moving cels is not supported by the native API') else error('Unsupported cel field: '..k) end end})
+ return setmetatable({},{__index=function(_,k)
+  if k=='image' then return celImage(l,fi) elseif k=='opacity' then return m.opacity elseif k=='zIndex' then return m.z_index
+  elseif k=='position' then return m.bounds and Point(m.bounds[1],m.bounds[2]) or Point()
+  elseif k=='bounds' then local b=m.bounds or {0,0,doc.width,doc.height};return Rectangle(table.unpack(b))
+  elseif k=='frame' then return frameHandles[fi] elseif k=='frameNumber' then return fi elseif k=='layer' then return layerHandles[li] elseif k=='sprite' then return sprite end
+ end,__newindex=function(_,k,v)
+  if k=='opacity' then m.opacity=opacityByte(v) elseif k=='zIndex' then m.z_index=math.max(-32768,math.min(32767,math.floor(v)))
+  elseif k=='image' then putCelImage(l,fi,v,m.bounds and Point(m.bounds[1],m.bounds[2]) or Point())
+  elseif k=='position' then putCelImage(l,fi,celImage(l,fi),Point(v)) else error('Unsupported cel field: '..k) end
+ end})
 end
 local function rebuildHandles()
- layerHandles={} for i,l in ipairs(doc.layers) do layerHandles[i]=setmetatable({_index=i},{__index=function(_,k)if k=='name' then return l.name elseif k=='opacity' then return l.opacity elseif k=='isVisible' then return l.visible elseif k=='isEditable' then return not l.locked elseif k=='isGroup' then return l.group elseif k=='blendMode' then return l.blend elseif k=='sprite' then return sprite elseif k=='cels' then local c={} for f=1,#doc.durations do c[f]=cel(i,f) end return c elseif k=='cel' then return function(_,f)return cel(i,frameNumber(f))end elseif k=='parent' then return l.parent and layerHandles[l.parent+1] or sprite end end,__newindex=function(_,k,v)if k=='name' then l.name=tostring(v) elseif k=='opacity' then l.opacity=opacityByte(v) elseif k=='isVisible' then l.visible=not not v elseif k=='isEditable' then l.locked=not v elseif k=='blendMode' then l.blend=v elseif k=='parent' then if v==sprite then l.parent=nil else l.parent=layerNumber(v)-1 end else error('Unsupported layer field: '..k) end end}) end
+ layerHandles={} for i,l in ipairs(doc.layers) do layerHandles[i]=setmetatable({_index=i},{__index=function(_,k)if k=='name' then return l.name elseif k=='opacity' then return l.opacity elseif k=='isVisible' then return l.visible elseif k=='isEditable' then return not l.locked elseif k=='isTransparent' then return not l.background elseif k=='isBackground' then return l.background elseif k=='isImage' then return not l.group and not l.tileset elseif k=='isTilemap' then return l.tileset~=nil elseif k=='isGroup' then return l.group elseif k=='blendMode' then return l.blend elseif k=='sprite' then return sprite elseif k=='cels' then local c={} for f=1,#doc.durations do c[f]=cel(i,f) end return c elseif k=='cel' then return function(_,f)return cel(i,frameNumber(f))end elseif k=='parent' then return l.parent and layerHandles[l.parent+1] or sprite end end,__newindex=function(_,k,v)if k=='name' then l.name=tostring(v) elseif k=='opacity' then l.opacity=opacityByte(v) elseif k=='isVisible' then l.visible=not not v elseif k=='isEditable' then l.locked=not v elseif k=='blendMode' then l.blend=v elseif k=='parent' then if v==sprite then l.parent=nil else l.parent=layerNumber(v)-1 end else error('Unsupported layer field: '..k) end end}) end
  frameHandles={} for i in ipairs(doc.durations) do frameHandles[i]=setmetatable({frameNumber=i},{__index=function(_,k)if k=='duration' then return doc.durations[i]/1000 elseif k=='sprite' then return sprite end end,__newindex=function(_,k,v)if k=='duration' then doc.durations[i]=frameMilliseconds(v) else error('Unsupported frame field: '..k) end end}) end
 end
 local palette={}
@@ -130,7 +212,7 @@ end
 function palette:resize(n) assert(n>=1 and n<=256,'Palette must contain 1–256 colors');while #doc.palette>n do table.remove(doc.palette) end while #doc.palette<n do table.insert(doc.palette,{0,0,0,255}) end end
 setmetatable(palette,{__len=function()return #doc.palette end})
 local spriteMethods={}
-function spriteMethods:newCel(l,f,im,pos) local li,fi=layerNumber(l),frameNumber(f);local c=cel(li,fi);if im then local target=c.image;target:clear();target:drawImage(im,pos or Point()) end return c end
+function spriteMethods:newCel(l,f,im,pos) local li,fi=layerNumber(l),frameNumber(f);local c=cel(li,fi);if im then putCelImage(doc.layers[li],fi,im,pos or Point()) end return c end
 function spriteMethods:deleteCel(c) c.image:clear() end
 function spriteMethods:newLayer() assert((#doc.layers+1)*#doc.durations*doc.width*doc.height<=64000000,'Layer budget exceeded');local l={name='Layer '..(#doc.layers+1),visible=true,locked=false,opacity=255,cels={},cel_meta={},group=false,blend='Normal',tile_cels={}};for f=1,#doc.durations do l.cels[f]=Image(doc.width,doc.height)._pixels;l.cel_meta[f]={opacity=255,z_index=0,outside={}};l.tile_cels[f]={} end table.insert(doc.layers,l);rebuildHandles();return layerHandles[#doc.layers] end
 function spriteMethods:newGroup() local l=self:newLayer();doc.layers[l._index].group=true;return l end
@@ -199,6 +281,7 @@ function _pw_finish(command,discover)
  if type(init)=='function' then init(_pw_plugin) end
  local list={} for id,c in pairs(commands) do list[#list+1]={id=id,title=c.title or id} end
  if command and command~='' then assert(commands[command],'Plugin command was not registered: '..command);commands[command].onclick() end
+ if not discover and _pw_loop then _pw_loop() end
  hook()
  local function escape(s) return '"'..s:gsub('[%z\1-\31\\"]',function(c)return string.format('\\u%04x',string.byte(c))end)..'"' end
  local function json(v) local t=type(v);if t=='nil' then return 'null' elseif t=='boolean' or t=='number' then return tostring(v) elseif t=='string' then return escape(v) elseif t=='table' then local array=true;local n=0;for k in pairs(v)do if type(k)~='number' then array=false end;n=n+1 end;local out={};if array then for i=1,#v do out[i]=json(v[i]) end return '['..table.concat(out,',')..']' end;for k,val in pairs(v)do out[#out+1]=escape(k)..':'..json(val) end;return '{'..table.concat(out,',')..'}' else error('Cannot serialize '..t) end end

@@ -16,9 +16,9 @@ Disassembly of section .text:
   50aca7:	ba 01 00 00 00       	mov    $0x1,%edx
   50acac:	e8 cf 64 03 00       	call   541180 <_Z17lua_newuserdatauvP9lua_Statemi>
   50acb1:	41 0f 10 86 30 47 00 	movups 0x4730(%r14),%xmm0
-  50acb8:	00 
+  50acb8:	00
   50acb9:	41 0f 10 8e 40 47 00 	movups 0x4740(%r14),%xmm1
-  50acc0:	00 
+  50acc0:	00
   50acc1:	0f 11 00             	movups %xmm0,(%rax)
   50acc4:	0f 11 48 10          	movups %xmm1,0x10(%rax)
   50acc8:	49 8b 8e 50 47 00 00 	mov    0x4750(%r14),%rcx

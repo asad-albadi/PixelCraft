@@ -1,6 +1,44 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_rgb_constructor_preserves_native_integer_channels() {
+    let d = Document::new(1, 1);
+    let edited = run_source(
+        &d,
+        r#"
+        local c=Color{red=-1.2,green='258.9',blue=0x100000063,alpha=258}
+        assert(c.red==-2 and c.green==258 and c.blue==99 and c.alpha==258)
+        local clone=Color(c)
+        c.red=17
+        assert(clone.red==-2 and clone.alpha==258)
+        app.activeImage:drawPixel(0,0,clone.rgbaPixel)
+    "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(edited.layers[0].cels[0][0], [254, 2, 99, 2]);
+}
+
+#[test]
+fn lua_rgb_constructor_uses_one_field_family() {
+    let d = Document::new(1, 1);
+    for (constructor, expected) in [
+        ("{r=1,green=2,blue=3,alpha=4}", [1, 0, 0, 255]),
+        ("{red=1,g=2,b=3,a=4}", [1, 0, 0, 255]),
+        ("{r=false,red=99,g='bad',b=true,a=false}", [0, 0, 0, 0]),
+        ("{red=1,green=2,blue=3,alpha='bad'}", [1, 2, 3, 0]),
+        ("{r=1,g=2,b=3,a=-1}", [1, 2, 3, 255]),
+    ] {
+        let source =
+            format!("local c=Color{constructor}; app.activeImage:drawPixel(0,0,c.rgbaPixel)");
+        let edited = run_source(&d, &source, 0, 0, None).unwrap();
+        assert_eq!(edited.layers[0].cels[0][0], expected, "{constructor}");
+    }
+}
+
+#[test]
 fn lua_color_rgba_pixel_reflects_red_mutation() {
     // A cached packed value paints the old red channel after a Color edit.
     let d = Document::new(1, 1);

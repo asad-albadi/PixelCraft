@@ -149,7 +149,8 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         ColorMode::Indexed => 8,
     };
     out[12..14].copy_from_slice(&depth.to_le_bytes());
-    let header_flags = 3u32
+    let header_flags = 1u32
+        | if d.compose_groups { 2 } else { 0 }
         | if d.layers.iter().any(|l| !l.uuid.is_empty()) {
             4
         } else {
@@ -205,14 +206,20 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             append_metadata(&mut chunks, d, f, "palette");
             for (i, t) in d.tilesets.iter().enumerate() {
                 let mut c = vec![];
-                dword(&mut c, i as u32);
-                dword(&mut c, 6);
+                let info = d.ase_tilesets.iter().find(|v| v.index == i);
+                dword(&mut c, info.map_or(i as u32, |v| v.id));
+                // Resolved external tiles are embedded too, making saves portable.
+                dword(&mut c, info.map_or(6, |v| v.flags | 6));
                 dword(&mut c, (t.tiles.len() + 1) as u32);
                 word(&mut c, t.width as u16);
                 word(&mut c, t.height as u16);
-                word(&mut c, 1);
+                word(&mut c, info.map_or(1, |v| v.base_index) as u16);
                 c.extend([0; 14]);
                 string(&mut c, &t.name)?;
+                if let Some(link) = info.and_then(|v| v.external) {
+                    dword(&mut c, link[0]);
+                    dword(&mut c, link[1]);
+                }
                 let mut p = vec![CLEAR; t.width * t.height];
                 for tile in &t.tiles {
                     p.extend(tile.iter().copied());
@@ -308,12 +315,26 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             let palette = effective_palette.as_slice();
             let (mut x, mut y, mut w, mut h) = (0i32, 0i32, d.width, d.height);
             if l.tileset.is_none() {
+                if let Some(bounds) = m.bounds {
+                    x = bounds[0];
+                    y = bounds[1];
+                    w = bounds[2] as usize;
+                    h = bounds[3] as usize;
+                }
+                let mut maxx = x + w as i32;
+                let mut maxy = y + h as i32;
+                for (i, p) in l.cels[f].iter().enumerate().filter(|(_, p)| p[3] != 0) {
+                    let (cx, cy) = ((i % d.width) as i32, (i / d.width) as i32);
+                    let _ = p;
+                    x = x.min(cx);
+                    y = y.min(cy);
+                    maxx = maxx.max(cx + 1);
+                    maxy = maxy.max(cy + 1);
+                }
                 for p in &m.outside {
                     x = x.min(p.x);
                     y = y.min(p.y);
                 }
-                let mut maxx = d.width as i32;
-                let mut maxy = d.height as i32;
                 for p in &m.outside {
                     maxx = maxx.max(p.x + 1);
                     maxy = maxy.max(p.y + 1);
@@ -329,6 +350,10 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                     return Err("Off-canvas cel exceeds ASE limits".into());
                 }
             }
+            if let Some(g) = &m.tilemap {
+                x = g.x;
+                y = g.y;
+            }
             let mut c = vec![];
             word(&mut c, ids[li] as u16);
             word(&mut c, x as i16 as u16);
@@ -339,8 +364,19 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             c.extend([0; 5]);
             if let Some(ti) = l.tileset {
                 let t = &d.tilesets[ti];
-                word(&mut c, d.width.div_ceil(t.width) as u16);
-                word(&mut c, d.height.div_ceil(t.height) as u16);
+                word(
+                    &mut c,
+                    m.tilemap
+                        .as_ref()
+                        .map_or(d.width.div_ceil(t.width), |g| g.columns)
+                        as u16,
+                );
+                word(
+                    &mut c,
+                    m.tilemap
+                        .as_ref()
+                        .map_or(d.height.div_ceil(t.height), |g| g.rows) as u16,
+                );
                 word(&mut c, 32);
                 for mask in [0x1fffffff, 0x80000000, 0x40000000, 0x20000000] {
                     dword(&mut c, mask)
@@ -357,8 +393,14 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                 let mut p = vec![CLEAR; w * h];
                 for cy in 0..d.height {
                     for cx in 0..d.width {
-                        p[(cy as i32 - y) as usize * w + (cx as i32 - x) as usize] =
-                            l.cels[f][cy * d.width + cx];
+                        if (cx as i32) >= x
+                            && (cy as i32) >= y
+                            && (cx as i32) < x + w as i32
+                            && (cy as i32) < y + h as i32
+                        {
+                            p[(cy as i32 - y) as usize * w + (cx as i32 - x) as usize] =
+                                l.cels[f][cy * d.width + cx];
+                        }
                     }
                 }
                 for o in &m.outside {
@@ -372,7 +414,12 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                             for cx in 0..d.width {
                                 let i = cy * d.width + cx;
                                 let id = stored[i];
-                                if palette.get(id as usize) == Some(&l.cels[f][i]) {
+                                if cx as i32 >= x
+                                    && cy as i32 >= y
+                                    && (cx as i32) < x + w as i32
+                                    && (cy as i32) < y + h as i32
+                                    && palette.get(id as usize) == Some(&l.cels[f][i])
+                                {
                                     indices
                                         [(cy as i32 - y) as usize * w + (cx as i32 - x) as usize] =
                                         id;
@@ -406,6 +453,15 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
+    decode_ase_with_resolver(b, &mut |file, _| {
+        Err(format!("External tileset requires a file resolver: {file}"))
+    })
+}
+/// Resolve external references relative to the containing project, never an editor installation.
+pub fn decode_ase_with_resolver(
+    b: &[u8],
+    resolver: &mut dyn FnMut(&str, u32) -> Result<Tileset, String>,
+) -> Result<Document, String> {
     if b.len() < 128 || u16at(b, 4)? != 0xA5E0 {
         return Err("This is not an ASE sprite file".into());
     }
@@ -428,6 +484,7 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
         return Err("Sprite exceeds canvas or memory limits".into());
     }
     let mut d = Document::new(w, h);
+    d.compose_groups = u32at(b, 14)? & 2 != 0;
     d.layers.clear();
     d.durations = vec![100; frames];
     d.color_mode = match depth {
@@ -458,6 +515,8 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
     let mut p = 128;
     let mut deferred_tiles = vec![];
     let mut palettes = vec![];
+    let mut external_files = std::collections::HashMap::new();
+    let mut legacy_tilesets = vec![];
     for f in 0..frames {
         let size = u32at(b, p)? as usize;
         let end = p
@@ -487,6 +546,16 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
         }
         if c != end {
             return Err("Frame chunk count does not match its size".into());
+        }
+        for &(kind, data) in &chunks {
+            if kind == 0x2008 {
+                let mut q = 12;
+                for _ in 0..u32at(data, 0)? {
+                    let id = u32at(data, q)?;
+                    q += 12;
+                    external_files.insert(id, read_string(data, &mut q)?);
+                }
+            }
         }
         // Palettes can follow cels. Resolve them before decoding image indices.
         let has_new = chunks.iter().any(|(k, _)| *k == 0x2019);
@@ -614,6 +683,20 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
                         deferred_tiles.push((li, f, x, y, data.to_vec()));
                         continue;
                     }
+                    if ty == 1 && d.layers[li].tileset.is_some() {
+                        let link = u16at(data, 16)? as usize;
+                        if link >= f {
+                            return Err("Invalid linked tilemap".into());
+                        }
+                        let source = deferred_tiles
+                            .iter()
+                            .find(|(l, frame, _, _, _)| *l == li && *frame == link)
+                            .ok_or("Linked tilemap is missing")?
+                            .4
+                            .clone();
+                        deferred_tiles.push((li, f, x, y, source));
+                        continue;
+                    }
                     let (cw, ch, pixels, indices) = match ty {
                         0 | 2 => {
                             let cw = u16at(data, 16)? as usize;
@@ -666,6 +749,9 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
                         }
                         _ => return Err("Unknown cel encoding".into()),
                     };
+                    if x != 0 || y != 0 || cw != w || ch != h {
+                        d.layers[li].cel_meta[f].bounds = Some([x, y, cw as i32, ch as i32]);
+                    }
                     if indices.is_some() {
                         d.layers[li].cel_meta[f].indices =
                             Some(std::sync::Arc::new(vec![transparent as u8; w * h]));
@@ -740,30 +826,51 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
                     {
                         return Err("Invalid tileset dimensions".into());
                     }
-                    if fl & 2 == 0 {
-                        return Err(
-                            "External-only tilesets must be embedded before importing".into()
-                        );
-                    }
                     let mut q = 32;
                     let name = read_string(data, &mut q)?;
-                    if fl & 1 != 0 {
+                    let external = if fl & 1 != 0 {
+                        let link = [u32at(data, q)?, u32at(data, q + 4)?];
                         q += 8;
-                    }
-                    let len = u32at(data, q)? as usize;
-                    q += 4;
-                    let bytes = decompress(
-                        data.get(q..q + len).ok_or("Truncated tileset")?,
-                        tw * th * n * (depth / 8),
-                    )?;
-                    let pixels = read_pixels(&bytes, depth, &d.palette, transparent, false)?;
-                    if id != d.tilesets.len() {
-                        return Err("Non-sequential tileset IDs are unsupported".into());
-                    }
-                    let mut tiles: Vec<Pixels> =
-                        pixels.chunks(tw * th).map(|p| p.to_vec().into()).collect();
-                    if fl & 4 != 0 {
-                        tiles.remove(0);
+                        Some(link)
+                    } else {
+                        None
+                    };
+                    let tiles = if fl & 2 != 0 {
+                        let len = u32at(data, q)? as usize;
+                        q += 4;
+                        let bytes = decompress(
+                            data.get(q..q + len).ok_or("Truncated tileset")?,
+                            tw * th * n * (depth / 8),
+                        )?;
+                        let pixels = read_pixels(&bytes, depth, &d.palette, transparent, false)?;
+                        let mut tiles: Vec<Pixels> =
+                            pixels.chunks(tw * th).map(|p| p.to_vec().into()).collect();
+                        if fl & 4 != 0 {
+                            tiles.remove(0);
+                        }
+                        tiles
+                    } else {
+                        let link =
+                            external.ok_or("Tileset has neither pixels nor external reference")?;
+                        let file = external_files
+                            .get(&link[0])
+                            .ok_or("Missing external file entry")?;
+                        let resolved = resolver(file, link[1])?;
+                        if resolved.width != tw || resolved.height != th {
+                            return Err("External tileset dimensions differ".into());
+                        }
+                        resolved.tiles
+                    };
+                    let index = d.tilesets.len();
+                    legacy_tilesets.push(fl & 4 == 0);
+                    if id != index || fl != 6 || u16at(data, 16)? != 1 {
+                        d.ase_tilesets.push(AseTilesetInfo {
+                            index,
+                            id: id as u32,
+                            flags: fl | 6,
+                            base_index: u16at(data, 16)? as i16,
+                            external,
+                        });
                     }
                     d.tilesets.push(Tileset {
                         name,
@@ -771,7 +878,15 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
                         height: th,
                         tiles,
                     });
-                    owner = format!("tileset:{id}");
+                    owner = format!("tileset:{index}");
+                }
+                0x2008 => {
+                    d.metadata.push(MetadataChunk {
+                        frame: f,
+                        kind,
+                        data: data.to_vec(),
+                        owner: String::new(),
+                    });
                 }
                 _ => {
                     d.metadata.push(MetadataChunk {
@@ -794,35 +909,47 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
         let cw = u16at(&data, 16)? as usize;
         let ch = u16at(&data, 18)? as usize;
         let bits = u16at(&data, 20)? as usize;
-        if bits != 32 || cw * ch > MAX_PIXELS {
+        if ![8, 16, 32].contains(&bits) || cw == 0 || ch == 0 || cw * ch > MAX_PIXELS {
             return Err("Unsupported tile size".into());
         }
         let mask = u32at(&data, 22)?;
         let mx = u32at(&data, 26)?;
         let my = u32at(&data, 30)?;
         let md = u32at(&data, 34)?;
-        let b = decompress(data.get(48..).ok_or("Truncated tilemap")?, cw * ch * 4)?;
+        let b = decompress(
+            data.get(48..).ok_or("Truncated tilemap")?,
+            cw * ch * (bits / 8),
+        )?;
         let cols = w.div_ceil(t.width);
         let rows = h.div_ceil(t.height);
-        if x < 0
-            || y < 0
-            || x as usize % t.width != 0
-            || y as usize % t.height != 0
-            || x as usize / t.width + cw > cols
-            || y as usize / t.height + ch > rows
-        {
-            return Err("Off-grid tilemap geometry requires a native project".into());
-        }
-        let mut tiles = vec![0; cols * rows];
-        for cy in 0..ch {
-            for cx in 0..cw {
-                let v = u32at(&b, (cy * cw + cx) * 4)?;
-                let id = (v & mask)
-                    | if v & mx != 0 { 0x80000000 } else { 0 }
-                    | if v & my != 0 { 0x40000000 } else { 0 }
-                    | if v & md != 0 { 0x20000000 } else { 0 };
-                tiles[(y as usize / t.height + cy) * cols + x as usize / t.width + cx] = id;
+        let canonical = x == 0 && y == 0 && cw == cols && ch == rows;
+        let mut tiles = vec![0; cw * ch];
+        for (i, bytes) in b.chunks_exact(bits / 8).enumerate() {
+            let mut buf = [0; 4];
+            buf[..bytes.len()].copy_from_slice(bytes);
+            let v = u32::from_le_bytes(buf);
+            let empty = if legacy_tilesets[ti] {
+                v == ((1u64 << bits) - 1) as u32
+            } else {
+                v & mask == 0
+            };
+            if empty {
+                continue;
             }
+            let tile_id = (v & mask) >> mask.trailing_zeros().min(31);
+            let tile_id = tile_id + u32::from(legacy_tilesets[ti]);
+            tiles[i] = tile_id
+                | if v & mx != 0 { 0x80000000 } else { 0 }
+                | if v & my != 0 { 0x40000000 } else { 0 }
+                | if v & md != 0 { 0x20000000 } else { 0 };
+        }
+        if !canonical {
+            d.layers[li].cel_meta[f].tilemap = Some(TilemapGeometry {
+                x,
+                y,
+                columns: cw,
+                rows: ch,
+            });
         }
         d.layers[li].tile_cels[f] = tiles;
     }
@@ -843,6 +970,37 @@ pub fn decode_ase(b: &[u8]) -> Result<Document, String> {
     d.validate()?;
     Ok(d)
 }
+fn load_ase_path(path: &Path, stack: &mut Vec<std::path::PathBuf>) -> Result<Document, String> {
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if stack.len() >= 16 || stack.contains(&path) {
+        return Err("External tileset reference cycle or depth limit".into());
+    }
+    stack.push(path.clone());
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let result = decode_ase_with_resolver(&bytes, &mut |file, id| {
+        let external = load_ase_path(&path.parent().unwrap().join(file.replace('\\', "/")), stack)?;
+        let index = external
+            .ase_tilesets
+            .iter()
+            .find(|v| v.id == id)
+            .map(|v| v.index)
+            .or_else(|| {
+                ((id as usize) < external.tilesets.len()
+                    && !external.ase_tilesets.iter().any(|v| v.index == id as usize))
+                .then_some(id as usize)
+            })
+            .ok_or("External tileset ID not found")?;
+        external
+            .tilesets
+            .get(index)
+            .cloned()
+            .ok_or("External tileset ID not found".into())
+    });
+    stack.pop();
+    result
+}
 pub fn load(path: &Path) -> Result<Document, String> {
     let ext = path
         .extension()
@@ -853,7 +1011,7 @@ pub fn load(path: &Path) -> Result<Document, String> {
         return decode_project(&std::fs::read(path).map_err(|e| e.to_string())?);
     }
     if ext == "ase" || ext == "aseprite" {
-        return decode_ase(&std::fs::read(path).map_err(|e| e.to_string())?);
+        return load_ase_path(path, &mut Vec::new());
     }
     let im = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
     let (w, h) = im.dimensions();

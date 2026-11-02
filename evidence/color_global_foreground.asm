@@ -27,7 +27,7 @@ Disassembly of section .text:
   22cef0:	84 c0                	test   %al,%al
   22cef2:	74 0a                	je     22cefe <app::ColorBar::onFgColorButtonChange(app::Color const&)+0x5e>
   22cef4:	41 c6 87 58 47 00 00 	movb   $0x1,0x4758(%r15)
-  22cefb:	01 
+  22cefb:	01
   22cefc:	eb 70                	jmp    22cf6e <app::ColorBar::onFgColorButtonChange(app::Color const&)+0xce>
   22cefe:	49 8d bf 88 46 00 00 	lea    0x4688(%r15),%rdi
   22cf05:	4c 89 f6             	mov    %r14,%rsi
@@ -44,7 +44,7 @@ Disassembly of section .text:
   22cf34:	41 0f 11 4c 24 10    	movups %xmm1,0x10(%r12)
   22cf3a:	41 0f 11 04 24       	movups %xmm0,(%r12)
   22cf3f:	41 c6 87 58 47 00 00 	movb   $0x1,0x4758(%r15)
-  22cf46:	01 
+  22cf46:	01
   22cf47:	4c 89 ff             	mov    %r15,%rdi
   22cf4a:	48 81 c7 c8 46 00 00 	add    $0x46c8,%rdi
   22cf51:	4c 89 f6             	mov    %r14,%rsi
@@ -77,4 +77,4 @@ Disassembly of section .text:
   22cfc2:	e8 19 9c f1 ff       	call   146be0 <_Unwind_Resume@plt>
   22cfc7:	90                   	nop
   22cfc8:	0f 1f 84 00 00 00 00 	nopl   0x0(%rax,%rax,1)
-  22cfcf:	00 
+  22cfcf:	00

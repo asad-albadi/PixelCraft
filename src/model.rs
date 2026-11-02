@@ -127,12 +127,23 @@ pub struct OutsidePixel {
     pub color: Pixel,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TilemapGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub columns: usize,
+    pub rows: usize,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CelMeta {
     pub opacity: u8,
     pub z_index: i16,
     pub outside: Vec<OutsidePixel>,
     #[serde(default)]
     pub indices: Option<Arc<Vec<u8>>>,
+    #[serde(default)]
+    pub tilemap: Option<TilemapGeometry>,
+    #[serde(default)]
+    pub bounds: Option<[i32; 4]>,
 }
 impl Default for CelMeta {
     fn default() -> Self {
@@ -141,6 +152,8 @@ impl Default for CelMeta {
             z_index: 0,
             outside: vec![],
             indices: None,
+            tilemap: None,
+            bounds: None,
         }
     }
 }
@@ -209,7 +222,17 @@ impl Layer {
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AseTilesetInfo {
+    pub index: usize,
+    pub id: u32,
+    pub flags: u32,
+    pub base_index: i16,
+    pub external: Option<[u32; 2]>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
+    #[serde(default = "default_compose_groups")]
+    pub compose_groups: bool,
     pub width: usize,
     pub height: usize,
     pub layers: Vec<Layer>,
@@ -226,9 +249,13 @@ pub struct Document {
     pub drawing_index: Option<usize>,
     pub tags: Vec<FrameTag>,
     pub tilesets: Vec<Tileset>,
+    #[serde(default)]
+    pub ase_tilesets: Vec<AseTilesetInfo>,
     pub metadata: Vec<MetadataChunk>,
     pub color_profile: Vec<u8>,
     pub brush_shape: BrushShape,
+    #[serde(default)]
+    pub dithering: Option<crate::contributions::DitheringMatrix>,
 }
 pub fn default_palette() -> Vec<Pixel> {
     let mut p = vec![CLEAR];
@@ -428,10 +455,14 @@ pub fn blend(dst: Pixel, src: Pixel, opacity: u8, mode: BlendMode) -> Pixel {
     out[3] = (a * 255.).round() as u8;
     out
 }
+fn default_compose_groups() -> bool {
+    true
+}
 impl Document {
     pub fn new(w: usize, h: usize) -> Self {
         assert!(w > 0 && h > 0 && w <= MAX_DIMENSION && h <= MAX_DIMENSION && w * h <= MAX_PIXELS);
         Self {
+            compose_groups: true,
             width: w,
             height: h,
             layers: vec![Layer::new("Layer 1".into(), w, h, 1)],
@@ -444,12 +475,17 @@ impl Document {
             drawing_index: None,
             tags: vec![],
             tilesets: vec![],
+            ase_tilesets: vec![],
             metadata: vec![],
             color_profile: vec![],
             brush_shape: BrushShape::Round,
+            dithering: None,
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        if self.dithering.as_ref().is_some_and(|m| !m.validate()) {
+            return Err("Invalid dithering matrix".into());
+        }
         if self.width == 0
             || self.height == 0
             || self.width > MAX_DIMENSION
@@ -473,6 +509,34 @@ impl Document {
             return Err("Palette must contain 1–256 colors".into());
         }
         for (i, l) in self.layers.iter().enumerate() {
+            for m in &l.cel_meta {
+                if m.bounds.is_some_and(|b| {
+                    b[0] < i16::MIN as i32
+                        || b[0] > i16::MAX as i32
+                        || b[1] < i16::MIN as i32
+                        || b[1] > i16::MAX as i32
+                        || b[2] < 0
+                        || b[3] < 0
+                        || b[2] > 65535
+                        || b[3] > 65535
+                        || (b[2] as usize).saturating_mul(b[3] as usize) > MAX_PIXELS
+                }) {
+                    return Err("Invalid cel bounds".into());
+                }
+                if m.tilemap.as_ref().is_some_and(|g| {
+                    g.columns == 0
+                        || g.rows == 0
+                        || g.columns > 65535
+                        || g.rows > 65535
+                        || g.columns.saturating_mul(g.rows) > MAX_PIXELS
+                        || g.x < i16::MIN as i32
+                        || g.x > i16::MAX as i32
+                        || g.y < i16::MIN as i32
+                        || g.y > i16::MAX as i32
+                }) {
+                    return Err("Invalid tilemap geometry".into());
+                }
+            }
             if l.cel_meta.iter().any(|m| {
                 m.indices
                     .as_ref()
@@ -502,8 +566,14 @@ impl Document {
                     return Err("Invalid tileset size".into());
                 }
                 let count = self.width.div_ceil(t.width) * self.height.div_ceil(t.height);
-                if l.tile_cels.iter().any(|c| {
-                    c.len() != count || c.iter().any(|v| (v & 0x1fffffff) as usize > t.tiles.len())
+                if l.tile_cels.iter().enumerate().any(|(f, c)| {
+                    let count = l.cel_meta[f]
+                        .tilemap
+                        .as_ref()
+                        .map_or(count, |g| g.columns.saturating_mul(g.rows));
+                    count > MAX_PIXELS
+                        || c.len() != count
+                        || c.iter().any(|v| (v & 0x1fffffff) as usize > t.tiles.len())
                 }) {
                     return Err("Invalid tile reference".into());
                 }
@@ -605,7 +675,12 @@ impl Document {
                             .copied()
                             .filter(|n| p.get(*n as usize) == Some(v))
                             .map(|n| n as usize)
-                            .unwrap_or_else(|| nearest(*v, p));
+                            .unwrap_or_else(|| {
+                                self.dithering.as_ref().map_or_else(
+                                    || nearest(*v, p),
+                                    |m| m.index(*v, p, i % self.width, i / self.width),
+                                )
+                            });
                         indices.push(n as u8);
                         *v = p[n];
                     } else {
@@ -657,7 +732,12 @@ impl Document {
                             .copied()
                             .filter(|n| p.get(*n as usize) == Some(v))
                             .map(|n| n as usize)
-                            .unwrap_or_else(|| nearest(*v, p));
+                            .unwrap_or_else(|| {
+                                self.dithering.as_ref().map_or_else(
+                                    || nearest(*v, p),
+                                    |m| m.index(*v, p, i % self.width, i / self.width),
+                                )
+                            });
                         if n == index {
                             let mut replacement = color;
                             if index == self.transparent_index && !l.background {
@@ -870,7 +950,9 @@ impl Document {
         let Some(t) = self.tilesets.get(ti) else {
             return vec![CLEAR; self.width * self.height];
         };
-        let cols = self.width.div_ceil(t.width);
+        let geometry = layer.cel_meta[f].tilemap.as_ref();
+        let cols = geometry.map_or(self.width.div_ceil(t.width), |g| g.columns);
+        let (ox, oy) = geometry.map_or((0, 0), |g| (g.x, g.y));
         let mut out = vec![CLEAR; self.width * self.height];
         for (i, &id) in layer.tile_cels[f].iter().enumerate() {
             let n = (id & 0x1fffffff) as usize;
@@ -884,10 +966,10 @@ impl Document {
                 for x in 0..t.width {
                     let (mut sx, mut sy) = (x, y);
                     if id & 0x20000000 != 0 {
-                        if t.width != t.height {
-                            continue;
-                        }
-                        std::mem::swap(&mut sx, &mut sy)
+                        std::mem::swap(&mut sx, &mut sy);
+                    }
+                    if sx >= t.width || sy >= t.height {
+                        continue;
                     }
                     if id & 0x80000000 != 0 {
                         sx = t.width - 1 - sx
@@ -896,8 +978,8 @@ impl Document {
                         sy = t.height - 1 - sy
                     }
                     if let Some(p) = self.index(
-                        (i % cols * t.width + x) as i32,
-                        (i / cols * t.height + y) as i32,
+                        ox + (i % cols * t.width + x) as i32,
+                        oy + (i / cols * t.height + y) as i32,
                     ) {
                         out[p] = tile[sy * t.width + sx];
                     }
@@ -911,8 +993,12 @@ impl Document {
     }
     fn composite_group(&self, f: usize, parent: Option<usize>, depth: usize) -> Vec<Pixel> {
         let mut out = vec![CLEAR; self.width * self.height];
+        self.composite_into(f, parent, depth, &mut out);
+        out
+    }
+    fn composite_into(&self, f: usize, parent: Option<usize>, depth: usize, out: &mut Vec<Pixel>) {
         if depth > self.layers.len() {
-            return out;
+            return;
         }
         let mut order: Vec<_> = self
             .layers
@@ -924,6 +1010,10 @@ impl Document {
         order.sort_by_key(|p| (p.0, self.layers[p.1].cel_meta[f].z_index));
         for (_, i) in order {
             let l = &self.layers[i];
+            if l.group && !self.compose_groups {
+                self.composite_into(f, Some(i), depth + 1, out);
+                continue;
+            }
             let pixels = if l.group {
                 self.composite_group(f, Some(i), depth + 1)
             } else {
@@ -934,7 +1024,6 @@ impl Document {
                 *d = blend(*d, s, opacity, l.blend);
             }
         }
-        out
     }
     pub fn add_frame(&mut self, f: usize, duplicate: bool) {
         if !self.can_grow(self.width * self.height * self.layers.len()) {
@@ -1065,11 +1154,10 @@ impl Document {
             .tileset
             .and_then(|i| self.tilesets.get(i))
             .ok_or("Select a tile layer")?;
-        let cols = self.width.div_ceil(t.width);
-        if x >= cols
-            || y >= self.height.div_ceil(t.height)
-            || (tile & 0x1fffffff) as usize > t.tiles.len()
-        {
+        let geometry = self.layers[l].cel_meta[f].tilemap.as_ref();
+        let cols = geometry.map_or(self.width.div_ceil(t.width), |g| g.columns);
+        let rows = geometry.map_or(self.height.div_ceil(t.height), |g| g.rows);
+        if x >= cols || y >= rows || (tile & 0x1fffffff) as usize > t.tiles.len() {
             return Err("Tile is outside the map or tileset".into());
         }
         self.layers[l].tile_cels[f][y * cols + x] = tile;

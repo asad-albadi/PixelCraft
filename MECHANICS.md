@@ -1,3 +1,29 @@
+## Current native audit — RGB table construction (2026-11-02)
+
+Freshly opened the original main program `aseprite-reference` with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. The earlier audits below continue to document drawing, timing, blending, settings and other recovered behavior.
+
+`native_strings_find` searched names, settings and messages with `^Color$|^gray$|^color_bar$|invalid_fg_or_bg`, returning all nine matches (`ev_ddb5c202457d618cbd33862584c035349d8c27cc3768fe55aabde1791723197e`). Followed `gray` at `0xf600c9` through `native_xrefs_list` to the constructor reference at `0x3c5a28` (`ev_9a6da2cc03b4d2699b5a0dafdac04db8ed93a982fd64cca130a4f7636615424c`); `native_function_find` resolved its entry to `0x3c54a0` (`ev_e4765b6d0bb9f4875358fe6a81bb95e60dbfe57573796d0f0021ffd044417313`). Outgoing calls connect that constructor to `Color::fromRgb` and `lua_tointegerx` (`ev_288c0e4475a90d6f265432a51d36b8427f8a92b67694821fd31f46217dd043a0`); the latter calls `luaV_tointeger` (`ev_b28793b0187f347b6222abf9101486dc88c1a6b918202366d8ecea6cccd03f11`). The setting and alert are search anchors, not evidence for additional implemented behavior.
+
+Completed four sequential `native_function_pseudocode` requests, awaiting and reading each result before requesting the next:
+
+| Function | Entry | Completed pseudocode evidence |
+| --- | --- | --- |
+| Color_new | `0x3c54a0` | `ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309` |
+| Color::fromRgb | `0x16a5c0` | `ev_c724d1688af7d34962c3e4f0afc5742839218376fffd3d2f0d75d454089a1df7` |
+| lua_tointegerx | `0x53eab0` | `ev_78c9a310d50d382a08c8075b32d95dfb2ca81997767d81b8e819b090e8d6f085` |
+| luaV_tointeger | `0x554930` | `ev_7dd36e27cd0eb6dae6de9ba81c4d37681caf8ae8b8398562a3f91b06bf401f51` |
+
+Ghidra timed out; these completed responses use the built-in register-level decompiler. Conditional/type recovery is approximate. Also read all 449 constructor instructions (`ev_e15bd624ea78eb0761226710ff962f1b10fe28ec27bdbc385597543d6746b2e6`), retained as `evidence/color_constructor.asm`, to confirm field selection and 32-bit argument narrowing. Temporarily limited Ghidra startup to 15 seconds, then restored the original null setting.
+
+Recovered rules now used in `src/lua_api.lua`:
+
+- If table `r` is non-nil (including false), select **only** `r/g/b/a`; otherwise, if `red` is non-nil, select **only** `red/green/blue/alpha`. Missing RGB fields convert to zero. Missing/nil alpha defaults to **255**. Fields in the other family do not supply missing components. RGB forms take priority over indexed/gray/HSV forms.
+- For each supplied channel, use `J(v)=signed32(I(v)&0xffffffff)`, where the previously recovered `I` uses integer identity, floor conversion of finite numbers/numeric strings within signed64 range, and zero on failed conversion. `Color::fromRgb` writes the four signed32 values directly at offsets `+8,+12,+16,+20`; it does **not** saturate alpha or RGB during construction. This differs from subsequent alpha assignment's clamp.
+- Copying an RGB Color retains its channel values in independent state. Packing through the previously audited `rgbaPixel` getter masks each channel to its low byte: constructing `{red=-1.2,green='258.9',blue=0x100000063,alpha=258}` retains **[-2,258,99,258]** and packs to **[254,2,99,2]**.
+- Fixed constructor field mixing and saturation, preserved RGB values when copying, and shared signed32 conversion with the existing setters. Internal array colors and string conveniences remain supported. Numeric constructor overloads, empty-table defaults, gray/index/HSV/HSL state copying, exact alternate-color conversions, and full Color parity are outside this correction.
+
+Both new embedded-Lua regressions failed before the fix: native integer state assertion failed, and mixed-field construction painted `[1,2,3,4]` instead of `[1,0,0,255]`. Both pass after the fix. Fresh verification: all **99 tests** pass (`checks/native-constructor-tests.log`); `cargo fmt --check` and `cargo build --offline --locked` pass. Craft Anything `rebuild_check` passes build, desktop startup/screenshot (942×1005) and mechanics validation (24 values, 23 sourced and one estimated). These checks establish this correction and a working build; full ecosystem parity remains unresolved.
+
 ## Current native audit — mutable Lua RGB Colors (2026-11-02)
 
 Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode; SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Prior audits below remain evidence for their respective mechanics.
