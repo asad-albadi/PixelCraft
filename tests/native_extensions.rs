@@ -1,6 +1,50 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_gray_assignment_preserves_signed_state_and_alpha() {
+    // Saturating gray before packing loses the native low byte.
+    for (value, gray, expected) in [
+        ("-1.2", -2, [254, 254, 254, 2]),
+        ("'258.9'", 258, [2, 2, 2, 2]),
+        ("0x100000063", 99, [99, 99, 99, 2]),
+        ("false", 0, [0, 0, 0, 2]),
+    ] {
+        let source = format!(
+            r#"
+            local c=Color{{r=10,g=20,b=30,a=258}}
+            c.gray={value}
+            assert(c.gray=={gray} and c.alpha==258)
+            local p=c.grayPixel
+            app.activeImage:drawPixel(0,0,app.pixelColor.rgba(p&255,p&255,p&255,(p>>8)&255))
+        "#
+        );
+        let edited = run_source(&Document::new(1, 1), &source, 0, 0, None).unwrap();
+        assert_eq!(edited.layers[0].cels[0][0], expected, "{value}");
+    }
+}
+
+#[test]
+fn lua_gray_assignment_then_rgb_edit_recomputes_gray() {
+    // An RGB setter reconstructs an RGB Color, discarding prior gray state.
+    let edited = run_source(
+        &Document::new(1, 1),
+        r#"
+        local c=Color{r=10,g=20,b=30,a=99}
+        c.gray=40
+        c.alpha=88
+        c.red=200
+        local p=c.grayPixel
+        app.activeImage:drawPixel(0,0,app.pixelColor.rgba(p&255,p&255,p&255,(p>>8)&255))
+    "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(edited.layers[0].cels[0][0], [120, 120, 120, 88]);
+}
+
+#[test]
 fn lua_rgb_gray_uses_native_hsl_lightness() {
     // Luma weighting would make the three primary colors different shades.
     let edited = run_source(

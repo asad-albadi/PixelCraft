@@ -30,7 +30,7 @@
 </p>
 
 <p align="center">
-  <img src="shots/pixelcraft.png" alt="PixelCraft's dark teal interface editing a mushroom garden sprite, with its color palette, drawing tools, layer controls and four-frame animation timeline" width="100%">
+  <img src="shots/pixelcraft.png" alt="PixelCraft's current interface at 1920×1080, showing sprite tabs, the compact Colors selector, used-color swatches, mushroom garden artwork, drawing tools and animation timeline" width="100%">
   <br>
   <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
 </p>
@@ -184,6 +184,6 @@ The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LI
 
 **Help → About** shows the developer, installed version (from Cargo), latest stable GitHub release, and a download link when an update is available. The GitHub icon beside PixelCraft opens the project repository. A centered **New version found** link appears when a newer release is confirmed. Checks run in the background at startup, hourly while the editor is open, and through **Check for updates**; failed checks never announce an update.
 
-Tagged GitHub Actions builds automatically embed their repository and repository owner. For local builds, set `PIXELCRAFT_REPOSITORY=owner/repository` and optionally `PIXELCRAFT_DEVELOPER` when building, or enter the repository URL and developer name under **About → Developer and repository → Save and check**. These settings are remembered in PixelCraft's preferences. Local builds require this setting before GitHub links and release checks can work.
+The developer credit defaults to Asad, the author recorded in `Cargo.toml`. Tagged GitHub Actions builds automatically embed their repository and keep this developer credit. For local builds, set `PIXELCRAFT_REPOSITORY=owner/repository` and optionally `PIXELCRAFT_DEVELOPER` when building. The About dialog includes a read-only Developer and repository section, without editable fields or a save button. Previously saved developer and repository values in `about.json` are ignored; the build identity always supplies these fields. Local builds require the build-time repository setting before GitHub links and release checks can work.
 
 The GitHub mark in `assets/github-mark.svg` is from [GitHub Octicons](https://github.com/primer/octicons), licensed under the MIT License; the PNG is a rendered copy.

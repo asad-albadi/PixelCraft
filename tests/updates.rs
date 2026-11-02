@@ -65,3 +65,29 @@ fn repository_links_use_only_valid_github_repositories() {
         Some("https://github.com/example/pixelcraft/releases/latest")
     );
 }
+
+#[test]
+fn saved_blank_about_fields_keep_the_build_identity() {
+    use pixelcraft::updates::AboutInfo;
+    let info: AboutInfo = serde_json::from_str(r#"{"developer":"","repository":""}"#).unwrap();
+    assert!(!info.developer.trim().is_empty());
+}
+
+#[test]
+fn saved_about_identity_cannot_override_build_credits_or_release_destination() {
+    use pixelcraft::updates::AboutInfo;
+    let info: AboutInfo = serde_json::from_str(
+        r#"{"developer":"Previous custom author","repository":"https://github.com/previous/custom-repo.git"}"#,
+    ).unwrap();
+    assert_eq!(
+        info.developer,
+        option_env!("PIXELCRAFT_DEVELOPER").unwrap_or(env!("CARGO_PKG_AUTHORS"))
+    );
+    assert_eq!(
+        info.repository,
+        option_env!("PIXELCRAFT_REPOSITORY").unwrap_or("")
+    );
+    let build = AboutInfo::default();
+    assert_eq!(info.github_url(), build.github_url());
+    assert_eq!(info.releases_url(), build.releases_url());
+}

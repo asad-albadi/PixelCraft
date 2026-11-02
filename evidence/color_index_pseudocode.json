@@ -1,0 +1,525 @@
+[
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "unstructured_flow",
+        "message": "14 gotos remain where the control flow isn't a simple if/loop"
+      },
+      {
+        "code": "inline_asm",
+        "message": "31 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c54a0"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c54a0"
+    },
+    "result": {
+      "calls": [
+        "_Z10lua_settopP9lua_Statei",
+        "_Z12lua_getfieldP9lua_StateiPKc",
+        "_Z13lua_isintegerP9lua_Statei",
+        "_Z13lua_tonumberxP9lua_StateiPi",
+        "_Z14luaL_testudataP9lua_StateiPKc",
+        "_Z14lua_tointegerxP9lua_StateiPi",
+        "_Z8lua_typeP9lua_Statei",
+        "_ZN3app28app_get_current_pixel_formatEv",
+        "_ZN3app5Color7fromHslEdddi",
+        "_ZN3app5Color7fromHsvEdddi",
+        "_ZN3app5Color7fromRgbEiiii",
+        "_ZN3app5Color8fromGrayEii",
+        "_ZN3app5Color8fromTileEj",
+        "_ZN3app5Color9fromIndexEi",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c54a0",
+      "function": "_ZN3app6script12_GLOBAL__N_19Color_newEP9lua_Statei",
+      "gotos": 14,
+      "inline_asm": 31,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_19Color_newEP9lua_Statei(int64_t rdi, int64_t rsi, int64_t rdx)\n{\n    r15d = edx;\n    r14 = rsi;\n    rbx = rdi;\n    rax = fs:[0x28];\n    stack_40 = rax;\n    *(uint32_t*)(rdi) = 0;\n    rax = _Z14luaL_testudataP9lua_StateiPKc(rsi, r15d, \"app::Color\");\n    if (rax == 0) {\n        rax = _Z8lua_typeP9lua_Statei(r14, r15d);\n        if (eax != 5) {\n            rax = _Z8lua_typeP9lua_Statei(r14, r15d);\n            if (eax != -1) {\n                rax = _Z13lua_isintegerP9lua_Statei(r14, r15d);\n                if (eax == 0) {\n                    if (r15d >= 0) {\n                        ebp = r15 + 1;\nlabel_3c56fb:\n                        rax = _Z14lua_tointegerxP9lua_StateiPi(r14, r15d, 0);\n                        r12 = rax;\n                        rax = _Z14lua_tointegerxP9lua_StateiPi(r14, ebp, 0);\n                        r13 = rax;\n                        rax = _Z14lua_tointegerxP9lua_StateiPi(r14, r15 + 2, 0);\n                        r15d += 3;\n                        rax = _Z8lua_typeP9lua_Statei(r14, r15d);\n                        if (eax == -1) {\n                            r8d = 0xff;\n                        } else {\n                            rax = _Z14lua_tointegerxP9lua_StateiPi(r14, r15d, 0);\n                            r8 = rax;\n                        }\n                        rdi = &stack_18;\n                        esi = r12d;\n                        edx = r13d;\n                        ecx = ebp;\nlabel_3c57bb:\n                        _ZN3app5Color7fromRgbEiiii();\nlabel_3c57c0:\n                        rax = stack_38;\n                        *(uint64_t*)(rbx + 0x20) = rax;\n                        __asm(\"movups xmm0, [rsp+0x18]\");\n                        __asm(\"movups xmm1, [rsp+0x28]\");\n                        __asm(\"movups [rbx+0x10], xmm1\");\n                        __asm(\"movups [rbx], xmm0\");\n                    }\n                } else {\n                    if (r15d < 0) {\nlabel_3c55ae:\n                        rax = _Z14lua_tointegerxP9lua_StateiPi(r14, r15d, 0);\n                        r14 = rax;\n                        rax = _ZN3app28app_get_current_pixel_formatEv();\n                        if (eax == 2) {\n                            _ZN3app5Color9fromIndexEi(&stack_18, r14d);\n                            goto label_3c57c0;\n                        } else {\n                            if (eax == 1) {\n                                rax = r14;\n                                _ZN3app5Color8fromGrayEii(&stack_18, al, ah);\n                                goto label_3c57c0;\n                            } else {\n                                if (eax == 0) {\n                                    rcx = r14;\n                                    esi = cl;\n                                    edx = ch;\n                                    eax = ecx;\n                                    r8 = r14;\n                                    eax >>= 16;\n                                    ecx = al;\n                                    r8d >>= 0x18;\n                                    rdi = &stack_18;\n                                    goto label_3c57bb;\n                                }\n                            }\n                        }\n                    } else {\n                        ebp = r15 + 1;\n                        rax = _Z8lua_typeP9lua_Statei(r14, ebp);\n                        if (eax != -1) {\n                            goto label_3c56fb;\n                        } else {\n                            goto label_3c55ae;\n                        }\n                    }\n                }\n            }\nlabel_3c57da:\n            rax = fs:[0x28];\n            if (rax != stack_40) {\n                __stack_chk_fail@plt();\n            } else {\n                return rax;\n            }\n        } else {\n            rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"r\");\n            if (eax == 0) {\n                _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"red\");\n                if (eax == 0) {\n                    _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                    rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, &data_f34da1);\n                    if (eax == 0) {\n                        _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                        rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"value\");\n                        if (eax == 0) {\n                            _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                            rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"l\");\n                            if (eax == 0) {\n                                _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                                rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"lightness\");\n                                if (eax == 0) {\n                                    _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                                    rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"gray\");\n                                    if (eax == 0) {\n                                        _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                                        rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"index\");\n                                        rdi = r14;\n                                        if (eax == 0) {\n                                            _Z10lua_settopP9lua_Statei(rdi, 0xfffffffe);\n                                            rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"tile\");\n                                            if (eax == 0) {\n                                                rax = fs:[0x28];\n                                                if (rax != stack_40) {\n                                                    __stack_chk_fail@plt();\n                                                } else {\n                                                    return _Z10lua_settopP9lua_Statei(r14, 0xfffffffe); /* tail call */\n                                                }\n                                            } else {\n                                                rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xffffffff, 0);\n                                                _ZN3app5Color8fromTileEj(&stack_18, eax);\nlabel_3c5b38:\n                                                rax = stack_38;\n                                                *(uint64_t*)(rbx + 0x20) = rax;\n                                                __asm(\"movups xmm0, [rsp+0x18]\");\n                                                __asm(\"movups xmm1, [rsp+0x28]\");\n                                                __asm(\"movups [rbx+0x10], xmm1\");\n                                                __asm(\"movups [rbx], xmm0\");\n                                                _Z10lua_settopP9lua_Statei(r14, 0xfffffffe);\n                                                goto label_3c57da;\n                                            }\n                                        } else {\n                                            rax = _Z14lua_tointegerxP9lua_StateiPi(rdi, 0xffffffff, 0);\n                                            _ZN3app5Color9fromIndexEi(&stack_18, eax);\n                                            goto label_3c5b38;\n                                        }\n                                    } else {\n                                        rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"alpha\");\n                                        if (eax == 0) {\n                                            r15d = 0xff;\n                                        } else {\n                                            rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xffffffff, 0);\n                                            r15 = rax;\n                                        }\n                                        _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffe, 0);\n                                        __asm(\"cvttsd2si esi, xmm0\");\n                                        _ZN3app5Color8fromGrayEii(&stack_18, rsi, r15d);\n                                        rax = stack_38;\n                                        *(uint64_t*)(rbx + 0x20) = rax;\n                                        __asm(\"movups xmm0, [rsp+0x18]\");\n                                        __asm(\"movups xmm1, [rsp+0x28]\");\n                                        __asm(\"movups [rbx+0x10], xmm1\");\n                                        __asm(\"movups [rbx], xmm0\");\n                                        _Z10lua_settopP9lua_Statei(r14, 0xfffffffd);\n                                        goto label_3c57da;\n                                    }\n                                } else {\n                                    _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"saturation\");\n                                    _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"hue\");\n                                    rdx = \"alpha\";\nlabel_3c5998:\n                                    rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d);\n                                    if (eax == 0) {\n                                        r15d = 0xff;\n                                    } else {\n                                        rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xffffffff, 0);\n                                        r15 = rax;\n                                    }\n                                    _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffe, 0);\n                                    __asm(\"movsd [rsp+0x10], xmm0\");\n                                    _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffd, 0);\n                                    __asm(\"movsd [rsp+8], xmm0\");\n                                    _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffc, 0);\n                                    __asm(\"movaps xmm2, xmm0\");\n                                    __asm(\"movsd xmm0, [rsp+0x10]\");\n                                    __asm(\"movsd xmm1, [rsp+8]\");\n                                    _ZN3app5Color7fromHslEdddi(&stack_18, r15d);\nlabel_3c56c2:\n                                    rax = stack_38;\n                                    *(uint64_t*)(rbx + 0x20) = rax;\n                                    __asm(\"movups xmm0, [rsp+0x18]\");\n                                    __asm(\"movups xmm1, [rsp+0x28]\");\n                                    __asm(\"movups [rbx+0x10], xmm1\");\n                                    __asm(\"movups [rbx], xmm0\");\n                                    _Z10lua_settopP9lua_Statei(r14, 0xfffffffb);\n                                    goto label_3c57da;\n                                }\n                            } else {\n                                _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"s\");\n                                _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"h\");\n                                rdx = &data_f48195;\n                                goto label_3c5998;\n                            }\n                        } else {\n                            _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"saturation\");\n                            _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"hue\");\n                            rdx = \"alpha\";\nlabel_3c5873:\n                            rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d);\n                            if (eax == 0) {\n                                r15d = 0xff;\n                            } else {\n                                rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xffffffff, 0);\n                                r15 = rax;\n                            }\n                            _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffe, 0);\n                            __asm(\"movsd [rsp+0x10], xmm0\");\n                            _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffd, 0);\n                            __asm(\"movsd [rsp+8], xmm0\");\n                            _Z13lua_tonumberxP9lua_StateiPi(r14, 0xfffffffc, 0);\n                            __asm(\"movaps xmm2, xmm0\");\n                            __asm(\"movsd xmm0, [rsp+0x10]\");\n                            __asm(\"movsd xmm1, [rsp+8]\");\n                            _ZN3app5Color7fromHsvEdddi(&stack_18, r15d);\n                            goto label_3c56c2;\n                        }\n                    } else {\n                        _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"s\");\n                        _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"h\");\n                        rdx = &data_f48195;\n                        goto label_3c5873;\n                    }\n                } else {\n                    _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"green\");\n                    _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"blue\");\n                    rdx = \"alpha\";\nlabel_3c5651:\n                    rax = _Z12lua_getfieldP9lua_StateiPKc(r14, r15d);\n                    if (eax == 0) {\n                        r15d = 0xff;\n                    } else {\n                        rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xffffffff, 0);\n                        r15 = rax;\n                    }\n                    rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xfffffffc, 0);\n                    r12 = rax;\n                    rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xfffffffd, 0);\n                    r13 = rax;\n                    rax = _Z14lua_tointegerxP9lua_StateiPi(r14, 0xfffffffe, 0);\n                    _ZN3app5Color7fromRgbEiiii(&stack_18, r12d, r13d, eax, r15d);\n                    goto label_3c56c2;\n                }\n            } else {\n                _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, \"g\");\n                _Z12lua_getfieldP9lua_StateiPKc(r14, r15d, &data_f717c3);\n                rdx = &data_f48195;\n                goto label_3c5651;\n            }\n        }\n    } else {\n        rcx = fs:[0x28];\n        if (rcx != stack_40) {\n            __stack_chk_fail@plt();\n        } else {\n            rcx = *(uint64_t*)(rax + 0x20);\n            *(uint64_t*)(rbx + 0x20) = rcx;\n            __asm(\"movups xmm0, [rax]\");\n            __asm(\"movups xmm1, [rax+0x10]\");\n            __asm(\"movups [rbx+0x10], xmm1\");\n            __asm(\"movups [rbx], xmm0\");\n            return rax;\n        }\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_19Color_newEP9lua_Statei(int64_t rdi, int64_t rsi, int64_t rdx)",
+      "strings": [
+        "app::Color",
+        "r",
+        "g",
+        "red",
+        "green",
+        "blue",
+        "alpha",
+        "s",
+        "h",
+        "value",
+        "saturation",
+        "hue",
+        "l",
+        "lightness",
+        "gray",
+        "index",
+        "tile"
+      ],
+      "structured": false
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_19Color_newEP9lua_Statei (273 lines, partly unstructured)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_48c98fc7f29d194d139ece99500d684998481fe2a53eebbcef1f16b246e06eaa",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x16a630"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x16a630"
+    },
+    "result": {
+      "calls": [],
+      "engine": "clean-room lifter",
+      "entry": "0x16a630",
+      "function": "_ZN3app5Color9fromIndexEi",
+      "gotos": 0,
+      "inline_asm": 0,
+      "pseudo_code": "int64_t _ZN3app5Color9fromIndexEi(int64_t rdi, int64_t rsi)\n{\n    rax = rdi;\n    *(uint32_t*)(rdi) = 5;\n    *(uint32_t*)(rdi + 8) = esi;\n    return rax;\n}\n",
+      "signature": "int64_t _ZN3app5Color9fromIndexEi(int64_t rdi, int64_t rsi)",
+      "strings": [],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app5Color9fromIndexEi (7 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_78c9a310d50d382a08c8075b32d95dfb2ca81997767d81b8e819b090e8d6f085",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "unstructured_flow",
+        "message": "10 gotos remain where the control flow isn't a simple if/loop"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x53eab0"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x53eab0"
+    },
+    "result": {
+      "calls": [
+        "_Z14luaV_tointegerPK6TValuePx6F2Imod",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x53eab0",
+      "function": "_Z14lua_tointegerxP9lua_StateiPi",
+      "gotos": 10,
+      "inline_asm": 0,
+      "pseudo_code": "int64_t _Z14lua_tointegerxP9lua_StateiPi(int64_t rdi, int64_t rsi)\n{\n    rax = fs:[0x28];\n    stack_8 = rax;\n    stack_0 = 0;\n    rcx = *(uint64_t*)(rdi + 0x20);\n    if (esi <= 0) {\n        if (esi >= 0xfff0b9d9) {\n            rax = esi;\n            rax <<= 4;\n            rax += *(uint64_t*)(rdi + 16);\nlabel_53eb20:\n            if (*(uint8_t*)(rax + 8) != 3) {\nlabel_53eb8c:\n                rbx = rdx;\n                _Z14luaV_tointegerPK6TValuePx6F2Imod(rax, rsp, 1);\n                rdx = rbx;\n                if (rdx != 0) {\nlabel_53eb37:\n                    *(uint32_t*)(rdx) = eax;\n                } else {\n                }\n            } else {\nlabel_53eb26:\n                rax = *(uint64_t*)(rax);\n                stack_0 = rax;\n                eax = 1;\n                if (rdx != 0) {\n                    goto label_53eb37;\n                }\n            }\n        } else {\n            if (esi != 0xfff0b9d8) {\n                rax = *(uint64_t*)(rcx);\n                if (*(uint8_t*)(rax + 8) != 0x66) {\nlabel_53eae2:\n                    rax = *(uint64_t*)(rdi + 0x18);\n                    rax += 0x50;\n                    if (*(uint8_t*)(rax + 8) == 3) {\n                        goto label_53eb26;\n                    } else {\n                        goto label_53eb8c;\n                    }\n                } else {\n                    ecx = 0xfff0b9d8;\n                    ecx -= esi;\n                    rax = *(uint64_t*)(rax);\n                    r8d = *(uint8_t*)(rax + 10);\n                    if (ecx > r8d /* unsigned */) {\n                        goto label_53eae2;\n                    } else {\n                        ecx = 0xfff0b9d7;\n                        ecx -= esi;\n                        rcx <<= 4;\n                        rax += rcx;\n                        rax += 0x20;\n                        if (*(uint8_t*)(rax + 8) == 3) {\n                            goto label_53eb26;\n                        } else {\n                            goto label_53eb8c;\n                        }\n                    }\n                }\n            } else {\n                rax = *(uint64_t*)(rdi + 0x18);\n                rax += 0x40;\n                if (*(uint8_t*)(rax + 8) == 3) {\n                    goto label_53eb26;\n                } else {\n                    goto label_53eb8c;\n                }\n            }\n        }\n    } else {\n        eax = esi;\n        rax <<= 4;\n        rax += *(uint64_t*)(rcx);\n        if (rax < *(uint64_t*)(rdi + 16) /* unsigned */) {\n            goto label_53eb20;\n        } else {\n            goto label_53eae2;\n        }\n    }\n    rax = stack_0;\n    rcx = fs:[0x28];\n    if (rcx != stack_8) {\n        __stack_chk_fail@plt();\n    } else {\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _Z14lua_tointegerxP9lua_StateiPi(int64_t rdi, int64_t rsi)",
+      "strings": [],
+      "structured": false
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _Z14lua_tointegerxP9lua_StateiPi (91 lines, partly unstructured)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_7dd36e27cd0eb6dae6de9ba81c4d37681caf8ae8b8398562a3f91b06bf401f51",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "unstructured_flow",
+        "message": "3 gotos remain where the control flow isn't a simple if/loop"
+      },
+      {
+        "code": "inline_asm",
+        "message": "12 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x554930"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x554930"
+    },
+    "result": {
+      "calls": [
+        "_Z12luaO_str2numPKcP6TValue",
+        "__stack_chk_fail@plt",
+        "floor@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x554930",
+      "function": "_Z14luaV_tointegerPK6TValuePx6F2Imod",
+      "gotos": 3,
+      "inline_asm": 12,
+      "pseudo_code": "int64_t _Z14luaV_tointegerPK6TValuePx6F2Imod(int64_t rdi, int64_t rsi, int64_t rdx)\n{\n    rbx = rsi;\n    r14 = rdi;\n    rax = fs:[0x28];\n    stack_20 = rax;\n    eax = *(uint8_t*)(rdi + 8);\n    ecx = eax;\n    cl &= 15;\n    if (cl == 4) {\n        rdi = *(uint64_t*)(r14);\n        rdi += 0x18;\n        r15 = &stack_10;\n        _Z12luaO_str2numPKcP6TValue(rdi, r15);\n        rcx = *(uint64_t*)(r14);\n        if (*(uint8_t*)(rcx + 8) != 4) {\n            rcx = *(uint64_t*)(rcx + 16);\n        } else {\n            ecx = *(uint8_t*)(rcx + 11);\n        }\n        rcx++;\n        r14 = r15;\n        eax = *(uint8_t*)(r14 + 8);\n    }\n    if (al == 3) {\n        rax = *(uint64_t*)(r14);\n        *(uint64_t*)(rbx) = rax;\n        eax = 1;\nlabel_554a2a:\n        rcx = fs:[0x28];\n        if (rcx != stack_20) {\n            __stack_chk_fail@plt();\n        } else {\n            return rax;\n        }\n    } else {\n        ecx = al;\n        eax = 0;\n        if (ecx != 0x13) {\n            goto label_554a2a;\n        } else {\n            __asm(\"movsd xmm0, [r14]\");\n            __asm(\"movsd [rsp+8], xmm0\");\n            floor@plt();\n            __asm(\"movsd xmm1, [rsp+8]\");\n            __asm(\"ucomisd xmm1, xmm0\");\n            if (xmm1 != 0) {\nlabel_5549c8:\n                if (ebp == 0) {\n                    eax = ebp;\n                    rcx = fs:[0x28];\n                    if (rcx == stack_20) {\n                        return rax;\n                    } else {\n                        __stack_chk_fail@plt();\n                    }\n                } else {\n                    if (ebp == 2) {\n                        __asm(\"addsd xmm0, [0xf7b3e8]\");\n                    }\nlabel_5549d9:\n                    __asm(\"movsd xmm1, [0xf7b698]\");\n                    __asm(\"movapd xmm2, xmm0\");\n                    __asm(\"cmpltsd xmm2, [0xf7b650]\");\n                    __asm(\"cmplesd xmm1, xmm0\");\n                    __asm(\"andpd xmm2, xmm1\");\n                    __asm(\"movd eax, xmm2\");\n                    if ((al & 1) != 0) {\n                        __asm(\"cvttsd2si rcx, xmm0\");\n                        *(uint64_t*)(rbx) = rcx;\n                    }\n                    eax = al;\n                    eax &= 1;\n                    rcx = fs:[0x28];\n                    if (rcx == stack_20) {\n                        return rax;\n                    } else {\n                        __stack_chk_fail@plt();\n                    }\n                }\n            } else {\n                if (/* NotParity */ flags) {\n                    goto label_5549d9;\n                } else {\n                    goto label_5549c8;\n                }\n            }\n        }\n    }\n}\n",
+      "signature": "int64_t _Z14luaV_tointegerPK6TValuePx6F2Imod(int64_t rdi, int64_t rsi, int64_t rdx)",
+      "strings": [],
+      "structured": false
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _Z14luaV_tointegerPK6TValuePx6F2Imod (90 lines, partly unstructured)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_2a171f406d3497d497ce01e70a613edf26d4d463ca9385e746cd513937a7c295",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "4 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c6860"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c6860"
+    },
+    "result": {
+      "calls": [
+        "_Z14lua_tointegerxP9lua_StateiPi",
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_ZN3app5Color9fromIndexEi",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c6860",
+      "function": "_ZN3app6script12_GLOBAL__N_115Color_set_indexEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 4,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_115Color_set_indexEP9lua_State(int64_t rdi)\n{\n    rbx = rdi;\n    rax = fs:[0x28];\n    stack_30 = rax;\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, \"app::Color\");\n    r14 = rax;\n    rax = _Z14lua_tointegerxP9lua_StateiPi(rbx, 2, 0);\n    _ZN3app5Color9fromIndexEi(&stack_8, eax);\n    rax = stack_28;\n    *(uint64_t*)(r14 + 0x20) = rax;\n    __asm(\"movups xmm0, [rsp+8]\");\n    __asm(\"movups xmm1, [rsp+0x18]\");\n    __asm(\"movups [r14+0x10], xmm1\");\n    __asm(\"movups [r14], xmm0\");\n    rax = fs:[0x28];\n    if (rax != stack_30) {\n        __stack_chk_fail@plt();\n    } else {\n        eax = 0;\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_115Color_set_indexEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_115Color_set_indexEP9lua_State (23 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_4cbe9b0b6e3f883eff0fc1d7f63fbd1f29cfb074c025491ab8e87a130cbfce1e",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c6830"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c6830"
+    },
+    "result": {
+      "calls": [
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_Z15lua_pushintegerP9lua_Statex",
+        "_ZNK3app5Color8getIndexEv"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c6830",
+      "function": "_ZN3app6script12_GLOBAL__N_115Color_get_indexEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 0,
+      "pseudo_code": "int32_t _ZN3app6script12_GLOBAL__N_115Color_get_indexEP9lua_State(int64_t rdi)\n{\n    rbx = rdi;\n    eax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, \"app::Color\");\n    eax = _ZNK3app5Color8getIndexEv(rax);\n    _Z15lua_pushintegerP9lua_Statex(rbx, eax);\n    eax = 1;\n    return eax;\n}\n",
+      "signature": "int32_t _ZN3app6script12_GLOBAL__N_115Color_get_indexEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_115Color_get_indexEP9lua_State (9 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.2.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_19e5bcf1f5e63d9de4662eaf3a18d325718870958a7dc1aee943806eb763a888",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "unstructured_flow",
+        "message": "1 gotos remain where the control flow isn't a simple if/loop"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x16cbb0"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x16cbb0"
+    },
+    "result": {
+      "calls": [
+        "_ZN3app19get_current_paletteEv",
+        "_ZNK3app5Color6getRedEv",
+        "_ZNK3app5Color7getBlueEv",
+        "_ZNK3app5Color8getGreenEv",
+        "_ZNK3doc7Palette11findBestfitEiiiii",
+        "_ZNK3doc7Palette14findExactMatchEiiiii"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x16cbb0",
+      "function": "_ZNK3app5Color8getIndexEv",
+      "gotos": 1,
+      "inline_asm": 0,
+      "pseudo_code": "int32_t _ZNK3app5Color8getIndexEv(int64_t rdi)\n{\n    eax = *(uint32_t*)(rdi);\n    if (rax > 6 /* unsigned */) {\n        eax = 0xffffffff;\nlabel_16ccc6:\n        return eax;\n    } else {\n        rbx = rdi;\n        rcx = &data_f81ac8;\n        rdx = *(uint32_t*)(rcx + rax * 4);\n        rdx += rcx;\n        switch (rdx) {\n            case_16cbd6:\n                eax = _ZN3app19get_current_paletteEv();\n                r14 = rax;\n                eax = _ZNK3app5Color6getRedEv(rbx);\n                eax = _ZNK3app5Color8getGreenEv(rbx);\n                r15d = eax;\n                _ZNK3app5Color7getBlueEv(rbx);\n                r8d = *(uint32_t*)(rbx);\n                if (r8 > 6 /* unsigned */) {\n                    r8d = 0xffffffff;\n                } else {\n                    rcx = &data_f81ae4;\n                    rdx = *(uint32_t*)(rcx + r8 * 4);\n                    rdx += rcx;\n                    switch (rdx) {\n                        case_16cc14:\n                            r8d = *(uint32_t*)(rbx + 0x20);\n                            break;\n                        case_16cc3c:\n                            r8d = *(uint32_t*)(rbx + 12);\n                            break;\n                        case_16cc42:\n                            r8d = *(uint32_t*)(rbx + 0x14);\n                            break;\n                        case_16cc50:\n                            r12 = *(uint32_t*)(rbx + 8);\n                            r8d = 0;\n                            if (r12 >= 0) {\n                                r13d = eax;\n                                eax = _ZN3app19get_current_paletteEv();\n                                rcx = *(uint64_t*)(rax + 0x28);\n                                rcx -= *(uint64_t*)(rax + 0x20);\n                                rcx >>= 2;\n                                if (r12d >= ecx) {\n                                    eax = r13d;\n                                    r8d = 0;\n                                } else {\n                                    eax = _ZN3app19get_current_paletteEv();\n                                    rcx = *(uint64_t*)(rax + 0x20);\n                                    rax = *(uint64_t*)(rax + 0x28);\n                                    rax -= rcx;\n                                    rax >>= 2;\n                                    eax = r13d;\n                                    r8d = 0;\n                                    if (r12d < eax) {\n                                        r8d = *(uint8_t*)(rcx + r12 * 4 + 3);\n                                    }\n                                }\n                            }\n                            break;\n                        case_16cc9f:\n                            r8d = 0xff;\n                            break;\n                        case_16ccad:\n                            break;\n                    }\n                }\n                eax = _ZNK3doc7Palette14findExactMatchEiiiii(r14, ebp, r15d, eax, r8, 0xffffffff);\n                if (eax < 0) {\n                    eax = _ZN3app19get_current_paletteEv();\n                    r14 = rax;\n                    eax = _ZNK3app5Color6getRedEv(rbx);\n                    eax = _ZNK3app5Color8getGreenEv(rbx);\n                    r15d = eax;\n                    _ZNK3app5Color7getBlueEv(rbx);\n                    r8d = *(uint32_t*)(rbx);\n                    if (r8 > 6 /* unsigned */) {\n                        r8d = 0xffffffff;\n                    } else {\n                        rcx = &data_f81b00;\n                        rdx = *(uint32_t*)(rcx + r8 * 4);\n                        rdx += rcx;\n                        switch (rdx) {\n                            case_16cd13:\n                                r8d = *(uint32_t*)(rbx + 0x20);\n                                break;\n                            case_16cd19:\n                                r8d = *(uint32_t*)(rbx + 12);\n                                break;\n                            case_16cd1f:\n                                r8d = *(uint32_t*)(rbx + 0x14);\n                                break;\n                            case_16cd2d:\n                                rbx = *(uint32_t*)(rbx + 8);\n                                r8d = 0;\n                                if (rbx >= 0) {\n                                    r12d = eax;\n                                    eax = _ZN3app19get_current_paletteEv();\n                                    rcx = *(uint64_t*)(rax + 0x28);\n                                    rcx -= *(uint64_t*)(rax + 0x20);\n                                    rcx >>= 2;\n                                    if (ebx >= ecx) {\n                                        eax = r12d;\n                                        r8d = 0;\n                                    } else {\n                                        eax = _ZN3app19get_current_paletteEv();\n                                        rcx = *(uint64_t*)(rax + 0x20);\n                                        rax = *(uint64_t*)(rax + 0x28);\n                                        rax -= rcx;\n                                        rax >>= 2;\n                                        eax = r12d;\n                                        r8d = 0;\n                                        if (ebx < eax) {\n                                            r8d = *(uint8_t*)(rcx + rbx * 4 + 3);\n                                        }\n                                    }\n                                }\n                                break;\n                            case_16cd7a:\n                                r8d = 0xff;\n                                break;\n                            case_16cd88:\n                                break;\n                        }\n                    }\n                    return _ZNK3doc7Palette11findBestfitEiiiii(r14, ebp, r15d, eax, r8, 0); /* tail call */\n                } else {\n                    return eax;\n                }\n                break;\n            case_16cc27:\n                eax = *(uint32_t*)(rbx + 8);\n                return eax;\n            case_16cc2f:\n                eax = 0x1fffffff;\n                eax &= *(uint32_t*)(rbx + 8);\n                return eax;\n            case_16ccc6:\n                goto label_16ccc6;\n        }\n    }\n}\n",
+      "signature": "int32_t _ZNK3app5Color8getIndexEv(int64_t rdi)",
+      "strings": [],
+      "structured": false
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZNK3app5Color8getIndexEv (145 lines, partly unstructured)."
+  }
+]

@@ -97,16 +97,20 @@ pub fn repository_slug(input: &str) -> Option<String> {
     Some(slug.into())
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+// Legacy about.json files remain readable, but build identity is authoritative.
+#[derive(serde::Deserialize)]
+#[serde(default)]
 pub struct AboutInfo {
+    #[serde(skip_deserializing)]
     pub developer: String,
+    #[serde(skip_deserializing)]
     pub repository: String,
 }
 impl Default for AboutInfo {
     fn default() -> Self {
         Self {
             developer: option_env!("PIXELCRAFT_DEVELOPER")
-                .unwrap_or("PixelCraft contributors")
+                .unwrap_or(env!("CARGO_PKG_AUTHORS"))
                 .into(),
             repository: option_env!("PIXELCRAFT_REPOSITORY").unwrap_or("").into(),
         }
@@ -118,15 +122,6 @@ impl AboutInfo {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default()
-    }
-    pub fn save(&self) -> Result<(), String> {
-        let directory = crate::extensions::config_directory();
-        std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-        std::fs::write(
-            directory.join("about.json"),
-            serde_json::to_vec_pretty(self).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())
     }
     pub fn github_url(&self) -> Option<String> {
         repository_slug(&self.repository).map(|slug| format!("https://github.com/{slug}"))

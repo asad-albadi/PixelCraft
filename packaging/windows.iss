@@ -10,7 +10,7 @@
 AppId={{C2A8C5DF-3977-47D9-9543-2681958D7084}
 AppName=PixelCraft
 AppVersion={#AppVersion}
-AppPublisher=PixelCraft contributors
+AppPublisher=Asad
 DefaultDirName={localappdata}\Programs\PixelCraft
 DefaultGroupName=PixelCraft
 DisableProgramGroupPage=yes

@@ -34,6 +34,13 @@ local function colorInteger(v)
  local n=pixelInteger(v)&0xffffffff
  return n>=0x80000000 and n-0x100000000 or n
 end
+-- Color_new's gray table branch (0x3c5abb..0x3c5acc) uses
+-- lua_tonumberx then CVTTSD2SI, unlike the integer-based gray setter.
+local function constructorGray(v)
+ local n=(tonumber(v) or 0)+0.0
+ if n~=n or n>=2147483648 or n<=-2147483649 then return -2147483648 end
+ return math.modf(n)
+end
 local function unpackColor(c)
  if type(c)=='table' then return {byte(c.r or c.red or c[1]),byte(c.g or c.green or c[2]),byte(c.b or c.blue or c[3]),byte(c.a or c.alpha or c[4] or 255)} end
  c=math.tointeger(c or 0) or 0;return {c&255,(c>>8)&255,(c>>16)&255,(c>>24)&255}
@@ -58,6 +65,10 @@ local function rgbGray(p)
  local n=(sum/255.0)*0.5*255.0
  return n<0 and math.ceil(n) or math.floor(n)
 end
+-- Native Color_new 0x3c54f6..0x3c5509 copies the complete Color value.
+-- Keep private state so copying preserves gray/index representation as well
+-- as channels, without sharing mutable storage between Color objects.
+local colorStates=setmetatable({}, {__mode='k'})
 function Color(c,g,b,a)
  local index,gray
  if type(c)=='string' then
@@ -69,6 +80,8 @@ function Color(c,g,b,a)
  local p
  if type(c)=='table' and getmetatable(c) and getmetatable(c).__name=='Color' then
   p={c.red,c.green,c.blue,c.alpha}
+  local state=colorStates[c]
+  if state then index,gray=state() end
  elseif type(c)=='table' and c.r~=nil then
   p={colorInteger(c.r),colorInteger(c.g),colorInteger(c.b),c.a==nil and 255 or colorInteger(c.a)}
  elseif type(c)=='table' and c.red~=nil then
@@ -78,15 +91,16 @@ function Color(c,g,b,a)
  end
  if type(c)=='table' and not (getmetatable(c) and getmetatable(c).__name=='Color') then
   if c.r~=nil or c.red~=nil then -- RGB has priority over other table forms.
-  elseif c.index~=nil then index=c.index;p=copy((doc.palette or {})[index+1] or {0,0,0,255})
-  elseif c.gray~=nil then gray=c.gray;p={gray,gray,gray,c.alpha or c.a or 255}
+  -- Color_new 0x3c5a95 -> fromIndex 0x16a630 stores signed32(I(v)).
+  elseif c.index~=nil then index=colorInteger(c.index);p=copy((doc.palette or {})[index+1] or {0,0,0,255})
+  elseif c.gray~=nil then gray=constructorGray(c.gray);p={gray,gray,gray,c.alpha==nil and 255 or colorInteger(c.alpha)}
   elseif c.h~=nil or c.hue~=nil then
    local h,sat,v=c.h or c.hue or 0,c.s or c.saturation or 0,c.v or c.value or 0
    if c.l~=nil or c.lightness~=nil then local l=c.l or c.lightness;v=l+sat*math.min(l,1-l);sat=v==0 and 0 or 2*(1-l/v) end
    p=hsvToRgb(h,sat,v);p[4]=c.a or c.alpha or 255
   end
  end
- return setmetatable({}, {
+ local result=setmetatable({}, {
   __name='Color',
   __eq=function(x,y)return x.rgbaPixel==y.rgbaPixel end,
   __index=function(_,k)
@@ -106,15 +120,20 @@ function Color(c,g,b,a)
   end,
   __newindex=function(t,k,v)
    local i=colorChannels[k]
-   if i then local n=colorInteger(v);p[i]=i==4 and byte(n) or n;index=nil
-   elseif k=='index' then index=v;p=copy(doc.palette[v+1] or {0,0,0,255})
-   elseif k=='gray' then gray=byte(v);p={gray,gray,gray,p[4]}
+   if i then local n=colorInteger(v);p[i]=i==4 and byte(n) or n;index=nil;if i~=4 then gray=nil end
+   -- Color_set_index 0x3c6860 replaces the represented value via fromIndex.
+   elseif k=='index' then index=colorInteger(v);gray=nil;p=copy(doc.palette[index+1] or {0,0,0,255})
+   -- Color_set_gray 0x3c6920 -> fromGray 0x16a620 stores signed32,
+   -- preserves alpha and replaces the representation (no byte clamp).
+   elseif k=='gray' then gray=colorInteger(v);p={gray,gray,gray,p[4]};index=nil
    elseif k=='rgbaPixel' or k=='grayPixel' then error('Color.'..k..' is read-only')
    elseif k=='hue' or k=='hsvHue' or k=='hsvSaturation' or k=='saturation' or k=='value' or k=='hsvValue' then
     local h,sat,val=rgbToHsv(p);if k=='hue' or k=='hsvHue' then h=v elseif k=='saturation' or k=='hsvSaturation' then sat=v else val=v end;local alpha=p[4];p=hsvToRgb(h,sat,val);p[4]=alpha;index=nil
    else rawset(t,k,v) end
   end
  })
+ colorStates[result]=function()return index,gray end
+ return result
 end
 function Point(x,y) if type(x)=='table' then return {x=x.x or x[1] or 0,y=x.y or x[2] or 0} end return {x=x or 0,y=y or 0} end
 function Size(w,h) if type(w)=='table' then return {width=w.width or w[1] or 0,height=w.height or w[2] or 0} end return {width=w or 0,height=h or 0} end

@@ -164,6 +164,24 @@
       "group": "scripting",
       "value": "(gray&255)|((alpha&255)<<8)",
       "source": "Color_get_grayPixel 0x3c6a20 -> color_for_target_mask 0x16dc90; ev_83e556a462e586246746ec902ef1327e4b5dc8af53ba1c97c63702001d9b98a4; ev_81ff27c9fa2eef77eb90f338c9be7f72be01081fd912576bce5d73f3dd93d69e"
+    },
+    {
+      "name": "Lua gray assignment",
+      "group": "scripting",
+      "value": "G=signed32(I(v)); preserve alpha without clamp; RGB assignment replaces gray representation; grayPixel masks low bytes",
+      "source": "Color_set_gray 0x3c6920 -> Color::fromGray 0x16a620; Color_set_red 0x3c5c90; ev_5f28e1a29d293f49fc69605161ce6a995787e569dcade83312d0fa879d2a709c; ev_46b28f301ef06ad6f24ad99a51d0496f5101113c40ae3400056889c819a7e16b; evidence/color_gray_assignment.asm; limits in MECHANICS.md"
+    },
+    {
+      "name": "gray table constructor conversion",
+      "group": "scripting",
+      "value": "gray: double to signed32 truncation; alpha: floor integer then signed32; alpha default 255",
+      "source": "Color_new 0x3c54a0 (gray branch 0x3c5a3e..0x3c5acc), Color::fromGray 0x16a620; ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309; ev_e15bd624ea78eb0761226710ff962f1b10fe28ec27bdbc385597543d6746b2e6"
+    },
+    {
+      "name": "Lua indexed Color input conversion",
+      "group": "scripting",
+      "value": "N=signed32(I(v)); I integer identity or signed64 floor numeric conversion, failed conversion zero; constructor and assignment store representation 5 and N at +8; assignment replaces gray state",
+      "source": "Color_new 0x3c54a0, Color_set_index 0x3c6860 -> lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; Color::fromIndex 0x16a630; Color::getIndex 0x16cbb0; evidence/color_index_pseudocode.json; limits in MECHANICS.md"
     }
   ]
 }

@@ -3456,7 +3456,7 @@ impl PixelCraft {
             self.next_update_check = None;
             self.update_job = None;
             self.update_status =
-                "Set PixelCraft’s GitHub repository below to check for updates.".into();
+                "This build needs PixelCraft’s GitHub repository to check for updates.".into();
         }
     }
 
@@ -3517,31 +3517,14 @@ impl PixelCraft {
                 }
                 ui.separator();
                 ui.collapsing("Developer and repository", |ui| {
-                    ui.label("Developer name");
-                    ui.text_edit_singleline(&mut self.about_info.developer);
-                    ui.label("PixelCraft GitHub repository");
-                    let changed = ui
-                        .text_edit_singleline(&mut self.about_info.repository)
-                        .changed();
-                    if changed {
-                        self.latest_release = None;
-                        self.update_job = None;
-                        self.next_update_check = None;
-                        self.update_status = "Save the repository to check its releases.".into();
-                    }
-                    ui.small("Enter https://github.com/owner/repository");
-                    if ui.button("Save and check").clicked() {
-                        if let Some(slug) = updates::repository_slug(&self.about_info.repository) {
-                            self.about_info.repository = slug;
-                            match self.about_info.save() {
-                                Ok(()) => self.check_updates(ctx),
-                                Err(e) => {
-                                    self.update_status = format!("Could not save settings: {e}")
-                                }
-                            }
-                        } else {
-                            self.update_status = "Enter a valid GitHub repository URL.".into();
-                        }
+                    ui.label(format!("Developer: {}", self.about_info.developer));
+                    if let Some(url) = self.about_info.github_url() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label("Repository:");
+                            ui.hyperlink_to(&url, &url);
+                        });
+                    } else {
+                        ui.label("Repository: Not configured in this build");
                     }
                 });
                 ui.separator();

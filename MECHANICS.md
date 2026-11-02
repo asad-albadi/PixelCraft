@@ -1,3 +1,120 @@
+## Current native audit — indexed Color input conversion (2026-11-02)
+
+Opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier drawing, timing, blending, settings and scripting audits remain below.
+
+Searched names, settings and messages with `native_strings_find`, regex `^Color$|^index$|^color_bar$|invalid_fg_or_bg` (nine matches; `ev_ad4b3f6ffc33a22b7218aec90988fa279ce281051c9010485d3e0ece7b3c20fc`). Followed index string `0xf60657` to constructor reference `0x3c5a75` (`ev_a3c9493d3421912cd43a7745fcd3c6df5a311b9d7030d0d7f303e0efd0b5bd2e`), then outgoing calls to `lua_tointegerx` and `fromIndex` (`ev_987616d99e92a4c7decfef8462048c61c865fe1f79087deac94622bf77caa942`). Function search located index getter/setter; their outgoing references identify the same factory and the native getter (`ev_0a3051eabc89235885badfc3ba6b188c3a31676984682f07e6e3afb5e74bed59`, `ev_07ac34e5166ff0dc10ab4e050dac6c2547fb2d0a613d760a06cc5125014ca4f9`). Settings/message matches are navigation anchors; this audit makes no additional claims about them.
+
+Read seven completed `native_function_pseudocode` results sequentially, awaiting each before requesting the next. Full results: `evidence/color_index_pseudocode.json`.
+
+| Function | Address | Pseudocode evidence |
+| --- | --- | --- |
+| Color_new | `0x3c54a0` | `ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309` |
+| Color::fromIndex | `0x16a630` | `ev_48c98fc7f29d194d139ece99500d684998481fe2a53eebbcef1f16b246e06eaa` |
+| lua_tointegerx | `0x53eab0` | `ev_78c9a310d50d382a08c8075b32d95dfb2ca81997767d81b8e819b090e8d6f085` |
+| luaV_tointeger | `0x554930` | `ev_7dd36e27cd0eb6dae6de9ba81c4d37681caf8ae8b8398562a3f91b06bf401f51` |
+| Color_set_index | `0x3c6860` | `ev_2a171f406d3497d497ce01e70a613edf26d4d463ca9385e746cd513937a7c295` |
+| Color_get_index | `0x3c6830` | `ev_4cbe9b0b6e3f883eff0fc1d7f63fbd1f29cfb074c025491ab8e87a130cbfce1e` |
+| Color::getIndex | `0x16cbb0` | `ev_19e5bcf1f5e63d9de4662eaf3a18d325718870958a7dc1aee943806eb763a888` |
+
+The first constructor call timed out at the tool's 300-second limit; it produced no usable pseudocode. Retried with a temporary 15-second Ghidra startup limit, then restored the original null setting. All seven completed results explicitly report Ghidra unavailable and use the built-in fallback. Its types, conditions and register arguments are approximate. Supplemented with full setter/getter assembly (`ev_37dacadc973f7b0055eacac58c0fea8b2ae7d034a12bb106d4e03da8ffd92242`, `ev_89a8674139f3bba0b63b138b437edeadf4c7e89c3080856ab0043f2ced719aa6`, `ev_28494725682008cd3f8d7d0e211e75f2ee467782c175990df211d8b6a1bae556`; saved in `evidence/color_index.asm` and ledger). Constructor and numeric-helper assembly from the earlier audits is retained in `evidence/color_constructor.asm` and `evidence/luaV_tointeger.asm`.
+
+Recovered rules applied to `src/lua_api.lua`:
+
+- Both explicit index table construction (`0x3c5a95..0x3c5aa1`) and index assignment (`0x3c6896..0x3c68a2`) convert input through `lua_tointegerx`, then pass its low 32 bits to `fromIndex`.
+- Define **I(v)** as integer identity for signed64 Lua integers; otherwise floor a convertible finite number/numeric string within **[-2^63,2^63)**; failed conversion returns **0**. Define **U=I(v)&0xffffffff**, then **N=U** if U<2^31, otherwise **N=U-2^32**. No palette-range or byte saturation occurs in index storage. Examples: **'2.9'→2**, **-1.2→-2**, **false→0**, **NaN→0**, **0x100000003→3**, **2147483648→-2147483648**.
+- `fromIndex` stores representation tag **5** and signed32 N at offset **+8**. Assignment replaces the prior represented value, so stale gray state must be discarded.
+- Indexed `getIndex` returns stored N. Verified jump table slot **5** at **0xf81adc** contains signed offset **-14765729** from table base **0xf81ac8**, landing at **0x16cc27**, which loads offset +8 (`ev_992edcc11f9022ea8bfc6ba93a9d4357a0377efcf327bc0f8e5ae1511996b657`). Lua wrapper sign-extends EAX at **0x3c684d** before pushing the integer.
+
+Previously the build retained input strings/fractions/booleans/wide integers and assignment also left old gray state. Both regressions in `tests/native_index_conversion.rs` failed before their corresponding corrections. They run the real embedded Lua interpreter and verify actual painted document pixels.
+
+Final verification: `cargo test --offline --locked` passed **114 tests, zero failures** (`checks/native-index-tests.log`); `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-index-build.log`). Craft Anything `rebuild_check` passed build, desktop startup/screenshot (938×990), and mechanics validation (**29 values, 28 sourced, one estimated**).
+
+Scope: corrected explicit index input normalization and represented-state replacement. Palette lookup remains a snapshot in this build; native palette changes, invalid-index RGBA/alpha behavior, nearest-color matching for non-indexed colors, mixed constructor precedence and full HSV/HSL parity remain unresolved. Full original-application parity is not claimed.
+
+## Current native audit — Color value copying (2026-11-02)
+
+Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode. SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier audits of drawing, timing, settings, blending and scripting remain below.
+
+Searched names, settings and messages with `native_strings_find`, regex `^Color$|^gray$|^color_bar$|invalid_fg_or_bg`; all nine matches returned (`ev_af44c136f58203fe29b8847d0179fe62571c33cb884f1d091f0cb4c4a18df017`). Followed gray string `0xf600c9` to `Color_new` reference `0x3c5a28` (`ev_02660b82be029b8e3ce6b15290cdb340313a93ad0c04777e7568c8114acc8865`) and its outgoing calls to `fromGray` (`ev_987616d99e92a4c7decfef8462048c61c865fe1f79087deac94622bf77caa942`). Setting and message matches are navigation anchors; no new setting or alert behavior is claimed here.
+
+Completed and read these four `native_function_pseudocode` results sequentially, awaiting each result before the next function request. An initial constructor request completed without its payload being displayed by the wrapper; it was repeated and its full result read before continuing. Results are retained in `evidence/color_copy_pseudocode.json`.
+
+| Function | Address | Completed pseudocode evidence |
+| --- | --- | --- |
+| Color_new | `0x3c54a0` | `ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309` |
+| Color::fromGray | `0x16a620` | `ev_46b28f301ef06ad6f24ad99a51d0496f5101113c40ae3400056889c819a7e16b` |
+| Color::getGray | `0x16c2b0` | `ev_cb4b93a186f1ca43bf524dca5698f19da1edac3405b8c0dbc13919067ec6c73c` |
+| Color::getAlpha | `0x16b2a0` | `ev_410e7153101ea7480fb0a868ee24d4c43cca5c01a933bb6cbe70db57dab4facb` |
+
+Ghidra timed out. These are completed built-in fallback decompilations with approximate register types and conditions. The constructor assembly was also retrieved (449 instructions, `ev_e15bd624ea78eb0761226710ff962f1b10fe28ec27bdbc385597543d6746b2e6`, retained in `evidence/color_constructor.asm`). Its copy path resolves the pseudocode's inline assembly. A temporary 15-second Ghidra startup timeout was restored to its original null setting afterward.
+
+Recovered rule applied to `src/lua_api.lua`: when `luaL_testudata` recognizes `app::Color`, instructions `0x3c54f6..0x3c5509` copy bytes **[0,40)** into independent destination storage, through **16+16+8-byte** loads/stores. Thus the representation tag and payload survive copying; the constructor does not reconstruct this branch through RGB getters. `fromGray` stores tag **4**, signed32 gray at **+8**, and signed32 alpha at **+12**, without clamping. The gray and alpha getters have direct storage paths, as shown in the fallback reads and earlier assembly audits below.
+
+For the supported gray representation, copying must preserve **Gcopy=Gsource**, **Acopy=Asource**, and subsequent mutation must not alias the source. Existing gray packing remains **P=(G&255)|((A&255)<<8)**. Example: `Color{gray=2147483647,alpha=258}` copied into another Color retains gray **2147483647**, alpha **258**, and packs **0x02ff**; painting its extracted gray/alpha yields **[255,255,255,2]**. Previously copying discarded gray representation, and the RGB gray calculation wrapped the signed32 sum of identical channels to **-2**, giving gray **-1**. The new private weak-key state registry preserves the represented gray/index values on copies; each object's mutable channel array and representation variables remain separate.
+
+Regression `tests/native_color_copy.rs` executes the real embedded Lua interpreter, checks stored state and independent mutations in both directions, and checks actual painted pixels. It failed before the correction with `copy lost gray representation` and passes afterward. Fresh `cargo test --offline --locked`: **112 passed, zero failed** (`checks/native-color-copy-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-color-copy-build.log`). Craft Anything `rebuild_check` also passed build, desktop startup/screenshot (938×990), and mechanics validation (28 entries: 27 sourced, one estimated).
+
+Scope: verified correction covers stored gray value copying and independent mutation. HSV/HSL representation preservation, palette-dependent indexed behavior, mixed constructor precedence and out-of-range gray-to-RGB conversion remain unresolved. Full original application parity is not claimed.
+
+## Current native audit — grayscale table construction (2026-11-02)
+
+Verification: `cargo test --offline --locked` passed **111 tests, zero failures** (`checks/native-gray-constructor-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-gray-constructor-build.log`). Craft Anything `rebuild_check` passed build, desktop startup/screenshot (938×990), and mechanics validation (**28 entries: 27 sourced, one estimated**).
+
+Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode. SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. This audit extends the earlier recovered drawing, timing, blending, preferences and scripting rules retained below.
+
+Searched names, settings and messages with `native_strings_find`, regex `^gray$|^color_bar$|invalid_fg_or_bg`; all five matches returned (`ev_63e23594a7afd74ca9aa11b44ce882163b8b81ae9d14b289bea7b496bda0b1f4`). Followed gray string `0xf600c9` through its reference at `0x3c5a28` to `Color_new` entry `0x3c54a0` (`ev_9a6da2cc03b4d2699b5a0dafdac04db8ed93a982fd64cca130a4f7636615424c`, `ev_e4765b6d0bb9f4875358fe6a81bb95e60dbfe57573796d0f0021ffd044417313`). Its outgoing references identify the gray factory and two distinct numeric conversions (`ev_987616d99e92a4c7decfef8462048c61c865fe1f79087deac94622bf77caa942`); number conversion references identify its helper (`ev_4785942a665bf7a3ae24685538c2816aebacbdf82c300201d5443dda2b55cf4d`). The setting and alert are search anchors, not evidence for additional behavior changes.
+
+Completed six sequential `native_function_pseudocode` calls, awaiting and reading each result before requesting the next:
+
+| Function | Address | Completed pseudocode evidence |
+| --- | --- | --- |
+| Color_new | `0x3c54a0` | `ev_e3391ea5d6f591f7440051acc25ba72878947603d4cfcf7370cb554470dcd309` |
+| Color::fromGray | `0x16a620` | `ev_46b28f301ef06ad6f24ad99a51d0496f5101113c40ae3400056889c819a7e16b` |
+| lua_tonumberx | `0x53e9c0` | `ev_0cefa7aefcce3979cffd29e6e0e1fca89c748059790f8cc06b2f7929eec1b44f` |
+| lua_tointegerx | `0x53eab0` | `ev_78c9a310d50d382a08c8075b32d95dfb2ca81997767d81b8e819b090e8d6f085` |
+| luaV_tonumber_ | `0x554760` | `ev_67312044feded002482ea7d03de7f89946bca8fb8bb7e72a2ff911c36816479e` |
+| luaV_tointeger | `0x554930` | `ev_7dd36e27cd0eb6dae6de9ba81c4d37681caf8ae8b8398562a3f91b06bf401f51` |
+
+Ghidra timed out. These are completed built-in fallback decompilations, with approximate register types/conditions. Read the full 449-instruction constructor assembly too (`ev_e15bd624ea78eb0761226710ff962f1b10fe28ec27bdbc385597543d6746b2e6`, retained in `evidence/color_constructor.asm`). Temporarily limited Ghidra startup timeout to 15 seconds and restored null afterward.
+
+Recovered rules applied to `src/lua_api.lua`:
+
+- The explicit gray table branch reads `gray` and **long-form `alpha` only**. Missing/nil alpha defaults to **255**; short `a` does not substitute. Non-nil false is supplied input and converts to zero.
+- Gray goes through `lua_tonumberx` (number/numeric string to double, failed conversion to **0**), then instruction `CVTTSD2SI esi,xmm0` at `0x3c5ac0`. Thus **G=trunc_toward_zero(double(gray))** for representable signed32 results. In the usual masked-invalid x86 execution environment, NaN, infinity and out-of-range conversion yield **-2147483648**. Truncation happens before the range decision: `2147483647.9` gives **2147483647**, while `2147483648` gives **-2147483648**; `-1.9` gives **-1**, unlike gray assignment's floor rule.
+- Alpha uses the existing recovered integer rule: integer identity, otherwise floor of finite numeric input within signed64 range, failed conversion zero; then **A=signed32(I(alpha)&0xffffffff)**. Construction does not clamp it. For example `'258.9'` stores **258**, false stores **0**, and `0x100000063` stores **99**.
+- `fromGray` writes representation **4**, G at offset **+8**, A at **+12**, without saturation. Existing `grayPixel` packing retains low bytes: **P=(G&255)|((A&255)<<8)**. `{gray='258.9',alpha='258.9'}` therefore packs gray **2**, alpha **2**. The build previously retained fractions, strings, false and unconverted alpha and incorrectly accepted short `a` here.
+
+The two new regression tests run the real embedded Lua interpreter and paint document pixels from the packed gray value. Both failed before correction at their conversion checks. Coverage includes negative fractions, numeric strings, false, NaN, signed32 boundaries, missing alpha, conflicting short alpha, and wide integer alpha. Alternate Color representations/copying, mixed gray/index/HSV table precedence, and native out-of-range gray-to-RGB conversion remain outside this correction; full application parity is not established.
+
+## Current native audit — Lua gray assignment (2026-11-02)
+
+Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode. SHA-256 remains `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Prior audits below retain the recovered defaults, frame timing, line/fill, blending, conversion and scripting rules.
+
+Searched names, settings and messages using `native_strings_find`, regex `^gray$|^color_bar$|invalid_fg_or_bg`: all five matches returned (`ev_ca8d181fc73d1684c9e92ba86e3e04473139f03d6b4f0645312ac724555afa60`). Followed gray string `0xf600c9` to constructor reference `0x3c5a28` (`ev_45e941e9640ecfe1a3d9764ccd1d351b4efe37733fca5f7c70ef0c5d52fe21fa`). Gray property setter `0x3c6920` has a registration pointer at `0x1cbafb8` (`ev_3defc80b68928610107709deb0f5733b226bf06297ce97f06221111526a703b2`). Followed its outgoing calls to integer conversion, getAlpha and fromGray (`ev_4d3b1ef7e5511d49f852c0d9c33c88ffd48cadfed332270cb3517da3ea66eefd`). Setting/alert strings are navigation anchors, not evidence of new settings/alert behavior.
+
+Requested and read six `native_function_pseudocode` results sequentially, awaiting each completed response before the next:
+
+| Function | Entry | Completed pseudocode evidence |
+| --- | --- | --- |
+| Color_set_gray | `0x3c6920` | `ev_5f28e1a29d293f49fc69605161ce6a995787e569dcade83312d0fa879d2a709c` |
+| Color::fromGray | `0x16a620` | `ev_46b28f301ef06ad6f24ad99a51d0496f5101113c40ae3400056889c819a7e16b` |
+| Color::getGray | `0x16c2b0` | `ev_cb4b93a186f1ca43bf524dca5698f19da1edac3405b8c0dbc13919067ec6c73c` |
+| Color_set_red | `0x3c5c90` | `ev_3cad851c15c3460595015a583795efbab2d32fa6b7df7e92a3b31daa8ab76c06` |
+| Color::getAlpha | `0x16b2a0` | `ev_410e7153101ea7480fb0a868ee24d4c43cca5c01a933bb6cbe70db57dab4facb` |
+| lua_tointegerx | `0x53eab0` | `ev_78c9a310d50d382a08c8075b32d95dfb2ca81997767d81b8e819b090e8d6f085` |
+
+Ghidra timed out; all six completed results use the built-in fallback, with approximate register/type/control-flow recovery. Temporarily used a 15-second Ghidra startup timeout and restored null afterward. Read complete assembly for setter, factory and gray getter; saved `evidence/color_gray_assignment.asm` (evidence `ev_356d9207c12c3cc4500e388f942564f78e9e61b45063b96b5fe658ebbe2aee59`, `ev_e763d1c18e0dcd693a385c4f175006b4e517d2d1b5c517daca6e4c13781999b6`, `ev_4bb3a220e8d388fdec0d2a0bf2e325b77f97d12af028cf81723e6a20770c1521`).
+
+Recovered rules now used in `src/lua_api.lua`:
+
+- Assignment `c.gray=v` uses `G=signed32(I(v)&0xffffffff)`, with the previously recovered integer conversion I (floor for finite numeric inputs/numeric strings, failure zero). The setter narrows with `mov esi,ebx`, preserves `getAlpha()`, and replaces the Color using `fromGray(G,A)`. Factory stores type **4**, G at **+8**, A at **+12**, without saturation. Gray getter's direct-storage path returns G; grayPixel retains the previously recovered low-byte packing `(G&255)|((A&255)<<8)`.
+- Corrected byte saturation on gray assignment: `-1.2` stores **-2** and packs **254**; `'258.9'` stores **258** and packs **2**; `0x100000063` stores **99**; false converts to **0**. Alpha **258** is retained and packs **2**.
+- Native RGB setters reconstruct the Color with `fromRgb`, replacing the gray representation. Clear the Lua gray state on RGB assignment, so gray **40**, alpha **99**, then alpha **88** and red **200**, yields RGB **[200,40,40,88]** and recomputed gray **120**, rather than stale gray **40**. Alpha-only assignment retains the gray representation.
+
+Both embedded-runtime regressions failed before correction: signed state assertion failed, and gray-to-RGB mutation painted **[40,40,40,88]** instead of **[120,120,120,88]**. Both pass after correction. This is a focused assignment correction; alternate representations, constructor/copy type preservation, HSV/index mutations and full application parity remain unresolved. Native gray out-of-range RGB conversion is not established by these tests.
+
+Fresh verification: all **107 tests passed**, zero failures (`checks/native-gray-assignment-tests.log`); `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-gray-assignment-build.log`). Craft Anything `rebuild_check` passed build, desktop startup/screenshot (938×990), and mechanics validation (27 values: 26 sourced, one estimated).
+
 ## Current native audit — Lua RGB grayscale properties (2026-11-02)
 
 Opened `aseprite-reference` again with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. The previous audits below retain the recovered drawing, timing, blending, settings and constructor rules.
