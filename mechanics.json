@@ -98,6 +98,24 @@
       "group": "scripting",
       "value": "newEmptyFrame(f) inserts before f and returns f; omitted argument appends; timing inherits preceding frame (old first at slot 1)",
       "source": "Sprite_newEmptyFrame 0x3f3d80 -> DocApi::addEmptyFrame 0x19f250 -> AddFrame::onExecute 0x406d10 -> Sprite::addFrame 0x61a140; assembly ev_a1000165a7d86428f85993e0d077f2b0abb2ede5f626ae3c93d41927c00c5ead and ev_ccbfe1c1107895d2dcfc312e45fcb2ee98e70c49789375c1ffce13fe3e168956"
+    },
+    {
+      "name": "frame command insertion",
+      "group": "scripting",
+      "value": "NewFrame and NewEmptyFrame insert at active zero-based index+1; copy retains source duration and pixels; empty retains preceding duration",
+      "source": "NewFrameCommand::onExecute 0x45cfa0 -> DocApi::addFrame 0x19f0b0 / addEmptyFrame 0x19f250; assembly ev_fdabe0d53fa3a2ede74a2c9fdca77816e2e9b4dad3e8000e8af3aa8eb55d415b; original selection notification behavior not established"
+    },
+    {
+      "name": "Lua duration numeric conversion",
+      "group": "scripting",
+      "value": "double(seconds)*1000 -> truncating signed int32 -> clamp 1..65535; x86_64 masked-invalid overflow/NaN -> 1 ms",
+      "source": "Frame_set_duration 0x3ce440 -> SetFrameDuration 0x415570 / onExecute 0x4155d0 -> Sprite::setFrameDuration 0x61a420; assembly ev_aa31e01a1cf6a6d1c0f28ac6a2b28e5a9d3751947fb5fc23a0446e1d7e5ab1f9; constant ev_699b48c44b272501962cd2668b4046414868b581c1936ea10e907bb3224f2131; clamp ev_191ac27d385689c1e5621fa4eb0a424e4668ed37a2667562269756a622e1b04d"
+    },
+    {
+      "name": "Lua opacity failed conversion",
+      "group": "scripting",
+      "value": "Failed integer conversion -> 0; floor for successful inputs in 0..255; out-of-range byte storage remains a compatibility limit",
+      "source": "Layer_set_opacity 0x3dd4a0 / Cel_set_opacity 0x50e0a0 -> lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; completed fallback pseudocode ev_86884a0977896d1132728c6a5f51de3bf04988467462d8e6697c1c145f791041; helper assembly ev_b61fb1d1b48dde568a63059ea8a697ade63361618fa834b7d8ee9df71eea5715 and ev_8c466bf72f0fa667eb554957e12414689f0c6ba20d4452ea7599785f2a643093; full limits in MECHANICS.md"
     }
   ]
 }

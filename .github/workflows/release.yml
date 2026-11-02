@@ -82,7 +82,7 @@ jobs:
           "$RUNNER_TEMP/linuxdeploy.AppImage" --appdir AppDir \
             --executable target/release/pixelcraft \
             --desktop-file packaging/pixelcraft.desktop \
-            --icon-file packaging/pixelcraft.svg \
+            --icon-file packaging/pixelcraft.png \
             --library /usr/lib/x86_64-linux-gnu/libX11.so.6 \
             --exclude-library 'libwayland-*.so*' \
             --library /usr/lib/x86_64-linux-gnu/libxkbcommon.so.0 \

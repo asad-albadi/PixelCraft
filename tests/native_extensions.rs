@@ -1,6 +1,100 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_opacity_failed_numeric_conversion_becomes_zero() {
+    // Native lua_tointegerx uses floor mode, with a zero-initialized result
+    // for failed conversion. Catch clamping infinity to opaque or raising
+    // on values the native setter accepts as zero.
+    let d = Document::new(1, 1);
+    for field in ["app.activeLayer.opacity", "app.activeCel.opacity"] {
+        for (value, opacity) in [
+            ("math.huge", 0),
+            ("-math.huge", 0),
+            ("0/0", 0),
+            ("'invalid'", 0),
+            ("false", 0),
+            ("{}", 0),
+            ("nil", 0),
+            ("'123.9'", 123),
+            ("123.9", 123),
+            ("255", 255),
+        ] {
+            let edited = run_source(&d, &format!("{field}={value}"), 0, 0, None).unwrap();
+            let actual = if field == "app.activeLayer.opacity" {
+                edited.layers[0].opacity
+            } else {
+                edited.layers[0].cel_meta[0].opacity
+            };
+            assert_eq!(actual, opacity, "{field}={value}");
+        }
+    }
+}
+
+#[test]
+fn lua_duration_uses_native_integer_conversion_before_clamping() {
+    let d = Document::new(1, 1);
+    // Literal expectations from the x86_64 setter's CVTTSD2SI then 1..65535 clamp.
+    for (seconds, millis) in [
+        ("0.1239", 123),
+        ("-0.1239", 1),
+        ("0", 1),
+        ("65.535", 65535),
+        ("100", 65535),
+        ("2147483.647", 65535),
+        ("2147483.648", 1),
+        ("math.huge", 1),
+        ("-math.huge", 1),
+        ("0/0", 1),
+    ] {
+        let edited = run_source(
+            &d,
+            &format!("app.activeFrame.duration={seconds}"),
+            0,
+            0,
+            None,
+        )
+        .unwrap();
+        assert_eq!(edited.durations, [millis], "seconds={seconds}");
+    }
+}
+
+#[test]
+fn lua_frame_commands_insert_after_active_frame() {
+    // Catch command handlers accidentally using the sprite methods' append default.
+    let mut d = Document::new(1, 1);
+    d.add_frame(0, true);
+    d.add_frame(1, true);
+    d.durations = vec![110, 220, 330];
+    for (f, red) in [10, 20, 30].into_iter().enumerate() {
+        d.layers[0].cels[f][0] = [red, 0, 0, 255];
+    }
+    for (command, inserted) in [("NewFrame", [20, 0, 0, 255]), ("NewEmptyFrame", CLEAR)] {
+        let edited = run_source(&d, &format!("app.command.{command}()"), 1, 0, None).unwrap();
+        assert_eq!(edited.durations, [110, 220, 220, 330], "{command}");
+        assert_eq!(
+            edited.layers[0]
+                .cels
+                .iter()
+                .map(|p| p[0])
+                .collect::<Vec<_>>(),
+            [[10, 0, 0, 255], [20, 0, 0, 255], inserted, [30, 0, 0, 255]],
+            "{command}"
+        );
+        // PixelCraft keeps its command convention of selecting the new slot.
+        let painted = run_source(
+            &d,
+            &format!("app.command.{command}(); app.activeImage:drawPixel(0,0,Color{{r=99}})"),
+            1,
+            0,
+            None,
+        )
+        .unwrap();
+        assert_eq!(painted.layers[0].cels[2][0], [99, 0, 0, 255], "{command}");
+        assert_eq!(painted.layers[0].cels[3][0], [30, 0, 0, 255], "{command}");
+    }
+}
+
+#[test]
 fn lua_empty_frame_inserts_at_requested_slot() {
     let mut d = Document::new(1, 1);
     d.add_frame(0, true);

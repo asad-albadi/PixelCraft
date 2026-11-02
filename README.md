@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/pixelcraft-logo.png" alt="PixelCraft's teal pixel P emblem with a gold pixel" width="128">
+</p>
+
 <h1 align="center">PixelCraft</h1>
 
 <p align="center">
