@@ -52,13 +52,16 @@ struct Runtime {
 }
 impl Runtime {
     fn new() -> Result<Self, String> {
+        // Clock timestamps can repeat for concurrent calls on Windows.
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "pixelcraft-lua-{}-{}",
+            "pixelcraft-lua-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| e.to_string())?
-                .as_nanos()
+                .as_nanos(),
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
         let directory = RuntimeDirectory(directory);
