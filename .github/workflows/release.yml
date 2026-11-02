@@ -1,4 +1,4 @@
-name: Linux AppImage release
+name: Desktop releases
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-release-${{ github.ref }}
+  group: desktop-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -164,8 +164,75 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      # Statically link the MSVC runtime so a separate redistributable is unnecessary.
+      RUSTFLAGS: '-C target-feature=+crt-static'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
+          rustup override set stable
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
+      - name: Build embedded Windows Lua
+        run: ./packaging/build-windows-lua.ps1
+      - name: Test and build Windows release
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
+        run: |
+          cargo test --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+          cargo build --release --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Package Windows installer
+        run: |
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read app version' }
+          $appVersion = ($metadata.packages | Where-Object name -eq pixelcraft).version
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { 'manual-' + $env:GITHUB_SHA.Substring(0,7) }
+          $version = $version -replace '[^A-Za-z0-9._-]', '-'
+          $output = "PixelCraft-$version-x86_64-Setup"
+          "OUTPUT=$output.exe" >> $env:GITHUB_ENV
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is missing from the Windows runner' }
+          & $compiler "/DAppVersion=$appVersion" "/DOutputName=$output" packaging/windows.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+      - name: Verify installed app, uninstall and checksum
+        run: ./checks/windows-installer.ps1 -Installer "dist/$env:OUTPUT"
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelCraft-Windows-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [appimage, windows]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PixelCraft-Linux-x86_64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: PixelCraft-Windows-x86_64
+          path: dist
       - name: Publish tagged release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

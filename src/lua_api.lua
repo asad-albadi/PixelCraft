@@ -81,8 +81,48 @@ function spriteMethods:newCel(l,f,im,pos) local li,fi=layerNumber(l),frameNumber
 function spriteMethods:deleteCel(c) c.image:clear() end
 function spriteMethods:newLayer() assert((#doc.layers+1)*#doc.durations*doc.width*doc.height<=64000000,'Layer budget exceeded');local l={name='Layer '..(#doc.layers+1),visible=true,locked=false,opacity=255,cels={},cel_meta={},group=false,blend='Normal',tile_cels={}};for f=1,#doc.durations do l.cels[f]=Image(doc.width,doc.height)._pixels;l.cel_meta[f]={opacity=255,z_index=0,outside={}};l.tile_cels[f]={} end table.insert(doc.layers,l);rebuildHandles();return layerHandles[#doc.layers] end
 function spriteMethods:newGroup() local l=self:newLayer();doc.layers[l._index].group=true;return l end
-function spriteMethods:newFrame(f) assert((#doc.durations+1)*#doc.layers*doc.width*doc.height<=64000000,'Frame budget exceeded');f=frameNumber(f) or #doc.durations;table.insert(doc.durations,doc.durations[f]);for _,l in ipairs(doc.layers) do table.insert(l.cels,copy(l.cels[f]));table.insert(l.cel_meta,copy(l.cel_meta[f]));table.insert(l.tile_cels,copy(l.tile_cels[f]));end rebuildHandles();return frameHandles[#doc.durations] end
-function spriteMethods:newEmptyFrame() local f=self:newFrame();for _,l in ipairs(layerHandles) do if not l.isGroup then l:cel(f).image:clear() end end return f end
+function spriteMethods:newFrame(f)
+ assert((#doc.durations+1)*#doc.layers*doc.width*doc.height<=64000000,'Frame budget exceeded')
+ local explicit=f~=nil
+ f=frameNumber(f) or #doc.durations
+ assert(f%1==0 and f>=1 and f<=#doc.durations,'Missing frame')
+ -- Sprite_newFrame (0x3f3b10) -> DocApi::addFrame (0x19f0b0):
+ -- copy the preceding frame into the insertion slot, shifting later frames.
+ table.insert(doc.durations,f+1,doc.durations[f])
+ for _,l in ipairs(doc.layers) do
+  table.insert(l.cels,f+1,copy(l.cels[f]))
+  table.insert(l.cel_meta,f+1,copy(l.cel_meta[f]))
+  table.insert(l.tile_cels,f+1,copy(l.tile_cels[f]))
+ end
+ -- Keep PixelCraft's parallel document data aligned with the inserted frame.
+ if #doc.frame_palettes>0 then table.insert(doc.frame_palettes,f+1,copy(doc.frame_palettes[f] or doc.palette)) end
+ for _,t in ipairs(doc.tags) do if t.from>=f then t.from=t.from+1 end;if t.to>=f-1 then t.to=t.to+1 end end
+ for _,m in ipairs(doc.metadata) do if m.frame>=f then m.frame=m.frame+1 end end
+ rebuildHandles()
+ -- The native explicit-argument path pushes the source index, not source+1.
+ return frameHandles[explicit and f or #doc.durations]
+end
+function spriteMethods:newEmptyFrame(f)
+ assert((#doc.durations+1)*#doc.layers*doc.width*doc.height<=64000000,'Frame budget exceeded')
+ -- Sprite_newEmptyFrame 0x3f3d80 passes the requested slot unchanged,
+ -- unlike newFrame's insert-after path. No argument means append.
+ f=frameNumber(f) or (#doc.durations+1)
+ assert(f%1==0 and f>=1 and f<=#doc.durations+1,'Missing frame')
+ local previous=math.max(1,f-1)
+ table.insert(doc.durations,f,doc.durations[previous])
+ for _,l in ipairs(doc.layers) do
+  local tiles={} for i=1,#(l.tile_cels[previous] or {}) do tiles[i]=0 end
+  table.insert(l.cels,f,Image(doc.width,doc.height)._pixels)
+  table.insert(l.cel_meta,f,{opacity=255,z_index=0,outside={}})
+  table.insert(l.tile_cels,f,tiles)
+ end
+ if #doc.frame_palettes>0 then table.insert(doc.frame_palettes,f,copy(doc.frame_palettes[previous] or doc.palette)) end
+ -- DocApi::adjustTags 0x19f2d0, insertion with TagsHandling=1.
+ for _,t in ipairs(doc.tags) do if t.from>=f-1 then t.from=t.from+1 end;if t.to>=f-2 then t.to=t.to+1 end end
+ for _,m in ipairs(doc.metadata) do if m.frame>=f-1 then m.frame=m.frame+1 end end
+ rebuildHandles()
+ return frameHandles[f]
+end
 function spriteMethods:newTag(a,b) a=frameNumber(a);b=frameNumber(b);assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range');local t={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}};table.insert(doc.tags,t);return setmetatable({},{__index=function(_,k)if k=='name' then return t.name elseif k=='fromFrame' then return frameHandles[t.from+1] elseif k=='toFrame' then return frameHandles[t.to+1] elseif k=='aniDir' then return t.direction end end,__newindex=function(_,k,v)if k=='name' then t.name=tostring(v) elseif k=='aniDir' then t.direction=v elseif k=='fromFrame' then t.from=frameNumber(v)-1 elseif k=='toFrame' then t.to=frameNumber(v)-1 else error('Unsupported tag field: '..k) end end}) end
 setmetatable(sprite,{__index=function(_,k)if spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
 rebuildHandles()

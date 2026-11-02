@@ -64,6 +64,10 @@ PixelCraft runs independently of Aseprite. Its executable includes a Lua 5.4 run
 
 ## Get started
 
+### Windows installer (future releases)
+
+Future tagged releases will include `PixelCraft-<version>-x86_64-Setup.exe` beside the Linux AppImage, with a SHA-256 checksum. On Windows 10/11 x64, open the installer, choose the install location and optional desktop shortcut, then launch PixelCraft from the Start menu. Installation is per user and requires no administrator access. Install newer versions over the existing installation; remove PixelCraft through Windows Settings → Apps. Uninstall keeps your projects, preferences and extensions in your user profile. Working OpenGL drivers are required. Installers are currently unsigned, so Windows may show a publisher warning.
+
 ### Linux AppImage
 
 Download the `.AppImage` from this repository's GitHub **Releases**, make it executable in your file manager, and open it. From a terminal:
@@ -75,20 +79,22 @@ chmod +x PixelCraft-*-x86_64.AppImage
 
 Use the filename you downloaded. Releases target Linux x86-64 with glibc 2.35 or newer (Ubuntu 22.04+), a graphical desktop and working OpenGL drivers. On Wayland, the app uses your system's Wayland libraries alongside its graphics drivers; these libraries are deliberately excluded from the AppImage. File dialogs use the desktop's XDG portal. If FUSE is unavailable, run the AppImage with `--appimage-extract-and-run` before any app arguments. A SHA-256 checksum accompanies each release.
 
-Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. The workflow tests and builds the app, packages it using [linuxdeploy](https://docs.appimage.org/packaging-guide/from-source/native-binaries.html), checks the packaged app's save/export/Lua functionality, and uploads the AppImage and checksum to the tag's GitHub release. It builds on Ubuntu 22.04 and embeds that runner's Lua 5.4 library instead of the development binary to avoid newer glibc requirements. **Actions → Linux AppImage release → Run workflow** also creates downloadable build artifacts; branch runs do not publish a release. The version tag controls the artifact name; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
+Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. **Actions → Desktop releases → Run workflow** creates downloadable artifacts without publishing a release. Tagged runs publish both platforms and their checksums together after both jobs pass. The version tag controls artifact filenames; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
+
+The Linux job builds on Ubuntu 22.04, embeds that runner's Lua 5.4 library, packages using [linuxdeploy](https://docs.appimage.org/packaging-guide/from-source/native-binaries.html), and checks packaged save/export/Lua functionality. The Windows job uses Windows Server 2022, stable MSVC Rust and Inno Setup 6. It compiles a checksum-verified [official Lua 5.4.9 source archive](https://www.lua.org/ftp/) into an embedded x64 DLL with a static C runtime, runs the Rust tests, and builds a per-user installer. Before uploading, it silently installs to a path containing spaces, exercises saving, exports and Lua plugins from the installed executable, repeats installation for the upgrade path, checks uninstall, and writes the installer checksum. Windows release verification runs on the Windows runner; local Linux checks cannot execute that installer. No Windows installer is produced until the workflow runs.
 
 Before uploading a release, the workflow also opens the packaged AppImage on an Xvfb X11 display and a headless Weston Wayland display using Mesa software rendering. Each check must exit successfully and produce a nonblank editor screenshot within 60 seconds. Wayland runs without `DISPLAY` so it cannot fall back to X11. Screenshots and startup/compositor logs are saved in the `PixelCraft-startup-diagnostics` Actions artifact, including on failure. Packaging fails if any `libwayland-*.so*` files or symlinks enter the AppDir. These checks validate startup on the Ubuntu release runner; they do not cover every Linux distribution or graphics driver.
 
 ### Build from source
 
-Build from the repository root with a Rust toolchain supporting edition 2024 and Cargo. Linux graphics and window-system libraries are required; a graphical desktop session is needed to open the editor. The bundled Lua runtime currently targets Linux x86-64.
+Build from the repository root with a Rust toolchain supporting edition 2024 and Cargo. Linux graphics and window-system libraries are required; a graphical desktop session is needed to open the editor. For Windows x64, use an x64 MSVC developer PowerShell with stable Rust and run `./packaging/build-windows-lua.ps1` first (requires network access to download verified Lua source). The generated `runtime/lua54.dll` is embedded at compile time. The Linux Lua runtime is checked in.
 
 ```bash
 cargo build --release
 cargo run --release
 ```
 
-The first build downloads dependencies. After Cargo has cached them, add `--offline` to build or run without network access. The release executable is `target/release/pixelcraft`.
+The first build downloads dependencies. After Cargo has cached them, add `--offline` to build or run without network access. The release executable is `target/release/pixelcraft` on Linux or `target/release/pixelcraft.exe` on Windows.
 
 The editor opens with an editable garden sample. Choose **File → New sprite** to start a transparent canvas, or open an existing project. Save your editable work as **.pixel**; use PNG, sprite-sheet or GIF export for sharing.
 
@@ -152,7 +158,7 @@ Lua runs transactionally on a separate document copy; successful results import 
 
 ## Status
 
-PixelCraft is an early-alpha Linux desktop app. Drawing, animation, advanced document features, native project persistence and independent Lua extensions have automated coverage. The standalone check also exercises saving, exports and plugins in an isolated filesystem without Aseprite or an installed Lua interpreter.
+PixelCraft is an early-alpha desktop app with Linux AppImage and Windows installer release workflows. Drawing, animation, advanced document features, native project persistence and independent Lua extensions have automated coverage. The standalone check also exercises saving, exports and plugins in an isolated filesystem without Aseprite or an installed Lua interpreter.
 
 Compatibility has boundaries: Lua exposes the API documented above, full ICC color-managed preview is not implemented, and some external ASE encodings and tileset arrangements are unsupported. See the file-format and extension sections before bringing an existing project or plugin into the editor. Other operating systems and architectures have not been validated.
 

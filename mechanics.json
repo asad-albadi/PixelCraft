@@ -86,6 +86,18 @@
       "group": "scripting",
       "value": "normal integer alpha blend; truncate signed channel division; skip packed-zero mask",
       "source": "Image_drawImage 0x3d2bb0 -> blend_image 0x5efb30 -> RGBA template 0x5eff40 -> get_rgba_blender 0x5ef7d0 -> rgba_blender_normal 0x5e81e0; ev_db08cb397bdee123a1f98e80fbf399af866a7b5db87f61df1f18268fac676296; ev_821f8fa80d93b2ce55cfbe7f3c6809a9e49134f116f8f8af3a438d864fbec6fa"
+    },
+    {
+      "name": "Lua explicit frame insertion",
+      "group": "scripting",
+      "value": "newFrame(f) inserts copied pixels and duration at f+1; returns frame handle f; omitted argument appends and returns appended frame",
+      "source": "Sprite_newFrame 0x3f3b10 -> DocApi::addFrame 0x19f0b0 -> copyFrame 0x19f0d0 -> cmd::CopyFrame::onExecute 0x40d680; assembly ev_346a85fed2cc064370861c1293a2e3b47ee25367f8710f410aa65a173b902e52 and ev_5ba1c0c35a2adaf09e9d664b6eae3ab7b89ac3daa036f7e29aff5374cd5a5070"
+    },
+    {
+      "name": "Lua empty frame insertion",
+      "group": "scripting",
+      "value": "newEmptyFrame(f) inserts before f and returns f; omitted argument appends; timing inherits preceding frame (old first at slot 1)",
+      "source": "Sprite_newEmptyFrame 0x3f3d80 -> DocApi::addEmptyFrame 0x19f250 -> AddFrame::onExecute 0x406d10 -> Sprite::addFrame 0x61a140; assembly ev_a1000165a7d86428f85993e0d077f2b0abb2ede5f626ae3c93d41927c00c5ead and ev_ccbfe1c1107895d2dcfc312e45fcb2ee98e70c49789375c1ffce13fe3e168956"
     }
   ]
 }

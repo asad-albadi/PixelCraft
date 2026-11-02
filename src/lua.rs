@@ -37,10 +37,17 @@ unsafe extern "C" fn allocate(
     }
     out
 }
+struct RuntimeDirectory(PathBuf);
+impl Drop for RuntimeDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 struct Runtime {
     library: Library,
     state: State,
-    directory: PathBuf,
+    // Fields drop in declaration order: unload the DLL before deleting it on Windows.
+    _directory: RuntimeDirectory,
     _budget: Box<Budget>,
 }
 impl Runtime {
@@ -54,9 +61,19 @@ impl Runtime {
                 .as_nanos()
         ));
         std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
-        let path = directory.join("lua.so");
-        std::fs::write(&path, include_bytes!("../runtime/liblua5.4.so"))
-            .map_err(|e| e.to_string())?;
+        let directory = RuntimeDirectory(directory);
+        #[cfg(target_os = "windows")]
+        let (name, bytes) = (
+            "lua54.dll",
+            include_bytes!("../runtime/lua54.dll").as_slice(),
+        );
+        #[cfg(not(target_os = "windows"))]
+        let (name, bytes) = (
+            "lua.so",
+            include_bytes!("../runtime/liblua5.4.so").as_slice(),
+        );
+        let path = directory.0.join(name);
+        std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
         let library = unsafe { Library::new(&path) }.map_err(|e| e.to_string())?;
         let mut budget = Box::new(Budget { used: 0 });
         let state = unsafe {
@@ -77,7 +94,7 @@ impl Runtime {
         Ok(Self {
             library,
             state,
-            directory,
+            _directory: directory,
             _budget: budget,
         })
     }
@@ -143,7 +160,6 @@ impl Drop for Runtime {
                 close(self.state)
             }
         }
-        let _ = std::fs::remove_dir_all(&self.directory);
     }
 }
 fn literal(v: &serde_json::Value) -> String {

@@ -1,6 +1,67 @@
 # Pixel editor reconstruction
 
+## Latest native audit — empty-frame insertion (2026-11-02)
+
+Fresh verification after this correction: `cargo test --offline --locked` passed **62 tests**; `cargo build --offline --locked` and `cargo fmt --check` passed. `rebuild_check` passed build, desktop launch/screenshot (942×1005), and mechanics (15 entries, 14 sourced and one estimated). The captured editor window was visually inspected.
+
+Reopened the original main program `Aseprite 1.3.18.6 reference executable` using `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Completed and read **seven successful, sequential `native_function_pseudocode` calls**, awaiting each result. Ghidra could not start; the tool returned completed built-in fallback decompilation. Full assembly was also read where fallback omitted register assignments or conditional moves. An initial unqualified `Sprite_newEmptyFrame` lookup failed; symbol search resolved the actual function before its successful read.
+
+`native_strings_find` searched API names, settings and messages (`newEmptyFrame|adjust.*tag|tag.*adjust|pixel_connectivity|commands.NewFrame_`), returning all nine matches, evidence `ev_f15bd130dda6f14d011db7396e3ff424eaf473895b5d930898ea12303bd94174`. Followed references from API name `0xf4138c` to registration-table locations `0x62580` and `0x1cbd2a0` (`ev_a1b3c39ebcd05391d6d0e9198d95e23e817d63d375347c9467f9d3a5f565caf0`); function-name search resolved the wrapper (`ev_7c0ade5850c6c7f661305856b4dfc497ec9c38664d35217add1dc2c2b7620627`). Followed message `commands.NewFrame_` at `0xf43629` to `0x45d4ec` in the command (`ev_3bf55c6d7b194e92be2949a7a4f0d063baf029b55520dc2e35cc5da411375566`), and `pixel_connectivity` at `0xf38b5e` to `0x3769e3` in its preference constructor (`ev_9514a6fed3f59c2e880c74f6078b95d543a81f27610065e9f83f91e98080d73b`). Followed calls from the wrapper through `addEmptyFrame`, `AddFrame::onExecute`, `Sprite::addFrame`, and `adjustTags`.
+
+| Completed function read | Address | Recovered rule / evidence |
+| --- | --- | --- |
+| `NewFrameCommand::onExecute` | `0x45cfa0` | Empty-frame command calls `addEmptyFrame` at active index+1. Copy and empty paths differ. `ev_efc840d0c26554fa6f0ecc5eabba86e95a0e98e5a86963f7ec2ef3bef41d83ba`. |
+| Lua `Sprite_newEmptyFrame` | `0x3f3d80` | Optional argument is converted to a zero-based frame index and passed unchanged to insertion and returned handle; omitted argument uses old frame count. Thus one-based `newEmptyFrame(f)` inserts **before f** and returns the inserted frame; omission appends. `ev_f76a8200024c4083d3d747fc0ff2b15ad0930a56d6a807656f47ec70abb5c383`; complete assembly `ev_a1000165a7d86428f85993e0d077f2b0abb2ede5f626ae3c93d41927c00c5ead`. |
+| `DocApi::addEmptyFrame` | `0x19f250` | Executes AddFrame then `adjustTags(sprite,p,1,0,1)`. `ev_7b33f23d34eaf610723a49480d7acc22162544085e91175322ddd84df943f8b5`. |
+| `cmd::AddFrame::onExecute` | `0x406d10` | Calls `Sprite::addFrame`; normal image layers get no copied cel. Background layer has a separate image filled with document background color. `ev_15c1ac27cf52a277a17e06dd402f400f83cc5270210e571b34601f1aba10c240`. |
+| `Sprite::addFrame` | `0x61a140` | Grow timing array using old last duration, shift durations backward into following slots, and displace cels from insertion index. For valid existing durations, inserted duration equals the preceding frame's, or old first duration when inserting at zero. `ev_d9d069ecf6e53358e8d778aef660e719365a7bd3934c1ffa5ee3b0059e5b7c4d`; full assembly `ev_ccbfe1c1107895d2dcfc312e45fcb2ee98e70c49789375c1ffce13fe3e168956` resolves omitted conditional moves. |
+| `DocApi::adjustTags` | `0x19f2d0` | For insertion mode 1 and zero-based slot p: `from += (p <= from)`; `to += (p <= to+1)`. This extends a tag when inserting immediately after its end. `ev_fcac7798cb5943d0f5803eadde1dc660820777919e18f7d9515257b002baf5d3`; full assembly `ev_1051621d6cfd1aa3e22ad12d52e81697e0607cd19f97fdc0e7df70f62f2ec18e`. |
+| `ToolPref::Floodfill` | `0x376670` | `pixel_connectivity` default enum 0; installed enum mapping identifies four neighbors. `ev_8c3ff38ff013d3407a8e58ce02489942a3c07b12a31fe73d2f7b0332a1d7b4a2`. |
+
+Changed `src/lua_api.lua`: `newEmptyFrame(f)` previously ignored its argument and called the copy-frame append operation, clearing copied pixels afterward. It now inserts empty pixel/cel/tile data at f, shifts following frames, inherits the preceding duration, adjusts tags with the recovered mode-1 inequalities, and returns handle f. No-argument insertion still appends. Parallel metadata and palette handling follow the project's preservation policy. The distinct `newFrame(f)` copy/return behavior documented below remains unchanged.
+
+Regression `lua_empty_frame_inserts_at_requested_slot` failed before the fix with `empty insertion slot`. It exercises numeric and frame-handle arguments, timing `[110,220,330]` → `[110,110,220,330]`, empty pixels with preserved following artwork, insertion at the first frame, and omitted-argument append. Background-color filling, explicit nil/invalid arguments, absent-cel identity, and exact palette semantics are not established as equivalent by this correction. Other real values and formulas from earlier completed native reads remain documented below; historical unresolved tag-insertion statements are superseded for insertion mode 1 by this audit.
+
 This is an independent Rust + eframe/egui implementation of the core pixel-art editing workflow. No original code, art, fonts, icons or logos are copied. The sample garden artwork is original and generated by this project. The project uses its dedicated Craft Anything app/ workspace, as requested.
+
+## Latest executable audit — frame insertion
+
+Reopened the original main ELF with `core_target_open` in Deep mode on 2026-11-02 (SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`). Completed and read **15 sequential `native_function_pseudocode` results**, awaiting each before proceeding. Ghidra could not start; every read completed using the built-in fallback. Assembly resolves the omitted register moves and carry-dependent instructions below. These are recovered rules for the supported subset, not a whole-app equivalence claim.
+
+`native_strings_find` searched names, settings and messages (`newFrame|newEmptyFrame|tx.set_frame_|default_brush_size|pixel_connectivity|commands.NewFrame_`): all 16 matches returned, evidence `ev_8dff674b658af0e478c8ad5c272a9e13e81624272c9dcd0a637c743b5699b175`. Followed `newFrame` at `0xf41383` to its registration-table references (`ev_48738b91186a408532e0c3dd2896dd1daae0600d48c70d1ee5a93684af6d8570`); `tx.set_frame_` at `0xf401c6` to `0x3ce49d` in the setter (`ev_fdaeac98e8e0b0f835c01659e1c9dcf29e976e3aa6efeffc910c39701659b52c`); command message at `0xf43629` to `0x45d4ec` (`ev_a29e4a01d552f404b8e96d5cb429226a8e3fdca138deffc195f71059d6f17aa9`); and `pixel_connectivity` at `0xf38b5e` to its preference constructor (`ev_94cfc7820a0d713be3f3d9a8f7501baccae50672b5b4a96db2b97d1930bc971f`). Followed calls and exact symbol references from the frame wrapper through `DocApi::addFrame`, `copyFrame` and `cmd::CopyFrame::onExecute`.
+
+### New correction used by the build
+
+For an existing one-based Lua frame number `f` (or frame handle), `sprite:newFrame(f)` inserts a copy into slot **f+1**, shifting later frames. The explicit-argument path returns a handle for **f**, not the newly inserted slot. With no argument, it appends a copy of the last frame and returns the appended slot. This unusual explicit return rule comes directly from the executable, rather than an API assumption:
+
+- `Sprite_newFrame`, **0x3f3b10**, pseudocode `ev_dbeac66fc7b9fcd34a49fa0a3c17fa0d2f2d5c117c67d010b05c74cda81b819e`; full assembly `ev_346a85fed2cc064370861c1293a2e3b47ee25367f8710f410aa65a173b902e52`. `r15d` holds source index; `ebp=source+1` is passed to `addFrame`; `r15d` is subsequently passed to `push_sprite_frame`. With no argument both start at the old frame count.
+- `get_frame_number_from_arg`, **0x3ce270**, `ev_b32fbc0de647bef317f4c96d4183ebe37c7c5955193d3562b9343f56f130eb1e`: frame handles store zero-based indexes; numeric arguments subtract one.
+- `push_sprite_frame`, **0x3ce200**, `ev_4278d9065e26f445cd14f96c9a4b71b9dc09ae9ad41113f8d2128e3a0dd73b04`; assembly `ev_3c0069bc2962fa5e57f712328245268f3e43d590802efd58d0f1df6e0a29cf2a` confirms it stores the passed index unchanged.
+- `DocApi::addFrame`, **0x19f0b0**, `ev_d599b298fdc5de6d02568eef5d323d34364a656b68fec2eb28de6500fb84bdaf`: delegates to `copyFrame(sprite,n-1,n,0,1)`.
+- `DocApi::copyFrame`, **0x19f0d0**, `ev_c743cea957d1e245c2dce5260fbf18d16188a2f0f5e4b6daa717faf9408bfd6b`; assembly `ev_5ba1c0c35a2adaf09e9d664b6eae3ab7b89ac3daa036f7e29aff5374cd5a5070` establishes that place=0 leaves the destination at n (`cmp`/`sbb`, omitted by fallback). It copies cels across layers and calls tag adjustment.
+- `cmd::CopyFrame::onExecute`, **0x40d680**, `ev_5e1b9205922afe7910825763161fa0a9ef80f7d7d4600564730493f8f7657485`: reads source frame duration, inserts the destination frame and sets its duration.
+
+Changed `src/lua_api.lua`: it previously appended every explicit copy and returned the last slot. It now inserts timing, pixels, cel metadata and tile data at f+1 and returns f for an explicit existing-frame argument. Parallel palette and metadata arrays stay aligned; tag movement follows PixelCraft's existing model insertion policy (exact original tag adjustment is still unverified). Resource and invalid-frame checks remain project safeguards.
+
+Regression `lua_new_frame_inserts_after_argument_and_returns_source_slot` failed before the correction with `returned source slot`, then passed. Both numeric and frame-handle arguments are exercised. Starting durations `[110,220,330]`, copying frame 1 and assigning 444 ms through the returned handle produces `[444,110,220,330]`. Editing the inserted copy leaves original and later-frame pixels intact.
+
+### Other completed reads
+
+| Function | Address | Recovered rule / evidence |
+| --- | --- | --- |
+| `NewFrameCommand::onExecute` | `0x45cfa0` | Separate empty/copy/linked paths in a transaction; `ev_efc840d0c26554fa6f0ecc5eabba86e95a0e98e5a86963f7ec2ef3bef41d83ba`. |
+| Lua `Frame_set_duration` | `0x3ce440` | Float multiply then truncating integer conversion; `ev_3f22c15620330775cce907dab0a4ff7783531be37e91569f301d264ec7be2c71`. |
+| `Sprite::setFrameDuration` | `0x61a420` | Valid frames only, 1..65535 ms; `ev_306fda5d2ea134eb34ae1bdc260478f8ea5224238ba81714adc96eff875ea5e6`; earlier complete assembly E4 supplies conditional-move bounds. |
+| `ToolPref::Floodfill` | `0x376670` | Default connectivity enum 0; installed enum mapping gives four neighbors; `ev_8c3ff38ff013d3407a8e58ce02489942a3c07b12a31fe73d2f7b0332a1d7b4a2`. |
+| `Sprite::Sprite` | `0x617e40` | One initial frame, 100 ms; `ev_5293b37d970497833b57985911b6bce97c564b236dba27819fbf5a45298f1f54`. Also establishes frame-count field at +0x98 used by scripting wrapper. |
+| `rgba_blender_normal` | `0x5e81e0` | `M(a,b): t=a*b+128; (t+(t>>8))>>8`; s=M(src alpha,opacity); A=s+d-M(s,d); C=dst+trunc((src-dst)*s/A), transparent branches as below; `ev_50358e5f77cd676585cc0771461863366aac18f4c445a730cc44c0963de7e730`. |
+| `rgba_to_graya_using_luma` | `0x5f7170` | floor((2126R+7152G+722B)/10000), alpha preserved; `ev_b3bd20c7de1394f17ad16847d892a2a329bcbbe24c08c58abb94cb04374eece9`. |
+| `ContextBar::BrushSizeField` | `0x253050` | UI input range 1..64 px; `ev_5598869494a7abf4f39d06f29193b9deac86fc01207474f0ccd7a81a49d45115`. |
+| `algo_line_continuous` | `0x5cb800` | Integer error stepping with endpoints, recurrence below; `ev_67a87e62bf30b0c8227a6a7d910984e565c70dbb19fe8fb9e3d224c831c46f90`. |
+
+Fresh verification: `cargo test --offline --locked` passed all **61 tests**; `cargo build --offline --locked` and `cargo fmt --check` passed. Craft Anything `rebuild_check` passed build, desktop launch/screenshot (942×1005), and mechanics (14 entries, 13 sourced and one estimated).
+
+Explicit nil/out-of-range scripting frame arguments, exact native tag/palette movement, advanced blend formulas, ellipse masks and complete ecosystem compatibility remain outside verified parity. The earlier broad statement that scripting frame insertion is wholly unresolved is superseded for valid existing-frame arguments by this audit.
 
 ## Current native re-audit — 2026-11-02
 

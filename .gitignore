@@ -14,3 +14,6 @@
 !.env.example
 .DS_Store
 Thumbs.db
+
+# Generated Windows Lua runtime (built from verified source).
+/runtime/lua54.dll

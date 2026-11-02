@@ -1,6 +1,74 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_empty_frame_inserts_at_requested_slot() {
+    let mut d = Document::new(1, 1);
+    d.add_frame(0, true);
+    d.add_frame(1, true);
+    d.durations = vec![110, 220, 330];
+    for (f, red) in [10, 20, 30].into_iter().enumerate() {
+        d.layers[0].cels[f][0] = [red, 0, 0, 255];
+    }
+    for arg in ["2", "app.activeSprite.frames[2]"] {
+        let code = format!(
+            "local f=app.activeSprite:newEmptyFrame({arg}); assert(f.frameNumber==2, 'empty insertion slot'); assert(f.duration==0.110, 'preceding duration')"
+        );
+        let edited = run_source(&d, &code, 0, 0, None).unwrap();
+        assert_eq!(edited.durations, [110, 110, 220, 330]);
+        assert_eq!(
+            edited.layers[0]
+                .cels
+                .iter()
+                .map(|p| p[0])
+                .collect::<Vec<_>>(),
+            [[10, 0, 0, 255], CLEAR, [20, 0, 0, 255], [30, 0, 0, 255]]
+        );
+    }
+    let first = run_source(&d, "app.activeSprite:newEmptyFrame(1)", 0, 0, None).unwrap();
+    assert_eq!(first.durations, [110, 110, 220, 330]);
+    assert_eq!(first.layers[0].cels[0][0], CLEAR);
+    assert_eq!(first.layers[0].cels[1][0], [10, 0, 0, 255]);
+    let last = run_source(
+        &d,
+        "local f=app.activeSprite:newEmptyFrame(); assert(f.frameNumber==4)",
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(last.durations, [110, 220, 330, 330]);
+    assert_eq!(last.layers[0].cels[3][0], CLEAR);
+}
+
+#[test]
+fn lua_new_frame_inserts_after_argument_and_returns_source_slot() {
+    // Native Sprite_newFrame inserts at source+1, but pushes source's index.
+    let mut d = Document::new(1, 1);
+    d.add_frame(0, true);
+    d.add_frame(1, true);
+    d.durations = vec![110, 220, 330];
+    for (f, red) in [10, 20, 30].into_iter().enumerate() {
+        d.layers[0].cels[f][0] = [red, 0, 0, 255];
+    }
+    for arg in ["1", "app.activeSprite.frames[1]"] {
+        let code = format!(
+            "local s=app.activeSprite; local f=s:newFrame({arg}); assert(f.frameNumber==1, 'returned source slot'); f.duration=0.444; s.layers[1]:cel(2).image:drawPixel(0,0,Color{{r=99}})"
+        );
+        let edited = run_source(&d, &code, 0, 0, None).unwrap();
+        assert_eq!(edited.durations, [444, 110, 220, 330]);
+        assert_eq!(
+            edited.layers[0]
+                .cels
+                .iter()
+                .map(|p| p[0][0])
+                .collect::<Vec<_>>(),
+            [10, 99, 20, 30]
+        );
+        assert_eq!(d.durations, [110, 220, 330]);
+    }
+}
+
+#[test]
 fn lua_draw_image_uses_native_integer_normal_blend() {
     // Literal results derived from rgba_blender_normal's byte arithmetic.
     for (dst, src, opacity, expected) in [
