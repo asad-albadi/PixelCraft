@@ -17,6 +17,12 @@ try {
     Invoke-Checked $installerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installDir`"", "/LOG=`"$work/install.log`"")
     $app = Join-Path $installDir 'pixelcraft.exe'
     if (!(Test-Path $app)) { throw 'Installer did not create the executable' }
+    # A console-subsystem executable opens a terminal beside the editor.
+    $image = [IO.File]::ReadAllBytes($app)
+    $pe = [BitConverter]::ToInt32($image, 0x3c)
+    if ([BitConverter]::ToUInt32($image, $pe) -ne 0x4550) { throw 'Invalid PE signature' }
+    $subsystem = [BitConverter]::ToUInt16($image, $pe + 24 + 68)
+    if ($subsystem -ne 2) { throw "Expected Windows GUI subsystem (2), got $subsystem; this build would open a console" }
     foreach ($notice in @('LICENSE', 'LUA-LICENSE.txt')) {
         if (!(Test-Path (Join-Path $installDir $notice))) { throw "Missing license: $notice" }
     }
