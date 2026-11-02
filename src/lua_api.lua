@@ -18,17 +18,54 @@ local function opacityByte(v)
  return byte(n)
 end
 local function rgba(r,g,b,a) return byte(r)|(byte(g)<<8)|(byte(b)<<16)|(byte(a==nil and 255 or a)<<24) end
+-- Native PixelColor_rgba 0x3e2100 and extractors 0x3e21a0..0x3e2230
+-- call lua_tointegerx (floor mode, failed conversion -> zero) then mask.
+local function pixelInteger(v)
+ local n=tonumber(v)
+ if not n then return 0 end
+ if math.type(n)=='integer' then return n end
+ if n~=n or n < -9223372036854775808.0 or n >= 9223372036854775808.0 then return 0 end
+ return math.floor(n)
+end
+local function pixelRgba(r,g,b,a)
+ return (pixelInteger(r)&255)|((pixelInteger(g)&255)<<8)|((pixelInteger(b)&255)<<16)|(((a==nil and 255 or pixelInteger(a))&255)<<24)
+end
 local function unpackColor(c)
  if type(c)=='table' then return {byte(c.r or c.red or c[1]),byte(c.g or c.green or c[2]),byte(c.b or c.blue or c[3]),byte(c.a or c.alpha or c[4] or 255)} end
  c=math.tointeger(c or 0) or 0;return {c&255,(c>>8)&255,(c>>16)&255,(c>>24)&255}
 end
-function Color(c,g,b,a) local p=type(c)=='number' and (g and {c,g,b,a or 255} or unpackColor(c)) or unpackColor(c or {});return {r=p[1],g=p[2],b=p[3],a=p[4],red=p[1],green=p[2],blue=p[3],alpha=p[4],rgbaPixel=rgba(table.unpack(p))} end
+local colorChannels={r=1,red=1,g=2,green=2,b=3,blue=3,a=4,alpha=4}
+function Color(c,g,b,a)
+ local p=type(c)=='number' and (g and {c,g,b,a or 255} or unpackColor(c)) or unpackColor(c or {})
+ -- Native RGB setters replace a channel, not a separate alias field.
+ -- rgbaPixel (0x3c69b0 -> 0x16dc90) packs current state on every read.
+ return setmetatable({}, {
+  __index=function(_,k)
+   local i=colorChannels[k]
+   if i then return p[i] end
+   if k=='rgbaPixel' then return pixelRgba(table.unpack(p)) end
+  end,
+  __newindex=function(t,k,v)
+   local i=colorChannels[k]
+   if i then
+    -- lua_tointegerx -> low signed int32 passed to native Color methods.
+    local n=pixelInteger(v)&0xffffffff
+    if n>=0x80000000 then n=n-0x100000000 end
+    p[i]=i==4 and byte(n) or n
+   elseif k=='rgbaPixel' then error('Color.rgbaPixel is read-only')
+   else rawset(t,k,v) end
+  end
+ })
+end
 function Point(x,y) if type(x)=='table' then return {x=x.x or x[1] or 0,y=x.y or x[2] or 0} end return {x=x or 0,y=y or 0} end
 function Size(w,h) return {width=w or 0,height=h or 0} end
 function Rectangle(x,y,w,h) if type(x)=='table' then return copy(x) end return {x=x or 0,y=y or 0,width=w or 0,height=h or 0} end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}
 AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}
+-- Native App_get_fgColor 0x50ac90 / App_get_bgColor 0x50ae00 copy
+-- the preference Color into fresh Lua userdata on every read.
+local scriptColors=_pw_colors
 local doc=_pw_document
 local imageMethods={}
 local function image(p,w,h) return setmetatable({_pixels=p,width=w,height=h,colorMode=doc.color_mode,bytesPerPixel=4},{__index=imageMethods}) end
@@ -144,7 +181,7 @@ setmetatable(sprite,{__index=function(_,k)if spriteMethods[k] then return sprite
 rebuildHandles()
 local activeLayer,activeFrame=_pw_layer+1,_pw_frame+1
 local commands={}
-app=setmetatable({apiVersion=1,version='PixelCraft 0.2',isUIAvailable=false,pixelColor={rgba=rgba,rgbaR=function(c)return c&255 end,rgbaG=function(c)return(c>>8)&255 end,rgbaB=function(c)return(c>>16)&255 end,rgbaA=function(c)return(c>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color{r=0,g=0,b=0,a=255} elseif k=='bgColor' then return Color{r=255,g=255,b=255,a=255} else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
+app=setmetatable({apiVersion=1,version='PixelCraft 0.2',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
 -- NewFrameCommand::onExecute (0x45cfa0) passes active index+1 to
 -- addFrame/addEmptyFrame. Sprite methods without arguments instead append.
 rawset(app,'command',setmetatable({NewLayer=function()app.activeLayer=sprite:newLayer()end,NewFrame=function()

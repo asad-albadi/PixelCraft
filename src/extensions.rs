@@ -47,7 +47,19 @@ pub fn run_source(
     layer: usize,
     command: Option<&str>,
 ) -> Result<Document, String> {
-    let json = crate::lua::execute(doc, source, frame, layer, command, false)?;
+    run_source_with_colors(doc, source, frame, layer, command, None)
+}
+
+/// Pass the editor color preferences as a snapshot to the isolated Lua worker.
+pub fn run_source_with_colors(
+    doc: &Document,
+    source: &str,
+    frame: usize,
+    layer: usize,
+    command: Option<&str>,
+    colors: Option<[[u8; 4]; 2]>,
+) -> Result<Document, String> {
+    let json = crate::lua::execute(doc, source, frame, layer, command, false, colors)?;
     let mut edited: Document =
         serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
     edited.validate()?;
@@ -287,8 +299,9 @@ impl Manager {
             for s in &p.manifest.contributes.scripts {
                 let script = p.directory.join(safe_path(&s.path)?);
                 let source = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
-                let json = crate::lua::execute(&Document::new(1, 1), &source, 0, 0, None, true)
-                    .map_err(|e| format!("{}: {e}", p.id))?;
+                let json =
+                    crate::lua::execute(&Document::new(1, 1), &source, 0, 0, None, true, None)
+                        .map_err(|e| format!("{}: {e}", p.id))?;
                 let mut commands: Vec<PluginCommand> =
                     serde_json::from_str(&json).map_err(|e| e.to_string())?;
                 if commands.is_empty() {

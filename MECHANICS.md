@@ -1,4 +1,126 @@
+## Current native audit — mutable Lua RGB Colors (2026-11-02)
+
+Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode; SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Prior audits below remain evidence for their respective mechanics.
+
+Searched names, settings and messages with `native_strings_find`: a broad `Color|opacity|invalid` search returned 985 matches (only the first 100 were requested), then the focused `^red$|^rgbaPixel$|^color_bar$|invalid_fg_or_bg` search returned all four matches (`ev_0a7e9dbdd8ab73cd48eaf7ef4c592ec3d595a842875bab49c777b90a79f80e68`). Followed `rgbaPixel` at `0xf3fbdd` to property registration `0x1cbafc0`; its getter pointer at `0x1cbafc8` is `0x3c69b0`, with a null setter. `native_xrefs_list` evidence: `ev_360aca6d0b90a21d746d6a96711081e36291e9aa0941d13222a782d4130f7749`. The red property registration at `0x1cbae40` maps to getter `0x3c5c60` and setter `0x3c5c90`. Followed setter outgoing references to integer conversion, other channel getters and `Color::fromRgb` (`ev_761c572878c4a7e1e0e2ca77b25f30aa465df0c57c0f114aba9ce28f0930df29`). Registration and arithmetic instructions are saved in `evidence/color_mutation.asm`.
+
+Completed eight sequential `native_function_pseudocode` requests, waiting for and reading each result before requesting the next:
+
+| Function | Address | Completed pseudocode evidence |
+| --- | --- | --- |
+| Color_get_rgbaPixel | `0x3c69b0` | `ev_7105ca60f7d8b9ede0e31635a0e90e9346c63858a01e2b66a620d411433cd0b0` |
+| color_utils::color_for_target_mask | `0x16dc90` | `ev_81ff27c9fa2eef77eb90f338c9be7f72be01081fd912576bce5d73f3dd93d69e` |
+| Color_set_red | `0x3c5c90` | `ev_3cad851c15c3460595015a583795efbab2d32fa6b7df7e92a3b31daa8ab76c06` |
+| Color_set_green | `0x3c5d70` | `ev_e24b968a9bf6321264369bce64bbf4662482bd90a8bb2a4d9b6b1c463e222b6c` |
+| Color_set_blue | `0x3c5e50` | `ev_ca0b4159576582b55bad00ff592cdf63272b5804e151c7d4fa6a810a4ad665d4` |
+| Color_set_alpha | `0x3c5f30` | `ev_5fdb5589a65f20c765770d74240d221fcb5d0df14c5cc9b079b1a5c7016d0982` |
+| Color::fromRgb | `0x16a5c0` | `ev_c724d1688af7d34962c3e4f0afc5742839218376fffd3d2f0d75d454089a1df7` |
+| Color::setAlpha | `0x16cdc0` | `ev_754e4df2c6d200f5a53d46eba3a46c8f6ad2c43e66e52968de16bcecd8ce1eb8` |
+
+The first getter request timed out at the tool transport's 300-second limit and did not produce pseudocode. Retried with a temporary 15-second Ghidra startup timeout, then restored the original null setting. All eight completed results use the built-in fallback after Ghidra timed out. Its register variables and conditional moves are approximate: notably, the alpha clamp is established by the actual `test/cmovg/cmp/cmovl` instructions at `0x16cdc9..0x16cdd9`, not by trusting the fallback's flattened assignments.
+
+Recovered rules applied in `src/lua_api.lua`:
+
+- Channel assignment converts through the previously recovered `lua_tointegerx` floor/failure-zero rule, then narrows to signed 32-bit: `J(v) = signed32(I(v) & 0xffffffff)`. RGB setters replace just their channel and preserve the other three. `Color::fromRgb` stores the integer channels without saturation. Thus red `-1` stays -1 in RGB Color state, and red `0x100000063` becomes 99.
+- Alpha assignment uses `alpha = min(255,max(0,J(v)))`; it preserves RGB. This clamp differs from the low-byte mask used by packed pixel helpers.
+- `rgbaPixel` is read-only and computed per read: `(R&255) | ((G&255)<<8) | ((B&255)<<16) | ((A&255)<<24)`. The getter builds an RGB ColorTarget with mask zero; the packing instructions at `0x16dce8..0x16dd37` retain the low bytes. It is not a cached constructor result.
+- Replaced duplicated table channel fields and cached packed value with shared channel state. Existing short aliases `r/g/b/a` are retained as a PixelCraft convenience and access the same state as `red/green/blue/alpha`; this audit does not establish native short-property aliases. Color construction defaults remain as previously implemented; full constructor parity, HSV/HSL/indexed/tile Color mutation, direct drawing of out-of-range Color tables and events remain outside this correction.
+
+Two real embedded-Lua document-paint regressions failed before the correction: red mutation painted `[1,2,3,4]` instead of `[99,2,3,4]`; green/blue/alpha mutation likewise painted the old constructor pixel. Coverage includes all four channels, signed 32-bit narrowing, failed conversions, alpha clamping and packed byte masking. Final verification: all **76 tests** passed; `cargo fmt --check` and `cargo build --offline --locked` passed. Craft Anything `rebuild_check` passed build, desktop startup/screenshot (942×1005, inspected), and mechanics validation (23 entries: 22 sourced, one estimated).
+
 # Pixel editor reconstruction
+
+## Current native audit — Lua foreground/background getters (2026-11-02)
+
+Freshly opened the original main ELF `aseprite-reference` with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. This audit extends the drawing, timing, blending and packed-color formulas documented below.
+
+Searched names, settings and messages with `native_strings_find`, regex `fgColor|bgColor|fg_color|bg_color|invalid_fg_or_bg`: all 13 matches returned (`ev_82c0331472dbc64c437b187ee99c534b94233ab956c17d4c30608329ae6bdc46`). Followed `fgColor` at `0xf46f8b` to registration data `0x1cd53d8` (`ev_668a5b52c73b07fc82006f743213480eecaab5ee2f7da2201bdead77af770777`). Its next pointer at `0x1cd53e0` is the getter `0x50ac90`, corroborated by incoming references (`ev_4c934f1e9c86981160ed82dc61edb774b4c57a261520b54419661ff0e1a4eea6`). The next property entry maps `bgColor` at `0xf35713` via `0x1cd53f0` to getter `0x50ae00` at `0x1cd53f8`. Registration bytes are in `evidence/lua_color_registration.asm`. Function search resolved both getters and the preferences constructor (`ev_cdbfcaadaac167cdbe5e2f26e6c54038e7cfbe652e1fea4af20a58c73178a259`). Followed outgoing getter calls to the Preferences singleton and fresh Lua userdata allocation (`ev_0db17c4767368d2dc8f0433f51ca1605bde553062807ad62be9ee5cf90c08e32`). Setting strings `fg_color`/`bg_color` directly reference the preferences constructor; the invalid-color alert is a search anchor, not a new implemented alert rule.
+
+Completed three sequential `native_function_pseudocode` calls, awaiting and reading each response before requesting the next:
+
+| Function | Entry | Completed pseudocode evidence |
+| --- | --- | --- |
+| App_get_fgColor | `0x50ac90` | `ev_dd3e21f9df2a8bbdb3a24fb25f9af88c21424bdc2aeba043dbffd052ee0ed767` |
+| App_get_bgColor | `0x50ae00` | `ev_8ad8c2afe2eadf8448626ef623d57ef4be2b096cfba254d2d81f5410f72fb0f3` |
+| GlobalPref::ColorBar constructor | `0x366d20` | `ev_9daca0c10dc2a4202b55b144bc919cb60962a332d5076b5a9037bf5664fef4ea` |
+
+Ghidra timed out; all three completed responses used the built-in register-level decompiler. Its inferred types/flags are approximate. Temporarily set startup timeout to 15 seconds and restored the original null setting. Getter assembly is retained in `evidence/lua_foreground_getter.asm` and `evidence/lua_background_getter.asm`; factory assembly remains in `evidence/color_factory_defaults.asm`.
+
+Recovered rules and implementation:
+
+- Foreground getter copies **40 bytes** from `Preferences::instance()+0x4730`; background getter copies **40 bytes** from `+0x4820`. Each allocates fresh `0x28`-byte Lua userdata, copies the Color value, attaches its metatable, and returns one value. The results are copies; mutating a returned Color does not change the preference. These byte offsets describe native Color objects, not packed RGBA bytes.
+- Factory constructor calls `Color::fromRgb(255,255,255,255)` for foreground and `Color::fromRgb(0,0,0,255)` for background. Therefore standalone RGBA scripts use opaque white foreground and opaque black background.
+- Fixed `src/lua_api.lua` to copy invocation colors on every getter read. The desktop script worker now passes `[editor.foreground, editor.background]`, retaining all four channels. `extensions::run_source_with_colors` carries the snapshot into the embedded runtime; standalone calls and command discovery use the native factory defaults.
+- The worker uses an invocation snapshot while editing is blocked. This audit establishes RGBA getter values/copy semantics; script color setters, indexed/tile Color representations, full Color-object mutation semantics and color-change callbacks remain unsupported. It does not establish complete extension or format parity, nor exact ellipse masks.
+
+Both regressions were run before the getter correction: factory painting produced `[0,0,0,255]` instead of `[255,255,255,255]`; selected-color painting produced `[0,0,0,255]` instead of `[12,34,56,78]`. Tests paint real document pixels through embedded Lua and verify that mutating a returned copy leaves subsequent getter reads unchanged. Final verification: all **74 tests** passed; `cargo fmt --check` and `cargo build --offline --locked` passed. Craft Anything `rebuild_check` passed build, desktop startup/screenshot (942×1005, inspected), and mechanics validation (22 entries: 21 sourced, one estimated).
+
+## Current native audit — Lua packed RGBA colors (2026-11-02)
+
+Opened the original main ELF `aseprite-reference` with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. This is a fresh audit of the existing scripting color helpers; earlier audits below remain applicable to the other implemented mechanics.
+
+`native_strings_find` searched names, settings and messages using `rgba|fgColor|bgColor|color_bar|invalid_fg_or_bg`, returning all 69 matches (`ev_e7798ce8b0b02e4082bb7714d30d2d14a9f32ace0e9ba4a698e62787be3a7a6c`). These include `rgbaR` at `0xf4074b`, the `color_bar` setting at `0xf3e1d6`, and message `alerts.invalid_fg_or_bg_colors` at `0xf3976b`. Followed `rgbaR` references to registration data `0x1cbc400` (`ev_9518e71c93f3ceee37c360fdd9040c05a6e9fd75478a098fdd74134e1932ac3d`); the adjacent pointer at `0x1cbc408` identifies `PixelColor_rgbaR` at `0x3e21a0` (function references `ev_a350779f7b3cf807cc57248d49ee70ba7bfd578b9332aea9ad8463b0457cfd86`). The preceding registration pair at `0x1cbc3f0` maps `rgba` to `0x3e2100`. Registration bytes are retained in `evidence/pixelcolor_registration.asm`. Function search resolved the packer, all four extractors and integer helpers (`ev_41169d8eb97db1e1331713175a3462c29c714d0d5cca246907e34936e60b059d`). Followed packer outgoing calls to `lua_tointegerx`, `lua_type`, and the result push (`ev_1824bc8c565b9d722f0b7171ee983c5c601624258ce63ea71a9889825d8d2c31`).
+
+Completed **eight sequential `native_function_pseudocode` reads**, awaiting and reading each response before the next request:
+
+| Function | Entry | Completed pseudocode evidence |
+| --- | --- | --- |
+| PixelColor_rgba | `0x3e2100` | `ev_0c362b05d308707e98d280b99ead05cd3f06215fe946c2f04c2aba13f67cecd1` |
+| PixelColor_rgbaR | `0x3e21a0` | `ev_6679d8856744d12a5c04427e77136bab9a4b45493530b7697cd9688d1cb215e4` |
+| PixelColor_rgbaG | `0x3e21d0` | `ev_93ede02e8ad451b6acbe66014b0821404dbe7d0dfab44868d06d1a90aec6dc60` |
+| PixelColor_rgbaB | `0x3e2200` | `ev_aeef9fe2cf129246b64b922da3585e5fec9cf13396a81eea4d9e3e95f105af83` |
+| PixelColor_rgbaA | `0x3e2230` | `ev_180a8ecf74a8677d94dd5aa73026c2f3cd32897f3db7d61302f6708b6ac7c057` |
+| lua_tointegerx | `0x53eab0` | `ev_78c9a310d50d382a08c8075b32d95dfb2ca81997767d81b8e819b090e8d6f085` |
+| luaV_tointeger | `0x554930` | `ev_7dd36e27cd0eb6dae6de9ba81c4d37681caf8ae8b8398562a3f91b06bf401f51` |
+| lua_type | `0x53e270` | `ev_eb33375a0c370524320ba8c1b3f49d6b5227bf86ff676e694199bac59177ceee` |
+
+All returned the built-in fallback because Ghidra timed out. Temporarily used a 15-second startup timeout and restored its original null value after the reads. Two helper evidence ids match the earlier opacity audit: these are fresh completed calls returning the same content-addressed evidence, not new unique evidence. Register-level types/flags in fallback output are approximate. Corroborated packer and all extractor arithmetic against the full instruction listing in `evidence/pixelcolor_rgba.asm`; integer-helper assembly is retained from the earlier opacity audit in `evidence/lua_tointegerx.asm` and `evidence/luaV_tointeger.asm`.
+
+Recovered rules, implemented in `src/lua_api.lua`:
+
+- Let `I(v)` preserve signed 64-bit integer inputs; parse convertible numeric strings; floor finite floating inputs into the signed 64-bit domain; return **0** for failed conversions (invalid strings/types, NaN, infinity, or out-of-range floats). The helper initializes its output to zero and calls conversion mode 1. Preserve integer inputs before floating range checks so the valid integer `0x7fffffffffffffff` is not mistaken for +2^63.
+- Let `U(v)=I(v)&255`. `rgba(r,g,b,a)=U(r) | (U(g)<<8) | (U(b)<<16) | (A<<24)`, where **A=255 for omitted/nil alpha**, otherwise `A=U(a)`. Missing RGB inputs convert to zero. There is **no saturation clamp**: at `0x3e2168` red is zero-extended from its low byte, at `0x3e216c..0x3e2170` green is shifted/masked, at `0x3e2177` blue is zero-extended, and the 32-bit alpha shift at `0x3e215e` retains only its low byte. The packed result is a nonnegative integer in 0..4294967295.
+- Extractors are `rgbaR(c)=I(c)&255`, `rgbaG(c)=(I(c)>>8)&255`, `rgbaB(c)=(I(c)>>16)&255`, and `rgbaA(c)=(I(c)>>24)&255`. All call the same integer conversion before extracting. Invalid inputs return zero instead of raising a Lua bitwise-conversion error.
+- Examples: `rgba(-1,256,511,258)` gives channels **[255,0,255,2]**; `rgba('257.9',-0.1,258.9)` gives **[1,255,2,255]**; false alpha gives zero, while nil alpha gives 255. `rgba(1,2,3,4)=0x04030201`.
+
+Changed the exposed `app.pixelColor.rgba` and four extractors to use these rules. Internal normalized color-table packing remains separate. This audit does not establish complete Color-object behavior, grayscale/tile packing API coverage, or exact brush ellipse masks. The compact named Colors selector and artwork swatch list are project-specific UI; these are not claimed as native mechanics.
+
+Regression `lua_pixel_color_wraps_channels_and_converts_like_native` first failed through an actual script-driven document pixel edit: [0,255,255,255] instead of native [255,0,255,2]. It also covers fractional/numeric strings, omitted/nil/false alpha, failed conversion, large exact integers, packed result layout, and extraction. Final verification: all **72 tests** passed, `cargo fmt --check` passed, and `cargo build --offline --locked` passed without warnings. Craft Anything `rebuild_check` passed build, desktop launch/screenshot (942×1005), and mechanics (21 entries: 20 sourced, one estimated). The screenshot was inspected. Complete original file/extension ecosystem support and exact ellipse masks remain unresolved.
+
+
+## Current native audit — shared drawing colors (2026-11-02)
+
+Freshly opened the original main ELF `aseprite-reference` with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. This extends the earlier mechanic audits retained below.
+
+Searched names, settings and messages with `native_strings_find`: SwitchColors/default/reset/background names (4 matches, `ev_eadb1a6d085eb11ad148a8109d297b79461505735c596557c2b850ba50659231`); fg/bg/default color names (27 matches, `ev_e641f6abac12156b36619d83626f50a8b0499e111398ba8b5484208e3b7b8114`); targeted settings/events/message search (15 matches, `ev_82b21c303ece46fbbc5a9f08841be67e3961a2d100002d0c00fbd851e9afbaa5`). Relevant strings include `SwitchColors` at `0xf3575d`, `fg_color` at `0xf3a049`, `bg_color` at `0xf3a065`, `color_bar` at `0xf3e1d6`, and `alerts.invalid_fg_or_bg_colors` at `0xf3976b`.
+
+Followed SwitchColors string references to its constructor `0x499b30` and factory `0x499dd0` (`ev_f52aef0d2da9bacdc7d5e1ceed97f5310311d01c138a9340f2b419372ab15b1e`), resolved the corresponding onExecute symbol, and followed its outgoing references to getters/setters (`ev_6c4ded9e37d49cc4c20103cdb4a0e0315868092630aede69b68b819d06a93161`). Followed `fg_color` references to the global ColorBar preferences constructor (`ev_e6960144ebc4d76e6cc150b328c7d77618ef12dcfe022a488b199d3336305fac`).
+
+Completed **ten sequential `native_function_pseudocode` reads**, awaiting and reading each result before requesting the next:
+
+| Function | Entry address | Completed pseudocode evidence |
+| --- | --- | --- |
+| SwitchColorsCommand::onExecute | `0x499b60` | `ev_092f0153100edd42a3d86b40e6d9cd193921dc9a1ec22955be728cd07d457eec` |
+| ColorBar::onActiveSiteChange | `0x22f2f0` | `ev_03c8c23076485ae12a5b8862a7765e809fa2fe786fbaa3ed74ee094c3fb2f5f4` |
+| ColorBar::setFgColor | `0x22d440` | `ev_ac51ac88bd358ea1ea9a32a34bbab574c3cfa6c36e9a85569a90c73b9f173add` |
+| ColorBar::onFgColorButtonChange | `0x22cea0` | `ev_2dcbeb354b3038f825624bbc41f2de3e6dd2d91c999d33e9a9f9d73781f8849d` |
+| ColorBar::onBgColorButtonChange | `0x22d0c0` | `ev_0316730d1edd7ddff5deb6e9c3311eb2b06d9989a35a7a1a2f4d25622bf92352` |
+| gen::GlobalPref::ColorBar constructor | `0x366d20` | `ev_4871039251c8a168500125848f8100cb630856b45868ecf34e477564a78385ec` |
+| Color::fromRgb | `0x16a5c0` | `ev_80feda9e2e48d068250931e8d3edad556f20f83512015aa83cbf7165f4e07e1b` |
+| ColorBar::setBgColor | `0x22d3f0` | `ev_ec2e12cbeb30c98a745a7e7dc300cc888cc22af245c5a3feb3b015f4c9d5dd99` |
+| ColorBar::getFgColor | `0x22de50` | `ev_1ef6ac954ae547ddec0d3a004dcd6ef0e76c0e57eaddfb156b4c10f7aac6bb1e` |
+| ColorBar::getBgColor | `0x22ec00` | `ev_0e124cf4a68e3b580fd23d5dd655023204801fffe7f018d865a63942a4b207ef` |
+
+All ten completed through the built-in fallback because Ghidra timed out. Its register/flag reconstruction is approximate. Temporarily set Ghidra startup timeout to 15 seconds for completed replies, then restored the prior null value. Confirmed the numeric constructor arguments and foreground singleton writes with supplemental `objdump` listings in `evidence/color_factory_defaults.asm` and `evidence/color_global_foreground.asm`.
+
+Recovered rules and implementation:
+
+- **Factory foreground = RGBA (255,255,255,255); background = (0,0,0,255).** Constructor call at `0x3670a5` supplies four 255 arguments; call at `0x36718a` supplies 0,0,0,255. `Color::fromRgb` stores those four arguments directly. These are defaults before any saved preferences. Replaced PixelCraft's coral/cream startup colors with these values. The existing Default colors button now applies the same factory defaults, instead of the reversed black/white pair. The original's separate reset-button action has not been traced; matching its exact reset workflow is not claimed.
+- **Drawing colors are application-wide state.** Foreground callback calls `Preferences::instance()` at `0x22ced6` and copies the complete color to singleton +`0x4730`; background callback similarly writes singleton +`0x4820`. Both emit preference change signals. `onActiveSiteChange` handles document observers and tile UI without restoring document-specific RGB colors. PixelCraft now retains the current foreground/background, including alpha, when opening, switching or closing sprite tabs; removed these fields from SpriteTab. Per-tab artwork, history and view still remain independent. Cross-launch color persistence is not implemented by this correction.
+- **Normal color swap:** `(fg',bg')=(bg,fg)` using complete saved Color objects, not only RGB channels. The original reads both colors before setting either. PixelCraft's existing full RGBA swap already satisfies this rule. Native shading reversal and tile-ID swapping are separate branches and are not implemented or claimed here.
+
+Regression tests `native_color_defaults` and `drawing_colors_are_shared_between_sprite_tabs` both failed before correction (coral instead of white; old tab color restored instead of current shared color), then passed after correction. Final verification: all **69 tests** passed; `cargo fmt --check` and `cargo build --offline --locked` passed without warnings. Craft Anything `rebuild_check` passed build, desktop launch/screenshot (938×990), and mechanics (20 entries: 19 sourced, one estimated). The screenshot was inspected. Full original file/extension ecosystem compatibility and the previously documented ellipse-mask uncertainty remain unresolved.
+
 
 ## Current native audit — opacity conversion (2026-11-02)
 

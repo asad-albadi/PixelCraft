@@ -70,40 +70,6 @@ impl ThemeColors {
 fn theme_path() -> Option<PathBuf> {
     Some(extensions::config_directory().join("theme.json"))
 }
-const PALETTE: [Pixel; 32] = [
-    [36, 31, 47, 255],
-    [65, 50, 65, 255],
-    [98, 64, 81, 255],
-    [137, 83, 91, 255],
-    [185, 116, 108, 255],
-    [226, 163, 132, 255],
-    [249, 211, 165, 255],
-    [255, 239, 207, 255],
-    [64, 64, 83, 255],
-    [84, 98, 121, 255],
-    [110, 141, 155, 255],
-    [153, 184, 184, 255],
-    [196, 216, 209, 255],
-    [230, 234, 216, 255],
-    [255, 255, 255, 255],
-    [0, 0, 0, 255],
-    [67, 79, 65, 255],
-    [73, 113, 83, 255],
-    [105, 155, 100, 255],
-    [155, 192, 111, 255],
-    [203, 218, 138, 255],
-    [248, 216, 132, 255],
-    [235, 172, 91, 255],
-    [209, 120, 72, 255],
-    [136, 51, 78, 255],
-    [184, 65, 85, 255],
-    [231, 104, 104, 255],
-    [245, 156, 155, 255],
-    [126, 88, 136, 255],
-    [173, 125, 173, 255],
-    [221, 167, 203, 255],
-    [244, 207, 215, 255],
-];
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
     Pencil,
@@ -149,6 +115,7 @@ enum Pending {
     New,
     Open,
     Close,
+    CloseTab,
     Demo,
 }
 #[derive(Clone)]
@@ -157,7 +124,26 @@ struct Clipboard {
     h: usize,
     pixels: Vec<Pixel>,
 }
+struct SpriteTab {
+    doc: Document,
+    saved: Document,
+    path: Option<PathBuf>,
+    layer: usize,
+    frame: usize,
+    undo: Vec<Document>,
+    redo: Vec<Document>,
+    zoom: f32,
+    pan: Vec2,
+    selection: Option<(i32, i32, i32, i32)>,
+    palette_index: usize,
+    active_tag: Option<usize>,
+}
+// GlobalPref::ColorBar 0x366d20: factory colors, shared across documents.
+const DEFAULT_FG: Pixel = [255, 255, 255, 255];
+const DEFAULT_BG: Pixel = [0, 0, 0, 255];
 struct PixelCraft {
+    tabs: Vec<Option<SpriteTab>>,
+    active_tab: usize,
     dark_mode: bool,
     theme_path: Option<PathBuf>,
     doc: Document,
@@ -168,6 +154,10 @@ struct PixelCraft {
     tool: Tool,
     fg: Pixel,
     bg: Pixel,
+    named_colors: Vec<(String, Pixel)>,
+    active_color: usize,
+    used_colors_snapshot: Option<Document>,
+    used_colors: Vec<Pixel>,
     brush: i32,
     zoom: f32,
     pan: Vec2,
@@ -241,6 +231,8 @@ impl PixelCraft {
         Self::apply_theme(ctx, true);
         let doc = Document::demo();
         Self {
+            tabs: vec![None],
+            active_tab: 0,
             dark_mode: true,
             theme_path: None,
             saved: doc.clone(),
@@ -249,8 +241,12 @@ impl PixelCraft {
             layer: 1,
             frame: 0,
             tool: Tool::Pencil,
-            fg: PALETTE[26],
-            bg: PALETTE[7],
+            fg: DEFAULT_FG,
+            bg: DEFAULT_BG,
+            named_colors: vec![("Primary".into(), DEFAULT_FG)],
+            active_color: 0,
+            used_colors_snapshot: None,
+            used_colors: vec![],
             brush: 1,
             zoom: 10.,
             pan: Vec2::ZERO,
@@ -400,7 +396,7 @@ impl PixelCraft {
         self.frame_textures[f].as_ref().unwrap().clone()
     }
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
-        self.doc.drawing_index = Some(self.palette_index);
+        self.doc.drawing_index = self.drawing_palette_index(color);
         if let Some(ti) = self.doc.layers[self.layer].tileset {
             let t = &self.doc.tilesets[ti];
             let (x, y) = (p.0 as usize / t.width, p.1 as usize / t.height);
@@ -806,8 +802,55 @@ impl PixelCraft {
             .clamp(1., 16.);
         self.playing = false;
     }
+    fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
+        self.cancel_gesture();
+        let tab = SpriteTab {
+            doc: self.doc.clone(),
+            saved: self.saved.clone(),
+            path: self.path.clone(),
+            layer: self.layer.clone(),
+            frame: self.frame.clone(),
+            undo: self.undo.clone(),
+            redo: self.redo.clone(),
+            zoom: self.zoom.clone(),
+            pan: self.pan.clone(),
+            selection: self.selection.clone(),
+            palette_index: self.palette_index.clone(),
+            active_tag: self.active_tag.clone(),
+        };
+        self.tabs[self.active_tab] = Some(tab);
+        self.active_tab = self.tabs.len();
+        self.tabs.push(None);
+        self.replace(doc, path);
+    }
+    fn switch_tab(&mut self, index: usize) {
+        if index == self.active_tab || index >= self.tabs.len() || self.script_job.is_some() {
+            return;
+        }
+        self.cancel_gesture();
+        let mut tab = self.tabs[index].take().unwrap();
+        std::mem::swap(&mut self.doc, &mut tab.doc);
+        std::mem::swap(&mut self.saved, &mut tab.saved);
+        std::mem::swap(&mut self.path, &mut tab.path);
+        std::mem::swap(&mut self.layer, &mut tab.layer);
+        std::mem::swap(&mut self.frame, &mut tab.frame);
+        std::mem::swap(&mut self.undo, &mut tab.undo);
+        std::mem::swap(&mut self.redo, &mut tab.redo);
+        std::mem::swap(&mut self.zoom, &mut tab.zoom);
+        std::mem::swap(&mut self.pan, &mut tab.pan);
+        std::mem::swap(&mut self.selection, &mut tab.selection);
+        std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
+        std::mem::swap(&mut self.active_tag, &mut tab.active_tag);
+        self.tabs[self.active_tab] = Some(tab);
+        self.active_tab = index;
+        self.extension_session = None;
+        self.render_snapshot = None;
+        self.playing = false;
+        self.hover = None;
+        self.status = "Switched sprite".into();
+    }
     fn request(&mut self, p: Pending) {
-        if self.dirty() {
+        if self.dirty() && matches!(p, Pending::Close | Pending::CloseTab) {
             self.pending = Some(p)
         } else {
             self.perform(p)
@@ -817,7 +860,7 @@ impl PixelCraft {
         match p {
             Pending::New => self.new_dialog = true,
             Pending::Demo => {
-                self.replace(Document::demo(), None);
+                self.open_document(Document::demo(), None);
                 self.layer = 1;
             }
             Pending::Open => {
@@ -837,14 +880,43 @@ impl PixelCraft {
                                 path.extension().and_then(|e| e.to_str()),
                                 Some("pixel" | "ase" | "aseprite")
                             );
-                            self.replace(d, if ase { Some(path) } else { None });
+                            self.open_document(d, if ase { Some(path) } else { None });
                             self.status = "Opened sprite".into();
                         }
                         Err(e) => self.status = format!("Could not open: {e}"),
                     }
                 }
             }
+            Pending::CloseTab => {
+                if self.tabs.len() == 1 {
+                    self.replace(Document::new(32, 32), None);
+                } else {
+                    let closed = self.active_tab;
+                    let next = if closed == 0 { 1 } else { closed - 1 };
+                    self.switch_tab(next);
+                    self.tabs.remove(closed);
+                    if self.active_tab > closed {
+                        self.active_tab -= 1;
+                    }
+                }
+            }
             Pending::Close => {}
+        }
+    }
+    fn finish_pending(&mut self, ctx: &egui::Context, pending: Pending) {
+        if matches!(pending, Pending::Close) {
+            if let Some(index) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.as_ref().is_some_and(|tab| tab.doc != tab.saved))
+            {
+                self.switch_tab(index);
+                self.pending = Some(Pending::Close);
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        } else {
+            self.perform(pending);
         }
     }
     fn save(&mut self, as_new: bool) -> bool {
@@ -970,6 +1042,7 @@ impl PixelCraft {
         self.cancel_gesture();
         match s {
             "new" => self.request(Pending::New),
+            "closetab" => self.request(Pending::CloseTab),
             "open" => self.request(Pending::Open),
             "save" => {
                 self.save(false);
@@ -1113,8 +1186,20 @@ impl PixelCraft {
         let work = session.clone();
         let doc = self.doc.clone();
         let (frame, layer) = (self.frame, self.layer);
+        let colors = [self.fg, self.bg];
         std::thread::spawn(move || {
-            let result = extensions::run_lua(&doc, &script, frame, layer, command.as_deref())
+            let result = std::fs::read_to_string(&script)
+                .map_err(|e| e.to_string())
+                .and_then(|source| {
+                    extensions::run_source_with_colors(
+                        &doc,
+                        &source,
+                        frame,
+                        layer,
+                        command.as_deref(),
+                        Some(colors),
+                    )
+                })
                 .and_then(|d| formats::save(&work.result_path(), &d));
             let _ = tx.send(result);
         });
@@ -1198,6 +1283,7 @@ impl PixelCraft {
             for (k, a) in [
                 (Key::N, "new"),
                 (Key::O, "open"),
+                (Key::W, "closetab"),
                 (Key::S, if shift { "saveas" } else { "save" }),
                 (Key::Z, if shift { "redo" } else { "undo" }),
                 (Key::Y, "redo"),
@@ -1244,6 +1330,7 @@ impl PixelCraft {
                 }
                 if i.key_pressed(Key::X) {
                     std::mem::swap(&mut self.fg, &mut self.bg);
+                    self.set_active_color(self.fg);
                 }
             }
         });
@@ -1278,6 +1365,7 @@ impl PixelCraft {
                     vec![
                         ("New sprite…   Ctrl+N", "new"),
                         ("Open…   Ctrl+O", "open"),
+                        ("Close sprite   Ctrl+W", "closetab"),
                         ("Save   Ctrl+S", "save"),
                         ("Save as…", "saveas"),
                         ("Export PNG…", "png"),
@@ -1383,77 +1471,133 @@ impl PixelCraft {
             self.action(a)
         }
     }
-    fn palette(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(5.);
-        ui.horizontal(|ui| {
-            ui.strong("Palette");
-            ui.label(format!("{} colors", self.doc.palette.len()));
-        });
-        ui.separator();
-        egui::Grid::new("palette")
-            .min_col_width(0.)
-            .spacing(Vec2::splat(3.))
-            .show(ui, |ui| {
-                for (i, p) in self.doc.palette_for(self.frame).iter().enumerate() {
-                    let (r, response) = ui.allocate_exact_size(Vec2::splat(27.), Sense::click());
-                    ui.painter().rect_filled(
-                        r,
-                        0,
-                        Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]),
-                    );
-                    if *p == self.fg {
-                        ui.painter().rect_stroke(
-                            r.shrink(1.),
-                            0,
-                            Stroke::new(2., Color32::WHITE),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                    if response.clicked() {
-                        self.fg = *p;
-                        self.palette_index = i;
-                    }
-                    if response.secondary_clicked() {
-                        self.bg = *p
-                    }
-                    response.on_hover_text(format!(
-                        "#{:02X}{:02X}{:02X} · Right-click for background",
-                        p[0], p[1], p[2]
-                    ));
-                    if i % 4 == 3 {
-                        ui.end_row();
+    fn set_active_color(&mut self, color: Pixel) {
+        self.fg = color;
+        self.named_colors[self.active_color].1 = color;
+        if let Some(index) = self
+            .doc
+            .palette_for(self.frame)
+            .iter()
+            .position(|p| *p == color)
+        {
+            self.palette_index = index;
+        }
+    }
+    fn select_named_color(&mut self, index: usize) {
+        self.active_color = index;
+        self.set_active_color(self.named_colors[index].1);
+    }
+    fn add_named_color(&mut self) {
+        self.named_colors
+            .push((format!("Color {}", self.named_colors.len() + 1), self.fg));
+        self.active_color = self.named_colors.len() - 1;
+    }
+    fn sprite_colors(&mut self) -> Vec<Pixel> {
+        if self.used_colors_snapshot.as_ref() != Some(&self.doc) {
+            let mut colors = std::collections::BTreeSet::new();
+            for layer in &self.doc.layers {
+                for cel in &layer.cels {
+                    colors.extend(cel.iter().copied().filter(|p| p[3] != 0));
+                }
+                if layer.tileset.is_some() {
+                    for frame in 0..self.doc.durations.len() {
+                        colors.extend(self.doc.composite(frame).into_iter().filter(|p| p[3] != 0));
                     }
                 }
+            }
+            self.used_colors = colors.into_iter().collect();
+            self.used_colors_snapshot = Some(self.doc.clone());
+        }
+        self.used_colors.clone()
+    }
+    fn drawing_palette_index(&self, color: Pixel) -> Option<usize> {
+        let palette = self.doc.palette_for(self.frame);
+        if palette.get(self.palette_index) == Some(&color) {
+            Some(self.palette_index)
+        } else {
+            palette.iter().position(|p| *p == color)
+        }
+    }
+    fn palette(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(5.);
+        ui.strong("Colors");
+        ui.add_space(4.);
+        let mut selected = self.active_color;
+        egui::ComboBox::from_id_salt("named_colors")
+            .width(150.)
+            .selected_text(&self.named_colors[selected].0)
+            .show_ui(ui, |ui| {
+                for (index, (name, _)) in self.named_colors.iter().enumerate() {
+                    ui.selectable_value(&mut selected, index, name);
+                }
             });
-        ui.small(format!("Mode: {:?}", self.doc.color_mode));
-        if ui.button("Edit selected swatch").clicked() {
-            self.remember();
-            self.doc
-                .set_palette_color(self.palette_index.min(self.doc.palette.len() - 1), self.fg);
+        if selected != self.active_color {
+            self.select_named_color(selected);
         }
-        if ui.button("Properties & color mode…").clicked() {
-            self.properties_open = true;
-        }
-        ui.add_space(8.);
         ui.horizontal(|ui| {
-            ui.label("Foreground");
-            ui.color_edit_button_srgba_unmultiplied(&mut self.fg);
-        });
-        ui.horizontal(|ui| {
-            ui.label("Background");
-            ui.color_edit_button_srgba_unmultiplied(&mut self.bg);
-        });
-        ui.horizontal(|ui| {
+            if ui
+                .color_edit_button_srgba_unmultiplied(&mut self.fg)
+                .changed()
+            {
+                self.set_active_color(self.fg);
+            }
             ui.monospace(format!(
                 "#{:02X}{:02X}{:02X}",
                 self.fg[0], self.fg[1], self.fg[2]
             ));
-            if ui.small_button("Swap  X").clicked() {
-                std::mem::swap(&mut self.fg, &mut self.bg);
-            }
         });
-        ui.add_space(15.);
+        if ui.button("+ Add Color").clicked() {
+            self.add_named_color();
+        }
         ui.separator();
+        ui.label("Colors used in this sprite");
+        let colors = self.sprite_colors();
+        if colors.is_empty() {
+            ui.small("Draw to add colors here.");
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("sprite_used_colors")
+            .max_height(180.)
+            .show(ui, |ui| {
+                egui::Grid::new("sprite_colors")
+                    .min_col_width(0.)
+                    .spacing(Vec2::splat(3.))
+                    .show(ui, |ui| {
+                        for (i, p) in colors.iter().enumerate() {
+                            let (r, response) =
+                                ui.allocate_exact_size(Vec2::splat(27.), Sense::click());
+                            ui.painter().rect_filled(
+                                r,
+                                0,
+                                Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]),
+                            );
+                            if *p == self.fg {
+                                ui.painter().rect_stroke(
+                                    r.shrink(1.),
+                                    0,
+                                    Stroke::new(2., self.colors().ink),
+                                    egui::StrokeKind::Inside,
+                                );
+                            }
+                            if response.clicked() {
+                                self.set_active_color(*p);
+                            }
+                            response.on_hover_text(format!(
+                                "Use #{:02X}{:02X}{:02X} (alpha {})",
+                                p[0], p[1], p[2], p[3]
+                            ));
+                            if i % 4 == 3 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            });
+        ui.small(format!("{} used colors", colors.len()));
+        if ui.button("Properties & color mode…").clicked() {
+            self.properties_open = true;
+        }
+    }
+    fn sprite_preview(&mut self, ui: &mut egui::Ui) {
         ui.strong("Preview");
         self.preview = Some(self.frame_texture(ui.ctx(), self.frame));
         let (r, _) = ui.allocate_exact_size(Vec2::new(120., 120.), Sense::hover());
@@ -1473,10 +1617,7 @@ impl PixelCraft {
         }
         ui.add_space(8.);
         ui.label(
-            RichText::new(
-                "Left click: foreground\nRight click: background\nScroll: zoom · Middle drag: pan",
-            )
-            .size(11.),
+            RichText::new("Left click: active color\nScroll: zoom · Middle drag: pan").size(11.),
         );
     }
     fn tools(&mut self, ui: &mut egui::Ui) {
@@ -1707,7 +1848,7 @@ impl PixelCraft {
         }
     }
     fn shape(&mut self, a: (i32, i32), b: (i32, i32), c: Pixel) {
-        self.doc.drawing_index = Some(self.palette_index);
+        self.doc.drawing_index = self.drawing_palette_index(c);
         let l = self.layer;
         let f = self.frame;
         let (x0, y0, x1, y1) = (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
@@ -1874,13 +2015,11 @@ impl PixelCraft {
         {
             self.playing = false;
             let p = self.hover.unwrap();
-            self.stroke_color = if ctx.input(|i| i.pointer.secondary_down()) {
-                self.bg
-            } else {
-                self.fg
-            };
+            self.stroke_color = self.fg;
             if ctx.input(|i| i.modifiers.alt) || self.tool == Tool::Picker {
-                self.fg = self.doc.composite(self.frame)[self.doc.index(p.0, p.1).unwrap()];
+                self.set_active_color(
+                    self.doc.composite(self.frame)[self.doc.index(p.0, p.1).unwrap()],
+                );
             } else if self.tool == Tool::Select {
                 self.start = Some(p);
                 self.selection = Some((p.0, p.1, p.0, p.1));
@@ -1892,7 +2031,7 @@ impl PixelCraft {
                 self.last = Some(p);
                 self.stroke_base = Some(self.doc.clone());
                 if self.tool == Tool::Fill {
-                    self.doc.drawing_index = Some(self.palette_index);
+                    self.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
                     self.doc
                         .fill(self.layer, self.frame, p.0, p.1, self.stroke_color);
                     self.doc.drawing_index = None;
@@ -1926,7 +2065,7 @@ impl PixelCraft {
                         if self.doc.layers[self.layer].tileset.is_some() {
                             self.paint_at(b, color);
                         } else {
-                            self.doc.drawing_index = Some(self.palette_index);
+                            self.doc.drawing_index = self.drawing_palette_index(color);
                             self.doc.line(
                                 self.layer,
                                 self.frame,
@@ -2015,20 +2154,12 @@ impl PixelCraft {
                 ui.horizontal(|ui| {
                     if ui.button("Save").clicked() && self.save(false) {
                         let p = self.pending.take().unwrap();
-                        if matches!(p, Pending::Close) {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close)
-                        } else {
-                            self.perform(p)
-                        }
+                        self.finish_pending(ctx, p);
                     }
                     if ui.button("Discard changes").clicked() {
                         let p = self.pending.take().unwrap();
-                        if matches!(p, Pending::Close) {
-                            self.saved = self.doc.clone();
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close)
-                        } else {
-                            self.perform(p)
-                        }
+                        self.saved = self.doc.clone();
+                        self.finish_pending(ctx, p);
                     }
                     if ui.button("Cancel").clicked() {
                         self.pending = None;
@@ -2061,7 +2192,7 @@ impl PixelCraft {
                 ui.horizontal(|ui| {
                     if ui.button("Create sprite").clicked() {
                         if self.new_w.saturating_mul(self.new_h) <= MAX_PIXELS {
-                            self.replace(Document::new(self.new_w, self.new_h), None);
+                            self.open_document(Document::new(self.new_w, self.new_h), None);
                         } else {
                             self.status =
                                 "Could not create: canvas exceeds 64 million pixels".into();
@@ -2173,6 +2304,15 @@ impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_script();
+        if ctx.input(|i| i.viewport().close_requested()) && !self.dirty() {
+            if let Some(i) = self
+                .tabs
+                .iter()
+                .position(|t| t.as_ref().is_some_and(|t| t.doc != t.saved))
+            {
+                self.switch_tab(i);
+            }
+        }
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending = Some(Pending::Close);
@@ -2197,25 +2337,55 @@ impl PixelCraft {
         egui::Panel::top("document_tab")
             .exact_size(35.)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let name = self
-                        .path
-                        .as_ref()
-                        .and_then(|p| p.file_name())
-                        .and_then(|p| p.to_str())
-                        .unwrap_or("Untitled");
-                    ui.add(
-                        egui::Button::new(format!(
-                            "{name}{}",
-                            if self.dirty() { " *" } else { "" }
-                        ))
-                        .fill(self.colors().accent),
-                    );
-                    ui.label(format!(
-                        "{} layers · {} frames",
-                        self.doc.layers.len(),
-                        self.doc.durations.len()
-                    ));
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let mut selected = None;
+                        let mut close = None;
+                        for i in 0..self.tabs.len() {
+                            let (path, dirty) = if i == self.active_tab {
+                                (&self.path, self.dirty())
+                            } else {
+                                let tab = self.tabs[i].as_ref().unwrap();
+                                (&tab.path, tab.doc != tab.saved)
+                            };
+                            let name = path
+                                .as_ref()
+                                .and_then(|p| p.file_name())
+                                .and_then(|p| p.to_str())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| format!("Untitled {}", i + 1));
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .selectable_label(
+                                            i == self.active_tab,
+                                            format!("{name}{}", if dirty { " *" } else { "" }),
+                                        )
+                                        .clicked()
+                                    {
+                                        selected = Some(i);
+                                    }
+                                    if ui.small_button("×").on_hover_text("Close sprite").clicked()
+                                    {
+                                        close = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                        if let Some(i) = selected {
+                            self.switch_tab(i);
+                        }
+                        if let Some(i) = close {
+                            self.switch_tab(i);
+                            self.request(Pending::CloseTab);
+                        }
+                        if ui.button("+ New").clicked() {
+                            self.request(Pending::New);
+                        }
+                        if ui.button("Open…").clicked() {
+                            self.request(Pending::Open);
+                        }
+                    });
                 });
             });
         egui::Panel::top("context").exact_size(38.).show(ui, |ui| {
@@ -2282,6 +2452,11 @@ impl PixelCraft {
             .exact_size(174.)
             .resizable(false)
             .show(ui, |ui| {
+                egui::Panel::bottom("sidebar_preview")
+                    .exact_size(200.)
+                    .resizable(false)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| self.sprite_preview(ui));
                 egui::ScrollArea::vertical().show(ui, |ui| self.palette(ui));
             });
         egui::Panel::right("tool_panel")
@@ -2568,6 +2743,88 @@ mod tests {
         let mut a = PixelCraft::with_context(&ctx, None);
         a.replace(Document::new(8, 8), None);
         a
+    }
+    #[test]
+    fn named_colors_select_and_draw_independently() {
+        let mut a = app();
+        assert_eq!(a.named_colors, vec![("Primary".into(), DEFAULT_FG)]);
+        a.add_named_color();
+        a.set_active_color([230, 40, 80, 255]);
+        a.select_named_color(0);
+        assert_eq!(a.fg, DEFAULT_FG);
+        a.select_named_color(1);
+        a.paint_at((2, 3), a.fg);
+        assert_eq!(a.doc.composite(0)[26], [230, 40, 80, 255]);
+    }
+    #[test]
+    fn used_colors_follow_artwork_across_frames_and_undo() {
+        let mut a = app();
+        let red = [230, 40, 80, 255];
+        let blue = [40, 80, 230, 128];
+        a.doc.set_pixel(0, 0, 0, red);
+        a.doc.add_frame(0, false);
+        a.doc.set_pixel(0, 1, 1, blue);
+        assert_eq!(a.sprite_colors(), vec![blue, red]);
+        a.remember();
+        a.doc.set_pixel(0, 1, 1, CLEAR);
+        assert_eq!(a.sprite_colors(), vec![red]);
+        a.undo();
+        assert_eq!(a.sprite_colors(), vec![blue, red]);
+    }
+    #[test]
+    fn native_color_defaults() {
+        let a = app();
+        assert_eq!(a.fg, [255, 255, 255, 255]);
+        assert_eq!(a.bg, [0, 0, 0, 255]);
+    }
+    #[test]
+    fn drawing_colors_are_shared_between_sprite_tabs() {
+        let mut a = app();
+        a.fg = [10, 20, 30, 40];
+        a.bg = [50, 60, 70, 80];
+        a.open_document(Document::new(3, 4), None);
+        a.fg = [100, 110, 120, 130];
+        a.bg = [140, 150, 160, 170];
+        a.switch_tab(0);
+        assert_eq!(a.fg, [100, 110, 120, 130]);
+        assert_eq!(a.bg, [140, 150, 160, 170]);
+        a.switch_tab(1);
+        assert_eq!(a.fg, [100, 110, 120, 130]);
+        assert_eq!(a.bg, [140, 150, 160, 170]);
+    }
+    #[test]
+    fn tabs_preserve_unsaved_artwork_history_and_view() {
+        let mut a = app();
+        a.remember();
+        a.paint_at((1, 1), [255, 0, 0, 255]);
+        let edited = a.doc.clone();
+        a.zoom = 7.;
+        a.open_document(Document::new(3, 4), Some(PathBuf::from("second.pixel")));
+        assert_eq!(a.doc.width, 3);
+        assert!(!a.dirty());
+        a.switch_tab(0);
+        assert_eq!(a.doc, edited);
+        assert!(a.dirty());
+        assert_eq!(a.zoom, 7.);
+        a.undo();
+        assert!(!a.dirty());
+        a.switch_tab(1);
+        assert_eq!(a.path, Some(PathBuf::from("second.pixel")));
+        assert_eq!(a.doc.height, 4);
+    }
+    #[test]
+    fn closing_dirty_tab_requires_confirmation() {
+        let mut a = app();
+        a.open_document(Document::new(3, 3), None);
+        a.remember();
+        a.paint_at((0, 0), [1, 2, 3, 255]);
+        a.request(Pending::CloseTab);
+        assert!(a.pending.is_some());
+        assert_eq!(a.tabs.len(), 2);
+        a.pending = None;
+        a.perform(Pending::CloseTab);
+        assert_eq!(a.tabs.len(), 1);
+        assert_eq!(a.doc.width, 8);
     }
     #[test]
     fn opening_another_document_detaches_the_previous_extension_session() {

@@ -116,6 +116,36 @@
       "group": "scripting",
       "value": "Failed integer conversion -> 0; floor for successful inputs in 0..255; out-of-range byte storage remains a compatibility limit",
       "source": "Layer_set_opacity 0x3dd4a0 / Cel_set_opacity 0x50e0a0 -> lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; completed fallback pseudocode ev_86884a0977896d1132728c6a5f51de3bf04988467462d8e6697c1c145f791041; helper assembly ev_b61fb1d1b48dde568a63059ea8a697ade63361618fa834b7d8ee9df71eea5715 and ev_8c466bf72f0fa667eb554957e12414689f0c6ba20d4452ea7599785f2a643093; full limits in MECHANICS.md"
+    },
+    {
+      "name": "factory drawing colors",
+      "group": "color",
+      "value": "foreground RGBA(255,255,255,255); background RGBA(0,0,0,255)",
+      "source": "GlobalPref::ColorBar constructor 0x366d20 -> Color::fromRgb 0x16a5c0; ev_4871039251c8a168500125848f8100cb630856b45868ecf34e477564a78385ec; app/evidence/color_factory_defaults.asm"
+    },
+    {
+      "name": "shared drawing colors",
+      "group": "color",
+      "value": "Current foreground/background RGBA remain shared across sprite tabs; normal swap exchanges complete RGBA values",
+      "source": "ColorBar::onFgColorButtonChange 0x22cea0 and onBgColorButtonChange 0x22d0c0 -> Preferences singleton; SwitchColorsCommand::onExecute 0x499b60; ev_2dcbeb354b3038f825624bbc41f2de3e6dd2d91c999d33e9a9f9d73781f8849d; ev_0316730d1edd7ddff5deb6e9c3311eb2b06d9989a35a7a1a2f4d25622bf92352"
+    },
+    {
+      "name": "Lua packed RGBA conversion",
+      "group": "scripting",
+      "value": "I(v)=int64 floor conversion, failure 0; U=I&255; rgba=U(r)|(U(g)<<8)|(U(b)<<16)|(U(a)<<24); omitted/nil alpha=255; extract byte after I conversion",
+      "source": "PixelColor_rgba 0x3e2100; extractors 0x3e21a0/0x3e21d0/0x3e2200/0x3e2230 -> lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; ev_0c362b05d308707e98d280b99ead05cd3f06215fe946c2f04c2aba13f67cecd1; evidence/pixelcolor_rgba.asm; limits in MECHANICS.md"
+    },
+    {
+      "name": "Lua drawing color getters",
+      "group": "scripting",
+      "value": "Copy current foreground/background RGBA per read; standalone defaults white opaque foreground, black opaque background; desktop worker uses invocation snapshot",
+      "source": "App_get_fgColor 0x50ac90 (Preferences+0x4730), App_get_bgColor 0x50ae00 (+0x4820), GlobalPref::ColorBar 0x366d20; ev_dd3e21f9df2a8bbdb3a24fb25f9af88c21424bdc2aeba043dbffd052ee0ed767; ev_8ad8c2afe2eadf8448626ef623d57ef4be2b096cfba254d2d81f5410f72fb0f3; limits in MECHANICS.md"
+    },
+    {
+      "name": "Lua mutable RGB Color packing",
+      "group": "scripting",
+      "value": "RGB assignment replaces signed32(I(v)); alpha clamps signed32(I(v)) to 0..255; rgbaPixel packs current low-byte channels per read, read-only",
+      "source": "Color_get_rgbaPixel 0x3c69b0 -> color_for_target_mask 0x16dc90; RGB setters 0x3c5c90/0x3c5d70/0x3c5e50 -> fromRgb 0x16a5c0; alpha 0x3c5f30 -> setAlpha 0x16cdc0; ev_7105ca60f7d8b9ede0e31635a0e90e9346c63858a01e2b66a620d411433cd0b0; evidence/color_mutation.asm; limits in MECHANICS.md"
     }
   ]
 }

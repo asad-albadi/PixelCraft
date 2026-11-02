@@ -202,6 +202,7 @@ pub fn execute(
     layer: usize,
     command: Option<&str>,
     discover: bool,
+    colors: Option<[[u8; 4]; 2]>,
 ) -> Result<String, String> {
     doc.validate()?;
     if frame >= doc.durations.len() || layer >= doc.layers.len() {
@@ -214,8 +215,11 @@ pub fn execute(
     }
     let runtime = Runtime::new()?;
     runtime.eval(&format!(
-        "_pw_document={}; _pw_frame={frame}; _pw_layer={layer}",
-        literal(&serde_json::to_value(doc).map_err(|e| e.to_string())?)
+        "_pw_document={}; _pw_frame={frame}; _pw_layer={layer}; _pw_colors={}",
+        literal(&serde_json::to_value(doc).map_err(|e| e.to_string())?),
+        literal(&serde_json::json!(
+            colors.unwrap_or([[255, 255, 255, 255], [0, 0, 0, 255]])
+        ))
     ))?;
     runtime.eval(include_str!("lua_api.lua"))?;
     let finish_ref = unsafe {

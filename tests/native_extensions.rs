@@ -1,6 +1,109 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_color_rgba_pixel_reflects_red_mutation() {
+    // A cached packed value paints the old red channel after a Color edit.
+    let d = Document::new(1, 1);
+    let edited = run_source(
+        &d,
+        "local c=Color{r=1,g=2,b=3,a=4}; c.red=99; app.activeImage:drawPixel(0,0,c.rgbaPixel)",
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(edited.layers[0].cels[0][0], [99, 2, 3, 4]);
+}
+
+#[test]
+fn lua_color_channel_edits_feed_packed_pixels() {
+    let d = Document::new(1, 1);
+    for (edit, expected) in [
+        ("c.green=88; c.blue=77; c.alpha=66", [1, 88, 77, 66]),
+        (
+            "c.red=-1; c.green=256; c.blue='258.9'; c.alpha=300",
+            [255, 0, 2, 255],
+        ),
+        ("c.red=0x100000063; c.alpha=-1", [99, 2, 3, 0]),
+        (
+            "c.red=false; c.green='invalid'; c.alpha=false",
+            [0, 0, 3, 0],
+        ),
+    ] {
+        let edited=run_source(&d, &format!("local c=Color{{r=1,g=2,b=3,a=4}}; {edit}; app.activeImage:drawPixel(0,0,c.rgbaPixel)"),0,0,None).unwrap();
+        assert_eq!(edited.layers[0].cels[0][0], expected, "{edit}");
+    }
+}
+
+#[test]
+fn lua_factory_colors_paint_white_foreground_and_black_background() {
+    let d = Document::new(2, 1);
+    let edited = run_source(
+        &d,
+        r#"
+        local fg = app.fgColor
+        fg.r = 17
+        app.activeImage:drawPixel(0,0,app.fgColor)
+        app.activeImage:drawPixel(1,0,app.bgColor)
+    "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(edited.layers[0].cels[0][0], [255, 255, 255, 255]);
+    assert_eq!(edited.layers[0].cels[0][1], [0, 0, 0, 255]);
+}
+
+#[test]
+fn lua_pixel_color_wraps_channels_and_converts_like_native() {
+    // Catch saturation in packing and missing integer conversion in extractors.
+    // Expected pixels follow the original's low-byte masks, independently of
+    // our implementation. Exercise the real Lua runtime and document import.
+    let d = Document::new(1, 1);
+    for (args, expected) in [
+        ("-1,256,511,258", [255, 0, 255, 2]),
+        ("'257.9',-0.1,258.9", [1, 255, 2, 255]),
+        ("false,{},'invalid',false", [0, 0, 0, 0]),
+        ("math.huge,-math.huge,0/0,nil", [0, 0, 0, 255]),
+        ("0x7fffffffffffffff,0x100000000,0x101,0x100", [255, 0, 1, 0]),
+        ("", [0, 0, 0, 255]),
+    ] {
+        let edited = run_source(
+            &d,
+            &format!("app.activeImage:drawPixel(0,0,app.pixelColor.rgba({args}))"),
+            0,
+            0,
+            None,
+        )
+        .unwrap();
+        assert_eq!(edited.layers[0].cels[0][0], expected, "rgba({args})");
+    }
+    run_source(
+        &d,
+        r#"
+        local p=app.pixelColor
+        assert(p.rgba(1,2,3,4)==0x04030201)
+        assert(p.rgbaR('257.9')==1)
+        assert(p.rgbaG('65535.9')==255)
+        assert(p.rgbaB(-1.1)==255)
+        assert(p.rgbaA(-1)==255)
+        for _,f in ipairs{p.rgbaR,p.rgbaG,p.rgbaB,p.rgbaA} do
+            assert(f('invalid')==0)
+            assert(f(false)==0)
+            assert(f({})==0)
+            assert(f(math.huge)==0)
+            assert(f()==0)
+        end
+    "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
 fn lua_opacity_failed_numeric_conversion_becomes_zero() {
     // Native lua_tointegerx uses floor mode, with a zero-initialized result
     // for failed conversion. Catch clamping infinity to opaque or raising
@@ -300,4 +403,27 @@ fn native_lua_preserves_indices_alpha_and_root_group_assignment() {
         edited.composite(0),
         vec![[255, 0, 0, 255], [0, 255, 0, 255]]
     );
+}
+
+#[test]
+fn lua_selected_colors_paint_independent_rgba_copies() {
+    let d = Document::new(2, 1);
+    let edited = run_source_with_colors(
+        &d,
+        r#"
+        local fg = app.fgColor
+        fg.r = 99
+        app.activeImage:drawPixel(0,0,app.fgColor)
+        local bg = app.bgColor
+        bg.a = 0
+        app.activeImage:drawPixel(1,0,app.bgColor)
+    "#,
+        0,
+        0,
+        None,
+        Some([[12, 34, 56, 78], [90, 87, 65, 43]]),
+    )
+    .unwrap();
+    assert_eq!(edited.layers[0].cels[0][0], [12, 34, 56, 78]);
+    assert_eq!(edited.layers[0].cels[0][1], [90, 87, 65, 43]);
 }
