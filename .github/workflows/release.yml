@@ -1,0 +1,120 @@
+name: Linux AppImage release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      CARGO_TERM_COLOR: always
+      APPIMAGE_EXTRACT_AND_RUN: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
+            libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev \
+            libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev \
+            desktop-file-utils patchelf
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup override set stable
+
+      # The checked-in development Lua binary requires a newer glibc.
+      # Embed Ubuntu's Lua instead so the release supports Ubuntu 22.04+.
+      - name: Use release-compatible embedded Lua
+        run: cp -L /usr/lib/x86_64-linux-gnu/liblua5.4.so.0 runtime/liblua5.4.so
+
+      - name: Test and build release
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/pixelcraft-native-config
+        run: |
+          cargo test --locked
+          cargo build --release --locked
+          target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
+
+      - name: Set artifact version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="manual-${GITHUB_SHA:0:7}"
+          fi
+          # Git refs may contain characters that are unsafe in filenames.
+          version=$(printf '%s' "$version" | sed 's/[^A-Za-z0-9._-]/-/g')
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "OUTPUT=PixelCraft-${version}-x86_64.AppImage" >> "$GITHUB_ENV"
+
+      - name: Package AppImage
+        shell: bash
+        run: |
+          mkdir -p dist AppDir/usr/share/doc/pixelcraft
+          install -m 644 LICENSE AppDir/usr/share/doc/pixelcraft/LICENSE
+          install -m 644 runtime/LUA-LICENSE.txt AppDir/usr/share/doc/pixelcraft/LUA-LICENSE.txt
+          desktop-file-validate packaging/pixelcraft.desktop
+          curl --fail --location --retry 3 \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            --output "$RUNNER_TEMP/linuxdeploy.AppImage"
+          chmod +x "$RUNNER_TEMP/linuxdeploy.AppImage"
+          # Window-system libraries are loaded dynamically, so list them explicitly.
+          "$RUNNER_TEMP/linuxdeploy.AppImage" --appdir AppDir \
+            --executable target/release/pixelcraft \
+            --desktop-file packaging/pixelcraft.desktop \
+            --icon-file packaging/pixelcraft.svg \
+            --library /usr/lib/x86_64-linux-gnu/libX11.so.6 \
+            --library /usr/lib/x86_64-linux-gnu/libwayland-client.so.0 \
+            --library /usr/lib/x86_64-linux-gnu/libwayland-cursor.so.0 \
+            --library /usr/lib/x86_64-linux-gnu/libwayland-egl.so.1 \
+            --library /usr/lib/x86_64-linux-gnu/libxkbcommon.so.0 \
+            --output appimage
+          mv "$OUTPUT" dist/
+
+      - name: Smoke test packaged app and create checksum
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-appimage-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/pixelcraft-appimage-config
+        shell: bash
+        run: |
+          chmod +x "dist/$OUTPUT"
+          "dist/$OUTPUT" --standalone-check "$RUNNER_TEMP/pixelcraft-appimage-check"
+          cd dist
+          sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelCraft-Linux-x86_64
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "PixelCraft $GITHUB_REF_NAME" --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

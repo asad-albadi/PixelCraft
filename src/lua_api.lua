@@ -34,11 +34,26 @@ function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 a
 function imageMethods:getPixel(x,y) if x<0 or y<0 or x>=self.width or y>=self.height then return 0 end return rgba(table.unpack(self._pixels[y*self.width+x+1])) end
 function imageMethods:clear(c) for i=1,#self._pixels do self._pixels[i]=unpackColor(c or 0) end end
 function imageMethods:clone() return Image(self) end
+-- doc::rgba_blender_normal (0x5e81e0): rounded byte products, signed
+-- channel division truncated toward zero. Keep transparent branch ordering.
+local function mulUn8(a,b) local t=a*b+128;return (t+(t>>8))>>8 end
+local function normalOver(dst,src,opacity)
+ local s=mulUn8(src[4],opacity)
+ if dst[4]==0 then return {src[1],src[2],src[3],s} end
+ if src[4]==0 then return dst end
+ local a=s+dst[4]-mulUn8(s,dst[4]);local result={0,0,0,a}
+ for i=1,3 do result[i]=dst[i]+math.modf((src[i]-dst[i])*s/a) end
+ return result
+end
 function imageMethods:drawImage(src,pos,opacity)
- pos=pos or Point();opacity=opacity or 255
+ pos=pos or Point();opacity=byte(opacity or 255)
  for y=0,src.height-1 do for x=0,src.width-1 do
-  local p=unpackColor(src:getPixel(x,y));local dst=unpackColor(self:getPixel(x+pos.x,y+pos.y));local alpha=p[4]*opacity/65025;local da=dst[4]/255;local out=alpha+da*(1-alpha)
-  if p[4]>0 then local result={0,0,0,math.floor(out*255+0.5)};if out>0 then for i=1,3 do result[i]=math.floor((p[i]*alpha+dst[i]*da*(1-alpha))/out+0.5) end end;self:drawPixel(x+pos.x,y+pos.y,rgba(table.unpack(result))) end
+  local packed=src:getPixel(x,y)
+  -- blend_image_templ<RgbTraits,RgbTraits> (0x5eff40) skips mask zero.
+  if packed~=0 then
+   local p=unpackColor(packed);local dst=unpackColor(self:getPixel(x+pos.x,y+pos.y))
+   self:drawPixel(x+pos.x,y+pos.y,rgba(table.unpack(normalOver(dst,p,opacity))))
+  end
  end end
 end
 function imageMethods:pixels(rect) rect=rect or Rectangle(0,0,self.width,self.height);local x,y=rect.x-1,rect.y;return function() x=x+1;if x>=rect.x+rect.width then x=rect.x;y=y+1 end;if y>=rect.y+rect.height then return nil end;return setmetatable({x=x,y=y},{__call=function(_,v)if v==nil then return self:getPixel(x,y) else self:drawPixel(x,y,v) end end}) end end

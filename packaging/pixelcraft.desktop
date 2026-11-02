@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=PixelCraft
+Comment=Pixel art, sprites and animation editor
+Exec=pixelcraft %F
+Icon=pixelcraft
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;

@@ -80,6 +80,12 @@
       "group": "color",
       "value": "Y=floor((2126*R+7152*G+722*B)/10000); preserve alpha",
       "source": "doc::rgba_to_graya_using_luma 0x5f7170; native_function_pseudocode ev_b3bd20c7de1394f17ad16847d892a2a329bcbbe24c08c58abb94cb04374eece9; assembly ev_e86fd3d67feb70ea03f414eac482181d11c32b8605b6293211b326b621c63028"
+    },
+    {
+      "name": "Lua RGBA image drawing",
+      "group": "scripting",
+      "value": "normal integer alpha blend; truncate signed channel division; skip packed-zero mask",
+      "source": "Image_drawImage 0x3d2bb0 -> blend_image 0x5efb30 -> RGBA template 0x5eff40 -> get_rgba_blender 0x5ef7d0 -> rgba_blender_normal 0x5e81e0; ev_db08cb397bdee123a1f98e80fbf399af866a7b5db87f61df1f18268fac676296; ev_821f8fa80d93b2ce55cfbe7f3c6809a9e49134f116f8f8af3a438d864fbec6fa"
     }
   ]
 }

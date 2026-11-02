@@ -64,6 +64,21 @@ PixelCraft runs independently of Aseprite. Its executable includes a Lua 5.4 run
 
 ## Get started
 
+### Linux AppImage
+
+Download the `.AppImage` from this repository's GitHub **Releases**, make it executable in your file manager, and open it. From a terminal:
+
+```bash
+chmod +x PixelCraft-*-x86_64.AppImage
+./PixelCraft-v0.1.0-x86_64.AppImage
+```
+
+Use the filename you downloaded. Releases target Linux x86-64 with glibc 2.35 or newer (Ubuntu 22.04+), a graphical desktop and working OpenGL drivers. File dialogs use the desktop's XDG portal. If FUSE is unavailable, run the AppImage with `--appimage-extract-and-run` before any app arguments. A SHA-256 checksum accompanies each release.
+
+Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. The workflow tests and builds the app, packages it using [linuxdeploy](https://docs.appimage.org/packaging-guide/from-source/native-binaries.html), checks the packaged app's save/export/Lua functionality, and uploads the AppImage and checksum to the tag's GitHub release. It builds on Ubuntu 22.04 and embeds that runner's Lua 5.4 library instead of the development binary to avoid newer glibc requirements. **Actions → Linux AppImage release → Run workflow** also creates downloadable build artifacts; branch runs do not publish a release. The version tag controls the artifact name; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
+
+### Build from source
+
 Build from the repository root with a Rust toolchain supporting edition 2024 and Cargo. Linux graphics and window-system libraries are required; a graphical desktop session is needed to open the editor. The bundled Lua runtime currently targets Linux x86-64.
 
 ```bash

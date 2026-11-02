@@ -1,6 +1,37 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn lua_draw_image_uses_native_integer_normal_blend() {
+    // Literal results derived from rgba_blender_normal's byte arithmetic.
+    for (dst, src, opacity, expected) in [
+        (
+            [10, 20, 30, 100],
+            [200, 100, 0, 128],
+            172,
+            [117, 65, 14, 152],
+        ),
+        ([40, 50, 60, 0], [10, 20, 30, 0], 255, [10, 20, 30, 0]),
+        ([40, 50, 60, 0], [10, 20, 30, 128], 0, [10, 20, 30, 0]),
+        ([40, 50, 60, 100], [10, 20, 30, 0], 255, [40, 50, 60, 100]),
+        // The image loop skips the packed zero mask color before blending.
+        ([40, 50, 60, 0], CLEAR, 255, [40, 50, 60, 0]),
+    ] {
+        let mut d = Document::new(1, 1);
+        d.layers[0].cels[0][0] = dst;
+        let code = format!(
+            "local src=Image(1,1); src:drawPixel(0,0,app.pixelColor.rgba({},{},{},{})); app.activeImage:drawImage(src,Point(),{})",
+            src[0], src[1], src[2], src[3], opacity
+        );
+        let edited = run_source(&d, &code, 0, 0, None).unwrap();
+        assert_eq!(
+            edited.layers[0].cels[0][0], expected,
+            "src={src:?}, dst={dst:?}, opacity={opacity}"
+        );
+        assert_eq!(d.layers[0].cels[0][0], dst);
+    }
+}
+
+#[test]
 fn embedded_lua_edits_selected_cel_and_registers_plugin_commands() {
     let original = Document::new(3, 2);
     let dir = std::env::temp_dir().join(format!("pw-native-lua-{}", std::process::id()));

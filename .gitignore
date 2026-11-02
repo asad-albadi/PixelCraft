@@ -1,4 +1,7 @@
 /target/
+/AppDir/
+/dist/
+/*.AppImage
 
 # Generated verification logs and local development notes.
 /checks/*.log
