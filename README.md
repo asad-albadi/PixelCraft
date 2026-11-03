@@ -172,6 +172,8 @@ PixelCraft is licensed under the [MIT License](LICENSE).
 
 **Made via [CraftAnything](https://github.com/storytold/craft-anything) by [ArtCraft](https://getartcraft.com/).** Craft Anything provided the workflow used to study the reference application, build this independent editor and check the result.
 
+PixelCraft was created using [Aseprite](https://github.com/aseprite/aseprite) as its basis and reference for pixel-art editing features, file compatibility and scripting behavior. Thank you to the Aseprite developers and contributors.
+
 The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LICENSE.txt). Rust dependencies retain their respective licenses; exact versions are recorded in [Cargo.lock](Cargo.lock). ASE interoperability follows the published file specification linked above. The sample garden artwork is original to this project.
 
 <p align="center">
