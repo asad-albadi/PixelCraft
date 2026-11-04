@@ -42,3 +42,22 @@ The real corpus includes RGB/gray/indexed tilemaps, linked cels, nested groups, 
 Four unchanged MIT-licensed scripts from https://github.com/aseprite/Aseprite-Script-Examples run in tests/real_extensions.rs: Random Palette, Random Pixels (RGB/gray/indexed), Move Cels (real dialog response and movement), and Wizard Example (three modeless dialog pages). Their license is retained beside the fixtures. Additional regression tests cover external file resolution/portable saves, compact tile encodings, legacy empty IDs, negative origins, ICC linear-light conversion and alpha, original contribution formats, dialogs/timers/events/parameters, file operations and failure rollback. The egui widget renderer is also exercised directly. This corpus is evidence for these features, not certification of arbitrary third-party extensions.
 
 Build: cargo build --offline. Isolated runtime check: checks/standalone.sh, which mounts only the built binary and basic system libraries. Craft Anything rebuild_check additionally builds and captures the application window.
+
+## Expanded command and workflow coverage
+
+The following compatibility surfaces run in `cargo test --offline`. These are concrete tested cases, not a claim that every extension is compatible.
+
+| Surface | Tested behavior | Boundary |
+| --- | --- | --- |
+| `app.command.Flip` | Horizontal active-image flip and transactional undo; selection-aware implementation | `target="mask"`, horizontal/vertical only |
+| `app.command.InvertColor` | RGB inversion and Undo restoration | RGB channels; alpha retained |
+| `app.command.ReplaceColor` | Exact RGBA color replacement | Per-channel tolerance, active image/selection |
+| `app.command.Desaturate` | Uses the same selection-aware image command path | Luminance mode only |
+| Existing upstream script corpus | Random Palette, Random Pixels, Move Cels, Wizard Example | Unchanged upstream sources in `tests/fixtures/scripts`; existing tests cover dialogs, palettes, modes and event pumping |
+| Sprite sheets | Trimmed/padded export and JSON import restore pixels, durations and tag names | Unrotated frames; array/hash metadata with canvas dimensions |
+| Animated formats | GIF, APNG and lossless WebP: two frames, transparency and 70/230 ms durations | WebP requires libwebpdemux; platform availability is documented in README |
+| OpenRaster | Two named layers, stacking, alpha and opacity | Supported blend modes listed in README; 32 MiB ZIP extraction limit |
+| Tiled | Export/import of finite orthogonal maps, empty cells and flipped tiles | JSON array image tilesets, no objects/infinite maps |
+| Recovery/editor | Dirty tabs and saved baselines, active view, backup fallback, symmetry, selection clipping, pixel-perfect corners | 15-second backup interval; undo history is not restored |
+
+New workflow coverage is in `tests/workflows.rs` and `src/studio.rs`. Engine preset files are structurally tested; running a real Godot or Unity editor is outside this test suite. Unsupported Lua commands and command parameters continue to fail explicitly and leave the original editor document unchanged.

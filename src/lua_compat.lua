@@ -94,6 +94,59 @@ app.command.Clear=command(function()
   if spriteSelection.isEmpty or spriteSelection:contains(x+pos.x,y+pos.y) then im:drawPixel(x,y,color) end
  end end
 end)
+-- Additional common image commands, with selection-aware transactional writes.
+local function selectedImagePixels(fn)
+ assert(app.activeLayer.isImage and app.activeLayer.isEditable, 'Select an editable image layer')
+ local im=app.activeImage;local pos=app.activeCel.position
+ for y=0,im.height-1 do for x=0,im.width-1 do
+  if spriteSelection.isEmpty or spriteSelection:contains(x+pos.x,y+pos.y) then fn(im,x,y) end
+ end end
+end
+app.command.Flip=command(function(p)
+ assert(p.orientation==nil or p.orientation=='horizontal' or p.orientation=='vertical','Unsupported flip orientation')
+ assert(p.target==nil or p.target=='mask','Only mask flip is supported')
+ local bounds=spriteSelection.isEmpty and Rectangle(0,0,doc.width,doc.height) or spriteSelection.bounds
+ assert(app.activeLayer.isImage and app.activeLayer.isEditable, 'Select an editable image layer')
+ local source=app.activeImage:clone();local pos=app.activeCel.position
+ if spriteSelection.isEmpty then
+  local result=Image(source.width,source.height)
+  for y=0,source.height-1 do for x=0,source.width-1 do
+   local sx,sy=x,y
+   if p.orientation=='vertical' then sy=source.height-1-y else sx=source.width-1-x end
+   result:drawPixel(x,y,source:getPixel(sx,sy))
+  end end
+  if p.orientation=='vertical' then pos.y=doc.height-pos.y-source.height else pos.x=doc.width-pos.x-source.width end
+  putCelImage(doc.layers[activeLayer],activeFrame,result,pos)
+  return
+ end
+ -- Keep cel-local storage separate from sprite coordinates. The destination
+ -- can extend beyond the original cel, including outside the canvas.
+ local left,top=math.min(pos.x,bounds.x),math.min(pos.y,bounds.y)
+ local right,bottom=math.max(pos.x+source.width,bounds.x+bounds.width),math.max(pos.y+source.height,bounds.y+bounds.height)
+ local result=Image(right-left,bottom-top)
+ for y=top,bottom-1 do for x=left,right-1 do
+  local sx,sy=x,y
+  if x>=bounds.x and y>=bounds.y and x<bounds.x+bounds.width and y<bounds.y+bounds.height and (spriteSelection.isEmpty or spriteSelection:contains(x,y)) then
+   if p.orientation=='vertical' then sy=bounds.y*2+bounds.height-1-y else sx=bounds.x*2+bounds.width-1-x end
+   if not spriteSelection.isEmpty and not spriteSelection:contains(sx,sy) then sx,sy=nil,nil end
+  end
+  if sx then result:drawPixel(x-left,y-top,source:getPixel(sx-pos.x,sy-pos.y)) end
+ end end
+ putCelImage(doc.layers[activeLayer],activeFrame,result,Point(left,top))
+end)
+app.command.InvertColor=command(function(p)
+ assert(p.channels==nil or p.channels=='rgb','Only RGB channels are supported')
+ selectedImagePixels(function(im,x,y)local c=Color(im:getPixel(x,y));if c.alpha>0 then im:drawPixel(x,y,Color{r=255-c.red,g=255-c.green,b=255-c.blue,a=c.alpha})end end)
+end)
+app.command.Desaturate=command(function(p)
+ assert(p.mode==nil or p.mode=='luminance','Only luminance desaturation is supported')
+ selectedImagePixels(function(im,x,y)local c=Color(im:getPixel(x,y));local g=math.floor((c.red*2126+c.green*7152+c.blue*722)/10000);im:drawPixel(x,y,Color{r=g,g=g,b=g,a=c.alpha})end)
+end)
+app.command.ReplaceColor=command(function(p)
+ assert(p.from and p.to,'ReplaceColor requires from and to colors')
+ local a,b=Color(p.from),Color(p.to);local tolerance=math.max(0,math.min(255,p.tolerance or 0))
+ selectedImagePixels(function(im,x,y)local c=Color(im:getPixel(x,y));if math.abs(c.red-a.red)<=tolerance and math.abs(c.green-a.green)<=tolerance and math.abs(c.blue-a.blue)<=tolerance and math.abs(c.alpha-a.alpha)<=tolerance then im:drawPixel(x,y,b)end end)
+end)
 app.command.RemoveLayer=command(function()assert(#doc.layers>1,'Cannot remove the final layer');table.remove(doc.layers,activeLayer);for _,l in ipairs(doc.layers)do if l.parent==activeLayer-1 then l.parent=nil elseif l.parent and l.parent>activeLayer-1 then l.parent=l.parent-1 end end;activeLayer=math.min(activeLayer,#doc.layers);rebuildHandles()end)
 app.command.GotoNextFrame=function()app.activeFrame=frameHandles[math.min(#doc.durations,activeFrame+1)]end
 app.command.GotoPreviousFrame=function()app.activeFrame=frameHandles[math.max(1,activeFrame-1)]end

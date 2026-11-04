@@ -381,7 +381,7 @@ fn copy_directory(
     }
     Ok(())
 }
-fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
+pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
     fn w(b: &[u8], p: usize) -> Result<usize, String> {
         Ok(
             u16::from_le_bytes(b.get(p..p + 2).ok_or("Truncated ZIP")?.try_into().unwrap())

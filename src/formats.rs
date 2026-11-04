@@ -1013,6 +1013,36 @@ pub fn load(path: &Path) -> Result<Document, String> {
     if ext == "ase" || ext == "aseprite" {
         return load_ase_path(path, &mut Vec::new());
     }
+    if matches!(ext.as_str(), "gif" | "webp" | "apng") {
+        return crate::interchange::load_animation(path);
+    }
+    if ext == "ora" {
+        return crate::interchange::load_ora(path);
+    }
+    if matches!(ext.as_str(), "tmj" | "tsj") {
+        return crate::interchange::load_tiled(path);
+    }
+    if ext == "json" {
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let name = meta["meta"]["image"]
+            .as_str()
+            .ok_or("Sheet JSON must name its image")?;
+        let im = image::open(path.parent().unwrap_or(Path::new(".")).join(name))
+            .map_err(|e| e.to_string())?
+            .to_rgba8();
+        return crate::workflows::unpack_sheet(&im, &meta);
+    }
+    if ext == "png" {
+        let dec = image::codecs::png::PngDecoder::new(std::io::BufReader::new(
+            std::fs::File::open(path).map_err(|e| e.to_string())?,
+        ))
+        .map_err(|e| e.to_string())?;
+        if dec.is_apng().map_err(|e| e.to_string())? {
+            return crate::interchange::load_animation(path);
+        }
+    }
     let im = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
     let (w, h) = im.dimensions();
     if w == 0

@@ -4,6 +4,7 @@
 )]
 
 mod script_ui;
+mod studio;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use pixelcraft::{
     extensions::{self, Manager, PluginCommand, Session},
@@ -88,6 +89,9 @@ enum Tool {
     Ellipse,
     Select,
     Hand,
+    Lasso,
+    Move,
+    Gradient,
 }
 impl Tool {
     fn name(self) -> &'static str {
@@ -101,6 +105,9 @@ impl Tool {
             Self::Ellipse => "Ellipse",
             Self::Select => "Selection",
             Self::Hand => "Hand",
+            Self::Lasso => "Lasso",
+            Self::Move => "Move selection",
+            Self::Gradient => "Gradient",
         }
     }
     fn key(self) -> &'static str {
@@ -114,6 +121,9 @@ impl Tool {
             Self::Ellipse => "O",
             Self::Select => "M",
             Self::Hand => "H",
+            Self::Lasso => "Q",
+            Self::Move => "V",
+            Self::Gradient => "D",
         }
     }
 }
@@ -144,11 +154,13 @@ struct SpriteTab {
     selection: Option<(i32, i32, i32, i32)>,
     palette_index: usize,
     active_tag: Option<usize>,
+    polygon: Vec<(i32, i32)>,
 }
 // GlobalPref::ColorBar 0x366d20: factory colors, shared across documents.
 const DEFAULT_FG: Pixel = [255, 255, 255, 255];
 const DEFAULT_BG: Pixel = [0, 0, 0, 255];
 struct PixelCraft {
+    studio: studio::Studio,
     tabs: Vec<Option<SpriteTab>>,
     active_tab: usize,
     dark_mode: bool,
@@ -247,12 +259,15 @@ impl PixelCraft {
         app.about_info = AboutInfo::load();
         app.check_updates(&cc.egui_ctx);
         app.refresh_extensions();
+        app.studio.recovery_enabled = true;
+        app.restore_workspace();
         app
     }
     fn with_context(ctx: &egui::Context, shot: Option<PathBuf>) -> Self {
         Self::apply_theme(ctx, true);
         let doc = Document::demo();
         Self {
+            studio: studio::Studio::default(),
             tabs: vec![None],
             active_tab: 0,
             dark_mode: true,
@@ -464,8 +479,53 @@ impl PixelCraft {
                 self.status = e;
             }
         } else {
-            self.doc
-                .stamp(self.layer, self.frame, p.0, p.1, color, self.brush);
+            let size = if self.studio.pressure {
+                (self.brush as f32 * self.studio.force).round().max(1.) as i32
+            } else {
+                self.brush
+            };
+            let mut points = vec![p];
+            if self.studio.mirror_x {
+                points.push((self.doc.width as i32 - 1 - p.0, p.1));
+            }
+            if self.studio.mirror_y {
+                let mirrored: Vec<_> = points
+                    .iter()
+                    .map(|p| (p.0, self.doc.height as i32 - 1 - p.1))
+                    .collect();
+                points.extend(mirrored);
+            }
+            for p in points {
+                let before = self
+                    .selection
+                    .map(|_| self.doc.layers[self.layer].cels[self.frame].clone());
+                let indices = if self.selection.is_some() {
+                    self.doc.layers[self.layer].cel_meta[self.frame]
+                        .indices
+                        .clone()
+                } else {
+                    None
+                };
+                self.doc
+                    .stamp(self.layer, self.frame, p.0, p.1, color, size);
+                if self.selection.is_some() {
+                    for y in (p.1 - size).max(0)..=(p.1 + size).min(self.doc.height as i32 - 1) {
+                        for x in (p.0 - size).max(0)..=(p.0 + size).min(self.doc.width as i32 - 1) {
+                            if !self.selected(x, y) {
+                                let i = y as usize * self.doc.width + x as usize;
+                                self.doc.layers[self.layer].cels[self.frame][i] =
+                                    before.as_ref().unwrap()[i];
+                                if let (Some(old), Some(new)) = (
+                                    &indices,
+                                    &mut self.doc.layers[self.layer].cel_meta[self.frame].indices,
+                                ) {
+                                    std::sync::Arc::make_mut(new)[i] = old[i];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         self.doc.drawing_index = None;
     }
@@ -829,6 +889,9 @@ impl PixelCraft {
             || self.rename.is_some()
             || self.help
             || self.properties_open
+            || self.studio.open
+            || self.studio.sheet_open
+            || self.studio.tiles_open
             || self.extensions_open
             || (self.script_job.is_some() && !self.script_ui.modeless)
             || self.status.starts_with("Could not")
@@ -847,6 +910,7 @@ impl PixelCraft {
         self.layer = self.layer.min(self.doc.layers.len() - 1);
         self.frame = self.frame.min(self.doc.durations.len() - 1);
         self.selection = None;
+        self.studio.polygon.clear();
     }
     fn undo(&mut self) {
         if let Some(d) = self.undo.pop() {
@@ -876,6 +940,7 @@ impl PixelCraft {
         self.undo.clear();
         self.redo.clear();
         self.selection = None;
+        self.studio.polygon.clear();
         self.pan = Vec2::ZERO;
         self.zoom = (480. / self.doc.width.max(self.doc.height) as f32)
             .floor()
@@ -897,6 +962,7 @@ impl PixelCraft {
             selection: self.selection.clone(),
             palette_index: self.palette_index.clone(),
             active_tag: self.active_tag.clone(),
+            polygon: self.studio.polygon.clone(),
         };
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = self.tabs.len();
@@ -919,6 +985,7 @@ impl PixelCraft {
         std::mem::swap(&mut self.zoom, &mut tab.zoom);
         std::mem::swap(&mut self.pan, &mut tab.pan);
         std::mem::swap(&mut self.selection, &mut tab.selection);
+        std::mem::swap(&mut self.studio.polygon, &mut tab.polygon);
         std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
         std::mem::swap(&mut self.active_tag, &mut tab.active_tag);
         self.tabs[self.active_tab] = Some(tab);
@@ -947,7 +1014,10 @@ impl PixelCraft {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter(
                         "Project, sprite or image",
-                        &["pixel", "aseprite", "ase", "png"],
+                        &[
+                            "pixel", "aseprite", "ase", "png", "gif", "webp", "apng", "ora",
+                            "json", "tmj", "tsj",
+                        ],
                     )
                     .set_directory(
                         extensions::projects_directory().unwrap_or_else(|_| PathBuf::from(".")),
@@ -993,10 +1063,12 @@ impl PixelCraft {
                 self.switch_tab(index);
                 self.pending = Some(Pending::Close);
             } else {
+                self.autosave(true);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         } else {
             self.perform(pending);
+            self.autosave(true);
         }
     }
     fn save(&mut self, as_new: bool) -> bool {
@@ -1074,10 +1146,13 @@ impl PixelCraft {
         let mut pixels = vec![];
         for y in y0..=y1 {
             for x in x0..=x1 {
-                pixels.push(
-                    self.doc.layers[self.layer].cels[self.frame]
-                        [y as usize * self.doc.width + x as usize],
-                );
+                pixels.push(if self.selected(x, y) {
+                    self.doc
+                        .index(x, y)
+                        .map_or(CLEAR, |i| self.doc.layers[self.layer].cels[self.frame][i])
+                } else {
+                    CLEAR
+                });
             }
         }
         self.clipboard = Some(Clipboard { w, h, pixels });
@@ -1112,14 +1187,19 @@ impl PixelCraft {
                 .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
         for y in y0..=y1 {
             for x in x0..=x1 {
-                if let Some(i) = self.doc.index(x, y) {
-                    self.doc.set_pixel(self.layer, self.frame, i, CLEAR);
+                if self.selected(x, y) {
+                    if let Some(i) = self.doc.index(x, y) {
+                        self.doc.set_pixel(self.layer, self.frame, i, CLEAR);
+                    }
                 }
             }
         }
     }
     fn action(&mut self, s: &str) {
         self.cancel_gesture();
+        if self.studio_action(s) {
+            return;
+        }
         match s {
             "new" => self.request(Pending::New),
             "closetab" => self.request(Pending::CloseTab),
@@ -1141,9 +1221,13 @@ impl PixelCraft {
             }
             "clear" => self.clear(),
             "selectall" => {
+                self.studio.polygon.clear();
                 self.selection = Some((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1))
             }
-            "deselect" => self.selection = None,
+            "deselect" => {
+                self.selection = None;
+                self.studio.polygon.clear();
+            }
             "layer" => {
                 if self.doc.layers.len() < u16::MAX as usize
                     && self
@@ -1451,6 +1535,9 @@ impl PixelCraft {
                     (Key::U, Tool::Rect),
                     (Key::O, Tool::Ellipse),
                     (Key::M, Tool::Select),
+                    (Key::Q, Tool::Lasso),
+                    (Key::V, Tool::Move),
+                    (Key::D, Tool::Gradient),
                     (Key::H, Tool::Hand),
                 ] {
                     if i.key_pressed(k) {
@@ -1521,11 +1608,13 @@ impl PixelCraft {
                         ("New sprite…   Ctrl+N", "new"),
                         ("Open…   Ctrl+O", "open"),
                         ("Close sprite   Ctrl+W", "closetab"),
+                        ("Import PNG sequence…", "sequence"),
                         ("Save   Ctrl+S", "save"),
                         ("Save as…", "saveas"),
                         ("Export PNG…", "png"),
                         ("Export sprite sheet…", "sheet"),
                         ("Export animation GIF…", "gif"),
+                        ("Export Tiled map…", "tiledexport"),
                         ("Open sample garden", "demo"),
                     ],
                 ),
@@ -1540,12 +1629,20 @@ impl PixelCraft {
                         ("Clear   Delete", "clear"),
                         ("Select all   Ctrl+A", "selectall"),
                         ("Deselect   Esc", "deselect"),
+                        ("Drawing & selection studio…", "studio"),
+                        ("Lasso selection", "lasso"),
+                        ("Move selection", "move"),
+                        ("Rotate selection 90°", "rotate"),
+                        ("Flip selection horizontally", "selectionflipx"),
+                        ("Flip selection vertically", "selectionflipy"),
+                        ("Crop to selection", "crop"),
                     ],
                 ),
                 (
                     "Sprite",
                     vec![
                         ("Properties, layers, tiles & ranges…", "properties"),
+                        ("Tileset browser…", "tiles"),
                         ("Flip active cel horizontally", "flipx"),
                         ("Flip active cel vertically", "flipy"),
                     ],
@@ -1576,6 +1673,7 @@ impl PixelCraft {
                         ("Toggle pixel grid", "grid"),
                         ("Toggle onion skin", "onion"),
                         ("Fit canvas", "fit"),
+                        ("Seamless preview", "seamless"),
                     ],
                 ),
                 ("Extensions", vec![("Extensions & scripts…", "extensions")]),
@@ -1760,6 +1858,19 @@ impl PixelCraft {
                 self.fg[0], self.fg[1], self.fg[2]
             ));
         });
+        ui.text_edit_singleline(&mut self.named_colors[self.active_color].0);
+        if self.named_colors.len() > 1 && ui.small_button("Delete color").clicked() {
+            self.named_colors.remove(self.active_color);
+            self.select_named_color(self.active_color.min(self.named_colors.len() - 1));
+        }
+        ui.horizontal(|ui| {
+            if ui.small_button("Save palette…").clicked() {
+                self.studio_action("savepalette");
+            }
+            if ui.small_button("Load…").clicked() {
+                self.studio_action("loadpalette");
+            }
+        });
         if ui.button("+ Add Color").clicked() {
             self.add_named_color();
         }
@@ -1844,6 +1955,9 @@ impl PixelCraft {
             Tool::Rect,
             Tool::Ellipse,
             Tool::Select,
+            Tool::Lasso,
+            Tool::Move,
+            Tool::Gradient,
             Tool::Hand,
         ] {
             let (r, response) = ui.allocate_exact_size(Vec2::splat(34.), Sense::click());
@@ -2096,6 +2210,19 @@ impl PixelCraft {
         let ctx = ui.ctx().clone();
         let pointer = ctx.input(|i| i.pointer.hover_pos());
         let can_edit = ui.is_enabled() && !self.dialog_open();
+        if let Some(force) = ctx.input(|i| {
+            i.events.iter().rev().find_map(|e| {
+                if let egui::Event::Touch { force, .. } = e {
+                    *force
+                } else {
+                    None
+                }
+            })
+        }) {
+            self.studio.force = force.clamp(0., 1.);
+        } else if !ctx.input(|i| i.pointer.any_down()) {
+            self.studio.force = 1.;
+        }
         if can_edit && response.hovered() {
             ctx.set_cursor_icon(if self.tool == Tool::Hand {
                 egui::CursorIcon::Grab
@@ -2236,8 +2363,12 @@ impl PixelCraft {
                 self.set_active_color(
                     self.doc.composite(self.frame)[self.doc.index(p.0, p.1).unwrap()],
                 );
-            } else if self.tool == Tool::Select {
+            } else if matches!(self.tool, Tool::Select | Tool::Lasso) {
                 self.start = Some(p);
+                self.studio.polygon.clear();
+                if self.tool == Tool::Lasso {
+                    self.studio.polygon.push(p);
+                }
                 self.selection = Some((p.0, p.1, p.0, p.1));
             } else if !self.doc.editable(self.layer) {
                 self.status = "This layer is locked. Unlock it in the timeline to draw.".into();
@@ -2246,6 +2377,8 @@ impl PixelCraft {
                 self.start = Some(p);
                 self.last = Some(p);
                 self.stroke_base = Some(self.doc.clone());
+                self.studio.stroke.clear();
+                self.studio.selection_origin = self.selection;
                 if self.tool == Tool::Fill {
                     self.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
                     self.doc
@@ -2268,6 +2401,50 @@ impl PixelCraft {
                 b.0 = b.0.clamp(0, self.doc.width as i32 - 1);
                 b.1 = b.1.clamp(0, self.doc.height as i32 - 1);
                 match self.tool {
+                    Tool::Lasso => {
+                        if self.studio.polygon.last() != Some(&b) {
+                            self.studio.polygon.push(b);
+                        }
+                        let points = &self.studio.polygon;
+                        self.selection = Some((
+                            points.iter().map(|p| p.0).min().unwrap(),
+                            points.iter().map(|p| p.1).min().unwrap(),
+                            points.iter().map(|p| p.0).max().unwrap(),
+                            points.iter().map(|p| p.1).max().unwrap(),
+                        ));
+                    }
+                    Tool::Move => {
+                        if let Some(base) = &self.stroke_base {
+                            self.doc = base.clone();
+                        }
+                        self.last = Some(b);
+                        self.selection = self.studio.selection_origin;
+                        let bounds = self.selection_bounds();
+                        let mask: Vec<bool> = (0..self.doc.width * self.doc.height)
+                            .map(|i| {
+                                self.selected(
+                                    (i % self.doc.width) as i32,
+                                    (i / self.doc.width) as i32,
+                                )
+                            })
+                            .collect();
+                        if let Ok(r) = pixelcraft::workflows::transform(
+                            &mut self.doc,
+                            self.layer,
+                            self.frame,
+                            bounds,
+                            Some(&mask),
+                            pixelcraft::workflows::Transform::Move(b.0 - a.0, b.1 - a.1),
+                        ) {
+                            self.selection = Some((r[0], r[1], r[0] + r[2] - 1, r[1] + r[3] - 1));
+                        }
+                    }
+                    Tool::Gradient => {
+                        if let Some(base) = &self.stroke_base {
+                            self.doc = base.clone();
+                        }
+                        self.gradient(a, b);
+                    }
                     Tool::Select => {
                         self.selection =
                             Some((a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)))
@@ -2281,16 +2458,7 @@ impl PixelCraft {
                         if self.doc.layers[self.layer].tileset.is_some() {
                             self.paint_at(b, color);
                         } else {
-                            self.doc.drawing_index = self.drawing_palette_index(color);
-                            self.doc.line(
-                                self.layer,
-                                self.frame,
-                                self.last.unwrap_or(a),
-                                b,
-                                color,
-                                self.brush,
-                            );
-                            self.doc.drawing_index = None;
+                            self.stroke_line(self.last.unwrap_or(a), b, color);
                         }
                         self.last = Some(b);
                     }
@@ -2304,9 +2472,27 @@ impl PixelCraft {
                 }
             }
         } else {
+            if self.tool == Tool::Move {
+                if let (Some(a), Some(b)) = (self.start, self.last) {
+                    for p in &mut self.studio.polygon {
+                        p.0 += b.0 - a.0;
+                        p.1 += b.1 - a.1;
+                    }
+                }
+            }
             self.start = None;
             self.last = None;
             self.stroke_base = None;
+        }
+        if self.studio.polygon.len() > 1 {
+            let points: Vec<_> = self
+                .studio
+                .polygon
+                .iter()
+                .chain(self.studio.polygon.first())
+                .map(|p| board.min + Vec2::new(p.0 as f32 + 0.5, p.1 as f32 + 0.5) * self.zoom)
+                .collect();
+            painter.add(egui::Shape::line(points, Stroke::new(1., Color32::WHITE)));
         }
         if let Some((x0, y0, x1, y1)) = self.selection {
             let sr = Rect::from_min_max(
@@ -2374,7 +2560,7 @@ impl PixelCraft {
                     }
                     if ui.button("Discard changes").clicked() {
                         let p = self.pending.take().unwrap();
-                        self.saved = self.doc.clone();
+                        self.doc = self.saved.clone();
                         self.finish_pending(ctx, p);
                     }
                     if ui.button("Cancel").clicked() {
@@ -2513,6 +2699,8 @@ impl PixelCraft {
 impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.autosave(ctx.input(|i| i.viewport().close_requested()));
+        ctx.request_repaint_after(Duration::from_secs(15));
         if let Some(next_check) = self.next_update_check {
             if Instant::now() >= next_check && self.update_job.is_none() {
                 self.check_updates(&ctx);
@@ -2753,6 +2941,7 @@ impl PixelCraft {
             .frame(egui::Frame::NONE.fill(self.colors().canvas))
             .show(ui, |ui| self.canvas(ui));
         self.dialogs(&ctx);
+        self.studio_dialogs(&ctx);
         if let Some(path) = &self.shot {
             self.shot_frames += 1;
             ctx.request_repaint();
@@ -2858,6 +3047,19 @@ fn tool_icon(p: &egui::Painter, r: Rect, t: Tool, colors: ThemeColors) {
                 p.line_segment([Pos2::new(r.max.x, y), Pos2::new(r.max.x, y + 2.)], s);
             }
         }
+        Tool::Lasso | Tool::Move | Tool::Gradient => {
+            p.text(
+                c,
+                egui::Align2::CENTER_CENTER,
+                match t {
+                    Tool::Lasso => "Q",
+                    Tool::Move => "↔",
+                    _ => "▨",
+                },
+                egui::FontId::proportional(20.),
+                colors.ink,
+            );
+        }
         Tool::Hand => {
             p.rect_stroke(
                 Rect::from_center_size(c + Vec2::new(0., 3.), Vec2::new(12., 11.)),
@@ -2880,6 +3082,24 @@ fn tool_icon(p: &egui::Painter, r: Rect, t: Tool, colors: ThemeColors) {
 }
 fn standalone_check(root: PathBuf) -> Result<(), String> {
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        let webp = root.join("webp-runtime-check.webp");
+        std::fs::write(
+            &webp,
+            include_bytes!("../tests/fixtures/workflows/animation.webp"),
+        )
+        .map_err(|e| e.to_string())?;
+        let imported = formats::load(&webp)?;
+        if (imported.width, imported.height) != (3, 2)
+            || imported.durations != [70, 230]
+            || imported.composite(0)[0] != [255, 0, 0, 255]
+            || imported.composite(1)[5] != [0, 255, 0, 255]
+            || imported.composite(1)[0] != CLEAR
+        {
+            return Err("Installed WebP animation import mismatch".into());
+        }
+    }
     let ctx = egui::Context::default();
     let mut app = PixelCraft::with_context(&ctx, None);
     app.replace(Document::new(8, 8), None);
@@ -3553,8 +3773,8 @@ mod update_ui_tests {
         for width in [800., 938., 1180.] {
             for (tag, expected) in [
                 (None, false),
-                (Some("v0.2.0"), false),
-                (Some("v0.3.0"), true),
+                (Some("v0.3.0"), false),
+                (Some("v0.4.0"), true),
             ] {
                 app.latest_release =
                     tag.map(|tag| Release::parse(&format!(r#"{{"tag_name":"{tag}"}}"#)).unwrap());

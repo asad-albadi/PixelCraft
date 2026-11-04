@@ -1,3 +1,67 @@
+## Current native audit — HSV edits discard gray state (2026-11-04)
+
+Freshly opened the original main ELF using `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.
+
+Searched names, settings and messages using `native_strings_find` with `^alpha$|^Color$|^color_bar$|invalid_fg_or_bg` (`ev_814cd54cdbf79222045a8d3a6eba99cf3c6e3d72811f511f82f17c47c3f68434`). Followed Color string `0xf446eb` to registration `0x3c5320` (`ev_49dfe1a13a241e13cfbbe24dc8a759f7a9e42c3cc9d4a8596b4dd01e95ba9adb`), then its property table `0x1cbae40` (`ev_9346ec2e59fb509f7cd9dbc4a924dbad69c062533c39acbf15bbe4d304c61e5c`). Exact native-name references identify `Color_set_hsvHue` at `0x3c5fa0` from table entry `0x1cbaeb0` (`ev_d41b095283f4241a1b3d2736dbcd149a1318d5f176966c3de17b1350a586881c`). Outgoing references lead to `fromHsv` at `0x16a5e0` (`ev_57a910379427809d7b9d9ae6389b536fe78693074b351b3fc26b94781c213103`). Settings/message strings are navigation anchors; this audit adds no claims about their behavior.
+
+Read every completed `native_function_pseudocode` before requesting the next. The five HSV/gray results are preserved in `evidence/color_hsv_mutation.json`:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| Color_set_hsvHue | `0x3c5fa0` | `ev_0d5c4be8add50d3f626bf98c223b5b09e1d2c75c70a04bc623a21929affc4a29` |
+| Color::fromHsv | `0x16a5e0` | `ev_91335ad2a58d678b5806cf881c518f35fc7b7ea6391c5b9a40b791a044c18e20` |
+| Color_set_hsvValue | `0x3c6180` | `ev_59eb5799538207f297e96a8ef808d057d2a3da572e884638c5228565c1b5e4e2` |
+| Color_set_hsvSaturation | `0x3c6090` | `ev_18f8534638575b79358b430bd09055ec0d28344a8f18c1ea8b335dbe96d931a1` |
+| Color::getGray | `0x16c2b0` | `ev_7533296ec8ca2301e66c93dff920987883d6536509c257712f2c659199ffb0bb` |
+
+Also read alpha wrapper `0x3c5f30` and `setAlpha` `0x16cdc0` (`ev_21bd25b5bf87a47cb1522080f17388624df20ff67b9aab4c3cd569e43f1c582f`, `ev_a1e14441479a48dc0ac957324987a491f6526ad4e9c56ba514977be1341e0ee9`). No alpha correction was needed.
+
+Ghidra timed out; these are completed built-in fallback results, with approximate register types, arguments and conditions. The temporary 15-second Ghidra startup limit was restored to null. Setter assembly (`ev_d21689ff6f5b52b72ab7b18b44b081871fb911cc71bbe3dc0ea437e3eede9759`) and factory assembly (`ev_411c06400636413ebfb32a9d5065850c091c583281a0df0f07273593d925ae18`) corroborate the replacement independently of the fallback's argument reconstruction.
+
+Recovered rules:
+
+- Let `(H,S,V,A)` be the current HSV getters and alpha. Explicit HSV setters replace the value with `fromHsv(number(v),S,V,A)`, `fromHsv(H,number(v),V,A)`, or `fromHsv(H,S,number(v),A)`. They use `lua_tonumberx`, not byte/integer conversion, for the changed component.
+- `fromHsv` writes representation tag **2**, doubles H/S/V at offsets **+8/+16/+24**, and signed32 alpha at **+32**. It performs no clamp or RGB conversion. Setter `0x3c6180` copies the entire **40-byte** result back at `0x3c6201..0x3c6218`. Thus a prior gray/index payload is replaced, and alpha is preserved.
+- Gray getter `0x16c2b0` dispatches on the current representation. It cannot keep returning a former gray payload after an HSV replacement. In the tested achromatic case, black gray **0**, alpha **73**, then HSV value **1** becomes white: gray **255**, grayPixel **18943 = 255 + 73*256**. Changing value back to **0** gives grayPixel **18688 = 73*256**.
+
+Applied correction: `src/lua_api.lua` now clears old gray state as well as index state in its existing HSV mutation path. `tests/native_color_hsv_mutation.rs` invokes the actual embedded Lua API and checks updated channels, gray/grayPixel, preserved alpha, and independent copies. It failed before correction with `HSV edit must discard the old gray payload`.
+
+Verification: `cargo test --offline --locked` passed **136 tests, zero failures** (`checks/native-hsv-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-hsv-build.log`). `rebuild_check` passed build, desktop startup/screenshot (**942×1005**) and mechanics validation (**31 values, 30 sourced, one estimated**).
+
+Scope: this fixes stale gray state in the existing RGB-backed HSV implementation. Exact native double HSV retention, out-of-range component behavior, HSV/HSL representation equality, and conversion rounding remain compatibility gaps; the RGB-backed conversion is a project approximation, not the native factory rule. Prior verified mechanics and limits remain below.
+
+## Current native audit — represented Color equality (2026-11-04)
+
+Opened the original main executable with `core_target_open` at `aseprite-reference`. The previous installed path no longer exists. SHA-256 is the identical original: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`.
+
+`native_strings_find` searched names, settings and messages using `^Color$|^__eq$|^color_bar$|invalid_fg_or_bg` (`ev_64486c6ce3c6aac1de40598a94de7c2daed2e8f34cb44c991891d5029b4b39bf`). Followed Color string `0xf446eb` to registration `0x3c5320` (`ev_49dfe1a13a241e13cfbbe24dc8a759f7a9e42c3cc9d4a8596b4dd01e95ba9adb`), then its methods table `0x1cbae10` (`ev_9346ec2e59fb509f7cd9dbc4a924dbad69c062533c39acbf15bbe4d304c61e5c`). The table entry at `0x1cbae20` pairs the `__eq` string pointer `0xf3fb98` with wrapper `0x3c5c10` (`ev_f8037a234bbaa550168997547bde067dd26b15b5f4c7968005e1d8dffbff8b09`). Outgoing wrapper references call `Color::operator==` at `0x16c3f0` (`ev_ae7b58e27e13f2f8914b359fb696b4ef033f0e8d9abe81338df90850d4890971`). Settings/messages are navigation anchors, with no new claims about their behavior.
+
+Completed and read five `native_function_pseudocode` results in this order, awaiting every result before requesting the next:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| Lua Color_eq | `0x3c5c10` | `ev_45aa5407c15e7c908733f4dbd17d075e8a27a659dc3efe86918c61ca0be743fd` |
+| Color::operator== | `0x16c3f0` | `ev_122d02c2349f0eaaa1ab992fb12a1966cba4500a25984ac984c92f389902c905` |
+| Color::fromRgb | `0x16a5c0` | `ev_58c3cf8768e5fef1bb1353661d7987154e29b58dd19d7110513367d15f99b2c8` |
+| Color::fromGray | `0x16a620` | `ev_23173653adbf639903f24c8f431c96e617d285ae39aa7624162524b28c409cbd` |
+| Color::fromIndex | `0x16a630` | `ev_a17492d37e8fdfa3887d6c4c20ecee6eff2fc85874b7e88ddda038fe03f06b83` |
+
+Ghidra timed out; all five results use the built-in fallback with approximate register types and conditions. A temporary 15-second startup timeout was restored to its original null value. Full returned pseudocode and comparator assembly are saved in `evidence/color_equality.json`. Assembly (`ev_2ec9953a1f6e7219cb8c8358333eeee5cf577457c5bcb12b559f618303638449`) resolves the fallback's missing `cmp` operations before `sete`. Jump table bytes at `0xf81a20` (`ev_7c5b3b3ef5155c0ccf211c8d2f6a1fad6b817c22cd188a030b5b72daad72835a`) resolve tag branches.
+
+Recovered rules now used by `src/lua_api.lua`:
+
+- Let `T` be the representation tag. If `Tx != Ty`, equality is false (`0x16c3f0..0x16c3f4`). RGB uses tag **1**, gray **4**, index **5**, as stored by the factory functions above.
+- **RGB:** equality is `Rx=Ry && Gx=Gy && Bx=By && Ax=Ay`, comparing all four stored 32-bit integers at offsets **+8,+12,+16,+20** (`0x16c48c..0x16c4ad`). There is no byte wrapping before comparison. Thus red **1** differs from **257**, even though both pack to byte **1**.
+- **Gray:** equality is `Gx=Gy && Ax=Ay`, comparing stored 32-bit integers at **+8,+12** (`0x16c477..0x16c488`). Gray **5** differs from gray **261**, alpha **255** differs from **511**, and gray differs from RGB with identical visible channels.
+- **Index:** equality is `Ix=Iy`, comparing stored signed32 index at **+8** (`0x16c4b1..0x16c4ba`). It does not compare palette RGBA. Invalid indices **-1** and **-2** therefore differ even if the build's fallback pixels coincide.
+- Equality uses current private representation state, so copying preserves equality and gray/index assignment changes the comparison branch.
+
+`tests/native_color_equality.rs` runs the actual embedded Lua API. Both tests failed before correction (wrapped RGB equality and gray/RGB equivalence), then verify stored channels, alpha, gray/index distinctions, independent copies and representation replacement.
+
+Verification: `cargo test --offline --locked` passed **132 tests, zero failures** (`checks/native-equality-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-equality-build.log`). Craft Anything `rebuild_check` passed build, desktop startup/screenshot (**942×1005**) and mechanics validation (**30 values, 29 sourced, one estimated**).
+
+Scope: this correction covers the existing RGB, gray and indexed representations. Native tags **2/3** use floating payload comparisons, and tag **0** has a mask branch; this build does not yet retain those representations. Full HSV/HSL/mask equality, palette-dependent getters and original-application parity remain unresolved. Earlier audit results below are retained as historical verification.
+
 ## Current native audit — indexed Color input conversion (2026-11-02)
 
 Opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier drawing, timing, blending, settings and scripting audits remain below.

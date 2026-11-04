@@ -16,3 +16,8 @@ The original license is scripts/LICENSE.txt. Tests supply user responses via the
 same host callback used by the editor, and run the example code unchanged.
 
 The fixture files are not embedded in or read by the shipped executable.
+
+workflows/ contains original tiny fixtures generated for the expanded import tests:
+a 3×2 APNG, a lossless animated WebP (red then green, 70/230 ms), and a two-layer
+OpenRaster ZIP (Red and half-opacity Green). They were generated with Pillow and
+Python zipfile, contain no third-party artwork, and are only test inputs.

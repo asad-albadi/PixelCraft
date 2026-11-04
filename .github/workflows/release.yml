@@ -31,7 +31,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
             libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev \
+            libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev libwebp-dev \
             desktop-file-utils patchelf xvfb xauth weston \
             libgl1-mesa-dri libegl-mesa0 python3-pil
 
@@ -85,6 +85,7 @@ jobs:
             --desktop-file packaging/pixelcraft.desktop \
             --icon-file packaging/pixelcraft.png \
             --library /usr/lib/x86_64-linux-gnu/libX11.so.6 \
+            --library /usr/lib/x86_64-linux-gnu/libwebpdemux.so.2 \
             --exclude-library 'libwayland-*.so*' \
             --library /usr/lib/x86_64-linux-gnu/libxkbcommon.so.0 \
             --library /usr/lib/x86_64-linux-gnu/libxkbcommon-x11.so.0 \
@@ -189,6 +190,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
       - name: Build embedded Windows Lua
         run: ./packaging/build-windows-lua.ps1
+      - name: Build Windows WebP runtime
+        run: ./packaging/build-windows-webp.ps1
       - name: Test and build Windows release
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data

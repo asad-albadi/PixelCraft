@@ -1,4 +1,4 @@
-; Compile from app/ after cargo build --release and build-windows-lua.ps1.
+; Compile from app/ after cargo build --release and both Windows runtime scripts.
 ; AppId and install directory stay stable across upgrades.
 #ifndef AppVersion
   #error AppVersion must be supplied to ISCC
@@ -35,6 +35,10 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "..\target\release\pixelcraft.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\runtime\LUA-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\runtime\webp\libwebpdemux.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\runtime\webp\libwebp.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\runtime\webp\libsharpyuv.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\runtime\webp\WEBP-*.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\PixelCraft"; Filename: "{app}\pixelcraft.exe"

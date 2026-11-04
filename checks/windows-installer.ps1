@@ -13,6 +13,8 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments) {
     if ($process.ExitCode -ne 0) { throw "$Program failed with exit code $($process.ExitCode)" }
 }
 $env:PIXELCRAFT_HOME = Join-Path $work 'User Data'
+$previousPath = $env:PATH
+$previousDirectory = Get-Location
 try {
     Invoke-Checked $installerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installDir`"", "/LOG=`"$work/install.log`"")
     $app = Join-Path $installDir 'pixelcraft.exe'
@@ -23,10 +25,17 @@ try {
     if ([BitConverter]::ToUInt32($image, $pe) -ne 0x4550) { throw 'Invalid PE signature' }
     $subsystem = [BitConverter]::ToUInt16($image, $pe + 24 + 68)
     if ($subsystem -ne 2) { throw "Expected Windows GUI subsystem (2), got $subsystem; this build would open a console" }
-    foreach ($notice in @('LICENSE', 'LUA-LICENSE.txt')) {
+    foreach ($dll in @('libwebpdemux.dll', 'libwebp.dll', 'libsharpyuv.dll')) {
+        if (!(Test-Path (Join-Path $installDir $dll))) { throw "Missing WebP runtime: $dll" }
+    }
+    foreach ($notice in @('LICENSE', 'LUA-LICENSE.txt', 'WEBP-COPYING.txt', 'WEBP-PATENTS.txt', 'WEBP-AUTHORS.txt')) {
         if (!(Test-Path (Join-Path $installDir $notice))) { throw "Missing license: $notice" }
     }
-    # This exercises saves, exports, embedded Lua and extension lifecycle from the installed exe.
+    # Exclude build tools and their DLLs from PATH/current directory. WebP must
+    # load from the installation, as it would on a clean Windows machine.
+    $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+    Set-Location $work
+    # Exercises WebP import, saves, exports, embedded Lua and extension lifecycle.
     Invoke-Checked $app @('--standalone-check', "`"$work/results`"")
     # Repeat installation to exercise the upgrade path with the stable AppId.
     Invoke-Checked $installerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installDir`"")
@@ -40,5 +49,7 @@ try {
     $hash = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $([IO.Path]::GetFileName($installerPath))" | Set-Content "$installerPath.sha256" -Encoding ascii
 } finally {
+    $env:PATH = $previousPath
+    Set-Location $previousDirectory
     Write-Host "Installer verification files: $work"
 }

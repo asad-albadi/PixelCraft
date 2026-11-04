@@ -182,6 +182,18 @@
       "group": "scripting",
       "value": "N=signed32(I(v)); I integer identity or signed64 floor numeric conversion, failed conversion zero; constructor and assignment store representation 5 and N at +8; assignment replaces gray state",
       "source": "Color_new 0x3c54a0, Color_set_index 0x3c6860 -> lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; Color::fromIndex 0x16a630; Color::getIndex 0x16cbb0; evidence/color_index_pseudocode.json; limits in MECHANICS.md"
+    },
+    {
+      "name": "Color equality for represented RGB gray and index",
+      "group": "scripting",
+      "value": "Different representation tags are unequal; RGB compares stored R,G,B,A; gray compares G,A; index compares I; no pixel-byte wrapping",
+      "source": "Color_eq 0x3c5c10 -> Color::operator== 0x16c3f0; ev_122d02c2349f0eaaa1ab992fb12a1966cba4500a25984ac984c92f389902c905; assembly ev_2ec9953a1f6e7219cb8c8358333eeee5cf577457c5bcb12b559f618303638449; jump table ev_7c5b3b3ef5155c0ccf211c8d2f6a1fad6b817c22cd188a030b5b72daad72835a"
+    },
+    {
+      "name": "HSV edits discard previous gray state",
+      "group": "scripting",
+      "value": "HSV component assignment replaces the represented value and preserves alpha; clear stale gray/index payload. Native tag 2 stores doubles H/S/V at +8/+16/+24 and alpha at +32; RGB-backed conversion remains approximate",
+      "source": "Color_set_hsvHue 0x3c5fa0, Color_set_hsvSaturation 0x3c6090, Color_set_hsvValue 0x3c6180 -> Color::fromHsv 0x16a5e0; evidence/color_hsv_mutation.json; factory assembly ev_411c06400636413ebfb32a9d5065850c091c583281a0df0f07273593d925ae18; limits in MECHANICS.md"
     }
   ]
 }

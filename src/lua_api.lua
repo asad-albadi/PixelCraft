@@ -69,6 +69,16 @@ end
 -- Keep private state so copying preserves gray/index representation as well
 -- as channels, without sharing mutable storage between Color objects.
 local colorStates=setmetatable({}, {__mode='k'})
+-- Color_eq 0x3c5c10 -> Color::operator== 0x16c3f0 compares tags
+-- before payloads. Packing to bytes would lose stored signed32 values.
+local function colorEqual(x,y)
+ local xs,ys=colorStates[x],colorStates[y]
+ if not xs or not ys then return false end
+ local xi,xg=xs();local yi,yg=ys()
+ if xi~=nil or yi~=nil then return xi~=nil and yi~=nil and xi==yi end
+ if xg~=nil or yg~=nil then return xg~=nil and yg~=nil and xg==yg and x.alpha==y.alpha end
+ return x.red==y.red and x.green==y.green and x.blue==y.blue and x.alpha==y.alpha
+end
 function Color(c,g,b,a)
  local index,gray
  if type(c)=='string' then
@@ -102,7 +112,7 @@ function Color(c,g,b,a)
  end
  local result=setmetatable({}, {
   __name='Color',
-  __eq=function(x,y)return x.rgbaPixel==y.rgbaPixel end,
+  __eq=colorEqual,
   __index=function(_,k)
    local i=colorChannels[k];if i then return p[i] end
    local h,sat,v,l,d=rgbToHsv(p)
@@ -128,7 +138,9 @@ function Color(c,g,b,a)
    elseif k=='gray' then gray=colorInteger(v);p={gray,gray,gray,p[4]};index=nil
    elseif k=='rgbaPixel' or k=='grayPixel' then error('Color.'..k..' is read-only')
    elseif k=='hue' or k=='hsvHue' or k=='hsvSaturation' or k=='saturation' or k=='value' or k=='hsvValue' then
-    local h,sat,val=rgbToHsv(p);if k=='hue' or k=='hsvHue' then h=v elseif k=='saturation' or k=='hsvSaturation' then sat=v else val=v end;local alpha=p[4];p=hsvToRgb(h,sat,val);p[4]=alpha;index=nil
+    -- Native HSV setters 0x3c5fa0/0x3c6090/0x3c6180 replace
+    -- the complete value via fromHsv 0x16a5e0, discarding gray/index.
+    local h,sat,val=rgbToHsv(p);if k=='hue' or k=='hsvHue' then h=v elseif k=='saturation' or k=='hsvSaturation' then sat=v else val=v end;local alpha=p[4];p=hsvToRgb(h,sat,val);p[4]=alpha;index=nil;gray=nil
    else rawset(t,k,v) end
   end
  })
@@ -289,7 +301,7 @@ setmetatable(sprite,{__index=function(_,k)if spriteMethods[k] then return sprite
 rebuildHandles()
 local activeLayer,activeFrame=_pw_layer+1,_pw_frame+1
 local commands={}
-app=setmetatable({apiVersion=1,version='PixelCraft 0.2',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
+app=setmetatable({apiVersion=1,version='PixelCraft 0.3',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
 -- NewFrameCommand::onExecute (0x45cfa0) passes active index+1 to
 -- addFrame/addEmptyFrame. Sprite methods without arguments instead append.
 rawset(app,'command',setmetatable({NewLayer=function()app.activeLayer=sprite:newLayer()end,NewFrame=function()
