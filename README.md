@@ -156,6 +156,9 @@ The ASE implementation follows the [published format specification](https://gith
 - `PIXELCRAFT_HOME` optionally sets an independent portable root, with preferences beneath `preferences/`.
 - AppData is used when present as a fallback. There is no migration or lookup of another editor's settings.
 
+New installs follow the system appearance. Choose **View → Theme → System, Light, or Dark** to change and remember the appearance; existing Light and Dark choices are preserved.
+On Linux, System mode reads the desktop appearance portal and listens for changes while the editor is open (on both X11 and Wayland). If the desktop provides no appearance preference, System mode uses Light.
+
 Themes accept original XML color definitions or JSON with `dark`, `panel`, `text`, `accent` (RGB arrays). Palettes are JSON arrays of RGBA bytes, GIMP `.gpl` palettes, or ASE palettes. Shortcuts accept original `.aseprite-keys`/XML files for supported commands and tools, or JSON maps such as `{"P":"pencil","Ctrl+S":"save"}`; supported actions include tools, file/edit commands and playback. Applied theme/shortcut settings are copied into PixelCraft's preferences and remembered.
 
 Lua runs transactionally on a separate document copy; successful results import as one undoable change. Errors, unsupported APIs and resource limits leave the original document unchanged. Lua has a 256 MiB allocation budget, an instruction/CPU-time budget, and a one-million-stored-pixel invocation limit. Interactive editor sessions support dialogs, events, timers, preferences, file operations and local modules. Process execution and Lua io remain unavailable. Original language INI and BMP/PNG dithering contributions are supported; themes adapt XML colors to native widgets. See [the compatibility list](COMPATIBILITY.md) for the tested API and remaining limitations.

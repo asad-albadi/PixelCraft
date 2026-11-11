@@ -5,6 +5,7 @@
 
 mod script_ui;
 mod studio;
+mod system_appearance;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use pixelcraft::{
     extensions::{self, Manager, PluginCommand, Session},
@@ -77,6 +78,16 @@ impl ThemeColors {
 }
 fn theme_path() -> Option<PathBuf> {
     Some(extensions::config_directory().join("theme.json"))
+}
+// Older versions stored a boolean; preserve those explicit overrides.
+fn read_theme_preference(bytes: &[u8]) -> egui::ThemePreference {
+    match serde_json::from_slice::<serde_json::Value>(bytes).ok() {
+        Some(serde_json::Value::Bool(true)) => egui::ThemePreference::Dark,
+        Some(serde_json::Value::Bool(false)) => egui::ThemePreference::Light,
+        Some(serde_json::Value::String(value)) if value == "dark" => egui::ThemePreference::Dark,
+        Some(serde_json::Value::String(value)) if value == "light" => egui::ThemePreference::Light,
+        _ => egui::ThemePreference::System,
+    }
 }
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
@@ -164,7 +175,10 @@ struct PixelCraft {
     tabs: Vec<Option<SpriteTab>>,
     active_tab: usize,
     dark_mode: bool,
+    theme_preference: egui::ThemePreference,
     theme_path: Option<PathBuf>,
+    system_theme_rx: Option<std::sync::mpsc::Receiver<Option<egui::Theme>>>,
+    system_theme: Option<Option<egui::Theme>>,
     doc: Document,
     saved: Document,
     path: Option<PathBuf>,
@@ -239,23 +253,14 @@ impl PixelCraft {
     fn new(cc: &eframe::CreationContext<'_>, shot: Option<PathBuf>) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
         app.theme_path = theme_path();
-        if let Some(dark) = app
-            .theme_path
-            .as_ref()
-            .and_then(|p| std::fs::read(p).ok())
-            .and_then(|bytes| serde_json::from_slice::<bool>(&bytes).ok())
-        {
-            app.set_dark_mode(&cc.egui_ctx, dark);
-        }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("shortcuts.json")) {
             app.custom_shortcuts = serde_json::from_slice(&bytes).unwrap_or_default();
         }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
             app.translations = pixelcraft::contributions::language(&bytes).unwrap_or_default();
         }
-        if let Ok(bytes) = std::fs::read(extensions::config_directory().join("custom-theme.json")) {
-            let _ = app.apply_theme_asset(&cc.egui_ctx, &bytes);
-        }
+        app.restore_appearance(&cc.egui_ctx, &extensions::config_directory());
+        app.system_theme_rx = system_appearance::watch(cc.egui_ctx.clone());
         app.about_info = AboutInfo::load();
         app.check_updates(&cc.egui_ctx);
         app.refresh_extensions();
@@ -263,15 +268,35 @@ impl PixelCraft {
         app.restore_workspace();
         app
     }
+    fn restore_appearance(&mut self, ctx: &egui::Context, directory: &std::path::Path) {
+        let custom = std::fs::read(directory.join("custom-theme.json"))
+            .ok()
+            .and_then(|bytes| pixelcraft::contributions::theme(&bytes).ok());
+        // Resolve the base first: a saved choice takes priority over the asset's mode.
+        if let Some(bytes) = self.theme_path.as_ref().and_then(|p| std::fs::read(p).ok()) {
+            self.set_theme_preference(ctx, read_theme_preference(&bytes));
+        } else if let Some(v) = &custom {
+            self.set_dark_mode(ctx, v.get("dark").and_then(|v| v.as_bool()).unwrap_or(true));
+        }
+        if let Some(v) = &custom {
+            Self::apply_theme_colors(ctx, v);
+        }
+    }
     fn with_context(ctx: &egui::Context, shot: Option<PathBuf>) -> Self {
         Self::apply_theme(ctx, true);
+        Self::apply_theme(ctx, false);
+        ctx.options_mut(|options| options.fallback_theme = egui::Theme::Light);
+        ctx.set_theme(egui::ThemePreference::System);
         let doc = Document::demo();
         Self {
             studio: studio::Studio::default(),
             tabs: vec![None],
             active_tab: 0,
-            dark_mode: true,
+            dark_mode: ctx.theme() == egui::Theme::Dark,
+            theme_preference: egui::ThemePreference::System,
             theme_path: None,
+            system_theme_rx: None,
+            system_theme: None,
             saved: doc.clone(),
             doc,
             path: None,
@@ -359,7 +384,6 @@ impl PixelCraft {
         } else {
             egui::Theme::Light
         };
-        ctx.set_theme(theme);
         let mut style = (*ctx.style_of(theme)).clone();
         style.visuals = if dark {
             egui::Visuals::dark()
@@ -400,20 +424,40 @@ impl PixelCraft {
         style
             .text_styles
             .insert(egui::TextStyle::Button, egui::FontId::proportional(14.));
-        ctx.set_global_style(style);
+        ctx.set_style_of(theme, style);
     }
     fn colors(&self) -> ThemeColors {
         ThemeColors::new(self.dark_mode)
     }
     fn set_dark_mode(&mut self, ctx: &egui::Context, dark: bool) {
-        self.dark_mode = dark;
-        Self::apply_theme(ctx, dark);
+        self.set_theme_preference(
+            ctx,
+            if dark {
+                egui::ThemePreference::Dark
+            } else {
+                egui::ThemePreference::Light
+            },
+        );
+    }
+    fn set_theme_preference(&mut self, ctx: &egui::Context, preference: egui::ThemePreference) {
+        self.theme_preference = preference;
+        ctx.set_theme(preference);
+        self.dark_mode = ctx.theme() == egui::Theme::Dark;
+        Self::apply_theme(ctx, self.dark_mode);
         ctx.request_repaint();
     }
     fn save_theme(&mut self) {
         if let Some(path) = &self.theme_path {
-            let result = std::fs::create_dir_all(path.parent().unwrap())
-                .and_then(|()| std::fs::write(path, if self.dark_mode { "true" } else { "false" }));
+            let result = std::fs::create_dir_all(path.parent().unwrap()).and_then(|()| {
+                std::fs::write(
+                    path,
+                    match self.theme_preference {
+                        egui::ThemePreference::System => "\"system\"",
+                        egui::ThemePreference::Light => "\"light\"",
+                        egui::ThemePreference::Dark => "\"dark\"",
+                    },
+                )
+            });
             if let Err(error) = result {
                 self.status = format!("Theme changed, but preference could not be saved: {error}");
             }
@@ -565,6 +609,10 @@ impl PixelCraft {
         let v = pixelcraft::contributions::theme(bytes)?;
         let dark = v.get("dark").and_then(|v| v.as_bool()).unwrap_or(true);
         self.set_dark_mode(ctx, dark);
+        Self::apply_theme_colors(ctx, &v);
+        Ok(())
+    }
+    fn apply_theme_colors(ctx: &egui::Context, v: &serde_json::Value) {
         fn color(v: &serde_json::Value, k: &str) -> Option<Color32> {
             let a = v.get(k)?.as_array()?;
             if a.len() < 3 {
@@ -577,19 +625,18 @@ impl PixelCraft {
             ))
         }
         let mut style = (*ctx.style_of(ctx.theme())).clone();
-        if let Some(c) = color(&v, "panel") {
+        if let Some(c) = color(v, "panel") {
             style.visuals.panel_fill = c;
             style.visuals.window_fill = c;
         }
-        if let Some(c) = color(&v, "text") {
+        if let Some(c) = color(v, "text") {
             style.visuals.override_text_color = Some(c);
         }
-        if let Some(c) = color(&v, "accent") {
+        if let Some(c) = color(v, "accent") {
             style.visuals.selection.bg_fill = c;
             style.visuals.widgets.active.bg_fill = c;
         }
         ctx.set_global_style(style);
-        Ok(())
     }
     fn apply_extension_asset(
         &mut self,
@@ -1694,11 +1741,22 @@ impl PixelCraft {
                 };
                 ui.menu_button(title_text, |ui| {
                     if title == "View" {
-                        let mut dark = self.dark_mode;
-                        if ui.checkbox(&mut dark, "Dark mode").changed() {
-                            self.set_dark_mode(ui.ctx(), dark);
-                            self.save_theme();
-                        }
+                        ui.menu_button("Theme", |ui| {
+                            for (label, preference) in [
+                                ("System", egui::ThemePreference::System),
+                                ("Light", egui::ThemePreference::Light),
+                                ("Dark", egui::ThemePreference::Dark),
+                            ] {
+                                if ui
+                                    .selectable_label(self.theme_preference == preference, label)
+                                    .clicked()
+                                {
+                                    self.set_theme_preference(ui.ctx(), preference);
+                                    self.save_theme();
+                                    ui.close();
+                                }
+                            }
+                        });
                         ui.separator();
                     }
                     for (label, a) in items {
@@ -2698,6 +2756,7 @@ impl PixelCraft {
 }
 impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
+        self.dark_mode = ui.ctx().theme() == egui::Theme::Dark;
         let ctx = ui.ctx().clone();
         self.autosave(ctx.input(|i| i.viewport().close_requested()));
         ctx.request_repaint_after(Duration::from_secs(15));
@@ -2984,6 +3043,16 @@ impl PixelCraft {
     }
 }
 impl eframe::App for PixelCraft {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        if let Some(rx) = &self.system_theme_rx {
+            for theme in rx.try_iter() {
+                self.system_theme = Some(theme);
+            }
+        }
+        if let Some(theme) = self.system_theme {
+            input.system_theme = theme;
+        }
+    }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.render(ui)
     }
@@ -3371,10 +3440,90 @@ mod tests {
         std::fs::remove_dir_all(session.directory).unwrap();
     }
     #[test]
-    fn editor_starts_dark_without_changing_artwork() {
+    fn system_without_reported_theme_opens_light() {
         let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        for preference in [
+            egui::ThemePreference::System,
+            egui::ThemePreference::Dark,
+            egui::ThemePreference::Light,
+            egui::ThemePreference::System,
+        ] {
+            a.set_theme_preference(&ctx, preference);
+            let dark = preference == egui::ThemePreference::Dark;
+            assert_eq!(ctx.global_style().visuals.dark_mode, dark);
+            assert_eq!(a.dark_mode, dark);
+        }
+    }
+    #[test]
+    fn saved_appearance_preserves_custom_colors_on_restart() {
+        let directory =
+            std::env::temp_dir().join(format!("pixelcraft-custom-restart-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("custom-theme.json"),
+            br#"{"dark":true,"panel":[71,82,93],"text":[210,220,230],"accent":[110,120,130]}"#,
+        )
+        .unwrap();
+        for (saved, system, dark) in [
+            ("dark", None, true),
+            ("light", None, false),
+            ("system", None, false),
+            ("system", Some(egui::Theme::Dark), true),
+            ("system", Some(egui::Theme::Light), false),
+        ] {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    system_theme: system,
+                    ..Default::default()
+                },
+                |_| {},
+            );
+            output.textures_delta.clear();
+            let mut a = PixelCraft::with_context(&ctx, None);
+            a.theme_path = Some(directory.join("theme.json"));
+            std::fs::write(
+                a.theme_path.as_ref().unwrap(),
+                serde_json::to_vec(saved).unwrap(),
+            )
+            .unwrap();
+            a.restore_appearance(&ctx, &directory);
+            assert_eq!(
+                a.theme_preference,
+                read_theme_preference(&serde_json::to_vec(saved).unwrap())
+            );
+            assert_eq!(ctx.global_style().visuals.dark_mode, dark);
+            assert_eq!(
+                ctx.global_style().visuals.panel_fill,
+                Color32::from_rgb(71, 82, 93)
+            );
+            assert_eq!(
+                ctx.global_style().visuals.override_text_color,
+                Some(Color32::from_rgb(210, 220, 230))
+            );
+            assert_eq!(
+                ctx.global_style().visuals.selection.bg_fill,
+                Color32::from_rgb(110, 120, 130)
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn editor_follows_system_light_without_changing_artwork() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                system_theme: Some(egui::Theme::Light),
+                ..Default::default()
+            },
+            |_| {},
+        );
+        output.textures_delta.clear();
         let a = PixelCraft::with_context(&ctx, None);
-        assert_eq!(ctx.theme(), egui::Theme::Dark);
+        assert_eq!(ctx.theme(), egui::Theme::Light);
+        assert!(!a.dark_mode);
+        assert_eq!(ctx.global_style().visuals.panel_fill, a.colors().face);
         assert_eq!(a.doc, Document::demo());
         assert!(!a.dirty());
     }
@@ -3403,13 +3552,105 @@ mod tests {
             assert_eq!(ctx.global_style().visuals.dark_mode, dark);
             assert_eq!(ctx.global_style().visuals.panel_fill, a.colors().face);
             assert_eq!(
-                serde_json::from_slice::<bool>(&std::fs::read(&path).unwrap()).unwrap(),
-                dark
+                read_theme_preference(&std::fs::read(&path).unwrap()),
+                if dark {
+                    egui::ThemePreference::Dark
+                } else {
+                    egui::ThemePreference::Light
+                }
             );
             assert_eq!(a.doc, edited);
             assert!(a.dirty());
             assert_eq!(a.undo.len(), 1);
         }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn desktop_theme_updates_reach_frames_without_window_theme_events() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        let (tx, rx) = std::sync::mpsc::channel();
+        a.system_theme_rx = Some(rx);
+        for (preference, desktop, expected) in [
+            (egui::ThemePreference::System, Some(egui::Theme::Dark), true),
+            (
+                egui::ThemePreference::System,
+                Some(egui::Theme::Light),
+                false,
+            ),
+            (egui::ThemePreference::Light, Some(egui::Theme::Dark), false),
+            (egui::ThemePreference::System, Some(egui::Theme::Dark), true),
+            (egui::ThemePreference::Dark, Some(egui::Theme::Light), true),
+            (egui::ThemePreference::System, None, false),
+        ] {
+            a.set_theme_preference(&ctx, preference);
+            tx.send(desktop).unwrap();
+            // Linux supplies no window theme. Include a second frame without a signal.
+            for _ in 0..2 {
+                let mut input = egui::RawInput::default();
+                eframe::App::raw_input_hook(&mut a, &ctx, &mut input);
+                let mut output = ctx.run_ui(input, |ui| a.render(ui));
+                output.textures_delta.clear();
+                assert_eq!(a.dark_mode, expected);
+                assert_eq!(ctx.global_style().visuals.dark_mode, expected);
+                assert_eq!(ctx.global_style().visuals.panel_fill, a.colors().face);
+                assert!(!a.dirty());
+            }
+        }
+    }
+    #[test]
+    fn system_changes_update_editor_colors_but_explicit_overrides_stay_fixed() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        for (preference, system, expected) in [
+            (egui::ThemePreference::System, egui::Theme::Light, false),
+            (egui::ThemePreference::System, egui::Theme::Dark, true),
+            (egui::ThemePreference::Light, egui::Theme::Dark, false),
+            (egui::ThemePreference::Dark, egui::Theme::Light, true),
+            (egui::ThemePreference::System, egui::Theme::Light, false),
+        ] {
+            a.set_theme_preference(&ctx, preference);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    system_theme: Some(system),
+                    ..Default::default()
+                },
+                |ui| a.render(ui),
+            );
+            output.textures_delta.clear();
+            assert_eq!(a.dark_mode, expected);
+            assert_eq!(ctx.global_style().visuals.dark_mode, expected);
+            assert_eq!(ctx.global_style().visuals.panel_fill, a.colors().face);
+            assert!(!a.dirty());
+        }
+    }
+    #[test]
+    fn saved_theme_choices_support_legacy_overrides_and_system() {
+        for (bytes, expected) in [
+            (b"true".as_slice(), egui::ThemePreference::Dark),
+            (b"false".as_slice(), egui::ThemePreference::Light),
+            (br#""dark""#.as_slice(), egui::ThemePreference::Dark),
+            (br#""light""#.as_slice(), egui::ThemePreference::Light),
+            (br#""system""#.as_slice(), egui::ThemePreference::System),
+            (b"invalid".as_slice(), egui::ThemePreference::System),
+        ] {
+            assert_eq!(read_theme_preference(bytes), expected);
+        }
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        let directory =
+            std::env::temp_dir().join(format!("pixelcraft-system-theme-{}", std::process::id()));
+        let path = directory.join("theme.json");
+        a.theme_path = Some(path.clone());
+        a.set_dark_mode(&ctx, true);
+        a.save_theme();
+        a.set_theme_preference(&ctx, egui::ThemePreference::System);
+        a.save_theme();
+        assert_eq!(std::fs::read(&path).unwrap(), br#""system""#);
+        assert_eq!(
+            read_theme_preference(&std::fs::read(&path).unwrap()),
+            egui::ThemePreference::System
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
