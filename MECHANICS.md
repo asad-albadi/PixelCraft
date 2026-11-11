@@ -1,3 +1,168 @@
+## Native audit — HSV setter numeric conversion (2026-11-11)
+
+Freshly opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.
+
+Searched names, settings and messages using `native_strings_find` with regex `^hsvValue$|^hsvSaturation$|^hsvHue$|^color_bar$|invalid_fg_or_bg` (8 matches; `ev_e3749ca113de5ce80ac0b1eecd48e4ef85b91cb863508f029e01d6f07335a14d`). Followed hsvValue string `0xf3fbb2` to registration `0x1cbaed0` (`ev_116eefcc2d6b945622f1c7e576eddb5a1340900882444fd91ce468dcf7c9fa5a`). Exact setter-name references resolve function `0x3c6180` through pointer `0x1cbaee0`, 16 bytes after that registration (`ev_10950cc3898d0378ae49ff7828564dfae6561409bb84cd576ef465f0a73daf0c`). Its outgoing references lead to number conversion, HSV component access, alpha and construction (`ev_e7829f1621ea1a5b61240880916efc478be340f6b24ebbc0047fb2051da6e73d`). Settings/messages are navigation evidence, not newly inferred mechanics.
+
+Requested, awaited and read each of these **eight completed pseudocode results separately**, before requesting the next:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| `_ZN3app6script12_GLOBAL__N_118Color_set_hsvValueEP9lua_State` | `0x3c6180` | `ev_99abdfaf811fefb1188011a0696b36a6eb50c073d6675968e520061ce17c4b90` |
+| `_ZN3app6script12_GLOBAL__N_116Color_set_hsvHueEP9lua_State` | `0x3c5fa0` | `ev_5e3adf7b976571266cedae1c6347acd88d14992c4d493c69286b5da22042539c` |
+| `_ZN3app6script12_GLOBAL__N_123Color_set_hsvSaturationEP9lua_State` | `0x3c6090` | `ev_4f70ea7eb7474a4dad1e4c2523a73d0bfd9168420a64da30cf16aa1f5290ae30` |
+| `_Z13lua_tonumberxP9lua_StateiPi` | `0x53e9c0` | `ev_c2e604e25bb6aa2f2de721dece1e8aea2447549090270b5097823c72ce1eaffc` |
+| `_Z14luaV_tonumber_PK6TValuePd` | `0x554760` | `ev_677df1b6d3d1b00712ec63d55d93e310ec5b7952c749c2d93e248441e975e959` |
+| `_ZN3app5Color7fromHsvEdddi` | `0x16a5e0` | `ev_3982e68e9adb398e2856884b7231407f056c924eb1dc7f1a331f96c0a78d1da2` |
+| `_ZN3app6script12_GLOBAL__N_113Color_set_hueEP9lua_State` | `0x3c6570` | `ev_b6a80dd05ad4d972ed8a661a64e396940e448268233d8505ff167ff2d32c6ecd` |
+| `_ZN3app6script12_GLOBAL__N_120Color_set_saturationEP9lua_State` | `0x3c6700` | `ev_331aad626a44388b02aa612b6d4425587db3a8c7f36a90f606634e55a87e5bb7` |
+
+Ghidra timed out with a temporary 15-second startup limit. These completed results came from the built-in fallback decompiler, whose register arguments, branch conditions and SIMD recovery are approximate; this is not a successful Ghidra analysis. Restored the original null startup timeout. Full returned pseudocode and limitations are retained in [evidence/hsv_setter_conversion.json](evidence/hsv_setter_conversion.json).
+
+Recovered rules applied in `src/lua_api.lua`:
+
+- Each explicit HSV setter calls `lua_tonumberx(L,2,null)` for the replacement component. Let **N(x)** be a double-valued numeric conversion: Lua integers/floats and valid numeric strings convert; nil, booleans, tables, functions and invalid strings produce **0.0**. `lua_tonumberx` initializes its result to zero and the failed conversion helper leaves it untouched. Neither truthiness nor direct Lua arithmetic implements this rule.
+- Replacement calls are **fromHsv(N(x), oldS, oldV, oldAlpha)** for hue, **fromHsv(oldH, N(x), oldV, oldAlpha)** for saturation, and **fromHsv(oldH, oldS, N(x), oldAlpha)** for value. `fromHsv` writes representation **2**, three doubles at offsets **8/16/24**, and signed32 alpha at **32**; setters copy the complete result. Generic hue/saturation choose HSL for representation 3 and HSV otherwise. The value alias uses the same setter registration.
+- The build now converts the incoming HSV setter value with **(tonumber(x) or 0)+0.0** before computing display RGB. Previously booleans/tables caused arithmetic errors, and string saturation/value could fail numeric comparison. Alpha and the existing representation-reset behavior are preserved.
+- Examples from RGB green with alpha **73**: invalid hue gives red **(255,0,0,73)**; invalid saturation gives white **(255,255,255,73)**; invalid value gives black **(0,0,0,73)**. Assigning string hue **"120"** to red gives green; then string saturation **"0"** gives white; then string value **"0.5"** gives **(128,128,128,73)**.
+
+Regression `tests/native_color_hsv_setter_conversion.rs` exercises actual embedded Lua Image pixels for all six property names, invalid input types, nil, numeric strings and preserved alpha. It failed before the correction with `attempt to perform arithmetic on a boolean value` (`checks/native-hsv-setter-red.log`) and passed after the correction.
+
+Verification: fresh `cargo test --offline --locked` passed **180 tests, zero failures**, with one pre-existing ignored loopback transport test (`checks/native-hsv-setter-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed. Craft Anything `rebuild_check` passed build, desktop startup/drawing (**942×1005**) and mechanics validation (**38 values, 37 sourced, one estimated**).
+
+Scope: this pass corrects setter input conversion. The build still materializes HSV to RGB rather than retaining native HSV doubles/tag. Exact HSV conversion rounding, out-of-range/nonfinite inputs, HSV copy/equality and palette-dependent conversions remain compatibility gaps. Prior audits below retain their original scope and verification history.
+
+## Native audit — HSV constructor selection and numeric inputs (2026-11-11)
+
+Opened the original main executable using `core_target_open`, at `aseprite-reference` (SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`). Deep mode was enabled. This is a fresh trace extending the earlier audits below.
+
+Searched names, settings and messages with `native_strings_find`, regex `^Color$|^value$|^color_bar$|invalid_fg_or_bg` (`ev_370e8798d17225005cde4e33dff0915bdebc27425506a49f26b82b121dbca45e`). Followed `value` at `0xf78fd2` through its reference at `0x3c582e` (`ev_edec2a6655e7eb53ad40875018e02bcb3812964a817da96ed835d365e9ce3ad7`). `native_function_find` resolved this to `Color_new`, entry `0x3c54a0` (`ev_2821855b2d240cbcd24e86b60a37e6843b617948c5832aba8e78f101af28fac6`). Its outgoing references led to `fromHsv` and the numeric helpers (`ev_a7c03db519c1d0dcf73ee5146f3879f48cba4b007409a10277ed9ed67e6a576a`). Settings and message strings are navigation evidence, not numeric-rule evidence.
+
+The first pseudocode request returned a transport timeout after 300 seconds, with no pseudocode; it is not counted as a completed read. Retried with a temporary 15-second Ghidra startup timeout, then requested, awaited and read each completed result separately before requesting the next:
+
+| Function | Address | Completed pseudocode evidence |
+| --- | --- | --- |
+| `Color_new` | `0x3c54a0` | `ev_c08adf560f02e59509fdeb828fed87ba653040346e5ef2927c721671ec56a5cf` |
+| `Color::fromHsv` | `0x16a5e0` | `ev_3982e68e9adb398e2856884b7231407f056c924eb1dc7f1a331f96c0a78d1da2` |
+| `lua_tonumberx` | `0x53e9c0` | `ev_c2e604e25bb6aa2f2de721dece1e8aea2447549090270b5097823c72ce1eaffc` |
+| `lua_tointegerx` | `0x53eab0` | `ev_dd4c3f99a510b1ed5f1bf83f19090805b925fbd703b6729545ff1ad64994cad4` |
+| `luaV_tointeger` | `0x554930` | `ev_1d294ffa1b28a6c31b9cc4b77d72801898b8fc48006492e4f491eb560c1de59b` |
+
+All five report `deep_engine_unavailable`: Ghidra timed out, and the completed results use the built-in fallback lifter. This is not successful Ghidra analysis. Its register arguments, flags and SIMD are incomplete; fresh full constructor assembly (`ev_757551102c7418e23bae1939870db61f9eaaf4e2b6e7ead130e320d086eec8fc`) corroborates the branch order and conversions. Previous integer-helper assembly below corroborates floor mode. Restored the original null startup timeout afterward. Full results and the initial timeout are retained in [evidence/color_hsv_constructor.json](evidence/color_hsv_constructor.json).
+
+Recovered rules applied in `src/lua_api.lua`:
+
+- Constructor selection uses the first **nonnil** discriminator in order **r, red, v, value, l, lightness, gray, index, tile**. In particular, HSV is selected by `v` or `value`, without requiring hue; HSV precedes HSL, gray and index. False and zero still select a branch. The build previously required hue and let gray/index override HSV.
+- Short `v` selects **h/s/v/a only**; otherwise long `value` selects **hue/saturation/value/alpha only**. Missing or invalid H/S/V become **0.0** through `lua_tonumberx`; numeric strings are accepted. No fallback between short and long families occurs.
+- Alpha is **255** if its selected field is nil, else **signed32(I(alpha))**. `I` preserves Lua integers, floors successfully converted numeric inputs into signed64, and returns zero on failed conversion. Construction does not saturate alpha: **-1.1 → -2**, **4294967369 → 73**. Packed RGBA masks its low byte, so alpha -2 packs as **254**.
+- Native `fromHsv` stores representation **2**, unmodified H/S/V doubles at **+8/+16/+24**, signed32 alpha at **+32**. This pass corrects input selection/conversion; the build still materializes HSV into RGB and does not retain this exact native representation. Exact conversion rounding, out-of-range/nonfinite HSV, copying/equality of represented HSV and tile colors remain compatibility gaps.
+- Examples: `Color{value=1}` draws **RGBA(255,255,255,255)**. `Color{hue=120,saturation=1,value=1,gray=73}` draws **RGBA(0,255,0,255)**. `Color{v=1,hue=120,saturation=1,alpha=73}` uses only short fields and draws **RGBA(255,255,255,255)**. `Color{v=false,value=1,h=120,s=1,a=false,gray=73}` draws **RGBA(0,0,0,0)**.
+
+Both real embedded-Lua regressions in `tests/native_color_hsv_constructor.rs` failed before the correction (log `checks/native-hsv-constructor-red.log`) and passed afterward. They cover actual Image pixel output, value-only construction, precedence, field families, nil/false, numeric strings, failed conversion, alpha floor and signed32 narrowing. Fresh `cargo test --offline --locked` passed **177 tests, zero failures** (`checks/native-hsv-constructor-tests.log`); `cargo fmt --check` and `cargo build --offline --locked` passed. Fresh Craft Anything `rebuild_check` also passed build, desktop startup/drawing (**942×1005**) and mechanics validation (**37 values, 36 sourced, one estimated**). These checks establish this correction and a working build, not whole-application equivalence.
+
+## Native audit — gray/index constructor precedence (2026-11-11)
+
+Freshly opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`, in Deep mode. This pass extends the prior native audits below.
+
+`native_strings_find` searched names, settings and messages with regex `^Color$|^value$|^gray$|^color_bar$|invalid_fg_or_bg` (10 matches; `ev_dc160a3ccb61bed55b3869723e679afb77c4f9a5f07cf12c56ad315def6a2da8`). Followed gray at `0xf600c9` through its reference at `0x3c5a28` (`ev_9cd28cd5458e0bcbfae1d4bf1cbecfff9acc7d2449547224a9139fce00b8138a`); `native_function_find` resolves `Color_new` at `0x3c54a0`. Followed outgoing references (`ev_73e1c01716d1f56fddee04251ac0d7ca174f0b3bb4e103e9b83ba8324f75301e`) to gray construction and numeric conversion. Settings/messages were navigation anchors, with no new behavior claims.
+
+Requested, awaited and read each of these four completed pseudocode results separately before requesting the next:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| Color_new | `0x3c54a0` | `ev_8f616ea4abbe1759c2172730e27f3036d738b1f691cc83072402211fe9eac114` |
+| Color::fromGray | `0x16a620` | `ev_23173653adbf639903f24c8f431c96e617d285ae39aa7624162524b28c409cbd` |
+| lua_tonumberx | `0x53e9c0` | `ev_8484bb763372a6ad99788d4cfd2e9406e85ea72125b6539a395e2f0a35181201` |
+| lua_tointegerx | `0x53eab0` | `ev_446b3298f424da3a883b910c3f9d2b4e03b46a78a938a495ee135510f2db4692` |
+
+Ghidra timed out with a temporary 15-second startup limit. These are completed built-in fallback decompiler reads, with register-level and approximate-condition limitations; they are not successful Ghidra decompilation. Restored the original null timeout afterward. Full results: [evidence/color_constructor_priority.json](evidence/color_constructor_priority.json). Fresh constructor assembly (`ev_e4ec748b33d27705fb9154559dc5bf2eb563960013d34b0e538c8d48a7e57bdf`) is saved in [evidence/color_constructor_priority_assembly.json](evidence/color_constructor_priority_assembly.json).
+
+Recovered rules applied in `src/lua_api.lua`:
+
+- At `0x3c5a35..0x3c5a3c`, nonnil **gray** selects gray construction. Only nil gray reaches the **index** test at `0x3c5a82`. False, zero and invalid numeric strings still select gray. The build previously tested index first; this pass corrects that order.
+- Gray uses **G=trunc_signed32(number(gray))**; failed number conversion is zero. Alpha uses the long **alpha** field only, defaults to **255** when nil, otherwise **A=signed32(I(alpha))**, where the previously audited integer helper floors successful numeric conversions and returns zero on failure. No channel saturation occurs during construction. `fromGray` stores representation **4**, signed32 gray at **+8** and signed32 alpha at **+12**.
+- Example: `Color{gray=73.9,index=0,alpha=42.9}` retains gray **73** and alpha **42**; its packed pixel is **RGBA(73,73,73,42)**. `Color{gray=false,index=0,alpha=-1.1,a=99}` retains gray **0**, alpha **-2**, and gray representation. Short `a` is ignored. Existing RGB/HSL precedence is retained.
+
+Both embedded-Lua regressions in `tests/native_color_constructor_priority.rs` failed before the correction and passed afterward. They cover actual Image pixel output, retained representation/copying, nonnil false and invalid strings, truncation versus alpha floor, alpha field family and higher-priority RGB/HSL forms. Failure log: `checks/native-constructor-priority-red.log`.
+
+Verification: `cargo test --offline --locked` passed **152 tests, zero failures**. `cargo fmt --check` and `cargo build --offline --locked` passed. Fresh Craft Anything `rebuild_check` passed build, desktop startup/drawing (**942×1005**) and mechanics validation (**36 values, 35 sourced, one estimated**).
+
+Scope: this correction covers gray versus index selection. Exact HSV representation/conversion, HSV mixed-table selection and tile colors remain compatibility gaps; no full native-parity claim is made.
+
+## Native audit — HSL table construction (2026-11-11)
+
+Freshly opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled. Earlier audits below remain applicable; this pass closes the HSL table-constructor gap explicitly listed by the previous audit.
+
+Searched names, settings and messages using `native_strings_find`, regex `^Color$|^lightness$|^color_bar$|invalid_fg_or_bg` (`ev_873ef2dcfa520ce47c20921f4c10dfaea858ad5281c56ee2292e37df99693111`). The `lightness` string at `0xf3a294` references `0x3c5953`; `native_function_find` resolves it to `Color_new` at `0x3c54a0` (`ev_cea15fef5dee6196f6f49d467bbe11863439522c2fae493f8342b985ced24f6d`). Followed its outgoing references to `fromHsl`, `lua_tonumberx` and `lua_tointegerx` (`ev_73e1c01716d1f56fddee04251ac0d7ca174f0b3bb4e103e9b83ba8324f75301e`). The settings/message matches are navigation anchors, with no new behavior claim.
+
+Requested, awaited and read these **four completed pseudocode results sequentially**, one before requesting the next:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| Color_new | `0x3c54a0` | `ev_8f616ea4abbe1759c2172730e27f3036d738b1f691cc83072402211fe9eac114` |
+| Color::fromHsl | `0x16a600` | `ev_63b0b702fc5ac666b087813424ede543e30584ff1cb41d725f25c046a5bc8a71` |
+| lua_tonumberx | `0x53e9c0` | `ev_8484bb763372a6ad99788d4cfd2e9406e85ea72125b6539a395e2f0a35181201` |
+| lua_tointegerx | `0x53eab0` | `ev_446b3298f424da3a883b910c3f9d2b4e03b46a78a938a495ee135510f2db4692` |
+
+Ghidra timed out with a temporary 15-second startup limit; the tools returned completed built-in fallback pseudocode, with approximate register-level conditions/arguments and inline assembly. Restored the startup limit to its original null value after the reads. Full results, outgoing references and constructor assembly (`ev_e4ec748b33d27705fb9154559dc5bf2eb563960013d34b0e538c8d48a7e57bdf`) are retained in [evidence/color_hsl_constructor.json](evidence/color_hsl_constructor.json). Assembly corroborates the field tests, argument order, alpha conversion and complete 40-byte result copy.
+
+Recovered rules applied in `src/lua_api.lua`:
+
+- Constructor table selection tests **presence (not nil)** in order: **r, red, v, value, l, lightness, gray, index, tile**. This pass corrects HSL selection and the existing HSV/HSL conflict; broader HSV/gray/index mixed-table priority remains unresolved.
+- With short `l` present, HSL uses **h, s, l, a** only; otherwise long `lightness` selects **hue, saturation, lightness, alpha** only. Hue is not required. At `0x3c5998..0x3c5a11`, H/S/L each use `lua_tonumberx`; missing or failed conversions become **0.0**, numeric strings are accepted. Alpha defaults to **255** only when its selected field is nil; otherwise it uses **signed32(I(alpha))**, where the original integer helper uses floor conversion and returns zero on failure. Alpha is not saturated by construction. Thus -1.1 stores **-2**, while 4294967369 stores **73**.
+- `fromHsl` stores tag **3**, unmodified double H/S/L at **+8/+16/+24**, and signed32 alpha at **+32**. The constructor retains this representation, enabling the previously recovered HSL getters, copying, tolerance equality and generic hue/saturation edits. Display RGB follows the existing native-derived HSL formula below; gray remains **signed32-trunc(L*255)** from stored lightness.
+- For example, `Color{lightness=0.5}` has H/S/L **0/0/0.5**, RGB **128/128/128**, gray **127**, alpha **255**. `Color{h=120,s=1,l=0.5,a=73}` draws opaque-channel green with alpha **73**. `Color{l=0.5,hue=120,saturation=1,alpha=73}` ignores the long fields and yields gray with alpha **255**. Stored lightness **2** remains **2**, displays white and gives gray **510**.
+
+Two real embedded-Lua regressions in `tests/native_color_hsl_constructor.rs` failed before the correction (lightness-only selection and field-family mismatch). They cover image pixel output, component retention/copy/edit, short/long families, nonnil false fields, numeric strings, failed conversion, signed alpha, RGB/HSV precedence and HSL precedence over gray/index. Logs: `checks/native-hsl-constructor-{red,green,tests,build}.log`.
+
+Verification: `cargo test --offline --locked` passed **148 tests, zero failures**. `cargo fmt --check` and `cargo build --offline --locked` passed. Craft Anything `rebuild_check` passed build, desktop startup/screenshot (**942×1005**) and mechanics validation (**35 values, 34 sourced, one estimated**).
+
+Scope: this pass corrects HSL table construction using the existing native-derived HSL conversion. Exact HSV representation, wider mixed-constructor priority, palette-dependent conversions and exhaustive NaN/infinity behavior remain unresolved. Completed fallback pseudocode plus assembly is not a successful Ghidra analysis or a claim of full native parity.
+
+## Native audit — represented HSL color mutation (2026-11-11)
+
+Opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled. This audit extends the earlier drawing, animation, blending, preferences and scripting audits preserved below.
+
+Searched names, settings and messages with `native_strings_find`, regex `^Color$|hslLightness|hslSaturation|hslHue|^color_bar$|invalid_fg_or_bg` (12 matches; `ev_e27b74fddc79e987c0a9192737ef64ee9c67d6714d62ad80a600446119ed132d`). Followed `hslLightness` at `0xf3fbd0` to property entry `0x1cbaf18` (`ev_996c311407176a157b847b9a2c74b5de546f6dafcd11ab7daf12ef6ed9efec3c`). Native-name references identify its setter `0x3c6450` via pointer `0x1cbaf28` (`ev_4f4e4901d2911e722b7d7be26a895ab74581d3d5ccc03c7fad68909a9976fc85`). Outgoing references lead to HSL getters, alpha, number conversion and `fromHsl` (`ev_5a0624ff9b125f8e233486c2dd6f09042ac8a46f55c186f909814f9e03cf2a6c`). Settings/messages are navigation anchors, not new behavior claims.
+
+The first pseudocode request timed out after 300 seconds and is **not** counted as a completed read. Retried with a temporary 15-second Ghidra startup timeout; Ghidra still failed, but the tool returned completed built-in fallback pseudocode. Read each of the following **16 completed results sequentially**, awaiting and reading each before requesting the next. Restored the startup timeout to its original null value. Full results, with their register/condition/inline-assembly limitations, are saved in [evidence/color_hsl_mutation.json](evidence/color_hsl_mutation.json).
+
+| Function | Address | Pseudocode evidence |
+| --- | --- | --- |
+| Color_set_hslLightness | `0x3c6450` | `ev_19cd812e60ae85a17bcea8719b7227c967335172b5a82a0ba64d83392c643ec1` |
+| Color::fromHsl | `0x16a600` | `ev_63b0b702fc5ac666b087813424ede543e30584ff1cb41d725f25c046a5bc8a71` |
+| Color_set_hslHue | `0x3c6270` | `ev_af265ad2695ffa861e3aecd1cfcc8e10baaf35436490f6d6204ba89200ce16ea` |
+| Color_set_hslSaturation | `0x3c6360` | `ev_6bab2713f7f22e3da45e039407a2581f6265c3b75b92ac57a62b05bb6fea80d7` |
+| gfx::Hsl(H,S,L) | `0x691370` | `ev_0a1ee0c3a38770329159d0e5280eef52110f2b23315e8ae820f7ffd50fc9fb94` |
+| gfx::Rgb(Hsl) | `0x6918e0` | `ev_d46c19fe74415f9b9a385b164a4652e62fb257c72bc098406407cd29168d3050` |
+| Color::getHslHue | `0x16c860` | `ev_cd6767c1679a0b43b3d0c7dd8a5094a10109ba265dbcc884991e0bf588460dd9` |
+| Color::getHslSaturation | `0x16c960` | `ev_ffae17c2a857648fee86a09bec7498062fd2fbbac921333d7b6090bae83fc278` |
+| Color::getHslLightness | `0x16ca60` | `ev_8cd4fee6e6ebd1e4a8b93073ae00eba154bfe6818238638b1a4982f846c4eabe` |
+| gfx::Hsl(Rgb) | `0x6913b0` | `ev_d5859753671dc68077a7bf79376b87502d888c39f20fa2afcccbc62137e0ac72` |
+| Color::getGray | `0x16c2b0` | `ev_7533296ec8ca2301e66c93dff920987883d6536509c257712f2c659199ffb0bb` |
+| Color::operator== | `0x16c3f0` | `ev_122d02c2349f0eaaa1ab992fb12a1966cba4500a25984ac984c92f389902c905` |
+| Color::getRed | `0x16ae40` | `ev_04da219a05d111d1cee2c0a5279449e611b399fa723e0939c329a927d9d04699` |
+| Color::setAlpha | `0x16cdc0` | `ev_a1e14441479a48dc0ac957324987a491f6526ad4e9c56ba514977be1341e0ee9` |
+| Color_set_hue | `0x3c6570` | `ev_eb8a7684c45af9a935a93a7d209080413462e7a595eb62ac04e541a4759c402e` |
+| Color_set_saturation | `0x3c6700` | `ev_af99d47701d0b85d5a6c3aac27a197919633276dbadcfee12d8f435445f1d93a` |
+
+Assembly corroboration and raw ELF data are retained in [evidence/hsl-rgb-assembly.txt](evidence/hsl-rgb-assembly.txt) and [evidence/hsl-data-tables.json](evidence/hsl-data-tables.json). These use ELF load-segment address mapping rather than file offsets as virtual addresses. Tag tables resolve the fallback's indirect branches. Comparator assembly is `ev_2ec9953a1f6e7219cb8c8358333eeee5cf577457c5bcb12b559f618303638449`.
+
+Recovered rules now applied in `src/lua_api.lua`:
+
+- **Representation:** `fromHsl` stores tag **3**, double H/S/L at **+8/+16/+24**, and signed32 alpha at **+32**. It does not clamp the stored doubles. Each explicit HSL setter replaces the complete **40-byte** color with `fromHsl(number(new),S,L,A)`, `fromHsl(H,number(new),L,A)`, or `fromHsl(H,S,number(new),A)`. The changed component uses `lua_tonumberx`; failed numeric conversion gives zero. Replacing gray/index discards that representation; copying retains an independent HSL tuple.
+- **Getters:** HSL getters return stored doubles directly for tag 3. Gray-to-HSL uses **H=0, S=0, L=gray/255.0**, including the full signed gray value. For RGB, let max/min be signed channels: **D=signed32(max-min)/255.0**, **L=(signed32(max+min)/255.0)*0.5**. Achromatic H/S are zero; otherwise S is **D/(1-abs(2L-1))**, and hue uses the maximum-channel branch, normalized red branch modulo 6, then multiplies by **60**.
+- **RGB materialization:** `gfx::Hsl(H,S,L)` clamps S and L to **[0,1]**, retaining hue. `gfx::Rgb(Hsl)` computes **C=(1-abs(2L-1))*S**, **h=H/60**, **X=C*(1-abs(fmod(h,2)-1))**, **m=L-C/2**. Signed truncation of h selects sectors **0..6** with tuples **(C,X,0), (X,C,0), (0,C,X), (0,X,C), (X,0,C), (C,0,X), (C,X,0)**. Other sectors use (0,0,0). Channels are **signed32-trunc((component+m)*255+0.5)**; hue is not unconditionally wrapped modulo 360.
+- **Gray:** for represented HSL, **gray=signed32-trunc(stored L*255)**, using stored lightness rather than rounded display RGB. Thus L=0.5 gives gray **127** while RGB is **128,128,128**. L=2 remains stored as 2, displays white and gives gray **510**. The existing low-byte grayPixel packing is retained.
+- **Equality:** representations must match. HSL equality requires **abs(H1-H2)<0.001**, **abs(S1-S2)<0.00001**, **abs(L1-L2)<0.00001**, and exact alpha equality. Constants at `0xf7b400` and `0xf7b408` were read directly (`ev_47584876770b5650099d9d0ce39ca70e8f721050419bbe1b8742e45c558b3b26`, `ev_596af021f987cb4272aef163e7dad9c39b7c5011046983b7e1294446cfaf1524`). This is not packed-pixel or exact-double equality.
+- **Aliases and replacement:** generic hue/saturation setters select HSL only when the current tag is 3; otherwise they select HSV. Lightness uses HSL. Alpha edits preserve HSL state; RGB, gray, index and explicit HSV assignments replace it.
+
+The previous implementation silently stored HSL assignments as ordinary Lua fields. The corrected implementation changes the actual channels and retains the represented doubles, including achromatic hue and unrounded saturation. Six embedded-Lua regressions in `tests/native_color_hsl_mutation.rs` cover visible edits, fractional retention, independent copying, replacement, alpha, gray conversion, equality tolerances, aliases, signed32 gray transitions, sector 6 and strict equality boundaries. Fail-before logs are `checks/native-hsl-{red,red-expanded,alias-red,gray-red,sector-red}.log`.
+
+Verification: `cargo test --offline --locked` passed **144 tests, zero failures** (`checks/native-hsl-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-hsl-build.log`). Craft Anything `rebuild_check` passed build, desktop startup/screenshot (**942×1005**) and mechanics validation (**34 values, 33 sourced, one estimated**). Review found and corrected the signed-gray transition and sector-6 cases; both have fail-before/pass-after regressions.
+
+Scope: this audit corrects HSL **mutation** and copying of the resulting colors. Existing HSL/HSV table constructors and exact HSV representation retention remain separate compatibility gaps. Cross-model HSV conversion and palette-dependent getters retain existing limitations. NaN/infinity and every floating boundary have not been exhaustively compared against the running original. Completed fallback pseudocode plus assembly/data corroboration is not a claim that Ghidra succeeded or that the whole application has native parity.
+
 ## Current native audit — HSV edits discard gray state (2026-11-04)
 
 Freshly opened the original main ELF using `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.

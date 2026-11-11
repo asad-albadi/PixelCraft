@@ -1,0 +1,107 @@
+{
+  "original": "aseprite-reference",
+  "method": "ELF PT_LOAD address mapping; little-endian signed32 relative jump tables and IEEE754 doubles",
+  "tables": {
+    "0xfabfdc": {
+      "hex": "a9596effd2596effb3596effec596effdc596effe2596effa9596eff",
+      "targets": [
+        "0x691985",
+        "0x6919ae",
+        "0x69198f",
+        "0x6919c8",
+        "0x6919b8",
+        "0x6919be",
+        "0x691985"
+      ]
+    },
+    "0xf81a80": {
+      "hex": "a5ae1eff30ae1eff12ae1eff12ae1effa5ae1eff3dae1eff",
+      "targets": [
+        "0x16c925",
+        "0x16c8b0",
+        "0x16c892",
+        "0x16c892",
+        "0x16c925",
+        "0x16c8bd"
+      ]
+    },
+    "0xf81a98": {
+      "hex": "aaaf1efffdae1eff0aaf1effa5af1effaaaf1eff31af1eff",
+      "targets": [
+        "0x16ca42",
+        "0x16c995",
+        "0x16c9a2",
+        "0x16ca3d",
+        "0x16ca42",
+        "0x16c9c9"
+      ]
+    },
+    "0xf81ab0": {
+      "hex": "c9b01effe6af1eff1fb01eff46b01efff6af1eff60b01eff",
+      "targets": [
+        "0x16cb79",
+        "0x16ca96",
+        "0x16cacf",
+        "0x16caf6",
+        "0x16caa6",
+        "0x16cb10"
+      ]
+    },
+    "0xf81a08": {
+      "hex": "aca91effdaa81eff06a91eff2da91effeaa81eff34a91eff",
+      "targets": [
+        "0x16c3b4",
+        "0x16c2e2",
+        "0x16c30e",
+        "0x16c335",
+        "0x16c2f2",
+        "0x16c33c"
+      ]
+    },
+    "0xf81a20": {
+      "hex": "69aa1eff6caa1efff5a91efff5a91eff57aa1eff91aa1eff",
+      "targets": [
+        "0x16c489",
+        "0x16c48c",
+        "0x16c415",
+        "0x16c415",
+        "0x16c477",
+        "0x16c4b1"
+      ]
+    }
+  },
+  "constants": {
+    "0xf7b3e8": {
+      "hex": "000000000000f03f",
+      "double": 1.0
+    },
+    "0xf7b3f8": {
+      "hex": "0000000000e06f40",
+      "double": 255.0
+    },
+    "0xf7b400": {
+      "hex": "fca9f1d24d62503f",
+      "double": 0.001
+    },
+    "0xf7b408": {
+      "hex": "f168e388b5f8e43e",
+      "double": 1e-05
+    },
+    "0xf7b410": {
+      "hex": "000000000000f0bf",
+      "double": -1.0
+    },
+    "0xf7b498": {
+      "hex": "000000000000e03f",
+      "double": 0.5
+    },
+    "0xf7b520": {
+      "hex": "0000000000000040",
+      "double": 2.0
+    },
+    "0xf7b620": {
+      "hex": "0000000000004e40",
+      "double": 60.0
+    }
+  }
+}

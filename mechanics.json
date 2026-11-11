@@ -194,6 +194,48 @@
       "group": "scripting",
       "value": "HSV component assignment replaces the represented value and preserves alpha; clear stale gray/index payload. Native tag 2 stores doubles H/S/V at +8/+16/+24 and alpha at +32; RGB-backed conversion remains approximate",
       "source": "Color_set_hsvHue 0x3c5fa0, Color_set_hsvSaturation 0x3c6090, Color_set_hsvValue 0x3c6180 -> Color::fromHsv 0x16a5e0; evidence/color_hsv_mutation.json; factory assembly ev_411c06400636413ebfb32a9d5065850c091c583281a0df0f07273593d925ae18; limits in MECHANICS.md"
+    },
+    {
+      "name": "Lua HSL mutation stores represented doubles",
+      "group": "scripting",
+      "value": "HSL tag 3; H/S/L doubles +8/+16/+24; alpha +32; replace full 40 bytes",
+      "source": "Color_set_hslHue 0x3c6270, Color_set_hslSaturation 0x3c6360, Color_set_hslLightness 0x3c6450 -> fromHsl 0x16a600; ev_63b0b702fc5ac666b087813424ede543e30584ff1cb41d725f25c046a5bc8a71"
+    },
+    {
+      "name": "Lua HSL equality tolerances",
+      "group": "scripting",
+      "value": "same representation; abs(dH)<0.001, abs(dS)<0.00001, abs(dL)<0.00001; exact alpha",
+      "source": "Color::operator== 0x16c3f0; ev_2ec9953a1f6e7219cb8c8358333eeee5cf577457c5bcb12b559f618303638449; constants ev_47584876770b5650099d9d0ce39ca70e8f721050419bbe1b8742e45c558b3b26 and ev_596af021f987cb4272aef163e7dad9c39b7c5011046983b7e1294446cfaf1524"
+    },
+    {
+      "name": "Lua HSL gray uses stored lightness",
+      "group": "scripting",
+      "value": "signed32 trunc(L*255); grayPixel=(gray&255)|((alpha&255)<<8)",
+      "source": "Color::getGray 0x16c2b0; ev_7533296ec8ca2301e66c93dff920987883d6536509c257712f2c659199ffb0bb; tag table evidence/hsl-data-tables.json"
+    },
+    {
+      "name": "HSL table construction",
+      "group": "scripting",
+      "value": "select by l/lightness; retain HSL doubles; separate short/long fields; alpha default255 or signed32 floor conversion",
+      "source": "Color_new 0x3c54a0 -> fromHsl 0x16a600; ev_8f616ea4abbe1759c2172730e27f3036d738b1f691cc83072402211fe9eac114; ev_e4ec748b33d27705fb9154559dc5bf2eb563960013d34b0e538c8d48a7e57bdf"
+    },
+    {
+      "name": "gray precedes index in Color tables",
+      "group": "scripting",
+      "value": "nonnil gray selects representation 4 before index; G=trunc_signed32(number(gray)); alpha default255 or signed32 floor conversion of long alpha",
+      "source": "Color_new 0x3c54a0, gray test 0x3c5a35 before index test 0x3c5a82; fromGray 0x16a620; ev_8f616ea4abbe1759c2172730e27f3036d738b1f691cc83072402211fe9eac114; ev_e4ec748b33d27705fb9154559dc5bf2eb563960013d34b0e538c8d48a7e57bdf"
+    },
+    {
+      "name": "HSV table input selection",
+      "group": "scripting",
+      "value": "nonnil v/value selects HSV before HSL/gray/index; separate h/s/v/a or hue/saturation/value/alpha; H/S/V number conversion failure0; alpha default255 else signed32 floor integer conversion",
+      "source": "Color_new 0x3c54a0 -> fromHsv 0x16a5e0, lua_tonumberx 0x53e9c0, lua_tointegerx 0x53eab0; ev_c08adf560f02e59509fdeb828fed87ba653040346e5ef2927c721671ec56a5cf; assembly ev_757551102c7418e23bae1939870db61f9eaaf4e2b6e7ead130e320d086eec8fc; exact represented HSV remains a limit in MECHANICS.md"
+    },
+    {
+      "name": "HSV setter numeric conversion",
+      "group": "scripting",
+      "value": "double numeric conversion; failure zero; preserve alpha",
+      "source": "Color_set_hsvHue 0x3c5fa0, Color_set_hsvSaturation 0x3c6090, Color_set_hsvValue 0x3c6180 -> lua_tonumberx 0x53e9c0 -> luaV_tonumber_ 0x554760; ev_99abdfaf811fefb1188011a0696b36a6eb50c073d6675968e520061ce17c4b90; evidence/hsv_setter_conversion.json"
     }
   ]
 }

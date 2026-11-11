@@ -208,3 +208,47 @@ The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LI
 The developer credit defaults to Asad, the author recorded in `Cargo.toml`. Tagged GitHub Actions builds automatically embed their repository and keep this developer credit. For local builds, set `PIXELCRAFT_REPOSITORY=owner/repository` and optionally `PIXELCRAFT_DEVELOPER` when building. The About dialog includes a read-only Developer and repository section, without editable fields or a save button. Previously saved developer and repository values in `about.json` are ignored; the build identity always supplies these fields. Local builds require the build-time repository setting before GitHub links and release checks can work.
 
 The GitHub mark in `assets/github-mark.svg` is from [GitHub Octicons](https://github.com/primer/octicons), licensed under the MIT License; the PNG is a rendered copy.
+
+## Workflow tools and automation
+
+Open **Tools…** beside the brush controls, or **Edit → Brushes, references & workflow tools**.
+
+- **Magic Wand (W)** selects matching pixels on the active layer. Choose contiguous or whole-layer matching, tolerance (0–255 per RGBA channel), and Replace/Add/Subtract. Shift-click adds; Ctrl/Cmd-click subtracts. Transparent pixels match regardless of hidden RGB. Selection masks work with painting, copy/cut/delete, shapes and transforms.
+- **Shade** steps each painted pixel once per stroke through the document palette; enable the reverse option to step backward. **Dither** alternates the active and alternate colors on a checkerboard anchored to canvas coordinates. **Selection** stamps captured selection pixels, including partial alpha and transparent pixels that erase their destination. Capture deselects the source so the stamp can be painted elsewhere.
+- **Wrap drawing & fill** makes the canvas a torus. Strokes can extend past its edges, and flood fill connects matching pixels across opposite edges. This setting is independent of the existing 3×3 seamless preview.
+- **Reference images** imports PNG/JPEG overlays. Set X/Y, scale, visibility and opacity, or enable Move/scale and drag on canvas (Shift-drag scales). Finish moving to draw again. Images and placement are embedded in `.pixel` projects and recovery; artwork PNG, GIF, sprite sheets and atlases exclude them. Save `.pixel` to preserve editor-only reference data.
+- **Palette tools** optionally snap RGB pencil, fill and shapes to the document palette. Import/export `.hex`, JASC `.pal`, GIMP `.gpl` and JSON. HEX accepts RRGGBB or RRGGBBAA; PAL/GPL contain RGB only. The existing named drawing-color JSON palette remains available in Colors.
+- **Onion skin** supports 0–8 previous and 0–8 next frames, each side with its own tint and opacity. More distant frames fade by distance. Settings are remembered.
+- **Grid sprite-sheet import** previews complete cells in row-major order with independent cell size, offset and spacing. Import into a new document as frames or layers; incomplete edge cells are omitted.
+- **Batch tag export** writes one GIF or PNG/JSON sheet per animation tag. GIFs contain the requested forward, reverse or ping-pong playback order and original durations (subject to GIF's 10 ms precision). Sheets retain direction metadata and reuse the current columns/padding/trim and Generic/Godot/Unity options. Indexed filename prefixes avoid name collisions and unsafe tag names.
+- **Multi-file atlas** packs every frame of selected sprites with Rows or MaxRects, optional trimming, padding, exact pixel deduplication and power-of-two dimensions. JSON keeps every frame's timing, source identity, original canvas size, trim offsets and source tags even when frames share one packed region. The width is an upper bound; power-of-two mode uses a width no larger than that bound. Existing image/pixel limits apply.
+- **File → Recent files** remembers the last 15 successfully opened/saved files. Workflow tools also provide PixelCraft, Aseprite and Photoshop shortcut presets for supported commands and an editable binding list. Choosing a preset replaces the current bindings; edits and removals are saved.
+
+### Headless CLI
+
+No graphical display is needed. `pixelcraft --help` lists the operations and arguments. Run `--cli OPERATION` with a JSON argument object, or named flags; command errors go to stderr and exit with a nonzero status. Layer/frame indices are zero-based.
+
+```sh
+pixelcraft --cli inspect --input hero.pixel
+pixelcraft --cli export --input hero.pixel --output hero.gif
+pixelcraft --cli export --input hero.pixel --output hero.png --format sheet --options '{"preset":"Godot","columns":8,"trim":true}'
+pixelcraft --cli import-grid --input sheet.png --output animation.pixel --options '{"width":16,"height":16,"offset_x":1,"spacing_x":2}'
+pixelcraft --cli import-sequence --inputs '["walk1.png","walk2.png"]' --output walk.pixel
+pixelcraft --cli batch-tags --input hero.pixel --output exports --format gif
+pixelcraft --cli atlas --inputs '["hero.pixel","enemy.aseprite"]' --output atlas.png --options '{"layout":"MaxRects","width":1024,"padding":2,"trim":true,"deduplicate":true,"power_of_two":true}'
+pixelcraft --cli palette-export --input hero.pixel --output colors.hex
+pixelcraft --cli palette-import --input hero.pixel --palette colors.pal --output recolored.pixel
+pixelcraft --cli palette-convert --input colors.hex --output colors.gpl
+```
+
+`import`/`export` convert formats using the same loaders and exporters as the editor. `render` writes a PNG when output is supplied, or returns an inline PNG otherwise. `edit` accepts `input`, `output`, the `revision` returned by inspect, and `edits: [{layer,frame,x,y,color:[r,g,b,a]}]`. Edits validate completely before saving; locked layers, invalid coordinates and stale revisions fail without changing the input.
+
+### MCP and live editor access
+
+Configure an MCP client to launch the executable with `--mcp`. The newline-delimited stdio JSON-RPC server advertises file inspection, PNG rendering, revision-checked edits, import/export, palettes, tag batches and atlases. Rendering returns an MCP image. File tools operate on explicitly supplied local paths and do not require the editor to be open.
+
+Live access starts **disabled** and is never restored from preferences. Enable **Workflow tools → Assistants & headless tools → Allow assistants to access this live editor**. The editor displays an MCP command with `--live BRIDGE_CONFIG`. That instance adds `live-inspect`, `live-render`, `live-edit` and `live-undo`. The bridge listens on loopback with a random token in a private file, which is removed when access is disabled or the editor closes. Disable the checkbox to revoke access.
+
+Live inspection returns a session/document revision. Supply that exact revision to edit or undo; user edits, undo/redo and document changes invalidate it. Assistant changes are one regular undo step. Active gestures and scripts block edits, and expired requests are discarded rather than applied after a stalled editor resumes. Reference overlays are excluded from assistant artwork rendering too.
+
+`cargo test --offline` covers shared operations, masks, stamp transparency, shade replay, tag timing/direction, atlas reconstruction, revision guards, undo and expiry. `python3 checks/productivity-headless.py` checks the executable CLI and MCP with display variables removed. The separate loopback authentication test is ignored in the restricted build sandbox; run `cargo test --test productivity live_bridge_authentication -- --ignored` in a normal desktop environment to exercise the socket transport.

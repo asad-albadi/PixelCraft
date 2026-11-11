@@ -1094,10 +1094,17 @@ pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<()
     write_png_metadata(path, d)
 }
 pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
+    export_gif_with_repeat(path, d, 0)
+}
+pub fn export_gif_with_repeat(path: &Path, d: &Document, repeat: u16) -> Result<(), String> {
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let mut enc = image::codecs::gif::GifEncoder::new(file);
-    enc.set_repeat(image::codecs::gif::Repeat::Infinite)
-        .map_err(|e| e.to_string())?;
+    enc.set_repeat(if repeat == 0 {
+        image::codecs::gif::Repeat::Infinite
+    } else {
+        image::codecs::gif::Repeat::Finite(repeat)
+    })
+    .map_err(|e| e.to_string())?;
     for f in 0..d.durations.len() {
         let bytes = d.composite(f).into_iter().flatten().collect();
         let im = image::RgbaImage::from_raw(d.width as u32, d.height as u32, bytes)

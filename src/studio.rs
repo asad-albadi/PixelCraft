@@ -19,6 +19,8 @@ pub(super) struct Studio {
     pub force: f32,
     pub sheet: SheetOptions,
     pub polygon: Vec<(i32, i32)>,
+    pub mask: Option<Vec<bool>>,
+    pub move_mask: Option<Vec<bool>>,
     pub stroke: Vec<(i32, i32)>,
     pub selection_origin: Option<(i32, i32, i32, i32)>,
     dx: i32,
@@ -46,6 +48,8 @@ impl Default for Studio {
             force: 1.,
             sheet: SheetOptions::default(),
             polygon: vec![],
+            mask: None,
+            move_mask: None,
             stroke: vec![],
             selection_origin: None,
             dx: 1,
@@ -71,6 +75,8 @@ struct StoredTab {
     pan: [f32; 2],
     selection: Option<(i32, i32, i32, i32)>,
     polygon: Vec<(i32, i32)>,
+    #[serde(default)]
+    mask: Option<Vec<bool>>,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct Workspace {
@@ -97,6 +103,7 @@ impl PixelCraft {
                         pan: [t.pan.x, t.pan.y],
                         selection: t.selection,
                         polygon: t.polygon.clone(),
+                        mask: t.mask.clone(),
                     }
                 } else {
                     StoredTab {
@@ -109,6 +116,7 @@ impl PixelCraft {
                         pan: [self.pan.x, self.pan.y],
                         selection: self.selection,
                         polygon: self.studio.polygon.clone(),
+                        mask: self.studio.mask.clone(),
                     }
                 }
             })
@@ -218,6 +226,7 @@ impl PixelCraft {
                             pan: Vec2::new(t.pan[0], t.pan[1]),
                             selection: t.selection,
                             polygon: t.polygon.clone(),
+                            mask: t.mask.clone(),
                             palette_index: 0,
                             active_tag: None,
                         }));
@@ -230,6 +239,7 @@ impl PixelCraft {
                     self.zoom = t.zoom;
                     self.pan = t.pan;
                     self.selection = t.selection;
+                    self.studio.mask = t.mask;
                     self.studio.polygon = t.polygon;
                     self.active_tab = active;
                     self.named_colors = state.colors.clone();
@@ -256,6 +266,12 @@ impl PixelCraft {
         [x.min(x1), y.min(y1), (x1 - x).abs() + 1, (y1 - y).abs() + 1]
     }
     pub(super) fn selected(&self, x: i32, y: i32) -> bool {
+        if let Some(mask) = &self.studio.mask {
+            return self
+                .doc
+                .index(x, y)
+                .is_some_and(|i| mask.get(i) == Some(&true));
+        }
         let b = self.selection_bounds();
         x >= b[0]
             && y >= b[1]
@@ -301,6 +317,11 @@ impl PixelCraft {
                             oy + (y as f32 * h as f32 / oh as f32).round() as i32,
                         ),
                     };
+                }
+                if self.studio.mask.is_some() {
+                    let mask = workflows::transform_mask(&self.doc, original_bounds, &mask, t);
+                    self.studio.polygon.clear();
+                    self.set_selection_mask(mask);
                 }
                 self.status = "Transformed selection".into()
             }
@@ -622,6 +643,7 @@ impl PixelCraft {
             if let Some(base) = &self.stroke_base {
                 self.doc = base.clone()
             }
+            self.power.shade_seen.clear();
             for p in path {
                 self.paint_at(p, color)
             }

@@ -53,10 +53,28 @@ local function hsvToRgb(h,s,v)
  local t= h<1 and {c,x,0} or h<2 and {x,c,0} or h<3 and {0,c,x} or h<4 and {0,x,c} or h<5 and {x,0,c} or {c,0,x}
  return {byte((t[1]+m)*255+0.5),byte((t[2]+m)*255+0.5),byte((t[3]+m)*255+0.5),255}
 end
+-- gfx::Hsl(double,double,double) 0x691370 and gfx::Rgb(Hsl) 0x6918e0.
+local function hslToRgb(h,s,l)
+ s=math.max(0,math.min(1,s));l=math.max(0,math.min(1,l))
+ local c=(1-math.abs(2*l-1))*s;local hp=h/60
+ local x=c*(1-math.abs(math.fmod(hp,2)-1));local sector=constructorGray(hp)
+ local t=(sector==0 or sector==6) and {c,x,0} or sector==1 and {x,c,0} or sector==2 and {0,c,x} or sector==3 and {0,x,c} or sector==4 and {x,0,c} or sector==5 and {c,0,x} or {0,0,0}
+ local m=l-c*0.5
+ return {constructorGray((t[1]+m)*255+0.5),constructorGray((t[2]+m)*255+0.5),constructorGray((t[3]+m)*255+0.5),255}
+end
 local function rgbToHsv(p)
  local r,g,b=p[1]/255,p[2]/255,p[3]/255;local hi,lo=math.max(r,g,b),math.min(r,g,b);local d=hi-lo
  local h=d==0 and 0 or hi==r and ((g-b)/d)%6 or hi==g and (b-r)/d+2 or (r-g)/d+4
  return h*60,hi==0 and 0 or d/hi,hi,(hi+lo)/2,d
+end
+local function rgbToHsl(p)
+ local hi,lo=math.max(p[1],p[2],p[3]),math.min(p[1],p[2],p[3])
+ local d=colorInteger(hi-lo)/255.0
+ local l=(colorInteger(hi+lo)/255.0)*0.5
+ if d==0 then return 0,0,l end
+ local r,g,b=p[1]/255.0,p[2]/255.0,p[3]/255.0
+ local h=hi==p[1] and ((g-b)/d)%6 or hi==p[2] and (b-r)/d+2 or (r-g)/d+4
+ return h*60,d/(1-math.abs(2*l-1)),l
 end
 -- Color::getGray 0x16c2b0 uses Hsl(Rgb).lightness, not sprite luma.
 -- Match the native signed32 sum and double division/multiplication order.
@@ -74,13 +92,14 @@ local colorStates=setmetatable({}, {__mode='k'})
 local function colorEqual(x,y)
  local xs,ys=colorStates[x],colorStates[y]
  if not xs or not ys then return false end
- local xi,xg=xs();local yi,yg=ys()
+ local xi,xg,xh=xs();local yi,yg,yh=ys()
+ if xh or yh then return xh~=nil and yh~=nil and math.abs(xh[1]-yh[1])<0.001 and math.abs(xh[2]-yh[2])<0.00001 and math.abs(xh[3]-yh[3])<0.00001 and x.alpha==y.alpha end
  if xi~=nil or yi~=nil then return xi~=nil and yi~=nil and xi==yi end
  if xg~=nil or yg~=nil then return xg~=nil and yg~=nil and xg==yg and x.alpha==y.alpha end
  return x.red==y.red and x.green==y.green and x.blue==y.blue and x.alpha==y.alpha
 end
 function Color(c,g,b,a)
- local index,gray
+ local index,gray,hsl
  if type(c)=='string' then
   local hex=c:gsub('^#','');assert(#hex==6 or #hex==8,'Color requires #RRGGBB or #RRGGBBAA')
   c={tonumber(hex:sub(1,2),16),tonumber(hex:sub(3,4),16),tonumber(hex:sub(5,6),16),#hex==8 and tonumber(hex:sub(7,8),16) or 255}
@@ -91,23 +110,37 @@ function Color(c,g,b,a)
  if type(c)=='table' and getmetatable(c) and getmetatable(c).__name=='Color' then
   p={c.red,c.green,c.blue,c.alpha}
   local state=colorStates[c]
-  if state then index,gray=state() end
+  if state then index,gray,hsl=state();if hsl then hsl=copy(hsl) end end
  elseif type(c)=='table' and c.r~=nil then
   p={colorInteger(c.r),colorInteger(c.g),colorInteger(c.b),c.a==nil and 255 or colorInteger(c.a)}
  elseif type(c)=='table' and c.red~=nil then
   p={colorInteger(c.red),colorInteger(c.green),colorInteger(c.blue),c.alpha==nil and 255 or colorInteger(c.alpha)}
+ elseif type(c)=='table' and (c.v~=nil or c.value~=nil) then
+  -- Color_new 0x3c575e..0x3c58ec selects HSV by nonnil value,
+  -- before HSL/gray/index, and keeps short/long field families separate.
+  local h,s,v,alpha
+  if c.v~=nil then h,s,v,alpha=c.h,c.s,c.v,c.a
+  else h,s,v,alpha=c.hue,c.saturation,c.value,c.alpha end
+  p=hsvToRgb((tonumber(h) or 0)+0.0,(tonumber(s) or 0)+0.0,(tonumber(v) or 0)+0.0)
+  p[4]=alpha==nil and 255 or colorInteger(alpha)
+ elseif type(c)=='table' and (c.l~=nil or c.lightness~=nil) then
+  -- Color_new 0x3c5903..0x3c5a11 selects HSL by lightness,
+  -- after HSV value and before gray/index. Never mix field families.
+  local h,s,l,alpha
+  if c.l~=nil then h,s,l,alpha=c.h,c.s,c.l,c.a
+  else h,s,l,alpha=c.hue,c.saturation,c.lightness,c.alpha end
+  hsl={(tonumber(h) or 0)+0.0,(tonumber(s) or 0)+0.0,(tonumber(l) or 0)+0.0}
+  p=hslToRgb(hsl[1],hsl[2],hsl[3]);p[4]=alpha==nil and 255 or colorInteger(alpha)
  else
   p=type(c)=='number' and (g and {c,g,b,a or 255} or unpackColor(c)) or unpackColor(c or {})
  end
  if type(c)=='table' and not (getmetatable(c) and getmetatable(c).__name=='Color') then
   if c.r~=nil or c.red~=nil then -- RGB has priority over other table forms.
+  elseif c.v~=nil or c.value~=nil or hsl then -- Already constructed above.
+  -- Color_new 0x3c5a35 tests nonnil gray before index at 0x3c5a82.
+  elseif c.gray~=nil then gray=constructorGray(c.gray);p={gray,gray,gray,c.alpha==nil and 255 or colorInteger(c.alpha)}
   -- Color_new 0x3c5a95 -> fromIndex 0x16a630 stores signed32(I(v)).
   elseif c.index~=nil then index=colorInteger(c.index);p=copy((doc.palette or {})[index+1] or {0,0,0,255})
-  elseif c.gray~=nil then gray=constructorGray(c.gray);p={gray,gray,gray,c.alpha==nil and 255 or colorInteger(c.alpha)}
-  elseif c.h~=nil or c.hue~=nil then
-   local h,sat,v=c.h or c.hue or 0,c.s or c.saturation or 0,c.v or c.value or 0
-   if c.l~=nil or c.lightness~=nil then local l=c.l or c.lightness;v=l+sat*math.min(l,1-l);sat=v==0 and 0 or 2*(1-l/v) end
-   p=hsvToRgb(h,sat,v);p[4]=c.a or c.alpha or 255
   end
  end
  local result=setmetatable({}, {
@@ -117,34 +150,46 @@ function Color(c,g,b,a)
    local i=colorChannels[k];if i then return p[i] end
    local h,sat,v,l,d=rgbToHsv(p)
    if k=='rgbaPixel' then return pixelRgba(table.unpack(p))
-   elseif k=='grayPixel' then return (pixelInteger(gray or rgbGray(p))&255)|((pixelInteger(p[4])&255)<<8)
+   elseif k=='grayPixel' then return (pixelInteger(gray or (hsl and constructorGray(hsl[3]*255.0) or rgbGray(p)))&255)|((pixelInteger(p[4])&255)<<8)
    elseif k=='index' then
     if index then return index end;local best,dist=0,math.huge
     for n,c in ipairs(doc.palette) do local e=0;for j=1,4 do e=e+(p[j]-c[j])^2 end;if e<dist then best,dist=n-1,e end end;return best
-   elseif k=='gray' then return gray or rgbGray(p)
-   elseif k=='hue' or k=='hsvHue' or k=='hslHue' then return h
-   elseif k=='saturation' or k=='hsvSaturation' then return sat
+   elseif k=='gray' then return gray or (hsl and constructorGray(hsl[3]*255.0) or rgbGray(p))
+   elseif k=='hslHue' then return hsl and hsl[1] or h
+   elseif k=='hue' then return hsl and hsl[1] or h
+   elseif k=='hsvHue' then return h
+   elseif k=='saturation' then return hsl and hsl[2] or sat
+   elseif k=='hsvSaturation' then return sat
    elseif k=='value' or k=='hsvValue' then return v
-   elseif k=='lightness' or k=='hslLightness' then return l
-   elseif k=='hslSaturation' then return d==0 and 0 or d/(1-math.abs(2*l-1)) end
+   elseif k=='lightness' or k=='hslLightness' then return hsl and hsl[3] or l
+   elseif k=='hslSaturation' then return hsl and hsl[2] or (d==0 and 0 or d/(1-math.abs(2*l-1))) end
   end,
   __newindex=function(t,k,v)
    local i=colorChannels[k]
-   if i then local n=colorInteger(v);p[i]=i==4 and byte(n) or n;index=nil;if i~=4 then gray=nil end
+   if i then local n=colorInteger(v);p[i]=i==4 and byte(n) or n;index=nil;if i~=4 then gray=nil;hsl=nil end
    -- Color_set_index 0x3c6860 replaces the represented value via fromIndex.
-   elseif k=='index' then index=colorInteger(v);gray=nil;p=copy(doc.palette[index+1] or {0,0,0,255})
+   elseif k=='index' then index=colorInteger(v);gray=nil;hsl=nil;p=copy(doc.palette[index+1] or {0,0,0,255})
    -- Color_set_gray 0x3c6920 -> fromGray 0x16a620 stores signed32,
    -- preserves alpha and replaces the representation (no byte clamp).
-   elseif k=='gray' then gray=colorInteger(v);p={gray,gray,gray,p[4]};index=nil
+   elseif k=='gray' then gray=colorInteger(v);p={gray,gray,gray,p[4]};index=nil;hsl=nil
    elseif k=='rgbaPixel' or k=='grayPixel' then error('Color.'..k..' is read-only')
+   elseif k=='hslHue' or k=='hslSaturation' or k=='hslLightness' or k=='lightness' or (hsl and (k=='hue' or k=='saturation')) then
+    -- Native setters 0x3c6270/0x3c6360/0x3c6450 replace the
+    -- full value through fromHsl 0x16a600; retain its doubles.
+    hsl=hsl or (gray~=nil and {0,0,gray/255.0} or {rgbToHsl(p)})
+    hsl[(k=='hslHue' or k=='hue') and 1 or (k=='hslSaturation' or k=='saturation') and 2 or 3]=(tonumber(v) or 0)+0.0
+    local alpha=p[4];p=hslToRgb(hsl[1],hsl[2],hsl[3]);p[4]=alpha;index=nil;gray=nil
    elseif k=='hue' or k=='hsvHue' or k=='hsvSaturation' or k=='saturation' or k=='value' or k=='hsvValue' then
     -- Native HSV setters 0x3c5fa0/0x3c6090/0x3c6180 replace
     -- the complete value via fromHsv 0x16a5e0, discarding gray/index.
-    local h,sat,val=rgbToHsv(p);if k=='hue' or k=='hsvHue' then h=v elseif k=='saturation' or k=='hsvSaturation' then sat=v else val=v end;local alpha=p[4];p=hsvToRgb(h,sat,val);p[4]=alpha;index=nil;gray=nil
+    -- lua_tonumberx 0x53e9c0 accepts numeric strings; failed
+    -- conversion (including nil/boolean/table) supplies double zero.
+    v=(tonumber(v) or 0)+0.0
+    local h,sat,val=rgbToHsv(p);if k=='hue' or k=='hsvHue' then h=v elseif k=='saturation' or k=='hsvSaturation' then sat=v else val=v end;local alpha=p[4];p=hsvToRgb(h,sat,val);p[4]=alpha;index=nil;gray=nil;hsl=nil
    else rawset(t,k,v) end
   end
  })
- colorStates[result]=function()return index,gray end
+ colorStates[result]=function()return index,gray,hsl end
  return result
 end
 function Point(x,y) if type(x)=='table' then return {x=x.x or x[1] or 0,y=x.y or x[2] or 0} end return {x=x or 0,y=y or 0} end
