@@ -29,3 +29,9 @@ incremental = false
 [profile.release]
 opt-level = 2
 strip = true
+
+# Security-patched upstream releases, vendored for reproducible offline builds.
+[patch.crates-io]
+rustls = { path = "vendor/rustls-0.23.46" }
+rustls-webpki = { path = "vendor/rustls-webpki-0.103.16" }
+webpki-root-certs = { path = "vendor/webpki-root-certs-1.0.10" }

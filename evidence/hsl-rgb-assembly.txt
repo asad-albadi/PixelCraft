@@ -1,5 +1,5 @@
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -127,7 +127,7 @@ Disassembly of section .text:
   69152b:	c3                   	ret
   69152c:	0f 1f 40 00          	nopl   0x0(%rax)
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:

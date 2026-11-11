@@ -1061,6 +1061,9 @@ pub fn load(path: &Path) -> Result<Document, String> {
     Ok(d)
 }
 pub fn save(path: &Path, d: &Document) -> Result<(), String> {
+    if path.extension().and_then(|s| s.to_str()) != Some("pixel") && !d.references.is_empty() {
+        return Err("Reference images require .pixel. Save as .pixel or explicitly discard references before saving ASE.".into());
+    }
     let bytes = if path.extension().and_then(|s| s.to_str()) == Some("pixel") {
         encode_project(d)?
     } else {
@@ -1097,6 +1100,16 @@ pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
     export_gif_with_repeat(path, d, 0)
 }
 pub fn export_gif_with_repeat(path: &Path, d: &Document, repeat: u16) -> Result<(), String> {
+    export_gif_frames(path, d, repeat, 0..d.durations.len())
+}
+/// Encode playback order directly without constructing an expanded editable document.
+pub fn export_gif_frames(
+    path: &Path,
+    d: &Document,
+    repeat: u16,
+    frames: impl IntoIterator<Item = usize>,
+) -> Result<(), String> {
+    d.validate()?;
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let mut enc = image::codecs::gif::GifEncoder::new(file);
     enc.set_repeat(if repeat == 0 {
@@ -1105,7 +1118,10 @@ pub fn export_gif_with_repeat(path: &Path, d: &Document, repeat: u16) -> Result<
         image::codecs::gif::Repeat::Finite(repeat)
     })
     .map_err(|e| e.to_string())?;
-    for f in 0..d.durations.len() {
+    for f in frames {
+        if f >= d.durations.len() {
+            return Err("Unknown animation frame".into());
+        }
         let bytes = d.composite(f).into_iter().flatten().collect();
         let im = image::RgbaImage::from_raw(d.width as u32, d.height as u32, bytes)
             .ok_or("Invalid canvas")?;

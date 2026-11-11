@@ -1,0 +1,28 @@
+{
+  "repository": "https://github.com/rustls/webpki-roots",
+  "release_commit": "70760478b9d3ea729b22faa0b5324da38a297c1c",
+  "release_tag": "v/1.0.10",
+  "note": "Exact upstream library source and README; standalone Cargo.toml resolves upstream workspace metadata and runtime dependency; development-only dependencies omitted.",
+  "tree": [
+    {
+      "path": "LICENSE",
+      "sha": "8e84169cf7b2fa0fa8b098acb63a758fa2dc460a",
+      "mode": "100644"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha": "4eda442ff5aeb2280d348f51d284deedc9094ede",
+      "mode": "100644"
+    },
+    {
+      "path": "README.md",
+      "sha": "9e93a5b016524912eacc607f8991a8295eb51ca7",
+      "mode": "100644"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha": "e8424241cd2ce52f3e45d179b255dbe2bc95398a",
+      "mode": "100644"
+    }
+  ]
+}

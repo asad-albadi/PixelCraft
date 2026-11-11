@@ -1,5 +1,5 @@
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:

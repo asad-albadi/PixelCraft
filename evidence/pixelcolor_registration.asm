@@ -1,5 +1,5 @@
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .data.rel.ro:
  1cbc3f0 fd47f500 00000000 00213e00 00000000  .G.......!>.....

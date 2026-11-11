@@ -1,5 +1,5 @@
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .data.rel.ro:
  1cbae20 98fbf300 00000000 105c3c00 00000000  .........\<.....
@@ -16,14 +16,14 @@ Contents of section .data.rel.ro:
  1cbaed0 b2fbf300 00000000 50613c00 00000000  ........Pa<.....
 
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .data.rel.ro:
  1cbafc0 ddfbf300 00000000 b0693c00 00000000  .........i<.....
  1cbafd0 00000000 00000000                    ........
 
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -275,7 +275,7 @@ Disassembly of section .text:
   3c5f6e:	66 90                	xchg   %ax,%ax
 
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -312,7 +312,7 @@ Disassembly of section .text:
   3c6a1f:	90                   	nop
 
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -429,7 +429,7 @@ Disassembly of section .text:
   16ddce:	66 90                	xchg   %ax,%ax
 
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -456,7 +456,7 @@ Disassembly of section .text:
   16a5fb:	c3                   	ret
   16a5fc:	0f 1f 40 00          	nopl   0x0(%rax)
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -510,7 +510,7 @@ Disassembly of section .text:
   16ce4b:	00 00 00
   16ce4e:	66 90                	xchg   %ax,%ax
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:

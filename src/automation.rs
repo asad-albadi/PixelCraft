@@ -167,13 +167,11 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                 }
                 "palette-import" => {
                     let p = path(v, "palette")?;
-                    d.palette = parse_palette(
+                    let palette = parse_palette(
                         &std::fs::read(&p).map_err(|e| e.to_string())?,
                         extension(&p),
                     )?;
-                    d.frame_palettes.clear();
-                    let mode = d.color_mode;
-                    d.set_color_mode(mode);
+                    d.import_palette(palette)?;
                     formats::save(&path(v, "output")?, &d)?;
                     Ok(inspect(&d))
                 }
@@ -353,43 +351,52 @@ impl LiveBridge {
         let thread = std::thread::spawn(move || {
             while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
                 match listener.accept() {
-                    Ok((stream, _)) => {
-                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                        let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
-                        let mut reader = std::io::BufReader::new(stream);
-                        let mut line = String::new();
-                        let read = reader.by_ref().take(4_000_001).read_line(&mut line);
+                    Ok((mut stream, _)) => {
+                        let started = std::time::Instant::now();
+                        let deadline = started + std::time::Duration::from_secs(10);
+                        // Short individual waits allow revocation to interrupt an active read.
+                        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(40)));
                         let result = (|| {
-                            read.map_err(|e| e.to_string())?;
-                            if line.len() > 4_000_000 {
-                                return Err("Request too large".into());
-                            }
+                            let line = read_live_line(
+                                &mut stream,
+                                started + std::time::Duration::from_secs(2),
+                                &stopping,
+                            )?;
                             let v: Value =
                                 serde_json::from_str(&line).map_err(|e| e.to_string())?;
                             if v["token"] != token {
                                 return Err("Invalid bridge token".into());
                             }
+                            check_live_request(deadline, &stopping)?;
                             let (res_tx, res_rx) = mpsc::channel();
                             tx.send(LiveRequest {
-                                deadline: std::time::Instant::now()
-                                    + std::time::Duration::from_secs(9),
+                                deadline,
                                 operation: v["operation"].as_str().unwrap_or("").into(),
                                 arguments: v["arguments"].clone(),
                                 response: res_tx,
                             })
                             .map_err(|e| e.to_string())?;
-                            res_rx
-                                .recv_timeout(std::time::Duration::from_secs(10))
-                                .map_err(|e| e.to_string())?
+                            wait_live_response(&res_rx, deadline, &stopping)
                         })();
-                        let _ = writeln!(
-                            reader.get_mut(),
-                            "{}",
-                            match result {
-                                Ok(v) => json!({"result":v}),
-                                Err(e) => json!({"error":e}),
+                        if !stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                            let remaining =
+                                deadline.saturating_duration_since(std::time::Instant::now());
+                            if !remaining.is_zero() {
+                                let _ = stream.set_write_timeout(Some(
+                                    remaining.min(std::time::Duration::from_millis(40)),
+                                ));
+                                let response = match result {
+                                    Ok(v) => json!({"result":v}),
+                                    Err(e) => json!({"error":e}),
+                                };
+                                if let Ok(mut bytes) = serde_json::to_vec(&response) {
+                                    bytes.push(b'\n');
+                                    let _ =
+                                        write_live_bytes(&mut stream, &bytes, deadline, &stopping);
+                                }
                             }
-                        );
+                        }
+                        let _ = stream.shutdown(std::net::Shutdown::Both);
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(20))
@@ -409,8 +416,106 @@ impl LiveBridge {
 impl Drop for LiveBridge {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        let _ = std::fs::remove_file(&self.config); /* The listener exits after any in-flight bounded request completes. */
-        self.thread.take();
+        let _ = std::fs::remove_file(&self.config);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+fn check_live_request(
+    deadline: std::time::Instant,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("Live access disabled".into());
+    }
+    if std::time::Instant::now() >= deadline {
+        return Err("Live request deadline exceeded".into());
+    }
+    Ok(())
+}
+fn read_live_line(
+    reader: &mut impl Read,
+    deadline: std::time::Instant,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<String, String> {
+    let mut line = Vec::new();
+    let mut chunk = [0; 4096];
+    loop {
+        check_live_request(deadline, stop)?;
+        match reader.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                check_live_request(deadline, stop)?;
+                let end = chunk[..n]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map_or(n, |i| i + 1);
+                if line.len() + end > 4_000_000 {
+                    return Err("Request too large".into());
+                }
+                line.extend_from_slice(&chunk[..end]);
+                if chunk[end - 1] == b'\n' {
+                    break;
+                }
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    String::from_utf8(line).map_err(|e| e.to_string())
+}
+fn write_live_bytes(
+    writer: &mut impl Write,
+    mut bytes: &[u8],
+    deadline: std::time::Instant,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    while !bytes.is_empty() {
+        check_live_request(deadline, stop)?;
+        match writer.write(bytes) {
+            Ok(0) => return Err("Bridge connection closed".into()),
+            Ok(n) => bytes = &bytes[n..],
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    check_live_request(deadline, stop)
+}
+fn wait_live_response(
+    receiver: &mpsc::Receiver<Result<Value, String>>,
+    deadline: std::time::Instant,
+    stop: &std::sync::atomic::AtomicBool,
+) -> Result<Value, String> {
+    loop {
+        check_live_request(deadline, stop)?;
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match receiver.recv_timeout(remaining.min(std::time::Duration::from_millis(20))) {
+            Ok(result) => {
+                check_live_request(deadline, stop)?;
+                return result;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(e) => return Err(e.to_string()),
+        }
     }
 }
 fn live_call(config: &Path, op: &str, args: &Value) -> Result<Value, String> {
@@ -487,4 +592,119 @@ pub fn render_document(d: &Document, f: usize) -> Result<Value, String> {
     Ok(
         json!({"revision":document_revision(d),"mimeType":"image/png","data":base64(&png.into_inner())}),
     )
+}
+
+#[cfg(test)]
+mod deadline_regressions {
+    use super::*;
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        time::{Duration, Instant},
+    };
+    struct Trickle;
+    impl Read for Trickle {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            std::thread::sleep(Duration::from_millis(5));
+            out[0] = b' ';
+            Ok(1)
+        }
+    }
+    #[test]
+    fn regression_bridge_read_deadline_is_not_reset_by_progress() {
+        let start = Instant::now();
+        let result = read_live_line(
+            &mut Trickle,
+            start + Duration::from_millis(25),
+            &AtomicBool::new(false),
+        );
+        assert!(result.unwrap_err().contains("deadline"));
+        assert!(start.elapsed() < Duration::from_millis(200));
+    }
+    #[test]
+    fn regression_bridge_revocation_interrupts_active_read_and_response_wait() {
+        let stop = AtomicBool::new(true);
+        let mut input = b"{}\n".as_slice();
+        assert!(
+            read_live_line(&mut input, Instant::now() + Duration::from_secs(1), &stop)
+                .unwrap_err()
+                .contains("disabled")
+        );
+        assert_eq!(input, b"{}\n");
+        struct RevokedDuringRead<'a>(&'a AtomicBool);
+        impl Read for RevokedDuringRead<'_> {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                out[0] = b'{';
+                self.0.store(true, Ordering::Relaxed);
+                Ok(1)
+            }
+        }
+        let active_stop = AtomicBool::new(false);
+        assert!(
+            read_live_line(
+                &mut RevokedDuringRead(&active_stop),
+                Instant::now() + Duration::from_secs(1),
+                &active_stop,
+            )
+            .unwrap_err()
+            .contains("disabled")
+        );
+        let (_tx, rx) = mpsc::channel();
+        assert!(
+            wait_live_response(&rx, Instant::now() + Duration::from_secs(1), &stop)
+                .unwrap_err()
+                .contains("disabled")
+        );
+    }
+    #[test]
+    fn regression_bridge_response_wait_uses_original_request_deadline() {
+        let (_tx, rx) = mpsc::channel();
+        let start = Instant::now();
+        assert!(
+            wait_live_response(
+                &rx,
+                start + Duration::from_millis(25),
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .contains("deadline")
+        );
+        assert!(start.elapsed() < Duration::from_millis(200));
+    }
+    #[test]
+    fn regression_bridge_write_deadline_is_not_reset_by_progress() {
+        struct SlowWriter;
+        impl Write for SlowWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(5));
+                Ok(1)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let start = Instant::now();
+        let result = write_live_bytes(
+            &mut SlowWriter,
+            &[b' '; 100],
+            start + Duration::from_millis(25),
+            &AtomicBool::new(false),
+        );
+        assert!(result.unwrap_err().contains("deadline"));
+        assert!(start.elapsed() < Duration::from_millis(200));
+    }
+    #[test]
+    fn regression_bridge_line_reader_accepts_newline_and_limits_input() {
+        let stop = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            read_live_line(&mut b"{}\n".as_slice(), deadline, &stop).unwrap(),
+            "{}\n"
+        );
+        assert!(
+            read_live_line(&mut std::io::repeat(b' '), deadline, &stop)
+                .unwrap_err()
+                .contains("large")
+        );
+        assert!(!stop.load(Ordering::Relaxed));
+    }
 }

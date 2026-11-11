@@ -192,8 +192,26 @@ function Color(c,g,b,a)
  colorStates[result]=function()return index,gray,hsl end
  return result
 end
-function Point(x,y) if type(x)=='table' then return {x=x.x or x[1] or 0,y=x.y or x[2] or 0} end return {x=x or 0,y=y or 0} end
-function Size(w,h) if type(w)=='table' then return {width=w.width or w[1] or 0,height=w.height or w[2] or 0} end return {width=w or 0,height=h or 0} end
+-- Point_new 0x3e48f0 selects named fields when x is nonnil;
+-- both coordinates use lua_tointegerx then low signed32 storage.
+function Point(x,y)
+ if type(x)=='table' then
+  if x.x~=nil then return {x=colorInteger(x.x),y=colorInteger(x.y)} end
+  return {x=colorInteger(x[1]),y=colorInteger(x[2])}
+ end
+ return {x=colorInteger(x),y=colorInteger(y)}
+end
+-- Size_new 0x3ef330 selects width/height, then w/h, then [1]/[2]
+-- as a pair. All components use floor-mode integer conversion and signed32 storage.
+function Size(w,h)
+ if type(w)=='table' then
+  local t=w
+  if t.width~=nil then w,h=t.width,t.height
+  elseif t.w~=nil then w,h=t.w,t.h
+  else w,h=t[1],t[2] end
+ end
+ return {width=colorInteger(w),height=colorInteger(h)}
+end
 function Rectangle(x,y,w,h) if type(x)=='table' then return copy(x) end return {x=x or 0,y=y or 0,width=w or 0,height=h or 0} end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}

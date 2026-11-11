@@ -711,11 +711,30 @@ impl Document {
                             .filter(|n| p.get(*n as usize) == Some(v))
                             .map(|n| n as usize)
                             .unwrap_or_else(|| {
+                                if v[3] == 0 && !l.background {
+                                    return self.transparent_index.min(p.len() - 1);
+                                }
                                 self.dithering.as_ref().map_or_else(
                                     || nearest(*v, p),
                                     |m| m.index(*v, p, i % self.width, i / self.width),
                                 )
                             });
+                        // Transparency is a mask, not a candidate shade for opaque artwork.
+                        let n = if v[3] > 0 && !l.background && p[n][3] == 0 {
+                            p.iter()
+                                .enumerate()
+                                .filter(|(_, c)| c[3] > 0)
+                                .min_by_key(|(_, c)| {
+                                    v.iter()
+                                        .zip(c.iter())
+                                        .map(|(a, b)| (*a as i32 - *b as i32).pow(2) as u32)
+                                        .sum::<u32>()
+                                })
+                                .map(|(i, _)| i)
+                                .unwrap_or(n)
+                        } else {
+                            n
+                        };
                         indices.push(n as u8);
                         *v = p[n];
                     } else {
@@ -741,6 +760,31 @@ impl Document {
                 }
             }
         }
+    }
+    /// Import colors while reserving a distinct slot for transparency in indexed sprites.
+    pub fn import_palette(&mut self, mut palette: Vec<Pixel>) -> Result<(), String> {
+        if palette.is_empty() || palette.len() > 256 {
+            return Err("Palette must contain 1–256 colors".into());
+        }
+        if self.color_mode == ColorMode::Indexed {
+            let transparent = if let Some(i) = palette.iter().position(|p| p[3] == 0) {
+                i
+            } else if palette.len() < 256 {
+                palette.push(CLEAR);
+                palette.len() - 1
+            } else {
+                return Err(
+                    "Indexed palettes need a transparent slot; choose at most 255 opaque colors"
+                        .into(),
+                );
+            };
+            self.transparent_index = transparent;
+        }
+        self.palette = palette;
+        self.frame_palettes.clear();
+        self.drawing_index = None;
+        self.set_color_mode(self.color_mode);
+        Ok(())
     }
     pub fn set_palette_color(&mut self, index: usize, color: Pixel) {
         if index >= self.palette.len() {

@@ -1,0 +1,25 @@
+{
+  "rust_suite": {
+    "passed": 201,
+    "failed": 0,
+    "ignored": 2
+  },
+  "build": "passed",
+  "headless_cli_mcp": "passed",
+  "standalone_starter_extension": "passed including Ctrl+O and Ctrl+V",
+  "bridge_deadline_and_cancellation_unit_tests": "5 passed",
+  "live_socket_checks": {
+    "status": "passed",
+    "tests": [
+      "live_bridge_authentication_and_opt_in_lifecycle",
+      "regression_live_bridge_slow_read_deadline_and_revocation"
+    ]
+  },
+  "dependency_scan": {
+    "status": "passed pinned RustSec snapshot scan (not cargo-audit)",
+    "vulnerabilities": 0,
+    "informational_warnings": 5,
+    "report": "checks/dependency-audit.json"
+  },
+  "rebuild_check": "passed build, app screenshot, mechanics"
+}

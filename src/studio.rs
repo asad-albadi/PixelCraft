@@ -347,6 +347,8 @@ impl PixelCraft {
                         self.remember();
                         self.doc = d;
                         self.selection = None;
+                        self.studio.mask = None;
+                        self.studio.move_mask = None;
                         self.studio.polygon.clear();
                         self.status = "Cropped canvas".into()
                     }

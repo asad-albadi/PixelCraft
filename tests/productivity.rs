@@ -546,3 +546,260 @@ fn jpeg_reference_import_decodes_and_artwork_export_omits_it() {
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn regression_palette_import_preserves_transparent_and_white_pixels() {
+    let root = std::env::temp_dir().join(format!("palette-alpha-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut d = Document::new(2, 1);
+    d.palette = vec![CLEAR, [255; 4]];
+    d.set_pixel(0, 0, 1, [255; 4]);
+    d.set_color_mode(ColorMode::Indexed);
+    pixelcraft::formats::save(&root.join("in.pixel"), &d).unwrap();
+    std::fs::write(root.join("colors.hex"), "ffffff\n000000\n").unwrap();
+    operation("palette-import", &serde_json::json!({"input":root.join("in.pixel"),"output":root.join("out.pixel"),"palette":root.join("colors.hex")})).unwrap();
+    let out = pixelcraft::formats::load(&root.join("out.pixel")).unwrap();
+    assert_eq!(out.composite(0), vec![CLEAR, [255; 4]]);
+    assert_ne!(
+        out.layers[0].cel_meta[0].indices.as_ref().unwrap()[0],
+        out.layers[0].cel_meta[0].indices.as_ref().unwrap()[1]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn regression_ase_save_rejects_reference_loss() {
+    let mut d = Document::new(1, 1);
+    d.references.push(ReferenceImage {
+        name: "guide".into(),
+        width: 1,
+        height: 1,
+        pixels: vec![[255; 4]].into(),
+        x: 0.,
+        y: 0.,
+        scale: 1.,
+        opacity: 255,
+        visible: true,
+    });
+    for ext in ["ase", "aseprite"] {
+        let path =
+            std::env::temp_dir().join(format!("reference-save-{}.{}", std::process::id(), ext));
+        std::fs::write(&path, b"existing file").unwrap();
+        assert!(pixelcraft::formats::save(&path, &d).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing file");
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn regression_wrapped_shade_dab_steps_each_pixel_once() {
+    for mode in [ColorMode::Rgba, ColorMode::Indexed] {
+        for reverse in [false, true] {
+            let mut d = Document::new(2, 1);
+            d.palette = vec![
+                CLEAR,
+                [10, 0, 0, 255],
+                [20, 0, 0, 255],
+                [30, 0, 0, 255],
+                [40, 0, 0, 255],
+            ];
+            d.layers[0].cels[0] = vec![[20, 0, 0, 255]; 2].into();
+            d.set_color_mode(mode);
+            d.wraparound = true;
+            d.brush_shape = BrushShape::Square;
+            paint_brush(
+                &mut d,
+                0,
+                0,
+                (0, 0),
+                CLEAR,
+                8,
+                &BrushOptions {
+                    mode: BrushMode::Shade,
+                    reverse,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                d.composite(0),
+                vec![
+                    if reverse {
+                        [10, 0, 0, 255]
+                    } else {
+                        [30, 0, 0, 255]
+                    };
+                    2
+                ]
+            );
+        }
+    }
+}
+
+#[test]
+fn regression_maxrects_checks_packed_extent_not_search_area() {
+    let d = Document::new(1, 4000);
+    let (image, _) = pack_atlas(
+        &[("narrow".into(), d)],
+        &AtlasOptions {
+            width: 16384,
+            trim: false,
+            padding: 0,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(image.dimensions(), (1, 4000));
+}
+
+#[test]
+fn regression_large_ping_pong_gif_streams_repeated_frames() {
+    use image::AnimationDecoder;
+    let mut d = Document::new(1024, 1024);
+    for _ in 1..33 {
+        d.add_frame(0, true);
+    }
+    d.tags.push(FrameTag {
+        name: "ping".into(),
+        from: 0,
+        to: 32,
+        direction: 2,
+        repeat: 2,
+        color: [0; 3],
+    });
+    d.durations[1] = 230;
+    d.set_pixel(0, 1, 0, [255, 0, 0, 255]);
+    assert!(d.validate().is_ok());
+    let root = std::env::temp_dir().join(format!("large-ping-{}", std::process::id()));
+    let paths = batch_tags(&root, &d, true, &Default::default()).unwrap();
+    let decoder = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(
+        std::fs::File::open(&paths[0]).unwrap(),
+    ))
+    .unwrap();
+    let mut count = 0;
+    for frame in decoder.into_frames() {
+        let frame = frame.unwrap();
+        if count == 1 || count == 63 {
+            assert_eq!(frame.delay().numer_denom_ms(), (230, 1));
+            assert_eq!(frame.buffer().get_pixel(0, 0).0, [255, 0, 0, 255]);
+        }
+        count += 1;
+    }
+    assert_eq!(count, 64);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "Requires loopback network access"]
+fn regression_live_bridge_slow_read_deadline_and_revocation() {
+    use std::{
+        io::{Read, Write},
+        time::{Duration, Instant},
+    };
+    let config = std::env::temp_dir().join(format!("bridge-slow-{}.json", std::process::id()));
+    let bridge = LiveBridge::start(config.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    let address = v["address"].as_str().unwrap().to_string();
+    let mut slow = std::net::TcpStream::connect(&address).unwrap();
+    let sender = std::thread::spawn(move || {
+        for _ in 0..35 {
+            if slow.write_all(b" ").is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let mut valid = std::net::TcpStream::connect(&address).unwrap();
+    writeln!(
+        valid,
+        "{}",
+        serde_json::json!({"token":v["token"],"operation":"live-inspect","arguments":{}})
+    )
+    .unwrap();
+    let result = bridge.requests.recv_timeout(Duration::from_secs(3));
+    assert!(
+        result.is_ok(),
+        "byte-at-a-time input blocked authenticated client"
+    );
+    result
+        .unwrap()
+        .response
+        .send(Ok(serde_json::json!({"ok":true})))
+        .unwrap();
+    // Revocation must close the active read, not just remove its config file.
+    let mut active = std::net::TcpStream::connect(&address).unwrap();
+    active.write_all(b"{").unwrap();
+    active
+        .set_read_timeout(Some(Duration::from_millis(600)))
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(80));
+    let start = Instant::now();
+    drop(bridge);
+    assert!(start.elapsed() < Duration::from_millis(500));
+    let mut byte = [0];
+    assert!(matches!(active.read(&mut byte), Ok(0)));
+    assert!(!config.exists());
+    sender.join().unwrap();
+}
+
+#[test]
+fn regression_partial_legacy_and_starter_shortcuts_keep_defaults() {
+    for bytes in [
+        br#"{"P":"pencil"}"#.as_slice(),
+        include_bytes!("../examples/pixelcraft-starter/shortcuts.json").as_slice(),
+    ] {
+        let keys = load_shortcuts(bytes).unwrap();
+        assert_eq!(keys.get("Ctrl+O").map(String::as_str), Some("open"));
+        assert_eq!(keys.get("Ctrl+V").map(String::as_str), Some("paste"));
+        assert_eq!(keys.get("P").map(String::as_str), Some("pencil"));
+    }
+}
+
+#[test]
+fn regression_sparse_import_palette_never_turns_opaque_pixels_transparent() {
+    for palette in [vec![[255; 4]], vec![[255, 255, 255, 0], [0, 0, 0, 255]]] {
+        let mut d = Document::new(2, 1);
+        d.palette = vec![CLEAR, [0, 0, 0, 255]];
+        d.set_pixel(0, 0, 1, [0, 0, 0, 255]);
+        d.set_color_mode(ColorMode::Indexed);
+        // Transparent pixels can retain hidden RGB in imported source documents.
+        d.layers[0].cels[0][0] = [255, 255, 255, 0];
+        d.import_palette(palette).unwrap();
+        assert_eq!(d.composite(0)[0][3], 0);
+        assert_eq!(d.composite(0)[1][3], 255);
+    }
+}
+
+#[test]
+fn shortcut_removals_survive_default_merging() {
+    let keys =
+        load_shortcuts(br#"{"Ctrl+O":null,"B":null,"P":"pencil","Ctrl+S":"saveas"}"#).unwrap();
+    assert!(!keys.contains_key("Ctrl+O"));
+    assert!(!keys.contains_key("B"));
+    assert_eq!(keys.get("Ctrl+V").map(String::as_str), Some("paste"));
+    assert_eq!(keys.get("P").map(String::as_str), Some("pencil"));
+    assert_eq!(keys.get("Ctrl+S").map(String::as_str), Some("saveas"));
+}
+
+#[test]
+fn saved_shortcuts_preserve_removals_and_rebinding() {
+    let mut keys = load_shortcuts(br#"{"P":"pencil"}"#).unwrap();
+    keys.remove("Ctrl+O");
+    keys.remove("B");
+    let saved = save_shortcuts(&keys).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&saved).unwrap()["Ctrl+O"],
+        serde_json::Value::Null
+    );
+    assert_eq!(load_shortcuts(&saved).unwrap(), keys);
+    keys.insert("Ctrl+O".into(), "saveas".into());
+    assert_eq!(
+        load_shortcuts(&save_shortcuts(&keys).unwrap()).unwrap(),
+        keys
+    );
+    let empty = std::collections::BTreeMap::new();
+    assert!(
+        load_shortcuts(&save_shortcuts(&empty).unwrap())
+            .unwrap()
+            .is_empty()
+    );
+}

@@ -137,6 +137,7 @@ pub fn paint_brush(
             }
         }
     }
+    let mut shaded = std::collections::HashSet::new();
     for (mut x, mut y, mut c) in points {
         if d.wraparound {
             x = x.rem_euclid(d.width as i32);
@@ -150,6 +151,9 @@ pub fn paint_brush(
         }
         match o.mode {
             BrushMode::Shade => {
+                if !shaded.insert(i) {
+                    continue;
+                }
                 let old = d.layers[l].cels[f][i];
                 if old[3] == 0 {
                     continue;
@@ -557,8 +561,7 @@ pub fn batch_tags(
             if gif { "gif" } else { "png" }
         ));
         if gif {
-            let doc = tag_document(d, i)?;
-            formats::export_gif_with_repeat(&path, &doc, t.repeat)?;
+            formats::export_gif_frames(&path, d, t.repeat, tag_frames(t))?;
         } else {
             interchange::export_sheet(
                 &path,
@@ -573,6 +576,39 @@ pub fn batch_tags(
     }
     Ok(paths)
 }
+/// Merge older partial maps with defaults; null explicitly disables a binding.
+pub fn load_shortcuts(bytes: &[u8]) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut bindings = shortcut_preset("PixelCraft");
+    if let Ok(saved) =
+        serde_json::from_slice::<std::collections::BTreeMap<String, Option<String>>>(bytes)
+    {
+        for (key, action) in saved {
+            if let Some(action) = action {
+                bindings.insert(key, action);
+            } else {
+                bindings.remove(&key);
+            }
+        }
+    } else {
+        bindings.extend(crate::contributions::shortcuts(bytes)?.bindings);
+    }
+    Ok(bindings)
+}
+
+/// Record absent defaults as removals so loading cannot silently restore them.
+pub fn save_shortcuts(
+    bindings: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<u8>, String> {
+    let mut saved: std::collections::BTreeMap<String, Option<&String>> = bindings
+        .iter()
+        .map(|(key, action)| (key.clone(), Some(action)))
+        .collect();
+    for key in shortcut_preset("PixelCraft").into_keys() {
+        saved.entry(key).or_insert(None);
+    }
+    serde_json::to_vec_pretty(&saved).map_err(|e| e.to_string())
+}
+
 pub fn shortcut_preset(name: &str) -> std::collections::BTreeMap<String, String> {
     let mut m = std::collections::BTreeMap::new();
     for (k, a) in [

@@ -1,6 +1,65 @@
+## Native audit — Size constructor dimensions (2026-11-11)
+
+Freshly opened the original main ELF using `core_target_open`: `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`, in Deep mode. This extends the earlier drawing, timing, color and geometry audits retained below.
+
+`native_strings_find` searched names, fields and messages with `^Size$|^width$|^height$|^grid_bounds$|invalid_fg_or_bg` (`ev_b873a7c92a20b14aa1ddba2989fa7315fc36ba2838edfe2e9e27f8e90171b67a`). Size at `0xf412df` references registration at `0x3ef25b`; width/height references at `0x3ef36c` / `0x3ef381` resolve to helper entry `0x3ef330` (`ev_0588995743ddb03f1166363e0742f825b61cc04173836f8225837776daa8065a`). Followed incoming references to the wrapper (`ev_245fac78498f6800afd9d416d999381aaa9c4c2002407b967a34e85db67e2d1a`) and outgoing calls to integer conversion (`ev_53e9665e6f9d17575ab4e7934e0ecbfa2800436882d1b0cf69e79575438f7399`). A separate `^color_bar$` setting search returned `ev_36f1c6671cc15d8200c204259a45d4a52982481a894d79ee86078131352e6cf3`. Settings/messages are navigation evidence only.
+
+Requested, awaited and read each `native_function_pseudocode` result separately before requesting the next:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| `Size_new(lua_State*,int)` helper | `0x3ef330` | `ev_3a75063906a1e7dbdff274872f231897f27cd5d858e3455f09a908c7212caa90` |
+| `lua_tointegerx` | `0x53eab0` | `ev_dd4c3f99a510b1ed5f1bf83f19090805b925fbd703b6729545ff1ad64994cad4` |
+| `luaV_tointeger` | `0x554930` | `ev_1d294ffa1b28a6c31b9cc4b77d72801898b8fc48006492e4f491eb560c1de59b` |
+| `Size_new(lua_State*)` wrapper | `0x3ef2a0` | `ev_48410362017a6ebcd5f0a68fc5355af32bcf1115e58308940c3088e8d808622a` |
+
+Ghidra timed out under a temporary 15-second startup limit. All four completed results use the built-in fallback decompiler, with approximate register arguments/flags and incomplete SIMD recovery; they are not successful Ghidra analysis. Restored the original null timeout. Full helper assembly (`ev_95d0a5ace6f74dde9f2ccba68aa9849ee9d3a0c53f60c50384b4b2833ea206c0`) corroborates field branches and 32-bit stores. Bytes `77 00` at `0xf58609` confirm the short `w` key (`ev_94e01e2af940186a5ae75605fede82ed2774d4933457e27473b1277a34f665aa`). Full returned results are saved in [evidence/size_constructor.json](evidence/size_constructor.json).
+
+Recovered rules now used by `src/lua_api.lua`:
+
+- Define **I(v)** as native integer conversion: preserve integers; parse complete numeric strings; floor floating inputs within signed64 range; failed conversion, NaN and infinity yield **0**. Store each dimension as **S(v) = signed32(I(v) mod 2^32)**. Thus **Size(-1.1,"2.9") = (-2,2)** and **Size(4294967297,2147483648) = (1,-2147483648)**. The constructor does not clamp negative dimensions.
+- For a table, the first nonnil discriminator selects a complete pair: **width → width/height**, else **w → w/h**, else **[1]/[2]**. False and zero select their branch. Missing/invalid second fields become zero; no cross-family fallback. **Size{width=0,w=7,h=9} = (0,0)**; **Size{height=99,w="2.9",h="-1.1"} = (2,-2)**; **Size{height=99,h=98,4,5} = (4,5)**.
+- Scalar arguments convert independently; omission yields zero. Native Size userdata is copied as **8 bytes**, containing two signed32 dimensions. The build returns an independent dimension table when copying its Size result.
+
+`tests/native_size_constructor.rs` executes the real embedded Lua interface. Both regressions failed before correction: dimensions remained **-1.1,2.9**, and the short-field constructor returned **0,0** (`checks/native-size-red.log`). Both pass after correction. They cover signed wrap, negative fractions, numeric strings, invalid/nonfinite values, field precedence, false/nil and independent copies.
+
+Verification: `cargo test --offline --locked` with writable isolated `XDG_DATA_HOME=/tmp/pixelcraft-size-audit/data` and `XDG_CONFIG_HOME=/tmp/pixelcraft-size-audit/config` passed **201 tests, zero failures, two ignored**, exit 0 (`checks/native-size-tests.log`). `cargo fmt --check` initially reported existing formatting differences in shortcut persistence code/tests; applied formatting and reran successfully. `cargo build --offline --locked` passed. Fresh Craft Anything `rebuild_check` passed build, desktop startup/drawing (**942×1005**) and mechanics validation (**40 values, 39 sourced, one estimated**). Inspected the resulting desktop screenshot.
+
+Scope: this correction covers Size construction. Native userdata identity, operators and post-construction property setters remain outside this correction; the build continues to use Lua tables. Full application/extension equivalence remains unverified.
+
+## Native audit — Point constructor coordinates (2026-11-11)
+
+Freshly opened the original main ELF with `core_target_open` at `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`, with Deep mode enabled.
+
+`native_strings_find` searched names, coordinate fields and messages with regex `^Point$|^x$|^y$|^grid_bounds$|invalid_fg_or_bg` (15 matches, `ev_94b30f5cd27998199a452aff2b21c30808d6608ed1bce4adea8074a598165e53`); a separate setting search `^color_bar$` returned `ev_e0b0dbb77a9b1088531be58043a76af03fc3d0cb234f7aac5290216a982ae7dc`. Settings/messages serve as navigation evidence only. Followed Point string `0xf409c0` to registration `0x3e481b` (`ev_faf74274dceb9e363c63be1828e77b0e0fe0b72e19ab0f5219a2c726f73e7c38`); coordinate string references `0x3e492c` / `0x3e4941` resolve the constructor helper entry `0x3e48f0` (`ev_80d8710f8caa70d2613309124e6706311224c77ca6a1eebff26abfba4b9d559c`). Followed wrapper/helper outgoing references to coordinate conversion (`ev_253dead6b7e93867b477eb323afdd4c14f67e330830118b2881357c6e471000d`, `ev_0df3f1d2b08adfaa0f4dc6c1a8a6217dd77d5f67ac44891fbf25afce2d009cec`).
+
+Requested, awaited and read each `native_function_pseudocode` result separately, before requesting the next:
+
+| Function | Address | Evidence |
+| --- | --- | --- |
+| `Point_new(lua_State*,int)` helper | `0x3e48f0` | `ev_4a7b57dcb2ad55d762e71446feb1021904ee30deaf17d54db76bdf09e9c348c6` |
+| `lua_tointegerx` | `0x53eab0` | `ev_dd4c3f99a510b1ed5f1bf83f19090805b925fbd703b6729545ff1ad64994cad4` |
+| `luaV_tointeger` | `0x554930` | `ev_1d294ffa1b28a6c31b9cc4b77d72801898b8fc48006492e4f491eb560c1de59b` |
+| `Point_new(lua_State*)` wrapper | `0x3e4860` | `ev_7b5d2381271eedf71d35563313a4e0b07823001bb96d8f934d3845fb738d297b` |
+
+Ghidra timed out with a temporary 15-second startup limit. All four completed reads use the built-in fallback decompiler and report `deep_engine_unavailable`; they are not successful Ghidra decompilations. The fallback approximates register arguments and flags. Full constructor assembly (`ev_5b860db18b5b04de3290348055e5c8ab538a4dff3965cf4529e3f334c7e396e7`) corroborates branch selection and 32-bit stores; fresh integer-helper assembly corroborates floor-mode handling. Restored the original null startup timeout. Full returned results are saved in [evidence/point_constructor.json](evidence/point_constructor.json).
+
+Recovered rules now used by `src/lua_api.lua`:
+
+- Define **I(v)** as Lua integer conversion: preserve an integer; parse a complete numeric string; floor a float when the result fits signed64; return **0** for invalid conversion, NaN or infinity. The native call passes mode **1** to the helper, which calls `floor`.
+- Store each coordinate as **S(v) = signed32(I(v) mod 2^32)**. Thus **Point(-1.1,"2.9") = (-2,2)** and **Point(4294967297,2147483648) = (1,-2147483648)**. No byte saturation or truncation toward zero applies.
+- For a table with **x nonnil**, convert its **x and y fields together**, even when x is false or invalid. Otherwise convert array entries **1 and 2 together**. No per-coordinate fallback: **Point{y=91,4,5} = (4,5)**; **Point{x=0,[1]=8,[2]=9} = (0,0)**; **Point{x=false,y=-1.1,9,8} = (0,-2)**.
+- Missing scalar coordinates convert to **0**. The wrapper allocates **8 bytes** and copies two 32-bit coordinates; a native Point input copies those bytes. The build returns independent Lua coordinate tables, and construction copies their coordinates.
+
+Regression `tests/native_point_constructor.rs` runs the real embedded Lua implementation and checks floor behavior, numeric strings, signed32 wrap, invalid values, nonfinite values, paired field selection and independent copies. Before correction it failed with coordinates **-1.1,2.9** instead of **-2,2** (`checks/native-point-red.log`); after correction it passes.
+
+Verification: `cargo fmt --check` and `cargo build --offline --locked` passed. The initial full test run failed in `tests::native_assets_apply_inside_workshop_and_shortcuts_remain_local` because the sandbox made the normal preferences directory read-only (`checks/native-point-tests.log`). Reran the complete `cargo test --offline --locked` with `XDG_DATA_HOME=/tmp/pixelcraft-point-audit/data` and `XDG_CONFIG_HOME=/tmp/pixelcraft-point-audit/config`: **197 passed, zero failed, two ignored**, exit 0 (`checks/native-point-tests-isolated.log`). Craft Anything `rebuild_check` passed build, desktop startup/drawing (**942×1005**) and mechanics validation (**39 values, 38 sourced, one estimated**). Inspected the resulting desktop screenshot.
+
+Scope: this audit corrects Point construction. Native userdata identity, Point operators and post-construction coordinate setters remain outside this correction; the build still uses Lua tables. Existing color, drawing and animation audits below retain their stated limits. Full original file/extension ecosystem compatibility remains unresolved.
+
 ## Native audit — HSV setter numeric conversion (2026-11-11)
 
-Freshly opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.
+Freshly opened the original main ELF with `core_target_open`: `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.
 
 Searched names, settings and messages using `native_strings_find` with regex `^hsvValue$|^hsvSaturation$|^hsvHue$|^color_bar$|invalid_fg_or_bg` (8 matches; `ev_e3749ca113de5ce80ac0b1eecd48e4ef85b91cb863508f029e01d6f07335a14d`). Followed hsvValue string `0xf3fbb2` to registration `0x1cbaed0` (`ev_116eefcc2d6b945622f1c7e576eddb5a1340900882444fd91ce468dcf7c9fa5a`). Exact setter-name references resolve function `0x3c6180` through pointer `0x1cbaee0`, 16 bytes after that registration (`ev_10950cc3898d0378ae49ff7828564dfae6561409bb84cd576ef465f0a73daf0c`). Its outgoing references lead to number conversion, HSV component access, alpha and construction (`ev_e7829f1621ea1a5b61240880916efc478be340f6b24ebbc0047fb2051da6e73d`). Settings/messages are navigation evidence, not newly inferred mechanics.
 
@@ -34,7 +93,7 @@ Scope: this pass corrects setter input conversion. The build still materializes 
 
 ## Native audit — HSV constructor selection and numeric inputs (2026-11-11)
 
-Opened the original main executable using `core_target_open`, at `aseprite-reference` (SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`). Deep mode was enabled. This is a fresh trace extending the earlier audits below.
+Opened the original main executable using `core_target_open`, at `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite` (SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`). Deep mode was enabled. This is a fresh trace extending the earlier audits below.
 
 Searched names, settings and messages with `native_strings_find`, regex `^Color$|^value$|^color_bar$|invalid_fg_or_bg` (`ev_370e8798d17225005cde4e33dff0915bdebc27425506a49f26b82b121dbca45e`). Followed `value` at `0xf78fd2` through its reference at `0x3c582e` (`ev_edec2a6655e7eb53ad40875018e02bcb3812964a817da96ed835d365e9ce3ad7`). `native_function_find` resolved this to `Color_new`, entry `0x3c54a0` (`ev_2821855b2d240cbcd24e86b60a37e6843b617948c5832aba8e78f101af28fac6`). Its outgoing references led to `fromHsv` and the numeric helpers (`ev_a7c03db519c1d0dcf73ee5146f3879f48cba4b007409a10277ed9ed67e6a576a`). Settings and message strings are navigation evidence, not numeric-rule evidence.
 
@@ -62,7 +121,7 @@ Both real embedded-Lua regressions in `tests/native_color_hsv_constructor.rs` fa
 
 ## Native audit — gray/index constructor precedence (2026-11-11)
 
-Freshly opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`, in Deep mode. This pass extends the prior native audits below.
+Freshly opened the original main ELF with `core_target_open`: `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`, in Deep mode. This pass extends the prior native audits below.
 
 `native_strings_find` searched names, settings and messages with regex `^Color$|^value$|^gray$|^color_bar$|invalid_fg_or_bg` (10 matches; `ev_dc160a3ccb61bed55b3869723e679afb77c4f9a5f07cf12c56ad315def6a2da8`). Followed gray at `0xf600c9` through its reference at `0x3c5a28` (`ev_9cd28cd5458e0bcbfae1d4bf1cbecfff9acc7d2449547224a9139fce00b8138a`); `native_function_find` resolves `Color_new` at `0x3c54a0`. Followed outgoing references (`ev_73e1c01716d1f56fddee04251ac0d7ca174f0b3bb4e103e9b83ba8324f75301e`) to gray construction and numeric conversion. Settings/messages were navigation anchors, with no new behavior claims.
 
@@ -91,7 +150,7 @@ Scope: this correction covers gray versus index selection. Exact HSV representat
 
 ## Native audit — HSL table construction (2026-11-11)
 
-Freshly opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled. Earlier audits below remain applicable; this pass closes the HSL table-constructor gap explicitly listed by the previous audit.
+Freshly opened the original main ELF with `core_target_open`: `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled. Earlier audits below remain applicable; this pass closes the HSL table-constructor gap explicitly listed by the previous audit.
 
 Searched names, settings and messages using `native_strings_find`, regex `^Color$|^lightness$|^color_bar$|invalid_fg_or_bg` (`ev_873ef2dcfa520ce47c20921f4c10dfaea858ad5281c56ee2292e37df99693111`). The `lightness` string at `0xf3a294` references `0x3c5953`; `native_function_find` resolves it to `Color_new` at `0x3c54a0` (`ev_cea15fef5dee6196f6f49d467bbe11863439522c2fae493f8342b985ced24f6d`). Followed its outgoing references to `fromHsl`, `lua_tonumberx` and `lua_tointegerx` (`ev_73e1c01716d1f56fddee04251ac0d7ca174f0b3bb4e103e9b83ba8324f75301e`). The settings/message matches are navigation anchors, with no new behavior claim.
 
@@ -121,7 +180,7 @@ Scope: this pass corrects HSL table construction using the existing native-deriv
 
 ## Native audit — represented HSL color mutation (2026-11-11)
 
-Opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled. This audit extends the earlier drawing, animation, blending, preferences and scripting audits preserved below.
+Opened the original main ELF with `core_target_open`: `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled. This audit extends the earlier drawing, animation, blending, preferences and scripting audits preserved below.
 
 Searched names, settings and messages with `native_strings_find`, regex `^Color$|hslLightness|hslSaturation|hslHue|^color_bar$|invalid_fg_or_bg` (12 matches; `ev_e27b74fddc79e987c0a9192737ef64ee9c67d6714d62ad80a600446119ed132d`). Followed `hslLightness` at `0xf3fbd0` to property entry `0x1cbaf18` (`ev_996c311407176a157b847b9a2c74b5de546f6dafcd11ab7daf12ef6ed9efec3c`). Native-name references identify its setter `0x3c6450` via pointer `0x1cbaf28` (`ev_4f4e4901d2911e722b7d7be26a895ab74581d3d5ccc03c7fad68909a9976fc85`). Outgoing references lead to HSL getters, alpha, number conversion and `fromHsl` (`ev_5a0624ff9b125f8e233486c2dd6f09042ac8a46f55c186f909814f9e03cf2a6c`). Settings/messages are navigation anchors, not new behavior claims.
 
@@ -165,7 +224,7 @@ Scope: this audit corrects HSL **mutation** and copying of the resulting colors.
 
 ## Current native audit — HSV edits discard gray state (2026-11-04)
 
-Freshly opened the original main ELF using `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.
+Freshly opened the original main ELF using `core_target_open`: `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Deep mode was enabled.
 
 Searched names, settings and messages using `native_strings_find` with `^alpha$|^Color$|^color_bar$|invalid_fg_or_bg` (`ev_814cd54cdbf79222045a8d3a6eba99cf3c6e3d72811f511f82f17c47c3f68434`). Followed Color string `0xf446eb` to registration `0x3c5320` (`ev_49dfe1a13a241e13cfbbe24dc8a759f7a9e42c3cc9d4a8596b4dd01e95ba9adb`), then its property table `0x1cbae40` (`ev_9346ec2e59fb509f7cd9dbc4a924dbad69c062533c39acbf15bbe4d304c61e5c`). Exact native-name references identify `Color_set_hsvHue` at `0x3c5fa0` from table entry `0x1cbaeb0` (`ev_d41b095283f4241a1b3d2736dbcd149a1318d5f176966c3de17b1350a586881c`). Outgoing references lead to `fromHsv` at `0x16a5e0` (`ev_57a910379427809d7b9d9ae6389b536fe78693074b351b3fc26b94781c213103`). Settings/message strings are navigation anchors; this audit adds no claims about their behavior.
 
@@ -197,7 +256,7 @@ Scope: this fixes stale gray state in the existing RGB-backed HSV implementation
 
 ## Current native audit — represented Color equality (2026-11-04)
 
-Opened the original main executable with `core_target_open` at `aseprite-reference`. The previous installed path no longer exists. SHA-256 is the identical original: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`.
+Opened the original main executable with `core_target_open` at `/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite`. The previous installed path no longer exists. SHA-256 is the identical original: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`.
 
 `native_strings_find` searched names, settings and messages using `^Color$|^__eq$|^color_bar$|invalid_fg_or_bg` (`ev_64486c6ce3c6aac1de40598a94de7c2daed2e8f34cb44c991891d5029b4b39bf`). Followed Color string `0xf446eb` to registration `0x3c5320` (`ev_49dfe1a13a241e13cfbbe24dc8a759f7a9e42c3cc9d4a8596b4dd01e95ba9adb`), then its methods table `0x1cbae10` (`ev_9346ec2e59fb509f7cd9dbc4a924dbad69c062533c39acbf15bbe4d304c61e5c`). The table entry at `0x1cbae20` pairs the `__eq` string pointer `0xf3fb98` with wrapper `0x3c5c10` (`ev_f8037a234bbaa550168997547bde067dd26b15b5f4c7968005e1d8dffbff8b09`). Outgoing wrapper references call `Color::operator==` at `0x16c3f0` (`ev_ae7b58e27e13f2f8914b359fb696b4ef033f0e8d9abe81338df90850d4890971`). Settings/messages are navigation anchors, with no new claims about their behavior.
 
@@ -229,7 +288,7 @@ Scope: this correction covers the existing RGB, gray and indexed representations
 
 ## Current native audit — indexed Color input conversion (2026-11-02)
 
-Opened the original main ELF with `core_target_open`: `aseprite-reference`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier drawing, timing, blending, settings and scripting audits remain below.
+Opened the original main ELF with `core_target_open`: `/home/asad/.local/share/aseprite/1.3.18.6/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier drawing, timing, blending, settings and scripting audits remain below.
 
 Searched names, settings and messages with `native_strings_find`, regex `^Color$|^index$|^color_bar$|invalid_fg_or_bg` (nine matches; `ev_ad4b3f6ffc33a22b7218aec90988fa279ce281051c9010485d3e0ece7b3c20fc`). Followed index string `0xf60657` to constructor reference `0x3c5a75` (`ev_a3c9493d3421912cd43a7745fcd3c6df5a311b9d7030d0d7f303e0efd0b5bd2e`), then outgoing calls to `lua_tointegerx` and `fromIndex` (`ev_987616d99e92a4c7decfef8462048c61c865fe1f79087deac94622bf77caa942`). Function search located index getter/setter; their outgoing references identify the same factory and the native getter (`ev_0a3051eabc89235885badfc3ba6b188c3a31676984682f07e6e3afb5e74bed59`, `ev_07ac34e5166ff0dc10ab4e050dac6c2547fb2d0a613d760a06cc5125014ca4f9`). Settings/message matches are navigation anchors; this audit makes no additional claims about them.
 
@@ -262,7 +321,7 @@ Scope: corrected explicit index input normalization and represented-state replac
 
 ## Current native audit — Color value copying (2026-11-02)
 
-Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode. SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier audits of drawing, timing, settings, blending and scripting remain below.
+Freshly opened the original main executable `/home/asad/.local/share/aseprite/1.3.18.6/aseprite` with `core_target_open` in Deep mode. SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Earlier audits of drawing, timing, settings, blending and scripting remain below.
 
 Searched names, settings and messages with `native_strings_find`, regex `^Color$|^gray$|^color_bar$|invalid_fg_or_bg`; all nine matches returned (`ev_af44c136f58203fe29b8847d0179fe62571c33cb884f1d091f0cb4c4a18df017`). Followed gray string `0xf600c9` to `Color_new` reference `0x3c5a28` (`ev_02660b82be029b8e3ce6b15290cdb340313a93ad0c04777e7568c8114acc8865`) and its outgoing calls to `fromGray` (`ev_987616d99e92a4c7decfef8462048c61c865fe1f79087deac94622bf77caa942`). Setting and message matches are navigation anchors; no new setting or alert behavior is claimed here.
 
@@ -289,7 +348,7 @@ Scope: verified correction covers stored gray value copying and independent muta
 
 Verification: `cargo test --offline --locked` passed **111 tests, zero failures** (`checks/native-gray-constructor-tests.log`). `cargo fmt --check` and `cargo build --offline --locked` passed (`checks/native-gray-constructor-build.log`). Craft Anything `rebuild_check` passed build, desktop startup/screenshot (938×990), and mechanics validation (**28 entries: 27 sourced, one estimated**).
 
-Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode. SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. This audit extends the earlier recovered drawing, timing, blending, preferences and scripting rules retained below.
+Freshly opened the original main executable `/home/asad/.local/share/aseprite/1.3.18.6/aseprite` with `core_target_open` in Deep mode. SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. This audit extends the earlier recovered drawing, timing, blending, preferences and scripting rules retained below.
 
 Searched names, settings and messages with `native_strings_find`, regex `^gray$|^color_bar$|invalid_fg_or_bg`; all five matches returned (`ev_63e23594a7afd74ca9aa11b44ce882163b8b81ae9d14b289bea7b496bda0b1f4`). Followed gray string `0xf600c9` through its reference at `0x3c5a28` to `Color_new` entry `0x3c54a0` (`ev_9a6da2cc03b4d2699b5a0dafdac04db8ed93a982fd64cca130a4f7636615424c`, `ev_e4765b6d0bb9f4875358fe6a81bb95e60dbfe57573796d0f0021ffd044417313`). Its outgoing references identify the gray factory and two distinct numeric conversions (`ev_987616d99e92a4c7decfef8462048c61c865fe1f79087deac94622bf77caa942`); number conversion references identify its helper (`ev_4785942a665bf7a3ae24685538c2816aebacbdf82c300201d5443dda2b55cf4d`). The setting and alert are search anchors, not evidence for additional behavior changes.
 
@@ -317,7 +376,7 @@ The two new regression tests run the real embedded Lua interpreter and paint doc
 
 ## Current native audit — Lua gray assignment (2026-11-02)
 
-Freshly opened the original main executable `aseprite-reference` with `core_target_open` in Deep mode. SHA-256 remains `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Prior audits below retain the recovered defaults, frame timing, line/fill, blending, conversion and scripting rules.
+Freshly opened the original main executable `/home/asad/.local/share/aseprite/1.3.18.6/aseprite` with `core_target_open` in Deep mode. SHA-256 remains `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Prior audits below retain the recovered defaults, frame timing, line/fill, blending, conversion and scripting rules.
 
 Searched names, settings and messages using `native_strings_find`, regex `^gray$|^color_bar$|invalid_fg_or_bg`: all five matches returned (`ev_ca8d181fc73d1684c9e92ba86e3e04473139f03d6b4f0645312ac724555afa60`). Followed gray string `0xf600c9` to constructor reference `0x3c5a28` (`ev_45e941e9640ecfe1a3d9764ccd1d351b4efe37733fca5f7c70ef0c5d52fe21fa`). Gray property setter `0x3c6920` has a registration pointer at `0x1cbafb8` (`ev_3defc80b68928610107709deb0f5733b226bf06297ce97f06221111526a703b2`). Followed its outgoing calls to integer conversion, getAlpha and fromGray (`ev_4d3b1ef7e5511d49f852c0d9c33c88ffd48cadfed332270cb3517da3ea66eefd`). Setting/alert strings are navigation anchors, not evidence of new settings/alert behavior.
 
@@ -346,7 +405,7 @@ Fresh verification: all **107 tests passed**, zero failures (`checks/native-gray
 
 ## Current native audit — Lua RGB grayscale properties (2026-11-02)
 
-Opened `aseprite-reference` again with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. The previous audits below retain the recovered drawing, timing, blending, settings and constructor rules.
+Opened `/home/asad/.local/share/aseprite/1.3.18.6/aseprite` again with `core_target_open` in Deep mode. SHA-256: `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. The previous audits below retain the recovered drawing, timing, blending, settings and constructor rules.
 
 `native_strings_find` searched names, settings and messages with `^grayPixel$|^gray$|^color_bar$|invalid_fg_or_bg` and returned all six matches (`ev_7348714f1d8b0ab7cdcb872223addd8e4bd4fddebd60f9a1b783c5adafcc9f32`). Followed `grayPixel` at `0xf3fbe7` through `native_xrefs_list` to property registration `0x1cbafd8` (`ev_49720b40f2dee56b4fa41299a77678c050b107fd6a5d2fcda782a7d0be0420a4`). Its getter pointer at `0x1cbafe0` is `0x3c6a20`, followed by a null setter. Outgoing references lead to `color_for_target_mask` (`ev_87e6df250bcc836d02573cc7861b5b4cd7ac521c4c8f7f92efa0551c24ca3fc3`), then named references locate `Color::getGray` and the RGB-to-HSL constructor (`ev_6cf018b3d3cbf18d1a37147cb57f407af239301689ccd097c6683e023772f425`, `ev_de28f65a87b3ae766010999bc2bd3c5860fe91a3ed64c1944f294c6b59a0b169`). The setting and alert strings are navigation anchors; this audit makes no new behavior claims about them.
 

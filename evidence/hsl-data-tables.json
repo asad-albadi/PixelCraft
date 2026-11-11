@@ -1,5 +1,5 @@
 {
-  "original": "aseprite-reference",
+  "original": "/home/asad/Documents/Codex/2026-11-01/he/work/aseprite-install/build/bin/aseprite",
   "method": "ELF PT_LOAD address mapping; little-endian signed32 relative jump tables and IEEE754 doubles",
   "tables": {
     "0xfabfdc": {

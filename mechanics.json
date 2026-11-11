@@ -236,6 +236,18 @@
       "group": "scripting",
       "value": "double numeric conversion; failure zero; preserve alpha",
       "source": "Color_set_hsvHue 0x3c5fa0, Color_set_hsvSaturation 0x3c6090, Color_set_hsvValue 0x3c6180 -> lua_tonumberx 0x53e9c0 -> luaV_tonumber_ 0x554760; ev_99abdfaf811fefb1188011a0696b36a6eb50c073d6675968e520061ce17c4b90; evidence/hsv_setter_conversion.json"
+    },
+    {
+      "name": "Lua Point constructor coordinate conversion",
+      "group": "scripting",
+      "value": "Use named x/y together if x is nonnil, else array [1]/[2]; scalar arguments otherwise. Each coordinate signed32(I(v)), with I numeric-string conversion, floor mode for floats, invalid conversion zero.",
+      "source": "Point_new helper 0x3e48f0; wrapper 0x3e4860; lua_tointegerx 0x53eab0; luaV_tointeger 0x554930; ev_4a7b57dcb2ad55d762e71446feb1021904ee30deaf17d54db76bdf09e9c348c6; ev_5b860db18b5b04de3290348055e5c8ab538a4dff3965cf4529e3f334c7e396e7; completed fallback pseudocode plus assembly, Ghidra unavailable"
+    },
+    {
+      "name": "Lua Size constructor dimension conversion",
+      "group": "scripting",
+      "value": "First nonnil width selects width/height, else w selects w/h, else array1/2; scalar arguments otherwise. Each dimension signed32(I(v)); floor numeric conversion, failure zero.",
+      "source": "Size_new helper 0x3ef330; wrapper 0x3ef2a0; lua_tointegerx 0x53eab0; luaV_tointeger 0x554930; ev_3a75063906a1e7dbdff274872f231897f27cd5d858e3455f09a908c7212caa90; assembly ev_95d0a5ace6f74dde9f2ccba68aa9849ee9d3a0c53f60c50384b4b2833ea206c0; completed fallback reads, Ghidra unavailable"
     }
   ]
 }

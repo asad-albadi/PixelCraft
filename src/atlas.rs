@@ -250,13 +250,15 @@ pub fn pack_atlas(
             .unwrap_or(1)
             .max(area.div_ceil(width));
         loop {
-            if height > MAX_DIMENSION || width.saturating_mul(height) > MAX_PIXELS {
+            // The free search rectangle is not the output image. A narrow packed
+            // result can fit the pixel budget even with a wide maximum width.
+            if height > MAX_DIMENSION {
                 return Err("Atlas exceeds image limits; increase width or reduce inputs".into());
             }
             if let Some(out) = maxrects(&sizes, width, height, pad) {
                 break out;
             }
-            let limit = MAX_DIMENSION.min(MAX_PIXELS / width);
+            let limit = MAX_DIMENSION;
             if height >= limit {
                 return Err("Atlas does not fit within image limits".into());
             }

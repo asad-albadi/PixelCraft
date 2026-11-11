@@ -1,0 +1,470 @@
+{
+  "repository": "https://github.com/rustls/rustls",
+  "base_registry_version": "0.23.45",
+  "base_commit": "2976d90fd1c2db6b518700dd101b714069cfcb17",
+  "release_commit": "f04804fa13341a9b1dc02b5d1dd8a746f2c4b7fb",
+  "release_tag": "v/0.23.46",
+  "note": "Cached crates.io base plus every changed packaged upstream source and data file; Cargo.toml normalized base differs only by release version.",
+  "tree": [
+    {
+      "path": ".clippy.toml",
+      "sha": "8b79eddd64c6e7824db62c5889406533634c749e"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha": "168aa060ddecfea6c0be1ae93aae5a57c20276c4"
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "sha": "16fe87b06e802f094b3fbb0894b137bca2b16ef1"
+    },
+    {
+      "path": "LICENSE-ISC",
+      "sha": "03acf1bd2c44c9c10429d0ee4d05ee1e92f9e3f9"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "sha": "ef480e6f0936ef5d006d6e3ce9ea8536232b3c88"
+    },
+    {
+      "path": "benches/benchmarks.rs",
+      "sha": "5fc473de872a799c5a3440a5a0a59738da4c2bc2"
+    },
+    {
+      "path": "build.rs",
+      "sha": "8c0bd2aa64b5e409e4af782ff348fd8351847b74"
+    },
+    {
+      "path": "examples/internal/test_ca.rs",
+      "sha": "1df384849366ae77798563c4a5c3522145edc91d"
+    },
+    {
+      "path": "src/bs_debug.rs",
+      "sha": "eac4149f9e69eedea2fd242a12af75f9c3397009"
+    },
+    {
+      "path": "src/builder.rs",
+      "sha": "f8ff61405b128902c9ae2d97d9d3ac2558bc8ba9"
+    },
+    {
+      "path": "src/check.rs",
+      "sha": "9875bc8bdf36e37e9a74b95166691415fd78bd1a"
+    },
+    {
+      "path": "src/client/builder.rs",
+      "sha": "ccecde2a6c651113c832e964143aa5e9e1cf48e5"
+    },
+    {
+      "path": "src/client/client_conn.rs",
+      "sha": "77b2dc5ea149ab8c72f40fc31a425ca4b6cc720e"
+    },
+    {
+      "path": "src/client/common.rs",
+      "sha": "1bf0d8c7758e6fef35ec6bbca1b55badf24d9fce"
+    },
+    {
+      "path": "src/client/ech.rs",
+      "sha": "c0028912f6d0d104ca156c7d0a91222437385712"
+    },
+    {
+      "path": "src/client/handy.rs",
+      "sha": "30011679daf4bc6b6400988afcf7213655d77e76"
+    },
+    {
+      "path": "src/client/hs.rs",
+      "sha": "5e90b6a7b170a7b2cbb0581a4fc6b7f70f61ea8a"
+    },
+    {
+      "path": "src/client/test.rs",
+      "sha": "2990329132bf14ebd49763709a22f5101840b34b"
+    },
+    {
+      "path": "src/client/tls12.rs",
+      "sha": "d1a493ea679df545635f3ee4ee7ad1dbde962971"
+    },
+    {
+      "path": "src/client/tls13.rs",
+      "sha": "8678c1dfa9dd5f1220599c7bc4f72280822504d7"
+    },
+    {
+      "path": "src/common_state.rs",
+      "sha": "9a6e6b55f6a8160bf2715a9f5ad96ff67c173977"
+    },
+    {
+      "path": "src/compress.rs",
+      "sha": "89ed18584671d0a2df99b596370c7fadc1573d4e"
+    },
+    {
+      "path": "src/conn.rs",
+      "sha": "9bcaf09d9b5005a5ca2d7bc1e514fabfad804ba8"
+    },
+    {
+      "path": "src/conn/kernel.rs",
+      "sha": "b90fad390dd6d24e7666b9ba97cd5626b1472b8a"
+    },
+    {
+      "path": "src/conn/unbuffered.rs",
+      "sha": "53bf442794bf6011be204dc9000bbb2a55bb39d5"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/hpke.rs",
+      "sha": "dcea100a3d501249ef6ac33f1f79bb7823d41944"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/mod.rs",
+      "sha": "9262b9a7f6afa901caa4824d79049dbc49602050"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/pq/hybrid.rs",
+      "sha": "8e30d782edcc88dac9625cabd63657298999b716"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/pq/mlkem.rs",
+      "sha": "9e48fedc4324b5c86e8ef325e3c0a5c9b640829f"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/pq/mod.rs",
+      "sha": "2a61dd88232fdc47ae3dd494798138e357f5ca25"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/sign.rs",
+      "sha": "eec8952b6a03c47c3b88095586fb872aba8be87d"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/ticketer.rs",
+      "sha": "d24147d5f5516be32342d1bf1903970f666243fc"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/tls12.rs",
+      "sha": "3845af5837b31379de12041168bd20beeba5a35c"
+    },
+    {
+      "path": "src/crypto/aws_lc_rs/tls13.rs",
+      "sha": "dbc9d912c682f90f4c9769f450846bf4cd8b0ab0"
+    },
+    {
+      "path": "src/crypto/cipher.rs",
+      "sha": "b5a6046c44485a7eee512ea1c94fec72575dc8cc"
+    },
+    {
+      "path": "src/crypto/hash.rs",
+      "sha": "214dad4e0f89216a3b28ed1c166bb95523fa9fa4"
+    },
+    {
+      "path": "src/crypto/hmac.rs",
+      "sha": "6960b7e65b3063c447cedfc51e77a82814733f9f"
+    },
+    {
+      "path": "src/crypto/hpke.rs",
+      "sha": "6207415022fc1ee8d922003434f5d825b650d3a2"
+    },
+    {
+      "path": "src/crypto/mod.rs",
+      "sha": "1060d1302318891dd1de44fbd2c3e102a9794f92"
+    },
+    {
+      "path": "src/crypto/ring/hash.rs",
+      "sha": "220dc536395121b2738dd52fc1e38b615aaf1d1a"
+    },
+    {
+      "path": "src/crypto/ring/hmac.rs",
+      "sha": "7f30aba481e029a7cb26718a0378601130241803"
+    },
+    {
+      "path": "src/crypto/ring/kx.rs",
+      "sha": "6e0da22773c15172776068a906b84eb40086b45a"
+    },
+    {
+      "path": "src/crypto/ring/mod.rs",
+      "sha": "50f75dabcb560690523fa353366e979283484ea5"
+    },
+    {
+      "path": "src/crypto/ring/quic.rs",
+      "sha": "354e6aea1ed9791648f9cec4424209440b576f6a"
+    },
+    {
+      "path": "src/crypto/ring/sign.rs",
+      "sha": "028c8bb9f0c8a0652d604b361c00ddd9a2ad2444"
+    },
+    {
+      "path": "src/crypto/ring/ticketer.rs",
+      "sha": "45dcc27a873326442465234f496c630e2e1d04e6"
+    },
+    {
+      "path": "src/crypto/ring/tls12.rs",
+      "sha": "63dfae8b8a593806af8f57f6b2fa923f667941ec"
+    },
+    {
+      "path": "src/crypto/ring/tls13.rs",
+      "sha": "ef488b624b105955ed4094e2bfcfacfba6665ce7"
+    },
+    {
+      "path": "src/crypto/signer.rs",
+      "sha": "659566adffbe7ab0dc98fae7037c57c478347d2f"
+    },
+    {
+      "path": "src/crypto/tls12.rs",
+      "sha": "7128de4b2f3697aca884bd4964fb01d26ec79fc2"
+    },
+    {
+      "path": "src/crypto/tls13.rs",
+      "sha": "50ecaa89c7d676575b243d7f022f0c556c15ef4c"
+    },
+    {
+      "path": "src/enums.rs",
+      "sha": "817c933e5bb22fea1046a7f8c67523ba7eed0879"
+    },
+    {
+      "path": "src/error.rs",
+      "sha": "dbd043fb9cb631a9b0cd148e435f9f2825c67dac"
+    },
+    {
+      "path": "src/hash_hs.rs",
+      "sha": "8b4edc68fb2bd3f93191dc47b8f8a165c958b62c"
+    },
+    {
+      "path": "src/key_log.rs",
+      "sha": "0ffcccfea04f60970b2fe7f2312580483e004c78"
+    },
+    {
+      "path": "src/key_log_file.rs",
+      "sha": "2d337c793ef61f4035ed5c9b8c2ca654b5e40a9d"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha": "8652415afe564cc4d50fdd0742e1ece154a78429"
+    },
+    {
+      "path": "src/limited_cache.rs",
+      "sha": "0cd5df7eca0010a2f01e6d7f1649b16c1c6c6cc6"
+    },
+    {
+      "path": "src/lock.rs",
+      "sha": "b632b2c54b54a5b88a588757c65978570a1fe84a"
+    },
+    {
+      "path": "src/manual/defaults.rs",
+      "sha": "f6f70dc05f5b89f82c885fcc50385a4c0b0d70d4"
+    },
+    {
+      "path": "src/manual/features.rs",
+      "sha": "69daf48ace58121a601434874dd9a5c79f460f0d"
+    },
+    {
+      "path": "src/manual/fips.rs",
+      "sha": "04a2428dd1b241426110ecd5aa0d7ecc260f5cac"
+    },
+    {
+      "path": "src/manual/howto.rs",
+      "sha": "6c00c6957aa09a9897cab46fe2cdb1e63bacdc22"
+    },
+    {
+      "path": "src/manual/implvulns.rs",
+      "sha": "a073350c4e63132169ef1308be08e0623e6c3fd8"
+    },
+    {
+      "path": "src/manual/mod.rs",
+      "sha": "0e4fddce1cb8a4eed45ca3d22ddf5910f529daeb"
+    },
+    {
+      "path": "src/manual/tlsvulns.rs",
+      "sha": "6d2220e3789ee3c268a5196b447c7c2f7b83cc1a"
+    },
+    {
+      "path": "src/msgs/alert.rs",
+      "sha": "e66f64cf9614facca7636e48fea34c2e7e1b8649"
+    },
+    {
+      "path": "src/msgs/base.rs",
+      "sha": "1559b6e0ab2eb9c750f03e3f97165f7c3e90a515"
+    },
+    {
+      "path": "src/msgs/ccs.rs",
+      "sha": "ac2c9e6a865b9b8a5e50ff641d44645e099a8215"
+    },
+    {
+      "path": "src/msgs/codec.rs",
+      "sha": "bd62cd3a6de2fff93b5b2daa598eb53e96ebd886"
+    },
+    {
+      "path": "src/msgs/deframer/buffers.rs",
+      "sha": "bf0987407009993afa8e80073e31f4c511ec5610"
+    },
+    {
+      "path": "src/msgs/deframer/handshake.rs",
+      "sha": "984982196542f12ea8b37d402e1a2ecd0f3746f0"
+    },
+    {
+      "path": "src/msgs/deframer/mod.rs",
+      "sha": "4122b52591da0bb31009a9efc243d3b50af4e54a"
+    },
+    {
+      "path": "src/msgs/enums.rs",
+      "sha": "264dc1324ffca344a09002dcd21db2b16ea220da"
+    },
+    {
+      "path": "src/msgs/ffdhe_groups.rs",
+      "sha": "ac105b59877fc8cda56f09545b2079ac21896f63"
+    },
+    {
+      "path": "src/msgs/fragmenter.rs",
+      "sha": "4863677792cb1480014eccc2c25fd36537434989"
+    },
+    {
+      "path": "src/msgs/handshake.rs",
+      "sha": "63b836af7f7a6c56722726576a642469027ce730"
+    },
+    {
+      "path": "src/msgs/handshake_test.rs",
+      "sha": "d40d9ef1837cf36e28fe5fe94cd443b9775d875f"
+    },
+    {
+      "path": "src/msgs/macros.rs",
+      "sha": "d6a18910c72ed949cc3b611728406cf03fcd4c18"
+    },
+    {
+      "path": "src/msgs/message/inbound.rs",
+      "sha": "5168a5f1de755eb3fa69ced8d984147170771cec"
+    },
+    {
+      "path": "src/msgs/message/mod.rs",
+      "sha": "d5cecc94892c5c24c3dfb572e5c0b2422e257847"
+    },
+    {
+      "path": "src/msgs/message/outbound.rs",
+      "sha": "810c066cb5cd4031d2184c97238d10e93a14c497"
+    },
+    {
+      "path": "src/msgs/message_test.rs",
+      "sha": "0f5a08b66e1d75893f100c0287584ed8847d0b22"
+    },
+    {
+      "path": "src/msgs/mod.rs",
+      "sha": "270c2dbcc721647405ce982564f7c6f09619df48"
+    },
+    {
+      "path": "src/msgs/persist.rs",
+      "sha": "79370ed36391674cd86d8f56a1117b1785ac06f1"
+    },
+    {
+      "path": "src/polyfill.rs",
+      "sha": "82571a2244ad8afe073d4a60b7885a27c96c9d19"
+    },
+    {
+      "path": "src/quic.rs",
+      "sha": "099e6eabd7fa998995b19240562deb63438a2c82"
+    },
+    {
+      "path": "src/rand.rs",
+      "sha": "23593863d38327ace3ada31bde61df5a683969c3"
+    },
+    {
+      "path": "src/record_layer.rs",
+      "sha": "0106dafb9fa4f27e02fa7eb583e579efe84e5b6d"
+    },
+    {
+      "path": "src/server/builder.rs",
+      "sha": "22b30abc5e8c823cfc7cbc6db9e831a40087e6e1"
+    },
+    {
+      "path": "src/server/common.rs",
+      "sha": "8310998a0cf8e9842d9f3c30db2dd0541fc27bf8"
+    },
+    {
+      "path": "src/server/handy.rs",
+      "sha": "e695aa80aae0506bc16b2952bf5455fdfff22d4c"
+    },
+    {
+      "path": "src/server/hs.rs",
+      "sha": "98081ab34e18c0a4ad907c278e795dc09fbc2939"
+    },
+    {
+      "path": "src/server/server_conn.rs",
+      "sha": "2cfd8b82c4a48cbb7f510aef00580f9970e222e2"
+    },
+    {
+      "path": "src/server/test.rs",
+      "sha": "2b9efed217092c05184c834892ff7f822d0efd06"
+    },
+    {
+      "path": "src/server/tls12.rs",
+      "sha": "d617e1c68e6a490756af5385984b3a89abdcf5b4"
+    },
+    {
+      "path": "src/server/tls13.rs",
+      "sha": "55e32f1e5bd14a59176aa3e99b5188f5ebf28feb"
+    },
+    {
+      "path": "src/stream.rs",
+      "sha": "88b5937c281ccf3b370649ae5f76e288b73b833c"
+    },
+    {
+      "path": "src/suites.rs",
+      "sha": "097f9cb399c1c9e2cbd26fac9d73c1c5c8a16615"
+    },
+    {
+      "path": "src/test_macros.rs",
+      "sha": "237578e008c664b02ded4a420e57c594ba249de5"
+    },
+    {
+      "path": "src/ticketer.rs",
+      "sha": "d1b5e143574566baef01ae9017f2d338d2cab8b1"
+    },
+    {
+      "path": "src/time_provider.rs",
+      "sha": "e43f4d6ddff61942508a6e40e6d37edd5a7bd7c5"
+    },
+    {
+      "path": "src/tls12/mod.rs",
+      "sha": "c92718505480ff46f7002c74686622624be25ad9"
+    },
+    {
+      "path": "src/tls13/key_schedule.rs",
+      "sha": "7914ae2761ee25c0ca1c5c232098a91d1c7b5f90"
+    },
+    {
+      "path": "src/tls13/mod.rs",
+      "sha": "ab55c889613bd2e99878cb37e6024591cb9fd029"
+    },
+    {
+      "path": "src/vecbuf.rs",
+      "sha": "c050a3018c75941cfe0341159f977305b3bbce37"
+    },
+    {
+      "path": "src/verify.rs",
+      "sha": "46731548ad74be1860d669df320774afabf302e0"
+    },
+    {
+      "path": "src/verifybench.rs",
+      "sha": "9a675d8c62a118bb30319040223869f3893b4583"
+    },
+    {
+      "path": "src/versions.rs",
+      "sha": "4acdf99ae1ec6c7af73a29c0214758ed4566e48c"
+    },
+    {
+      "path": "src/webpki/anchors.rs",
+      "sha": "01cefed19ff4f7b215c20adbf47b324e24fef0a7"
+    },
+    {
+      "path": "src/webpki/client_verifier.rs",
+      "sha": "060f0f77937bb71a6a628588f0625156d8f293ae"
+    },
+    {
+      "path": "src/webpki/mod.rs",
+      "sha": "ead32d0cc4fdb9e2f805cb0626c0856afc178cf9"
+    },
+    {
+      "path": "src/webpki/server_verifier.rs",
+      "sha": "5aa9235054e8615f5cade08a505a78e21c5ce566"
+    },
+    {
+      "path": "src/webpki/verify.rs",
+      "sha": "67cad4e74bda64dcc45005d2220191c088f2ff17"
+    },
+    {
+      "path": "src/x509.rs",
+      "sha": "2620fe8a4cd8ae6340cb11cf7617d54f09fc72c8"
+    }
+  ]
+}

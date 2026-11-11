@@ -260,7 +260,7 @@ impl PixelCraft {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
         app.theme_path = theme_path();
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("shortcuts.json")) {
-            app.custom_shortcuts = serde_json::from_slice(&bytes)
+            app.custom_shortcuts = pixelcraft::productivity::load_shortcuts(&bytes)
                 .unwrap_or_else(|_| pixelcraft::productivity::shortcut_preset("PixelCraft"));
         }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
@@ -662,9 +662,7 @@ impl PixelCraft {
                     return Err("Palette must contain 1–256 colors".into());
                 }
                 self.remember();
-                let mode = self.doc.color_mode;
-                self.doc.palette = palette;
-                self.doc.set_color_mode(mode);
+                self.doc.import_palette(palette)?;
                 self.palette_index = 0;
             }
             "theme" => {
@@ -691,12 +689,12 @@ impl PixelCraft {
                         return Err(format!("Unknown shortcut key: {binding}"));
                     }
                 }
-                self.custom_shortcuts = shortcuts;
+                self.custom_shortcuts.extend(shortcuts);
                 std::fs::create_dir_all(extensions::config_directory())
                     .map_err(|e| e.to_string())?;
                 std::fs::write(
                     extensions::config_directory().join("shortcuts.json"),
-                    serde_json::to_vec(&self.custom_shortcuts).map_err(|e| e.to_string())?,
+                    pixelcraft::productivity::save_shortcuts(&self.custom_shortcuts)?,
                 )
                 .map_err(|e| e.to_string())?;
             }
@@ -1145,8 +1143,50 @@ impl PixelCraft {
                 return false;
             }
         }
-        match formats::save(&path, &self.doc) {
+        let mut saving = self.doc.clone();
+        if !saving.references.is_empty()
+            && matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("ase" | "aseprite")
+            )
+        {
+            let choice = rfd::MessageDialog::new()
+                .set_title("Save reference images")
+                .set_description("ASE files cannot store reference images. Save as .pixel to keep them, or explicitly discard them.")
+                .set_buttons(rfd::MessageButtons::YesNoCancelCustom("Save as .pixel".into(), "Discard references".into(), "Cancel".into()))
+                .show();
+            match choice {
+                rfd::MessageDialogResult::Custom(label) if label == "Save as .pixel" => {
+                    let Some(pixel_path) = rfd::FileDialog::new()
+                        .add_filter("PixelCraft project", &["pixel"])
+                        .set_file_name(
+                            path.with_extension("pixel")
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy(),
+                        )
+                        .save_file()
+                    else {
+                        return false;
+                    };
+                    path = pixel_path;
+                    path.set_extension("pixel");
+                }
+                rfd::MessageDialogResult::Custom(label) if label == "Discard references" => {
+                    saving.references.clear()
+                }
+                _ => return false,
+            }
+        }
+        self.finish_save(path, saving)
+    }
+    fn finish_save(&mut self, path: PathBuf, saving: Document) -> bool {
+        match formats::save(&path, &saving) {
             Ok(()) => {
+                if self.doc != saving {
+                    self.remember();
+                    self.doc = saving;
+                }
                 self.status = format!(
                     "Saved {}",
                     path.file_name().unwrap_or_default().to_string_lossy()
@@ -3295,6 +3335,8 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
     }
     if app.doc.palette[1] != [12, 34, 56, 255]
         || app.custom_shortcuts.get("P").map(String::as_str) != Some("pencil")
+        || app.custom_shortcuts.get("Ctrl+O").map(String::as_str) != Some("open")
+        || app.custom_shortcuts.get("Ctrl+V").map(String::as_str) != Some("paste")
         || ctx.style_of(ctx.theme()).visuals.panel_fill != Color32::from_rgb(32, 36, 44)
     {
         return Err("Extension asset mismatch".into());
@@ -3895,8 +3937,24 @@ mod tests {
             ctx.style_of(ctx.theme()).visuals.panel_fill,
             Color32::from_rgb(21, 31, 41)
         );
-        a.custom_shortcuts =
-            serde_json::from_slice(&std::fs::read(source.join("keys.json")).unwrap()).unwrap();
+        a.apply_extension_asset(
+            &ctx,
+            "shortcuts",
+            "ui-assets",
+            &extensions::Contribution {
+                path: "keys.json".into(),
+                id: String::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            a.custom_shortcuts.get("Ctrl+O").map(String::as_str),
+            Some("open")
+        );
+        assert_eq!(
+            a.custom_shortcuts.get("Ctrl+V").map(String::as_str),
+            Some("paste")
+        );
         a.tool = Tool::Eraser;
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -4114,5 +4172,108 @@ mod update_ui_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod merge_regressions {
+    use super::*;
+    #[test]
+    fn regression_crop_wand_mask_allows_copy_delete_and_fill() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(4, 2), None);
+        a.doc.layers[0].cels[0] = vec![[50, 60, 70, 255]; 8].into();
+        a.set_selection_mask(vec![false, false, true, true, false, false, true, true]);
+        a.studio_action("crop");
+        assert_eq!((a.doc.width, a.doc.height), (2, 2));
+        assert!(a.studio.mask.is_none());
+        a.copy();
+        assert_eq!(
+            a.clipboard.as_ref().unwrap().pixels,
+            vec![[50, 60, 70, 255]; 4]
+        );
+        a.clear();
+        assert_eq!(a.doc.composite(0), vec![CLEAR; 4]);
+        a.power_fill((0, 0), [80, 90, 100, 255]);
+        assert_eq!(a.doc.composite(0), vec![[80, 90, 100, 255]; 4]);
+    }
+    #[test]
+    fn regression_reference_save_updates_baseline_only_after_success() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(1, 1), None);
+        a.doc
+            .references
+            .push(pixelcraft::productivity::ReferenceImage {
+                name: "guide".into(),
+                width: 1,
+                height: 1,
+                pixels: vec![[255; 4]].into(),
+                x: 0.,
+                y: 0.,
+                scale: 1.,
+                opacity: 255,
+                visible: true,
+            });
+        let original = a.doc.clone();
+        let baseline = a.saved.clone();
+        let root = std::env::temp_dir().join(format!("save-baseline-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut discarded = original.clone();
+        discarded.references.clear();
+        assert!(!a.finish_save(root.join("missing").join("out.ase"), discarded.clone()));
+        assert_eq!(a.doc, original);
+        assert_eq!(a.saved, baseline);
+        assert!(a.finish_save(root.join("keep.pixel"), original.clone()));
+        assert_eq!(
+            formats::load(&root.join("keep.pixel")).unwrap().references,
+            original.references
+        );
+        assert_eq!(a.saved, original);
+        assert!(a.finish_save(root.join("discard.aseprite"), discarded.clone()));
+        assert_eq!(a.doc, discarded);
+        assert_eq!(a.saved, discarded);
+        a.undo();
+        assert_eq!(a.doc.references, original.references);
+        assert_ne!(a.doc, a.saved);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn regression_editor_white_first_palette_retains_alpha() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        let root = std::env::temp_dir().join(format!("editor-palette-{}", std::process::id()));
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("package.json"),
+            r#"{"name":"alpha-palette","contributes":{"palettes":[{"path":"colors.json"}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("colors.json"),
+            "[[255,255,255,255],[0,0,0,255]]",
+        )
+        .unwrap();
+        let manager = Manager::at(root.join("data")).unwrap();
+        manager.install(&source).unwrap();
+        a.extension_manager = Some(manager);
+        a.replace(Document::new(2, 1), None);
+        a.doc.palette = vec![CLEAR, [255; 4]];
+        a.doc.set_pixel(0, 0, 1, [255; 4]);
+        a.doc.set_color_mode(ColorMode::Indexed);
+        a.apply_extension_asset(
+            &ctx,
+            "palette",
+            "alpha-palette",
+            &extensions::Contribution {
+                path: "colors.json".into(),
+                id: String::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(a.doc.composite(0), vec![CLEAR, [255; 4]]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

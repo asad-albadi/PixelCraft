@@ -28,7 +28,7 @@ pub(super) struct PowerTools {
     atlas_files: Vec<PathBuf>,
     pub reference_edit: Option<usize>,
     reference_textures: Vec<(Pixels, egui::TextureHandle)>,
-    reference_drag: Option<(f32, f32, f32)>,
+    reference_drag: Option<(f32, f32, f32, Pos2)>,
     pub bridge: Option<LiveBridge>,
     bridge_snapshot: Option<Document>,
     pub bridge_generation: u64,
@@ -307,11 +307,8 @@ impl PixelCraft {
                 } else {
                     let p = parse_palette(&std::fs::read(&path).map_err(|e| e.to_string())?, ext)?;
                     self.remember();
-                    self.doc.palette = p;
-                    self.doc.frame_palettes.clear();
+                    self.doc.import_palette(p)?;
                     self.doc.palette_names.clear();
-                    let mode = self.doc.color_mode;
-                    self.doc.set_color_mode(mode);
                 }
                 Ok::<_, String>(())
             })();
@@ -326,7 +323,7 @@ impl PixelCraft {
             std::fs::create_dir_all(extensions::config_directory()).map_err(|e| e.to_string())?;
             std::fs::write(
                 extensions::config_directory().join("shortcuts.json"),
-                serde_json::to_vec_pretty(&self.custom_shortcuts).map_err(|e| e.to_string())?,
+                pixelcraft::productivity::save_shortcuts(&self.custom_shortcuts)?,
             )
             .map_err(|e| e.to_string())
         })();
@@ -398,11 +395,16 @@ impl PixelCraft {
                 );
                 if response.drag_started() {
                     self.remember();
-                    self.power.reference_drag = Some((r.x, r.y, r.scale));
+                    self.power.reference_drag = ui
+                        .input(|i| i.pointer.press_origin())
+                        .map(|origin| (r.x, r.y, r.scale, origin));
                 }
                 if response.dragged() {
-                    if let Some((x, y, scale)) = self.power.reference_drag {
-                        let delta = response.drag_delta() / self.zoom;
+                    if let Some((x, y, scale, origin)) = self.power.reference_drag {
+                        let Some(pointer) = response.interact_pointer_pos() else {
+                            continue;
+                        };
+                        let delta = (pointer - origin) / self.zoom;
                         let reference = &mut self.doc.references[i];
                         if ui.input(|i| i.modifiers.shift) {
                             reference.scale = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);
@@ -639,5 +641,65 @@ mod bridge_tests {
         assert_eq!(before, a.doc);
         assert!(request(&mut a, "live-edit", args, false).is_err());
         assert!(a.power.bridge.is_none());
+    }
+}
+
+#[cfg(test)]
+mod reference_drag_regressions {
+    use super::*;
+    #[test]
+    fn regression_reference_drag_uses_total_movement_for_move_and_scale() {
+        for shift in [false, true] {
+            let ctx = egui::Context::default();
+            let mut a = PixelCraft::with_context(&ctx, None);
+            a.doc.references.push(ReferenceImage {
+                name: "guide".into(),
+                width: 100,
+                height: 100,
+                pixels: vec![[255; 4]; 10000].into(),
+                x: 0.,
+                y: 0.,
+                scale: 1.,
+                opacity: 255,
+                visible: true,
+            });
+            a.zoom = 2.;
+            a.power.reference_edit = Some(0);
+            let modifiers = egui::Modifiers {
+                shift,
+                ..Default::default()
+            };
+            let mut frame = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(500.))),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        a.draw_references(ui, Rect::from_min_size(Pos2::ZERO, Vec2::splat(256.)));
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            frame(vec![egui::Event::ModifiersChanged(modifiers)]);
+            frame(vec![
+                egui::Event::PointerMoved(Pos2::new(30., 30.)),
+                egui::Event::PointerButton {
+                    pos: Pos2::new(30., 30.),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers,
+                },
+            ]);
+            frame(vec![egui::Event::PointerMoved(Pos2::new(40., 35.))]);
+            frame(vec![egui::Event::PointerMoved(Pos2::new(55., 45.))]);
+            let r = &a.doc.references[0];
+            if shift {
+                assert!((r.scale - 1.125).abs() < 0.0001, "scale was {}", r.scale);
+            } else {
+                assert_eq!((r.x, r.y), (12.5, 7.5));
+            }
+        }
     }
 }
