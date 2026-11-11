@@ -4145,11 +4145,18 @@ mod update_ui_tests {
     fn top_bar_shows_update_only_for_a_newer_release() {
         let ctx = egui::Context::default();
         let mut app = PixelCraft::with_context(&ctx, None);
+        let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        let mut newer = current.clone();
+        newer.minor += 1;
+        newer.patch = 0;
+        let current_tag = format!("v{current}");
+        let newer_tag = format!("v{newer}");
         for width in [800., 938., 1180.] {
             for (tag, expected) in [
                 (None, false),
-                (Some("v0.3.0"), false),
-                (Some("v0.4.0"), true),
+                (Some("v0.0.0"), false),
+                (Some(current_tag.as_str()), false),
+                (Some(newer_tag.as_str()), true),
             ] {
                 app.latest_release =
                     tag.map(|tag| Release::parse(&format!(r#"{{"tag_name":"{tag}"}}"#)).unwrap());
