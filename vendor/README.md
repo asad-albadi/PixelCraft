@@ -26,3 +26,13 @@ Run `python3 checks/dependency-audit.py` after building the app offline. It scan
 all Cargo.lock entries against the pinned RustSec snapshot, including optional
 and platform-specific entries, using Rust semver matching. This is not a live
 cargo-audit run: refresh the snapshot to discover advisories published later.
+
+## Lua source archive
+
+`lua-5.4.9.tar.gz` is the unmodified official archive from
+https://www.lua.org/ftp/lua-5.4.9.tar.gz. Its SHA-256 is
+`2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6`.
+The Windows packaging script verifies this checksum before extracting and
+compiling it, so release builds can use the pinned source without downloading
+it from lua.org. Lua's MIT license is retained in `runtime/LUA-LICENSE.txt`
+and in the archive's documentation.
