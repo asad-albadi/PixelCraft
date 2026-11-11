@@ -151,6 +151,7 @@ pub fn ramp(a: Pixel, b: Pixel, n: usize) -> Vec<Pixel> {
         .collect()
 }
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SheetOptions {
     pub columns: usize,
     pub padding: usize,
@@ -318,4 +319,35 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
     }
     d.validate()?;
     Ok(d)
+}
+
+/// Transform a selection mask with the same nearest-neighbor mapping as its pixels.
+pub fn transform_mask(d: &Document, b: [i32; 4], mask: &[bool], t: Transform) -> Vec<bool> {
+    let [x, y, w, h] = b;
+    let (nw, nh, dx, dy) = match t {
+        Transform::Move(dx, dy) => (w, h, dx, dy),
+        Transform::Rotate => (h, w, 0, 0),
+        Transform::Resize(w, h) => (w as i32, h as i32, 0, 0),
+        _ => (w, h, 0, 0),
+    };
+    let mut out = vec![false; d.width * d.height];
+    if nw <= 0 || nh <= 0 {
+        return out;
+    }
+    for oy in 0..nh {
+        for ox in 0..nw {
+            let (sx, sy) = match t {
+                Transform::Rotate => (oy, h - 1 - ox),
+                Transform::FlipX => (w - 1 - ox, oy),
+                Transform::FlipY => (ox, h - 1 - oy),
+                _ => (ox * w / nw, oy * h / nh),
+            };
+            if let (Some(src), Some(dst)) =
+                (d.index(x + sx, y + sy), d.index(x + dx + ox, y + dy + oy))
+            {
+                out[dst] = mask.get(src) == Some(&true);
+            }
+        }
+    }
+    out
 }

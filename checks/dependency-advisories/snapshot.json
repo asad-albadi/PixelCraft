@@ -1,0 +1,616 @@
+{
+  "repository": "https://github.com/RustSec/advisory-db",
+  "commit": "901cf64f2d04dc7f9f26bbbd50a3010378de034d",
+  "scope": "All RustSec crates advisories whose package name occurs in Cargo.lock; includes all target-specific and optional lock entries.",
+  "retrieved": "2026-11-11",
+  "files": [
+    {
+      "path": "base64/RUSTSEC-2017-0004.md",
+      "sha": "9f23ea17de30b520b444d781f018e293ee0726c1"
+    },
+    {
+      "path": "bumpalo/RUSTSEC-2020-0006.md",
+      "sha": "e5da37434bf40f29c66ad73fc853ed50f049c0a4"
+    },
+    {
+      "path": "bumpalo/RUSTSEC-2022-0078.md",
+      "sha": "ca9ecaf41598f2f347704f0495607ef226afc784"
+    },
+    {
+      "path": "bytes/RUSTSEC-2026-0007.md",
+      "sha": "00f4b2053f775619882baedab93971938d16475c"
+    },
+    {
+      "path": "crossbeam-utils/RUSTSEC-2022-0041.md",
+      "sha": "90470e3350ff92aa68b4471da579ee6a2c41d10d"
+    },
+    {
+      "path": "enumflags2/RUSTSEC-2023-0035.md",
+      "sha": "d8b8f9906369b1127f01a41b37b027d749cd35fb"
+    },
+    {
+      "path": "event-listener/RUSTSEC-2026-0221.md",
+      "sha": "504f671c2af509e221bff81d5b89a73c3e0bd493"
+    },
+    {
+      "path": "futures-task/RUSTSEC-2020-0060.md",
+      "sha": "11191c2a7708d4a237ad37de3dc10cd5ae322b7a"
+    },
+    {
+      "path": "futures-task/RUSTSEC-2020-0061.md",
+      "sha": "ca56af5726ce6b8a4143210fc2808c44db338ec3"
+    },
+    {
+      "path": "futures-util/RUSTSEC-2020-0059.md",
+      "sha": "45a2203bce0d00bfb9dadb3030b499767a4a509b"
+    },
+    {
+      "path": "futures-util/RUSTSEC-2020-0062.md",
+      "sha": "68ba1a7847959aa0327b89180cdbd120f00e77e9"
+    },
+    {
+      "path": "hashbrown/RUSTSEC-2024-0402.md",
+      "sha": "93322d4677b9c2f47a7f81f7e73902312eaf3fdc"
+    },
+    {
+      "path": "http/RUSTSEC-2019-0033.md",
+      "sha": "47dfe4709f6301739184e7e3c2a91652256a83c3"
+    },
+    {
+      "path": "http/RUSTSEC-2019-0034.md",
+      "sha": "92ee2f679e02cd30c8e3ff6567015092461850d7"
+    },
+    {
+      "path": "image/RUSTSEC-2019-0014.md",
+      "sha": "19365f059b84bb0fe435691e620af837ef1659fb"
+    },
+    {
+      "path": "image/RUSTSEC-2020-0073.md",
+      "sha": "918553964f9836dbc5046ffdc65a6919972d20a2"
+    },
+    {
+      "path": "lock_api/RUSTSEC-2020-0070.md",
+      "sha": "8d6a474bfe35b7ee76a0d2d4713572da9fb0b299"
+    },
+    {
+      "path": "memmap2/RUSTSEC-2026-0186.md",
+      "sha": "6799f4375758b5b3b37a0a61f8f97acd0761c77e"
+    },
+    {
+      "path": "memoffset/RUSTSEC-2019-0011.md",
+      "sha": "903153c657d5ea6759996210b7af5f4640006a39"
+    },
+    {
+      "path": "memoffset/RUSTSEC-2023-0045.md",
+      "sha": "5f16dfcdfeb320a1854389b32f079094350cca45"
+    },
+    {
+      "path": "mio/RUSTSEC-2020-0081.md",
+      "sha": "b3e1ee23beaed55dd29cfc3e085e05fa5f3407fa"
+    },
+    {
+      "path": "mio/RUSTSEC-2024-0019.md",
+      "sha": "2d88c4bef93e8a1538514052e8b06e11a7ed1f15"
+    },
+    {
+      "path": "once_cell/RUSTSEC-2019-0017.md",
+      "sha": "2001b4218a8a614246e37ff00ee0b2dfcaeca7eb"
+    },
+    {
+      "path": "quick-xml/RUSTSEC-2026-0194.md",
+      "sha": "f29a859005912bbda6a7ca0aee9601e30e794e9e"
+    },
+    {
+      "path": "quick-xml/RUSTSEC-2026-0195.md",
+      "sha": "a2549cad50e01295f7ee42567128d203d120da62"
+    },
+    {
+      "path": "ring/RUSTSEC-2025-0007.md",
+      "sha": "983aea18fbd22cd7af1eb636046ab7bd92d596f4"
+    },
+    {
+      "path": "ring/RUSTSEC-2025-0009.md",
+      "sha": "30bfaae03001e08f58d828c13519708942d66c70"
+    },
+    {
+      "path": "ring/RUSTSEC-2025-0010.md",
+      "sha": "68572a5cb9cd5d1afedb2b7c251515431fc3eb9a"
+    },
+    {
+      "path": "rustix/RUSTSEC-2026-0486.md",
+      "sha": "771621348de211646db0157792e6d23637b28581"
+    },
+    {
+      "path": "rustls-webpki/RUSTSEC-2023-0053.md",
+      "sha": "09b580aff5a6e9569377bb3c53d9856121921a4f"
+    },
+    {
+      "path": "rustls-webpki/RUSTSEC-2026-0049.md",
+      "sha": "642f030a1d6f84aebd5ed8f42edcf353d8c1bafa"
+    },
+    {
+      "path": "rustls-webpki/RUSTSEC-2026-0098.md",
+      "sha": "501391f1ff1e1e7209b08df000d895d5318cdc95"
+    },
+    {
+      "path": "rustls-webpki/RUSTSEC-2026-0099.md",
+      "sha": "1171f2e8aed7295d3551284aabb5096467270ef9"
+    },
+    {
+      "path": "rustls-webpki/RUSTSEC-2026-0104.md",
+      "sha": "e67d9c3224a3df010689043c212d217214b92c20"
+    },
+    {
+      "path": "rustls-webpki/RUSTSEC-2026-0382.md",
+      "sha": "27291e4f4bf088548cfa9d502cdb00842dd824b1"
+    },
+    {
+      "path": "rustls/RUSTSEC-2024-0336.md",
+      "sha": "34ad2e5128a29c256de9ee341a28cb5abaff3eae"
+    },
+    {
+      "path": "rustls/RUSTSEC-2024-0399.md",
+      "sha": "dbda18ac8988f9a1473555633c47777bcc5790d0"
+    },
+    {
+      "path": "rustls/RUSTSEC-2026-0285.md",
+      "sha": "bb52d6c592f757b080cdceb4cf8ca0b4c7f4ce38"
+    },
+    {
+      "path": "rustls/RUSTSEC-2026-0346.md",
+      "sha": "26ee11c1606756031eaeff7c327f1f2fa3685207"
+    },
+    {
+      "path": "rustls/RUSTSEC-2026-0347.md",
+      "sha": "d9e4c8c1bba3a674d88c635b32ebb798e8f5e7ee"
+    },
+    {
+      "path": "rustls/RUSTSEC-2026-0348.md",
+      "sha": "90f520f6dd5450e5e44aeb058aeb24b6184cff38"
+    },
+    {
+      "path": "rustls/RUSTSEC-2026-0349.md",
+      "sha": "92b549de400cc7a32c71dba037a41bd635fed8b7"
+    },
+    {
+      "path": "security-framework/RUSTSEC-2017-0003.md",
+      "sha": "90ba7aca2927c72552964d75a9ef212665e3d114"
+    },
+    {
+      "path": "self_cell/RUSTSEC-2023-0070.md",
+      "sha": "c74a25c68ddc1ddf578f11b75447247c5c73dc8d"
+    },
+    {
+      "path": "shlex/RUSTSEC-2024-0006.md",
+      "sha": "bd8bf3c6279427d4bab940fd76f20bb5dc388cb6"
+    },
+    {
+      "path": "slab/RUSTSEC-2025-0047.md",
+      "sha": "a8275406c14c328c51de5dd30b69bf880238b53f"
+    },
+    {
+      "path": "smallvec/RUSTSEC-2018-0003.md",
+      "sha": "1eca2b3653dc552d342130d1a5b1c4a3c86ddd69"
+    },
+    {
+      "path": "smallvec/RUSTSEC-2018-0018.md",
+      "sha": "ce95f4a97db04eadbd0876136c1d486d262b7ae2"
+    },
+    {
+      "path": "smallvec/RUSTSEC-2019-0009.md",
+      "sha": "99adbc419985f097e56b661c333b48e819b0d2ce"
+    },
+    {
+      "path": "smallvec/RUSTSEC-2019-0012.md",
+      "sha": "fdbbf8afb06ae1209fef40e391a23fba1dd97452"
+    },
+    {
+      "path": "smallvec/RUSTSEC-2021-0003.md",
+      "sha": "8525aa2ba20aa1fb037bfa30a24fc462082caca6"
+    },
+    {
+      "path": "tokio/RUSTSEC-2021-0072.md",
+      "sha": "60ea47400ad60b5c31b89916d4b7400f6b5efcd4"
+    },
+    {
+      "path": "tokio/RUSTSEC-2021-0124.md",
+      "sha": "f72016f2d1f148cc46121ef79b1365a69c0c8871"
+    },
+    {
+      "path": "tokio/RUSTSEC-2023-0001.md",
+      "sha": "e4dee6f08b4b9c7c5d2f6b9f9431639944e9c491"
+    },
+    {
+      "path": "tokio/RUSTSEC-2023-0005.md",
+      "sha": "93d1c2e068a5fce9df9fd9a9d478604daa6624cc"
+    },
+    {
+      "path": "tokio/RUSTSEC-2025-0023.md",
+      "sha": "f97ef67343b31364edb7496ef362f36a51d6aa26"
+    },
+    {
+      "path": "tokio/RUSTSEC-2026-0384.md",
+      "sha": "86a26916a1a5346ec1f31b9d3f811accea0fc201"
+    },
+    {
+      "path": "tokio/RUSTSEC-2026-0386.md",
+      "sha": "fac2eb554bb4c6f6113945bb878606803bf9eea7"
+    },
+    {
+      "path": "tracing/RUSTSEC-2023-0078.md",
+      "sha": "f1146e3685ddf784b280c7777ed9c0a35adc1aa4"
+    },
+    {
+      "path": "untrusted/RUSTSEC-2018-0001.md",
+      "sha": "c694af42e6b1bbf32fafc14229124160802a3a28"
+    },
+    {
+      "path": "webpki-root-certs/RUSTSEC-2026-0383.md",
+      "sha": "979690ab4418399620470de963d3dfb2f6fcc1fd"
+    },
+    {
+      "path": "xml-rs/RUSTSEC-2022-0048.md",
+      "sha": "9d52d18cfbc10c6d695f550fc5e7e703476abb35"
+    },
+    {
+      "path": "zbus_names/RUSTSEC-2026-0371.md",
+      "sha": "9ae1c89b068b6c16b6355bcae2e81176ab77d1b1"
+    },
+    {
+      "path": "zerocopy/RUSTSEC-2023-0074.md",
+      "sha": "6bc9db6d2f4b255fbe5a1dc7dcad9c04d7e9da2d"
+    },
+    {
+      "path": "zlib-rs/RUSTSEC-2024-0401.md",
+      "sha": "3f3b966897b0ce844bfd64f22c4fe8cd6d02bb8e"
+    },
+    {
+      "path": "zvariant/RUSTSEC-2026-0370.md",
+      "sha": "292c69c0e9397d8428224768fb62bdd3df0d5b56"
+    },
+    {
+      "path": "zvariant_derive/RUSTSEC-2026-0372.md",
+      "sha": "de1056de2ea4756be21548c57d6ea201a4fddf64"
+    }
+  ],
+  "locked_names": [
+    "accesskit",
+    "addr2line",
+    "adler2",
+    "ahash",
+    "android-activity",
+    "android-properties",
+    "arboard",
+    "arrayvec",
+    "as-raw-xcb-connection",
+    "async-broadcast",
+    "async-channel",
+    "async-executor",
+    "async-io",
+    "async-lock",
+    "async-process",
+    "async-recursion",
+    "async-signal",
+    "async-task",
+    "async-trait",
+    "atomic-waker",
+    "autocfg",
+    "backtrace",
+    "base64",
+    "bit-set",
+    "bit-vec",
+    "bitflags",
+    "block2",
+    "blocking",
+    "bumpalo",
+    "bytemuck",
+    "bytemuck_derive",
+    "byteorder-lite",
+    "bytes",
+    "calloop",
+    "calloop-wayland-source",
+    "cc",
+    "cfg-if",
+    "cfg_aliases",
+    "cgl",
+    "clipboard-win",
+    "codespan-reporting",
+    "color",
+    "color_quant",
+    "combine",
+    "concurrent-queue",
+    "core-foundation",
+    "core-foundation-sys",
+    "core-graphics",
+    "core-graphics-types",
+    "crc32fast",
+    "crossbeam-utils",
+    "crunchy",
+    "cursor-icon",
+    "dispatch",
+    "dispatch2",
+    "dlib",
+    "document-features",
+    "downcast-rs",
+    "dpi",
+    "ecolor",
+    "eframe",
+    "egui",
+    "egui-wgpu",
+    "egui-winit",
+    "egui_glow",
+    "either",
+    "emath",
+    "endi",
+    "enumflags2",
+    "enumflags2_derive",
+    "epaint",
+    "epaint_default_fonts",
+    "equivalent",
+    "errno",
+    "error-code",
+    "euclid",
+    "event-listener",
+    "event-listener-strategy",
+    "fastrand",
+    "fax",
+    "fdeflate",
+    "fearless_simd",
+    "find-msvc-tools",
+    "flate2",
+    "foldhash",
+    "font-types",
+    "foreign-types",
+    "foreign-types-macros",
+    "foreign-types-shared",
+    "futures-core",
+    "futures-io",
+    "futures-lite",
+    "futures-task",
+    "futures-util",
+    "gethostname",
+    "getrandom",
+    "gif",
+    "gimli",
+    "gl_generator",
+    "glifo",
+    "glow",
+    "glutin",
+    "glutin-winit",
+    "glutin_egl_sys",
+    "glutin_glx_sys",
+    "glutin_wgl_sys",
+    "guillotiere",
+    "half",
+    "harfrust",
+    "hashbrown",
+    "hermit-abi",
+    "hex",
+    "http",
+    "httparse",
+    "image",
+    "indexmap",
+    "io-uring",
+    "itertools",
+    "itoa",
+    "jni",
+    "jni-macros",
+    "jni-sys",
+    "jni-sys-macros",
+    "jobserver",
+    "js-sys",
+    "khronos_api",
+    "kurbo",
+    "libc",
+    "libloading",
+    "libm",
+    "libredox",
+    "linebender_resource_handle",
+    "linux-raw-sys",
+    "litrs",
+    "lock_api",
+    "log",
+    "memchr",
+    "memmap2",
+    "memoffset",
+    "miniz_oxide",
+    "mio",
+    "moxcms",
+    "naga",
+    "naga-types",
+    "ndk",
+    "ndk-context",
+    "ndk-sys",
+    "nohash-hasher",
+    "num-traits",
+    "num_enum",
+    "num_enum_derive",
+    "objc-sys",
+    "objc2",
+    "objc2-app-kit",
+    "objc2-cloud-kit",
+    "objc2-contacts",
+    "objc2-core-data",
+    "objc2-core-foundation",
+    "objc2-core-graphics",
+    "objc2-core-image",
+    "objc2-core-location",
+    "objc2-encode",
+    "objc2-foundation",
+    "objc2-io-surface",
+    "objc2-link-presentation",
+    "objc2-metal",
+    "objc2-quartz-core",
+    "objc2-symbols",
+    "objc2-ui-kit",
+    "objc2-uniform-type-identifiers",
+    "objc2-user-notifications",
+    "object",
+    "once_cell",
+    "openssl-probe",
+    "orbclient",
+    "ordered-stream",
+    "parking",
+    "parking_lot",
+    "parking_lot_core",
+    "peniko",
+    "percent-encoding",
+    "pin-project",
+    "pin-project-internal",
+    "pin-project-lite",
+    "piper",
+    "pixelcraft",
+    "pkg-config",
+    "plain",
+    "png",
+    "polling",
+    "pollster",
+    "polycool",
+    "portable-atomic",
+    "portable-atomic-util",
+    "proc-macro-crate",
+    "proc-macro2",
+    "profiling",
+    "pxfm",
+    "quick-error",
+    "quick-xml",
+    "quote",
+    "r-efi",
+    "raw-window-handle",
+    "read-fonts",
+    "redox_syscall",
+    "renderdoc-sys",
+    "rfd",
+    "ring",
+    "roxmltree",
+    "rustc-demangle",
+    "rustc-hash",
+    "rustc_version",
+    "rustix",
+    "rustls",
+    "rustls-native-certs",
+    "rustls-pki-types",
+    "rustls-platform-verifier",
+    "rustls-platform-verifier-android",
+    "rustls-webpki",
+    "rustversion",
+    "same-file",
+    "schannel",
+    "scoped-tls",
+    "scopeguard",
+    "security-framework",
+    "security-framework-sys",
+    "self_cell",
+    "semver",
+    "serde",
+    "serde_core",
+    "serde_derive",
+    "serde_json",
+    "serde_repr",
+    "shlex",
+    "signal-hook-registry",
+    "simd-adler32",
+    "simd_cesu8",
+    "simdutf8",
+    "skrifa",
+    "slab",
+    "slotmap",
+    "smallvec",
+    "smithay-client-toolkit",
+    "smithay-clipboard",
+    "smol_str",
+    "static_assertions",
+    "subtle",
+    "syn",
+    "tempfile",
+    "thiserror",
+    "thiserror-impl",
+    "tiff",
+    "tokio",
+    "toml_datetime",
+    "toml_edit",
+    "toml_parser",
+    "tracing",
+    "tracing-attributes",
+    "tracing-core",
+    "type-map",
+    "uds_windows",
+    "unicode-general-category",
+    "unicode-ident",
+    "unicode-segmentation",
+    "unicode-width",
+    "untrusted",
+    "ureq",
+    "ureq-proto",
+    "utf8-zero",
+    "uuid",
+    "vello_common",
+    "vello_cpu",
+    "version_check",
+    "walkdir",
+    "wasi",
+    "wasip2",
+    "wasm-bindgen",
+    "wasm-bindgen-futures",
+    "wasm-bindgen-macro",
+    "wasm-bindgen-macro-support",
+    "wasm-bindgen-shared",
+    "wayland-backend",
+    "wayland-client",
+    "wayland-csd-frame",
+    "wayland-cursor",
+    "wayland-protocols",
+    "wayland-protocols-experimental",
+    "wayland-protocols-misc",
+    "wayland-protocols-plasma",
+    "wayland-protocols-wlr",
+    "wayland-scanner",
+    "wayland-sys",
+    "web-sys",
+    "web-time",
+    "webpki-root-certs",
+    "weezl",
+    "wgpu",
+    "wgpu-core",
+    "wgpu-core-deps-windows-linux-android",
+    "wgpu-hal",
+    "wgpu-naga-bridge",
+    "wgpu-types",
+    "winapi-util",
+    "windows-link",
+    "windows-sys",
+    "windows-targets",
+    "windows_aarch64_gnullvm",
+    "windows_aarch64_msvc",
+    "windows_i686_gnu",
+    "windows_i686_gnullvm",
+    "windows_i686_msvc",
+    "windows_x86_64_gnu",
+    "windows_x86_64_gnullvm",
+    "windows_x86_64_msvc",
+    "winit",
+    "winnow",
+    "wit-bindgen",
+    "x11-dl",
+    "x11rb",
+    "x11rb-protocol",
+    "xcursor",
+    "xkbcommon-dl",
+    "xkeysym",
+    "xml-rs",
+    "zbus",
+    "zbus_macros",
+    "zbus_names",
+    "zcheapstr",
+    "zerocopy",
+    "zerocopy-derive",
+    "zeroize",
+    "zlib-rs",
+    "zmij",
+    "zune-core",
+    "zune-jpeg",
+    "zvariant",
+    "zvariant_derive",
+    "zvariant_utils"
+  ]
+}

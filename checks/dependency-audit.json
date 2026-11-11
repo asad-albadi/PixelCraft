@@ -1,0 +1,44 @@
+{
+  "scanner": "pinned RustSec snapshot with Rust semver matching (not cargo-audit)",
+  "database_commit": "901cf64f2d04dc7f9f26bbbd50a3010378de034d",
+  "snapshot_date": "2026-11-11",
+  "lock_packages": 373,
+  "advisories_considered": 67,
+  "withdrawn_skipped": [
+    "RUSTSEC-2025-0007",
+    "RUSTSEC-2022-0048"
+  ],
+  "vulnerabilities": [],
+  "informational_warnings": [
+    {
+      "id": "RUSTSEC-2026-0486",
+      "package": "rustix",
+      "version": "1.1.5",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2026-0486.html"
+    },
+    {
+      "id": "RUSTSEC-2026-0386",
+      "package": "tokio",
+      "version": "1.46.1",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2026-0386.html"
+    },
+    {
+      "id": "RUSTSEC-2026-0371",
+      "package": "zbus_names",
+      "version": "4.3.4",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2026-0371.html"
+    },
+    {
+      "id": "RUSTSEC-2026-0370",
+      "package": "zvariant",
+      "version": "5.15.0",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2026-0370.html"
+    },
+    {
+      "id": "RUSTSEC-2026-0372",
+      "package": "zvariant_derive",
+      "version": "5.15.0",
+      "url": "https://rustsec.org/advisories/RUSTSEC-2026-0372.html"
+    }
+  ]
+}

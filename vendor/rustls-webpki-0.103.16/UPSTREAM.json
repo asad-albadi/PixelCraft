@@ -1,0 +1,142 @@
+{
+  "repository": "https://github.com/rustls/webpki",
+  "base_registry_version": "0.103.15",
+  "base_commit": "c14836d8de33c0ad0ac7dcb28fe9aade20831a4d",
+  "release_commit": "8ecdcc76f56b68fda67a6adf7976f5eed5006a4c",
+  "release_tag": "v/0.103.16",
+  "note": "Cached crates.io base plus every changed packaged upstream source and data file; Cargo.toml normalized base differs only by release version.",
+  "tree": [
+    {
+      "path": "Cargo.toml",
+      "sha": "e32d43265e3866968ac7fb8a998164c48d5a534e"
+    },
+    {
+      "path": "LICENSE",
+      "sha": "cd87be1dbad4c7edb1a8a709e6e7c2fa0ea7375b"
+    },
+    {
+      "path": "README.md",
+      "sha": "5481570ca5e1b85c235e4f4f0df72a8a5aa1f1ba"
+    },
+    {
+      "path": "src/alg_tests.rs",
+      "sha": "6af8b3b660721b473633832ecf99a2bdcfae55ac"
+    },
+    {
+      "path": "src/aws_lc_rs_algs.rs",
+      "sha": "d5ae6e8e787c875c8462c6d78c2d97ea053428ea"
+    },
+    {
+      "path": "src/cert.rs",
+      "sha": "1998a14cd26c3209f4725108125699d144699921"
+    },
+    {
+      "path": "src/crl/mod.rs",
+      "sha": "de0bc3561045429549de6f3befb0ec1bd7ac6d9a"
+    },
+    {
+      "path": "src/crl/types.rs",
+      "sha": "6a517d96f2deb66ea6d1cebf62e733298d24f868"
+    },
+    {
+      "path": "src/data/alg-rsa-pkcs1-sha256-absent-params.der",
+      "sha": "a934df82f92edd5aebdc4a6b8b92ac10d6264afd"
+    },
+    {
+      "path": "src/data/alg-rsa-pkcs1-sha384-absent-params.der",
+      "sha": "03aa775d69ccc6b1c9d24eee8bab765ac3be0e99"
+    },
+    {
+      "path": "src/data/alg-rsa-pkcs1-sha512-absent-params.der",
+      "sha": "e59473c570154c8687316911adf9ee90e8ba3825"
+    },
+    {
+      "path": "src/data/distrusted/EMDVTLSCAG3B.spki.der",
+      "sha": "33f6d1118dce458d4645271588b9b1849f8312b4"
+    },
+    {
+      "path": "src/data/distrusted/EMDVTLSCAG3C.spki.der",
+      "sha": "9ffbb63d66a974125f036db76f537917f2e411b9"
+    },
+    {
+      "path": "src/data/distrusted/EMEVTLSCAG3B.spki.der",
+      "sha": "19a7e655cdf8ae8dcd934c704b78df13aa75b89d"
+    },
+    {
+      "path": "src/data/distrusted/EMEVTLSCAG3C.spki.der",
+      "sha": "a8f458ece155e8f7f0cab44a8609fab487e26bdc"
+    },
+    {
+      "path": "src/data/distrusted/EMOVCSCAG3B.spki.der",
+      "sha": "af9359da8fb2a55ab721e31d5d4204b43cd57e4e"
+    },
+    {
+      "path": "src/data/distrusted/EMOVCSCAG3C.spki.der",
+      "sha": "f3691d21164d65c2867fc76b35dc858dad26fd42"
+    },
+    {
+      "path": "src/data/distrusted/EMOVTLSCAG3B.spki.der",
+      "sha": "20cebe1afa33f1d0542cb1a3038c748fe7c06a3a"
+    },
+    {
+      "path": "src/data/distrusted/EMOVTLSCAG3C.spki.der",
+      "sha": "dd3f0dd4f2e8b7831f87d2238d7efd72cc47b7b6"
+    },
+    {
+      "path": "src/der.rs",
+      "sha": "76c6da460d8ab454c8b402170ec4ba557cae16ef"
+    },
+    {
+      "path": "src/end_entity.rs",
+      "sha": "e3a1db86bed95dec5587994b912aba01c1666418"
+    },
+    {
+      "path": "src/error.rs",
+      "sha": "9fdf20a8d22f13c9b4c58cd65abc8c4dc838023a"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha": "f5acf09b615ed80c89513daf581480134ce8b6ac"
+    },
+    {
+      "path": "src/ring_algs.rs",
+      "sha": "7b7ae3febe40204323226464386120c78b0a08a1"
+    },
+    {
+      "path": "src/rpk_entity.rs",
+      "sha": "4b41100bcb81a01455d3ba3f7d86e6aefdff721f"
+    },
+    {
+      "path": "src/signed_data.rs",
+      "sha": "1367d23fa143ee9b9505cf42fbf54bfdb0266a70"
+    },
+    {
+      "path": "src/subject_name/dns_name.rs",
+      "sha": "634dab25da515a7260045e63ec3da574943791d6"
+    },
+    {
+      "path": "src/subject_name/ip_address.rs",
+      "sha": "0c60ac02e1943af64d0fe9cdbae73b3fd19dcda2"
+    },
+    {
+      "path": "src/subject_name/mod.rs",
+      "sha": "1600390030835fb93bee82112fb960c2334a67ca"
+    },
+    {
+      "path": "src/time.rs",
+      "sha": "f96aeb626227bde58eaf963499fd8bb552278d15"
+    },
+    {
+      "path": "src/trust_anchor.rs",
+      "sha": "1489c90cbaa7b0fb8490d53778c8b0d5397611a7"
+    },
+    {
+      "path": "src/verify_cert.rs",
+      "sha": "fab109ab5f8df404eb7eaa98e0c1da5cf4ca91bf"
+    },
+    {
+      "path": "src/x509.rs",
+      "sha": "b0f9e13ed2399c881df1776e2af946abc1e89097"
+    }
+  ]
+}

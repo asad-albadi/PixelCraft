@@ -11,3 +11,7 @@ pub mod updates;
 
 pub mod interchange;
 pub mod workflows;
+
+pub mod atlas;
+pub mod automation;
+pub mod productivity;

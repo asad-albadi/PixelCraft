@@ -256,6 +256,12 @@ pub struct Document {
     pub brush_shape: BrushShape,
     #[serde(default)]
     pub dithering: Option<crate::contributions::DitheringMatrix>,
+    #[serde(default)]
+    pub wraparound: bool,
+    #[serde(default)]
+    pub palette_snap: bool,
+    #[serde(default)]
+    pub references: Vec<crate::productivity::ReferenceImage>,
 }
 pub fn default_palette() -> Vec<Pixel> {
     let mut p = vec![CLEAR];
@@ -480,9 +486,30 @@ impl Document {
             color_profile: vec![],
             brush_shape: BrushShape::Round,
             dithering: None,
+            wraparound: false,
+            palette_snap: false,
+            references: vec![],
         }
     }
     pub fn validate(&self) -> Result<(), String> {
+        let mut reference_pixels = 0usize;
+        for r in &self.references {
+            reference_pixels = reference_pixels.saturating_add(r.width.saturating_mul(r.height));
+            if r.width == 0
+                || r.height == 0
+                || r.width > MAX_DIMENSION
+                || r.height > MAX_DIMENSION
+                || r.pixels.len() != r.width.saturating_mul(r.height)
+                || reference_pixels > MAX_PIXELS
+                || !r.x.is_finite()
+                || !r.y.is_finite()
+                || !r.scale.is_finite()
+                || r.scale <= 0.
+                || r.scale > 1000.
+            {
+                return Err("Invalid reference image".into());
+            }
+        }
         if self.dithering.as_ref().is_some_and(|m| !m.validate()) {
             return Err("Invalid dithering matrix".into());
         }
@@ -634,6 +661,14 @@ impl Document {
         }
         p
     }
+    pub fn snapped_color(&self, f: usize, c: Pixel) -> Pixel {
+        if self.palette_snap && self.color_mode == ColorMode::Rgba && c[3] > 0 {
+            let p = self.palette_for(f);
+            p[nearest(c, p)]
+        } else {
+            c
+        }
+    }
     fn drawing_color(&self, l: usize, f: usize, c: Pixel) -> (Pixel, u8) {
         if self.color_mode != ColorMode::Indexed {
             return (convert(c, self.color_mode, self.palette_for(f)), 0);
@@ -676,11 +711,30 @@ impl Document {
                             .filter(|n| p.get(*n as usize) == Some(v))
                             .map(|n| n as usize)
                             .unwrap_or_else(|| {
+                                if v[3] == 0 && !l.background {
+                                    return self.transparent_index.min(p.len() - 1);
+                                }
                                 self.dithering.as_ref().map_or_else(
                                     || nearest(*v, p),
                                     |m| m.index(*v, p, i % self.width, i / self.width),
                                 )
                             });
+                        // Transparency is a mask, not a candidate shade for opaque artwork.
+                        let n = if v[3] > 0 && !l.background && p[n][3] == 0 {
+                            p.iter()
+                                .enumerate()
+                                .filter(|(_, c)| c[3] > 0)
+                                .min_by_key(|(_, c)| {
+                                    v.iter()
+                                        .zip(c.iter())
+                                        .map(|(a, b)| (*a as i32 - *b as i32).pow(2) as u32)
+                                        .sum::<u32>()
+                                })
+                                .map(|(i, _)| i)
+                                .unwrap_or(n)
+                        } else {
+                            n
+                        };
                         indices.push(n as u8);
                         *v = p[n];
                     } else {
@@ -706,6 +760,31 @@ impl Document {
                 }
             }
         }
+    }
+    /// Import colors while reserving a distinct slot for transparency in indexed sprites.
+    pub fn import_palette(&mut self, mut palette: Vec<Pixel>) -> Result<(), String> {
+        if palette.is_empty() || palette.len() > 256 {
+            return Err("Palette must contain 1–256 colors".into());
+        }
+        if self.color_mode == ColorMode::Indexed {
+            let transparent = if let Some(i) = palette.iter().position(|p| p[3] == 0) {
+                i
+            } else if palette.len() < 256 {
+                palette.push(CLEAR);
+                palette.len() - 1
+            } else {
+                return Err(
+                    "Indexed palettes need a transparent slot; choose at most 255 opaque colors"
+                        .into(),
+                );
+            };
+            self.transparent_index = transparent;
+        }
+        self.palette = palette;
+        self.frame_palettes.clear();
+        self.drawing_index = None;
+        self.set_color_mode(self.color_mode);
+        Ok(())
     }
     pub fn set_palette_color(&mut self, index: usize, color: Pixel) {
         if index >= self.palette.len() {
@@ -802,7 +881,7 @@ impl Document {
         if !self.editable(l) || self.layers[l].tileset.is_some() {
             return;
         }
-        let (c, ci) = self.drawing_color(l, f, c);
+        let (c, ci) = self.drawing_color(l, f, self.snapped_color(f, c));
         let size = size.clamp(1, MAX_BRUSH_SIZE);
         let lo = -(size / 2);
         for dy in lo..lo + size {
@@ -819,7 +898,7 @@ impl Document {
                     BrushShape::Vertical => dx == 0,
                 };
                 if accept {
-                    if let Some(i) = self.index(x + dx, y + dy) {
+                    if let Some(i) = self.drawing_position(x + dx, y + dy) {
                         self.layers[l].cels[f][i] = c;
                         if let Some(indices) = &mut self.layers[l].cel_meta[f].indices {
                             Arc::make_mut(indices)[i] = ci;
@@ -913,12 +992,25 @@ impl Document {
             y1 -= 1;
         }
     }
+    pub fn drawing_position(&self, x: i32, y: i32) -> Option<usize> {
+        if self.wraparound {
+            self.index(
+                x.rem_euclid(self.width as i32),
+                y.rem_euclid(self.height as i32),
+            )
+        } else {
+            self.index(x, y)
+        }
+    }
     pub fn fill(&mut self, l: usize, f: usize, x: i32, y: i32, c: Pixel) {
         if !self.editable(l) || self.layers[l].tileset.is_some() {
             return;
         }
-        let Some(i) = self.index(x, y) else { return };
-        let (c, ci) = self.drawing_color(l, f, c);
+        let Some(i) = self.drawing_position(x, y) else {
+            return;
+        };
+        let (x, y) = ((i % self.width) as i32, (i / self.width) as i32);
+        let (c, ci) = self.drawing_color(l, f, self.snapped_color(f, c));
         let old = self.layers[l].cels[f][i];
         if old == c {
             return;
@@ -930,13 +1022,13 @@ impl Document {
         }
         while let Some((x, y)) = stack.pop() {
             for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
-                if let Some(n) = self.index(nx, ny) {
+                if let Some(n) = self.drawing_position(nx, ny) {
                     if self.layers[l].cels[f][n] == old {
                         self.layers[l].cels[f][n] = c;
                         if let Some(indices) = &mut self.layers[l].cel_meta[f].indices {
                             Arc::make_mut(indices)[n] = ci;
                         }
-                        stack.push((nx, ny));
+                        stack.push(((n % self.width) as i32, (n / self.width) as i32));
                     }
                 }
             }

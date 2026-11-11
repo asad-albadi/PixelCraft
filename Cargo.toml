@@ -7,7 +7,7 @@ license = "MIT"
 
 [dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
-image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg"] }
 rfd = "0.17.2"
 flate2 = "1.1.10"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
@@ -29,3 +29,9 @@ incremental = false
 [profile.release]
 opt-level = 2
 strip = true
+
+# Security-patched upstream releases, vendored for reproducible offline builds.
+[patch.crates-io]
+rustls = { path = "vendor/rustls-0.23.46" }
+rustls-webpki = { path = "vendor/rustls-webpki-0.103.16" }
+webpki-root-certs = { path = "vendor/webpki-root-certs-1.0.10" }

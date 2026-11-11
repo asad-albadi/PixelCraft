@@ -1,0 +1,600 @@
+[
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_99abdfaf811fefb1188011a0696b36a6eb50c073d6675968e520061ce17c4b90",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "10 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c6180"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c6180"
+    },
+    "result": {
+      "calls": [
+        "_Z13lua_tonumberxP9lua_StateiPi",
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_ZN3app5Color7fromHsvEdddi",
+        "_ZNK3app5Color16getHsvSaturationEv",
+        "_ZNK3app5Color8getAlphaEv",
+        "_ZNK3app5Color9getHsvHueEv",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c6180",
+      "function": "_ZN3app6script12_GLOBAL__N_118Color_set_hsvValueEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 10,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_118Color_set_hsvValueEP9lua_State(int64_t rdi)\n{\n    r14 = rdi;\n    rax = fs:[0x28];\n    stack_40 = rax;\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, \"app::Color\");\n    rbx = rax;\n    _ZNK3app5Color9getHsvHueEv(rax);\n    __asm(\"movsd [rsp+0x10], xmm0\");\n    _ZNK3app5Color16getHsvSaturationEv(rbx);\n    __asm(\"movsd [rsp+8], xmm0\");\n    _Z13lua_tonumberxP9lua_StateiPi(r14, 2, 0);\n    __asm(\"movsd [rsp], xmm0\");\n    rax = _ZNK3app5Color8getAlphaEv(rbx);\n    __asm(\"movsd xmm0, [rsp+0x10]\");\n    __asm(\"movsd xmm1, [rsp+8]\");\n    __asm(\"movsd xmm2, [rsp]\");\n    _ZN3app5Color7fromHsvEdddi(&stack_18, eax);\n    rax = stack_38;\n    *(uint64_t*)(rbx + 0x20) = rax;\n    __asm(\"movups xmm0, [rsp+0x18]\");\n    __asm(\"movups xmm1, [rsp+0x28]\");\n    __asm(\"movups [rbx+0x10], xmm1\");\n    __asm(\"movups [rbx], xmm0\");\n    rax = fs:[0x28];\n    if (rax != stack_40) {\n        __stack_chk_fail@plt();\n    } else {\n        eax = 0;\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_118Color_set_hsvValueEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_118Color_set_hsvValueEP9lua_State (32 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_5e3adf7b976571266cedae1c6347acd88d14992c4d493c69286b5da22042539c",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "10 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c5fa0"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c5fa0"
+    },
+    "result": {
+      "calls": [
+        "_Z13lua_tonumberxP9lua_StateiPi",
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_ZN3app5Color7fromHsvEdddi",
+        "_ZNK3app5Color11getHsvValueEv",
+        "_ZNK3app5Color16getHsvSaturationEv",
+        "_ZNK3app5Color8getAlphaEv",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c5fa0",
+      "function": "_ZN3app6script12_GLOBAL__N_116Color_set_hsvHueEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 10,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_116Color_set_hsvHueEP9lua_State(int64_t rdi)\n{\n    r14 = rdi;\n    rax = fs:[0x28];\n    stack_40 = rax;\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, \"app::Color\");\n    rbx = rax;\n    _Z13lua_tonumberxP9lua_StateiPi(r14, 2, 0);\n    __asm(\"movsd [rsp+0x10], xmm0\");\n    _ZNK3app5Color16getHsvSaturationEv(rbx);\n    __asm(\"movsd [rsp+8], xmm0\");\n    _ZNK3app5Color11getHsvValueEv(rbx);\n    __asm(\"movsd [rsp], xmm0\");\n    rax = _ZNK3app5Color8getAlphaEv(rbx);\n    __asm(\"movsd xmm0, [rsp+0x10]\");\n    __asm(\"movsd xmm1, [rsp+8]\");\n    __asm(\"movsd xmm2, [rsp]\");\n    _ZN3app5Color7fromHsvEdddi(&stack_18, eax);\n    rax = stack_38;\n    *(uint64_t*)(rbx + 0x20) = rax;\n    __asm(\"movups xmm0, [rsp+0x18]\");\n    __asm(\"movups xmm1, [rsp+0x28]\");\n    __asm(\"movups [rbx+0x10], xmm1\");\n    __asm(\"movups [rbx], xmm0\");\n    rax = fs:[0x28];\n    if (rax != stack_40) {\n        __stack_chk_fail@plt();\n    } else {\n        eax = 0;\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_116Color_set_hsvHueEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_116Color_set_hsvHueEP9lua_State (32 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_4f70ea7eb7474a4dad1e4c2523a73d0bfd9168420a64da30cf16aa1f5290ae30",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "10 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c6090"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c6090"
+    },
+    "result": {
+      "calls": [
+        "_Z13lua_tonumberxP9lua_StateiPi",
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_ZN3app5Color7fromHsvEdddi",
+        "_ZNK3app5Color11getHsvValueEv",
+        "_ZNK3app5Color8getAlphaEv",
+        "_ZNK3app5Color9getHsvHueEv",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c6090",
+      "function": "_ZN3app6script12_GLOBAL__N_123Color_set_hsvSaturationEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 10,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_123Color_set_hsvSaturationEP9lua_State(int64_t rdi)\n{\n    r14 = rdi;\n    rax = fs:[0x28];\n    stack_40 = rax;\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, \"app::Color\");\n    rbx = rax;\n    _ZNK3app5Color9getHsvHueEv(rax);\n    __asm(\"movsd [rsp+0x10], xmm0\");\n    _Z13lua_tonumberxP9lua_StateiPi(r14, 2, 0);\n    __asm(\"movsd [rsp+8], xmm0\");\n    _ZNK3app5Color11getHsvValueEv(rbx);\n    __asm(\"movsd [rsp], xmm0\");\n    rax = _ZNK3app5Color8getAlphaEv(rbx);\n    __asm(\"movsd xmm0, [rsp+0x10]\");\n    __asm(\"movsd xmm1, [rsp+8]\");\n    __asm(\"movsd xmm2, [rsp]\");\n    _ZN3app5Color7fromHsvEdddi(&stack_18, eax);\n    rax = stack_38;\n    *(uint64_t*)(rbx + 0x20) = rax;\n    __asm(\"movups xmm0, [rsp+0x18]\");\n    __asm(\"movups xmm1, [rsp+0x28]\");\n    __asm(\"movups [rbx+0x10], xmm1\");\n    __asm(\"movups [rbx], xmm0\");\n    rax = fs:[0x28];\n    if (rax != stack_40) {\n        __stack_chk_fail@plt();\n    } else {\n        eax = 0;\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_123Color_set_hsvSaturationEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_123Color_set_hsvSaturationEP9lua_State (32 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_c2e604e25bb6aa2f2de721dece1e8aea2447549090270b5097823c72ce1eaffc",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "unstructured_flow",
+        "message": "10 gotos remain where the control flow isn't a simple if/loop"
+      },
+      {
+        "code": "inline_asm",
+        "message": "3 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x53e9c0"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x53e9c0"
+    },
+    "result": {
+      "calls": [
+        "_Z14luaV_tonumber_PK6TValuePd",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x53e9c0",
+      "function": "_Z13lua_tonumberxP9lua_StateiPi",
+      "gotos": 10,
+      "inline_asm": 3,
+      "pseudo_code": "int64_t _Z13lua_tonumberxP9lua_StateiPi(int64_t rdi, int64_t rsi, int64_t rdx)\n{\n    rbx = rdx;\n    rax = fs:[0x28];\n    stack_8 = rax;\n    stack_0 = 0;\n    rcx = *(uint64_t*)(rdi + 0x20);\n    if (esi <= 0) {\n        if (esi >= 0xfff0b9d9) {\n            rax = esi;\n            rax <<= 4;\n            rax += *(uint64_t*)(rdi + 16);\nlabel_53ea30:\n            if (*(uint8_t*)(rax + 8) != 0x13) {\nlabel_53ea7e:\n                _Z14luaV_tonumber_PK6TValuePd(rax, rsp);\n                if (rbx != 0) {\nlabel_53ea8e:\n                    *(uint32_t*)(rbx) = eax;\n                }\n            } else {\nlabel_53ea36:\n                __asm(\"movsd xmm0, [rax]\");\n                __asm(\"movsd [rsp], xmm0\");\n                eax = 1;\n                if (rbx != 0) {\n                    goto label_53ea8e;\n                } else {\n                }\n            }\n        } else {\n            if (esi != 0xfff0b9d8) {\n                rax = *(uint64_t*)(rcx);\n                if (*(uint8_t*)(rax + 8) != 0x66) {\nlabel_53e9f5:\n                    rax = *(uint64_t*)(rdi + 0x18);\n                    rax += 0x50;\n                    if (*(uint8_t*)(rax + 8) == 0x13) {\n                        goto label_53ea36;\n                    } else {\n                        goto label_53ea7e;\n                    }\n                } else {\n                    ecx = 0xfff0b9d8;\n                    ecx -= esi;\n                    rax = *(uint64_t*)(rax);\n                    edx = *(uint8_t*)(rax + 10);\n                    if (ecx > edx /* unsigned */) {\n                        goto label_53e9f5;\n                    } else {\n                        ecx = 0xfff0b9d7;\n                        ecx -= esi;\n                        rcx <<= 4;\n                        rax += rcx;\n                        rax += 0x20;\n                        if (*(uint8_t*)(rax + 8) == 0x13) {\n                            goto label_53ea36;\n                        } else {\n                            goto label_53ea7e;\n                        }\n                    }\n                }\n            } else {\n                rax = *(uint64_t*)(rdi + 0x18);\n                rax += 0x40;\n                if (*(uint8_t*)(rax + 8) == 0x13) {\n                    goto label_53ea36;\n                } else {\n                    goto label_53ea7e;\n                }\n            }\n        }\n    } else {\n        eax = esi;\n        rax <<= 4;\n        rax += *(uint64_t*)(rcx);\n        if (rax < *(uint64_t*)(rdi + 16) /* unsigned */) {\n            goto label_53ea30;\n        } else {\n            goto label_53e9f5;\n        }\n    }\n    __asm(\"movsd xmm0, [rsp]\");\n    rax = fs:[0x28];\n    if (rax != stack_8) {\n        __stack_chk_fail@plt();\n    } else {\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _Z13lua_tonumberxP9lua_StateiPi(int64_t rdi, int64_t rsi, int64_t rdx)",
+      "strings": [],
+      "structured": false
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _Z13lua_tonumberxP9lua_StateiPi (90 lines, partly unstructured)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_677df1b6d3d1b00712ec63d55d93e310ec5b7952c749c2d93e248441e975e959",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "unstructured_flow",
+        "message": "2 gotos remain where the control flow isn't a simple if/loop"
+      },
+      {
+        "code": "inline_asm",
+        "message": "4 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x554760"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "_Z14luaV_tonumber_PK6TValuePd"
+    },
+    "result": {
+      "calls": [
+        "_Z12luaO_str2numPKcP6TValue",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x554760",
+      "function": "_Z14luaV_tonumber_PK6TValuePd",
+      "gotos": 2,
+      "inline_asm": 4,
+      "pseudo_code": "int64_t _Z14luaV_tonumber_PK6TValuePd(int64_t rdi)\n{\n    rax = fs:[0x28];\n    stack_10 = rax;\n    ecx = *(uint8_t*)(rdi + 8);\n    if (cl != 3) {\n        cl &= 15;\n        eax = 0;\n        if (cl == 4) {\n            rbx = rsi;\n            rax = *(uint64_t*)(rdi);\n            rax += 0x18;\n            r14 = rdi;\n            _Z12luaO_str2numPKcP6TValue(rax, rsp);\n            rcx = *(uint64_t*)(r14);\n            if (*(uint8_t*)(rcx + 8) != 4) {\n                rcx = *(uint64_t*)(rcx + 16);\n                rcx++;\n                eax = 0;\n                if (rax == rcx) {\nlabel_5547f3:\n                    rsi = rbx;\n                    rax = stack_0;\n                    if (stack_8 == 3) {\n                        __asm(\"cvtsi2sd xmm0, rax\");\n                    } else {\n                        __asm(\"movq xmm0, rax\");\n                    }\nlabel_554783:\n                    __asm(\"movsd [rsi], xmm0\");\n                    eax = 1;\n                }\n            } else {\n                ecx = *(uint8_t*)(rcx + 11);\n                rcx++;\n                eax = 0;\n                if (rax == rcx) {\n                    goto label_5547f3;\n                }\n            }\n        }\n    } else {\n        __asm(\"cvtsi2sd xmm0, qword ptr [rdi]\");\n        goto label_554783;\n    }\n    rcx = fs:[0x28];\n    if (rcx != stack_10) {\n        __stack_chk_fail@plt();\n    } else {\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _Z14luaV_tonumber_PK6TValuePd(int64_t rdi)",
+      "strings": [],
+      "structured": false
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _Z14luaV_tonumber_PK6TValuePd (52 lines, partly unstructured)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_3982e68e9adb398e2856884b7231407f056c924eb1dc7f1a331f96c0a78d1da2",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "3 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x16a5e0"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x16a5e0"
+    },
+    "result": {
+      "calls": [],
+      "engine": "clean-room lifter",
+      "entry": "0x16a5e0",
+      "function": "_ZN3app5Color7fromHsvEdddi",
+      "gotos": 0,
+      "inline_asm": 3,
+      "pseudo_code": "int64_t _ZN3app5Color7fromHsvEdddi(int64_t rdi, int64_t rsi)\n{\n    rax = rdi;\n    *(uint32_t*)(rdi) = 2;\n    __asm(\"movsd [rdi+8], xmm0\");\n    __asm(\"movsd [rdi+0x10], xmm1\");\n    __asm(\"movsd [rdi+0x18], xmm2\");\n    *(uint32_t*)(rdi + 0x20) = esi;\n    return rax;\n}\n",
+      "signature": "int64_t _ZN3app5Color7fromHsvEdddi(int64_t rdi, int64_t rsi)",
+      "strings": [],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app5Color7fromHsvEdddi (10 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_b6a80dd05ad4d972ed8a661a64e396940e448268233d8505ff167ff2d32c6ecd",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "16 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c6570"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c6570"
+    },
+    "result": {
+      "calls": [
+        "_Z13lua_tonumberxP9lua_StateiPi",
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_ZN3app5Color7fromHslEdddi",
+        "_ZN3app5Color7fromHsvEdddi",
+        "_ZNK3app5Color11getHsvValueEv",
+        "_ZNK3app5Color15getHslLightnessEv",
+        "_ZNK3app5Color16getHslSaturationEv",
+        "_ZNK3app5Color16getHsvSaturationEv",
+        "_ZNK3app5Color8getAlphaEv",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c6570",
+      "function": "_ZN3app6script12_GLOBAL__N_113Color_set_hueEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 16,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_113Color_set_hueEP9lua_State(int64_t rdi)\n{\n    r14 = rdi;\n    rax = fs:[0x28];\n    stack_48 = rax;\n    rbx = \"app::Color\";\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, rbx);\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(r14, 1, rbx);\n    rbx = rax;\n    rdi = r14;\n    esi = 2;\n    edx = 0;\n    if (ebp != 3) {\n        _Z13lua_tonumberxP9lua_StateiPi();\n        __asm(\"movsd [rsp+0x18], xmm0\");\n        _ZNK3app5Color16getHsvSaturationEv(rbx);\n        __asm(\"movsd [rsp+0x10], xmm0\");\n        _ZNK3app5Color11getHsvValueEv(rbx);\n        __asm(\"movsd [rsp+8], xmm0\");\n        rax = _ZNK3app5Color8getAlphaEv(rbx);\n        __asm(\"movsd xmm0, [rsp+0x18]\");\n        __asm(\"movsd xmm1, [rsp+0x10]\");\n        __asm(\"movsd xmm2, [rsp+8]\");\n        _ZN3app5Color7fromHsvEdddi(&stack_20, eax);\n    } else {\n        _Z13lua_tonumberxP9lua_StateiPi();\n        __asm(\"movsd [rsp+0x18], xmm0\");\n        _ZNK3app5Color16getHslSaturationEv(rbx);\n        __asm(\"movsd [rsp+0x10], xmm0\");\n        _ZNK3app5Color15getHslLightnessEv(rbx);\n        __asm(\"movsd [rsp+8], xmm0\");\n        rax = _ZNK3app5Color8getAlphaEv(rbx);\n        __asm(\"movsd xmm0, [rsp+0x18]\");\n        __asm(\"movsd xmm1, [rsp+0x10]\");\n        __asm(\"movsd xmm2, [rsp+8]\");\n        _ZN3app5Color7fromHslEdddi(&stack_20, eax);\n    }\n    rax = stack_40;\n    *(uint64_t*)(rbx + 0x20) = rax;\n    __asm(\"movups xmm0, [rsp+0x20]\");\n    __asm(\"movups xmm1, [rsp+0x30]\");\n    __asm(\"movups [rbx+0x10], xmm1\");\n    __asm(\"movups [rbx], xmm0\");\n    rax = fs:[0x28];\n    if (rax != stack_48) {\n        __stack_chk_fail@plt();\n    } else {\n        eax = 0;\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_113Color_set_hueEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_113Color_set_hueEP9lua_State (51 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "inferred",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.0",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_331aad626a44388b02aa612b6d4425587db3a8c7f36a90f606634e55a87e5bb7",
+    "limitations": [
+      {
+        "code": "register_level",
+        "message": "variables are machine registers and stack slots; types are not recovered"
+      },
+      {
+        "code": "calling_convention_assumed",
+        "message": "call arguments follow the usual x86_64 convention and may be wrong for unusual functions"
+      },
+      {
+        "code": "conditions_from_flags",
+        "message": "branch conditions are rebuilt from the last compare and may be approximate"
+      },
+      {
+        "code": "inline_asm",
+        "message": "16 instructions have no C rule and are shown as __asm(...)"
+      },
+      {
+        "code": "deep_engine_unavailable",
+        "message": "Ghidra couldn't open this program (Ghidra timed out: Ghidra headless took longer than 14 s and was stopped.). So this came from the built-in decompiler, which is less exact."
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3c6700"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3c6700"
+    },
+    "result": {
+      "calls": [
+        "_Z13lua_tonumberxP9lua_StateiPi",
+        "_Z15luaL_checkudataP9lua_StateiPKc",
+        "_ZN3app5Color7fromHslEdddi",
+        "_ZN3app5Color7fromHsvEdddi",
+        "_ZNK3app5Color11getHsvValueEv",
+        "_ZNK3app5Color15getHslLightnessEv",
+        "_ZNK3app5Color8getAlphaEv",
+        "_ZNK3app5Color9getHslHueEv",
+        "_ZNK3app5Color9getHsvHueEv",
+        "__stack_chk_fail@plt"
+      ],
+      "engine": "clean-room lifter",
+      "entry": "0x3c6700",
+      "function": "_ZN3app6script12_GLOBAL__N_120Color_set_saturationEP9lua_State",
+      "gotos": 0,
+      "inline_asm": 16,
+      "pseudo_code": "int64_t _ZN3app6script12_GLOBAL__N_120Color_set_saturationEP9lua_State(int64_t rdi)\n{\n    r14 = rdi;\n    rax = fs:[0x28];\n    stack_48 = rax;\n    rbx = \"app::Color\";\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(rdi, 1, rbx);\n    rax = _Z15luaL_checkudataP9lua_StateiPKc(r14, 1, rbx);\n    rbx = rax;\n    rdi = rax;\n    if (ebp != 3) {\n        _ZNK3app5Color9getHsvHueEv();\n        __asm(\"movsd [rsp+0x18], xmm0\");\n        _Z13lua_tonumberxP9lua_StateiPi(r14, 2, 0);\n        __asm(\"movsd [rsp+0x10], xmm0\");\n        _ZNK3app5Color11getHsvValueEv(rbx);\n        __asm(\"movsd [rsp+8], xmm0\");\n        rax = _ZNK3app5Color8getAlphaEv(rbx);\n        __asm(\"movsd xmm0, [rsp+0x18]\");\n        __asm(\"movsd xmm1, [rsp+0x10]\");\n        __asm(\"movsd xmm2, [rsp+8]\");\n        _ZN3app5Color7fromHsvEdddi(&stack_20, eax);\n    } else {\n        _ZNK3app5Color9getHslHueEv();\n        __asm(\"movsd [rsp+0x18], xmm0\");\n        _Z13lua_tonumberxP9lua_StateiPi(r14, 2, 0);\n        __asm(\"movsd [rsp+0x10], xmm0\");\n        _ZNK3app5Color15getHslLightnessEv(rbx);\n        __asm(\"movsd [rsp+8], xmm0\");\n        rax = _ZNK3app5Color8getAlphaEv(rbx);\n        __asm(\"movsd xmm0, [rsp+0x18]\");\n        __asm(\"movsd xmm1, [rsp+0x10]\");\n        __asm(\"movsd xmm2, [rsp+8]\");\n        _ZN3app5Color7fromHslEdddi(&stack_20, eax);\n    }\n    rax = stack_40;\n    *(uint64_t*)(rbx + 0x20) = rax;\n    __asm(\"movups xmm0, [rsp+0x20]\");\n    __asm(\"movups xmm1, [rsp+0x30]\");\n    __asm(\"movups [rbx+0x10], xmm1\");\n    __asm(\"movups [rbx], xmm0\");\n    rax = fs:[0x28];\n    if (rax != stack_48) {\n        __stack_chk_fail@plt();\n    } else {\n        eax = 0;\n        return rax;\n    }\n}\n",
+      "signature": "int64_t _ZN3app6script12_GLOBAL__N_120Color_set_saturationEP9lua_State(int64_t rdi)",
+      "strings": [
+        "app::Color"
+      ],
+      "structured": true
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for _ZN3app6script12_GLOBAL__N_120Color_set_saturationEP9lua_State (49 lines)."
+  }
+]

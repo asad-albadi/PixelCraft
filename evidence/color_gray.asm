@@ -1,5 +1,5 @@
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -19,7 +19,7 @@ Disassembly of section .text:
   3c691e:	5b                   	pop    %rbx
   3c691f:	c3                   	ret
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -55,7 +55,7 @@ Disassembly of section .text:
   3c6a8f:	c3                   	ret
   3c6a90:	e8 4b fb d7 ff       	call   1465e0 <__stack_chk_fail@plt>
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -216,7 +216,7 @@ Disassembly of section .text:
   16de5e:	8b                   	.byte 0x8b
   16de5f:	7b                   	.byte 0x7b
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -310,7 +310,7 @@ Disassembly of section .text:
   16c3e0:	74 e2                	je     16c3c4 <_ZNK3app5Color7getGrayEv+0x114>
   16c3e2:	e8 f9 a1 fd ff       	call   1465e0 <__stack_chk_fail@plt>
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -419,7 +419,7 @@ Disassembly of section .text:
   691529:	41 5f                	pop    %r15
   69152b:	c3                   	ret
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 
 Disassembly of section .text:
@@ -447,23 +447,23 @@ Disassembly of section .text:
   691a5f:	0f 4d c2             	cmovge %edx,%eax
   691a62:	c3                   	ret
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .data.rel.ro:
  1cbafd8 e7fbf300 00000000 206a3c00 00000000  ........ j<.....
  1cbafe8 00000000 00000000                    ........
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .rodata:
  f7b3f8 00000000 00e06f40                    ......o@
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .rodata:
  f7b498 00000000 0000e03f                    .......?
 
-aseprite-reference:     file format elf64-x86-64
+/home/asad/.local/share/aseprite/1.3.18.6/aseprite:     file format elf64-x86-64
 
 Contents of section .rodata:
  f7c200 00000000 00e06f40 00000000 00e06f40  ......o@......o@
