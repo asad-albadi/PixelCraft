@@ -814,11 +814,14 @@ fn atlas_accepts_every_supported_extension_for_files_and_folders() {
         std::env::temp_dir().join(format!("pixelcraft-atlas-formats-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let mut paths = vec![];
-    for ext in [
+    for (index, ext) in [
         "pixel", "ase", "aseprite", "png", "gif", "bmp", "jpg", "jpeg", "jfif", "webp", "json",
         "ora", "apng", "tmj", "tsj", "ORA",
-    ] {
-        let path = root.join(format!("sprite.{ext}"));
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = root.join(format!("sprite-{index}.{ext}"));
         std::fs::write(&path, b"").unwrap();
         paths.push(path);
     }
