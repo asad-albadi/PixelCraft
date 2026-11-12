@@ -204,6 +204,11 @@ jobs:
           rustup component add clippy rustfmt
           rustup override set stable
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
+      - name: Restore Windows build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target
+          key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
       - name: Build embedded Windows Lua
         run: ./packaging/build-windows-lua.ps1
       - name: Build Windows WebP runtime
@@ -216,6 +221,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Save Windows build cache
+        uses: actions/cache/save@v4
+        with:
+          path: target
+          key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
       - name: Strict lint and native clipboard on Windows
         run: |
           cargo fmt --check
@@ -226,6 +236,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native clipboard failed' }
           ./checks/graphics-fallback.ps1
 
+      - name: Upload Windows startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelCraft-Windows-startup-review
+          path: |
+            ${{ runner.temp }}/pixelcraft-fallback/*.log
+            ${{ runner.temp }}/pixelcraft-fallback/*.png
+          if-no-files-found: warn
       - name: Check Windows UI themes, scaling, accessibility and keyboard navigation
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-ui-data
