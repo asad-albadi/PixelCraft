@@ -268,10 +268,28 @@
       "source": "Size_set_width 0x3efb20, Size_set_height 0x3efb90, lua_tointegerx 0x53eab0, luaV_tointeger 0x554930; ev_8f5d05eca6f0728fe79112fa6a6c7e973011541057d3c7ca7105c13a20dd9437; ev_92410839d97cbca6dd1bbfb27f6d0e2048be2106cc23f4e7658bb1163493dc96"
     },
     {
+      "name": "Lua Point value equality",
+      "group": "scripting",
+      "value": "Two Points compare equal iff both current stored signed32 x and y are equal; independent copies can compare equal",
+      "source": "Point_eq 0x3e4a40; Ghidra pseudocode ev_5d5cd5e769f26ecb884a1edb1e45417cb9ccd965dc3b668b18cd84a82f09c308 is truncated by an incorrect noreturn annotation; full assembly ev_c664b713e17b91e8917a83eb4011903c71b8f86d1dff7eee718142c4f2355285 establishes the comparison; evidence/point_equality.json"
+    },
+    {
       "name": "Lua Point assignment conversion",
       "group": "scripting",
       "value": "Every x/y write stores signed32(I(v)); I floors numeric floats and parses numeric strings; failed conversion zero; no canvas clamp",
       "source": "Point_set_x 0x3e5050; Point_set_y 0x3e50c0; lua_tointegerx 0x53eab0; luaV_tointeger 0x554930; evidence/point_setters.json and .asm; fallback pseudocode, Ghidra timeout disclosed in MECHANICS.md"
+    },
+    {
+      "name": "Lua Size value equality",
+      "group": "scripting",
+      "value": "Both current stored signed32 width and height must match exactly; independent copies can compare equal",
+      "source": "Size_eq 0x3ef470; Ghidra ev_089460dba97ff223322653c897d2f7950940b4717f48d4543a0590d815b72506 truncated by incorrect noreturn; complete assembly ev_801cc6d95ef7d750e8547673a9d04b16b90d81c99d7caadde5ebf99903972364; evidence/geometry_equality.json"
+    },
+    {
+      "name": "Lua Rectangle value equality",
+      "group": "scripting",
+      "value": "All four current stored signed32 x/y/width/height must match exactly, including empty rectangles; no normalization",
+      "source": "Rectangle_eq 0x3ea110; Ghidra ev_a946470746f451872841dc5714e31fa0090061d2fec3653360cea251463fa9c1 truncated by incorrect noreturn; complete assembly ev_5450cf5239ac096971fd69d43bb06a75a634672e31083e1e23a6d134ef977567; evidence/geometry_equality.json"
     }
   ]
 }

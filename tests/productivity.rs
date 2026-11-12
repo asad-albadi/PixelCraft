@@ -124,6 +124,8 @@ fn stale_bridge_edits_are_atomic() {
 fn references_survive_native_save_but_never_composite() {
     let mut d = Document::new(2, 2);
     d.references.push(ReferenceImage {
+        behind: false,
+        floating: false,
         name: "guide".into(),
         width: 1,
         height: 1,
@@ -571,6 +573,8 @@ fn regression_palette_import_preserves_transparent_and_white_pixels() {
 fn regression_ase_save_rejects_reference_loss() {
     let mut d = Document::new(1, 1);
     d.references.push(ReferenceImage {
+        behind: false,
+        floating: false,
         name: "guide".into(),
         width: 1,
         height: 1,
@@ -802,4 +806,77 @@ fn saved_shortcuts_preserve_removals_and_rebinding() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn atlas_accepts_every_supported_extension_for_files_and_folders() {
+    let root =
+        std::env::temp_dir().join(format!("pixelcraft-atlas-formats-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut paths = vec![];
+    for ext in [
+        "pixel", "ase", "aseprite", "png", "gif", "bmp", "jpg", "jpeg", "jfif", "webp", "json",
+        "ora", "apng", "tmj", "tsj", "ORA",
+    ] {
+        let path = root.join(format!("sprite.{ext}"));
+        std::fs::write(&path, b"").unwrap();
+        paths.push(path);
+    }
+    paths.sort();
+    assert_eq!(
+        pixelcraft::productivity::expand_atlas_inputs(&paths).unwrap(),
+        paths
+    );
+    assert_eq!(
+        pixelcraft::productivity::expand_atlas_inputs(std::slice::from_ref(&root)).unwrap(),
+        paths
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn reference_sampling_composites_transparency_and_stack_order() {
+    use pixelcraft::{
+        model::{CLEAR, Document, over},
+        productivity::{ReferenceImage, sample_canvas},
+    };
+    let mut d = Document::new(1, 1);
+    let art = [20, 30, 40, 255];
+    d.layers[0].cels[0][0] = art;
+    let reference = ReferenceImage {
+        behind: true,
+        floating: false,
+        name: "Guide".into(),
+        width: 1,
+        height: 1,
+        pixels: vec![[255, 0, 0, 255]].into(),
+        x: 0.,
+        y: 0.,
+        scale: 1.,
+        opacity: 255,
+        visible: true,
+    };
+    d.references.push(reference);
+    assert_eq!(sample_canvas(&d, 0, 0, 0, true), art);
+    d.references[0].behind = false;
+    d.references[0].pixels[0] = [255, 0, 0, 0];
+    assert_eq!(sample_canvas(&d, 0, 0, 0, true), art);
+    d.references[0].pixels[0] = [255, 0, 0, 128];
+    d.references[0].opacity = 128;
+    assert_eq!(
+        sample_canvas(&d, 0, 0, 0, true),
+        over(art, [255, 0, 0, 128], 128)
+    );
+    assert_eq!(sample_canvas(&d, 0, 0, 0, false), art);
+    d.references[0].behind = true;
+    d.layers[0].cels[0][0] = CLEAR;
+    assert_eq!(
+        sample_canvas(&d, 0, 0, 0, true),
+        over(CLEAR, [255, 0, 0, 128], 128)
+    );
+    d.references[0].visible = false;
+    assert_eq!(sample_canvas(&d, 0, 0, 0, true), CLEAR);
+    d.references[0].visible = true;
+    d.references[0].floating = true;
+    assert_eq!(sample_canvas(&d, 0, 0, 0, true), CLEAR);
 }

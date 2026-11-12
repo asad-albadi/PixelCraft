@@ -285,6 +285,10 @@ pub fn execute(
         None,
     )
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the established public API"
+)]
 pub fn execute_with_host(
     doc: &Document,
     source: &str,

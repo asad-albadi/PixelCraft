@@ -79,20 +79,20 @@ pub fn transform(
                 Transform::FlipY => (ox as i32, h - 1 - oy as i32),
                 _ => (ox as i32 * w / nw as i32, oy as i32 * h / nh as i32),
             };
-            if selected(x + sx, y + sy) {
-                if let Some(dst) = d.index(x + dx + ox as i32, y + dy + oy as i32) {
-                    let src = d.index(x + sx, y + sy).unwrap();
-                    writes.push((dst, source[src], source_indices.as_ref().map(|v| v[src])));
-                }
+            if selected(x + sx, y + sy)
+                && let Some(dst) = d.index(x + dx + ox as i32, y + dy + oy as i32)
+            {
+                let src = d.index(x + sx, y + sy).unwrap();
+                writes.push((dst, source[src], source_indices.as_ref().map(|v| v[src])));
             }
         }
     }
     for sy in y..y + h {
         for sx in x..x + w {
-            if let Some(i) = d.index(sx, sy) {
-                if mask.is_none_or(|m| m.get(i) == Some(&true)) {
-                    d.set_pixel(l, f, i, CLEAR);
-                }
+            if let Some(i) = d.index(sx, sy)
+                && mask.is_none_or(|m| m.get(i) == Some(&true))
+            {
+                d.set_pixel(l, f, i, CLEAR);
             }
         }
     }
@@ -153,6 +153,7 @@ pub fn ramp(a: Pixel, b: Pixel, n: usize) -> Vec<Pixel> {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SheetOptions {
+    pub scale: usize,
     pub columns: usize,
     pub padding: usize,
     pub trim: bool,
@@ -162,6 +163,7 @@ pub struct SheetOptions {
 impl Default for SheetOptions {
     fn default() -> Self {
         Self {
+            scale: 1,
             columns: 8,
             padding: 1,
             trim: false,
@@ -171,6 +173,10 @@ impl Default for SheetOptions {
     }
 }
 pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), String> {
+    d.validate()?;
+    if o.scale == 0 || o.scale > MAX_DIMENSION {
+        return Err("Scale must be a positive integer within image limits".into());
+    }
     let range = if let Some(i) = o.tag {
         let t = d.tags.get(i).ok_or("Unknown tag")?;
         t.from..=t.to
@@ -238,10 +244,21 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
         }
         frames.push(json!({"filename":format!("frame_{f}"),"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[*f],"sourceFrame":f}));
     }
-    let tags:Vec<Value>=d.tags.iter().filter_map(|t|{let from=sprites.iter().position(|s|s.0>=t.from)?;let to=sprites.iter().rposition(|s|s.0<=t.to)?;if from>to{return None}Some(json!({"name":t.name,"from":from,"to":to,"direction":match t.direction{1=>"reverse",2=>"pingpong",3=>"pingpong_reverse",_=>"forward"}}))}).collect();
+    let tags:Vec<Value>=d.tags.iter().filter_map(|t|{let from=sprites.iter().position(|s|s.0>=t.from)?;let to=sprites.iter().rposition(|s|s.0<=t.to)?;if from>to{return None}Some(json!({"name":t.name,"from":from,"to":to,"repeat":t.repeat,"direction":match t.direction{1=>"reverse",2=>"pingpong",3=>"pingpong_reverse",_=>"forward"}}))}).collect();
+    let scale = o.scale;
+    let im = scale_image(&im, scale)?;
+    for frame in &mut frames {
+        for key in ["frame", "spriteSourceSize", "sourceSize"] {
+            for value in frame[key].as_object_mut().unwrap().values_mut() {
+                if let Some(n) = value.as_u64() {
+                    *value = json!(n * scale as u64);
+                }
+            }
+        }
+    }
     Ok((
         im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width,"h":height},"scale":"1","padding":pad,"frameTags":tags}}),
+        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags}}),
     ))
 }
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
@@ -312,7 +329,10 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
                     Some("pingpong_reverse") => 3,
                     _ => 0,
                 },
-                repeat: 0,
+                repeat: match t.get("repeat").and_then(Value::as_u64) {
+                    Some(n) => u16::try_from(n).map_err(|_| "Invalid tag repeat")?,
+                    None => 0,
+                },
                 color: [0; 3],
             });
         }
@@ -350,4 +370,71 @@ pub fn transform_mask(d: &Document, b: [i32; 4], mask: &[bool], t: Transform) ->
         }
     }
     out
+}
+
+/// Integer nearest-neighbor scaling, bounded before allocation.
+pub fn scale_image(im: &RgbaImage, scale: usize) -> Result<RgbaImage, String> {
+    let w = (im.width() as usize)
+        .checked_mul(scale)
+        .ok_or("Export too large")?;
+    let h = (im.height() as usize)
+        .checked_mul(scale)
+        .ok_or("Export too large")?;
+    if scale == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION || w.saturating_mul(h) > MAX_PIXELS {
+        return Err("Scaled export exceeds image limits".into());
+    }
+    if scale == 1 {
+        return Ok(im.clone());
+    }
+    Ok(image::imageops::resize(
+        im,
+        w as u32,
+        h as u32,
+        image::imageops::FilterType::Nearest,
+    ))
+}
+/// Render a one-pixel outline or offset shadow from a stable source. Both the
+/// effect source and its destination are clipped to the active selection.
+pub fn spatial_effect(
+    d: &mut Document,
+    l: usize,
+    f: usize,
+    mask: &[bool],
+    color: Pixel,
+    offset: Option<(i32, i32)>,
+) -> Result<(), String> {
+    if l >= d.layers.len()
+        || f >= d.durations.len()
+        || !d.editable(l)
+        || d.layers[l].tileset.is_some()
+        || mask.len() != d.width * d.height
+    {
+        return Err("Choose an unlocked image layer and valid selection".into());
+    }
+    let source = d.layers[l].cels[f].clone();
+    let mut effect = vec![CLEAR; source.len()];
+    for (i, p) in source.iter().enumerate() {
+        if !mask[i] || p[3] == 0 {
+            continue;
+        }
+        let (x, y) = ((i % d.width) as i32, (i / d.width) as i32);
+        let shifts = offset.map_or_else(|| vec![(-1, 0), (1, 0), (0, -1), (0, 1)], |v| vec![v]);
+        for (dx, dy) in shifts {
+            if let Some(j) = d.index(x + dx, y + dy)
+                && mask[j]
+            {
+                let mut c = color;
+                c[3] = ((color[3] as u16 * p[3] as u16 + 127) / 255) as u8;
+                if c[3] > effect[j][3] {
+                    effect[j] = c;
+                }
+            }
+        }
+    }
+    for (i, c) in effect.into_iter().enumerate() {
+        if c[3] > 0 {
+            d.set_pixel(l, f, i, over(c, source[i], 255));
+        }
+    }
+    Ok(())
 }

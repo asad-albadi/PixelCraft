@@ -35,22 +35,22 @@ impl ScriptUi {
         self.modeless = false;
     }
     pub fn show(&mut self, ctx: &egui::Context) {
-        if self.pending.is_none() {
-            if let Some(Ok(request)) = self.receiver.as_ref().map(|rx| rx.try_recv()) {
-                let op = request.value["op"].as_str().unwrap_or("");
-                self.modeless = op == "pump";
-                if op == "refresh" || op == "pump" {
-                    self.preview = Some(request.value.clone());
-                }
-                if op == "refresh" {
-                    let _ = request.reply.send(json!({}));
-                } else if op == "preferences" {
-                    self.final_context = Some(request.value.clone());
-                    let _ = request.reply.send(json!({}));
-                } else {
-                    self.pending = Some(request);
-                    self.received = Some(Instant::now());
-                }
+        if self.pending.is_none()
+            && let Some(Ok(request)) = self.receiver.as_ref().map(|rx| rx.try_recv())
+        {
+            let op = request.value["op"].as_str().unwrap_or("");
+            self.modeless = op == "pump";
+            if op == "refresh" || op == "pump" {
+                self.preview = Some(request.value.clone());
+            }
+            if op == "refresh" {
+                let _ = request.reply.send(json!({}));
+            } else if op == "preferences" {
+                self.final_context = Some(request.value.clone());
+                let _ = request.reply.send(json!({}));
+            } else {
+                self.pending = Some(request);
+                self.received = Some(Instant::now());
             }
         }
         let Some(request) = self.pending.as_mut() else {

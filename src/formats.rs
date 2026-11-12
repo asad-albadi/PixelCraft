@@ -494,7 +494,7 @@ pub fn decode_ase_with_resolver(
     };
     let transparent = b[28] as usize;
     d.transparent_index = transparent;
-    let mut canonical = vec![0u8; 128];
+    let mut canonical = [0u8; 128];
     canonical[34] = 1;
     canonical[35] = 1;
     if b[20..28].iter().any(|v| *v != 0)
@@ -1078,7 +1078,25 @@ pub fn save(path: &Path, d: &Document) -> Result<(), String> {
     std::fs::rename(&temp, path).map_err(|e| e.to_string())
 }
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
+    export_raster_scaled(path, d, f, sheet, 1)
+}
+pub fn export_raster_scaled(
+    path: &Path,
+    d: &Document,
+    f: usize,
+    sheet: bool,
+    scale: usize,
+) -> Result<(), String> {
+    d.validate()?;
+    if f >= d.durations.len() {
+        return Err("Invalid frame".into());
+    }
     let count = if sheet { d.durations.len() } else { 1 };
+    if d.width.saturating_mul(count) > MAX_DIMENSION
+        || d.width.saturating_mul(count).saturating_mul(d.height) > MAX_PIXELS
+    {
+        return Err("Export exceeds image limits".into());
+    }
     let mut im = image::RgbaImage::new((d.width * count) as u32, d.height as u32);
     for n in 0..count {
         for (i, p) in d
@@ -1093,8 +1111,15 @@ pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<()
             );
         }
     }
+    let im = crate::workflows::scale_image(&im, scale)?;
     im.save(path).map_err(|e| e.to_string())?;
-    write_png_metadata(path, d)
+    if path
+        .extension()
+        .is_some_and(|s| s.eq_ignore_ascii_case("png"))
+    {
+        write_png_metadata(path, d)?;
+    }
+    Ok(())
 }
 pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
     export_gif_with_repeat(path, d, 0)
@@ -1135,7 +1160,8 @@ pub fn export_gif_frames(
     }
     Ok(())
 }
-fn png_records(bytes: &[u8]) -> Result<Vec<([u8; 4], Vec<u8>)>, String> {
+type PngRecord = ([u8; 4], Vec<u8>);
+fn png_records(bytes: &[u8]) -> Result<Vec<PngRecord>, String> {
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err("Invalid PNG signature".into());
     }
@@ -1173,22 +1199,22 @@ fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
         ) {
             if &kind == b"iCCP" {
                 let raw = &data[8..data.len() - 4];
-                if let Some(n) = raw.iter().position(|v| *v == 0) {
-                    if raw.get(n + 1) == Some(&0) {
-                        let mut icc = vec![];
-                        ZlibDecoder::new(&raw[n + 2..])
-                            .take(16 * 1024 * 1024 + 1)
-                            .read_to_end(&mut icc)
-                            .map_err(|e| e.to_string())?;
-                        if icc.len() > 16 * 1024 * 1024 {
-                            return Err("ICC profile exceeds budget".into());
-                        }
-                        let mut profile = vec![0; 16];
-                        profile[0] = 2;
-                        dword(&mut profile, icc.len() as u32);
-                        profile.extend(icc);
-                        d.color_profile = profile;
+                if let Some(n) = raw.iter().position(|v| *v == 0)
+                    && raw.get(n + 1) == Some(&0)
+                {
+                    let mut icc = vec![];
+                    ZlibDecoder::new(&raw[n + 2..])
+                        .take(16 * 1024 * 1024 + 1)
+                        .read_to_end(&mut icc)
+                        .map_err(|e| e.to_string())?;
+                    if icc.len() > 16 * 1024 * 1024 {
+                        return Err("ICC profile exceeds budget".into());
                     }
+                    let mut profile = vec![0; 16];
+                    profile[0] = 2;
+                    dword(&mut profile, icc.len() as u32);
+                    profile.extend(icc);
+                    d.color_profile = profile;
                 }
             }
             d.metadata.push(MetadataChunk {

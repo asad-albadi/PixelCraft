@@ -654,10 +654,10 @@ impl Document {
     }
     pub fn editing_palette(&self, l: usize, f: usize) -> Vec<Pixel> {
         let mut p = self.palette_for(f).to_vec();
-        if !self.layers[l].background {
-            if let Some(c) = p.get_mut(self.transparent_index) {
-                c[3] = 0;
-            }
+        if !self.layers[l].background
+            && let Some(c) = p.get_mut(self.transparent_index)
+        {
+            c[3] = 0;
         }
         p
     }
@@ -694,10 +694,10 @@ impl Document {
         for l in &mut self.layers {
             for (f, c) in l.cels.iter_mut().enumerate() {
                 let mut effective = palettes[f].clone();
-                if !l.background {
-                    if let Some(p) = effective.get_mut(self.transparent_index) {
-                        p[3] = 0;
-                    }
+                if !l.background
+                    && let Some(p) = effective.get_mut(self.transparent_index)
+                {
+                    p[3] = 0;
                 }
                 let p = &effective;
                 let old = l.cel_meta[f].indices.clone();
@@ -786,6 +786,79 @@ impl Document {
         self.set_color_mode(self.color_mode);
         Ok(())
     }
+    /// Move a swatch, remapping indices rather than recoloring existing artwork.
+    pub fn reorder_palette(&mut self, from: usize, to: usize) -> Result<(), String> {
+        let n = self.palette.len();
+        if from >= n || to >= n {
+            return Err("Invalid palette position".into());
+        }
+        if self
+            .frame_palettes
+            .iter()
+            .any(|p| !p.is_empty() && p.len() != n)
+        {
+            return Err("Frame palettes must have matching sizes to reorder".into());
+        }
+        let mut order: Vec<usize> = (0..n).collect();
+        let item = order.remove(from);
+        order.insert(to, item);
+        let mut remap = vec![0; n];
+        for (new, old) in order.iter().enumerate() {
+            remap[*old] = new;
+        }
+        let reorder = |p: &mut Vec<Pixel>| {
+            if !p.is_empty() {
+                let old = p.clone();
+                *p = order.iter().map(|i| old[*i]).collect();
+            }
+        };
+        reorder(&mut self.palette);
+        for p in &mut self.frame_palettes {
+            reorder(p);
+        }
+        self.palette_names.resize(n, String::new());
+        let name = self.palette_names.remove(from);
+        self.palette_names.insert(to, name);
+        self.transparent_index = remap[self.transparent_index.min(n - 1)];
+        self.drawing_index = self.drawing_index.map(|i| remap[i.min(n - 1)]);
+        for l in &mut self.layers {
+            for m in &mut l.cel_meta {
+                if let Some(indices) = &mut m.indices {
+                    for i in Arc::make_mut(indices) {
+                        *i = remap.get(*i as usize).copied().unwrap_or(0) as u8;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Append intermediate shades without changing any existing palette slots.
+    pub fn palette_ramp(&mut self, from: usize, to: usize, steps: usize) -> Result<(), String> {
+        if from >= self.palette.len()
+            || to >= self.palette.len()
+            || !(3..=256).contains(&steps)
+            || self.palette.len() + steps - 2 > 256
+        {
+            return Err("Ramp needs valid endpoints and room in the 256-color palette".into());
+        }
+        if self
+            .frame_palettes
+            .iter()
+            .any(|p| p.len() != self.palette.len())
+        {
+            return Err("Frame palettes must have matching sizes to add a shared ramp".into());
+        }
+        let colors = crate::workflows::ramp(self.palette[from], self.palette[to], steps);
+        self.palette.extend_from_slice(&colors[1..steps - 1]);
+        for p in &mut self.frame_palettes {
+            if !p.is_empty() {
+                let ramp = crate::workflows::ramp(p[from], p[to], steps);
+                p.extend_from_slice(&ramp[1..steps - 1]);
+            }
+        }
+        self.palette_names.resize(self.palette.len(), String::new());
+        Ok(())
+    }
     pub fn set_palette_color(&mut self, index: usize, color: Pixel) {
         if index >= self.palette.len() {
             return;
@@ -797,10 +870,10 @@ impl Document {
             for l in &mut self.layers {
                 for (f, c) in l.cels.iter_mut().enumerate() {
                     let mut effective = palettes[f].clone();
-                    if !l.background {
-                        if let Some(p) = effective.get_mut(self.transparent_index) {
-                            p[3] = 0;
-                        }
+                    if !l.background
+                        && let Some(p) = effective.get_mut(self.transparent_index)
+                    {
+                        p[3] = 0;
                     }
                     let p = &effective;
                     let indices = l.cel_meta[f].indices.clone();
@@ -897,12 +970,10 @@ impl Document {
                     BrushShape::Horizontal => dy == 0,
                     BrushShape::Vertical => dx == 0,
                 };
-                if accept {
-                    if let Some(i) = self.drawing_position(x + dx, y + dy) {
-                        self.layers[l].cels[f][i] = c;
-                        if let Some(indices) = &mut self.layers[l].cel_meta[f].indices {
-                            Arc::make_mut(indices)[i] = ci;
-                        }
+                if accept && let Some(i) = self.drawing_position(x + dx, y + dy) {
+                    self.layers[l].cels[f][i] = c;
+                    if let Some(indices) = &mut self.layers[l].cel_meta[f].indices {
+                        Arc::make_mut(indices)[i] = ci;
                     }
                 }
             }
@@ -931,6 +1002,10 @@ impl Document {
             }
         }
     }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the established public API"
+    )]
     pub fn ellipse(
         &mut self,
         l: usize,
@@ -1022,14 +1097,14 @@ impl Document {
         }
         while let Some((x, y)) = stack.pop() {
             for (nx, ny) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
-                if let Some(n) = self.drawing_position(nx, ny) {
-                    if self.layers[l].cels[f][n] == old {
-                        self.layers[l].cels[f][n] = c;
-                        if let Some(indices) = &mut self.layers[l].cel_meta[f].indices {
-                            Arc::make_mut(indices)[n] = ci;
-                        }
-                        stack.push(((n % self.width) as i32, (n / self.width) as i32));
+                if let Some(n) = self.drawing_position(nx, ny)
+                    && self.layers[l].cels[f][n] == old
+                {
+                    self.layers[l].cels[f][n] = c;
+                    if let Some(indices) = &mut self.layers[l].cel_meta[f].indices {
+                        Arc::make_mut(indices)[n] = ci;
                     }
+                    stack.push(((n % self.width) as i32, (n / self.width) as i32));
                 }
             }
         }
@@ -1265,10 +1340,10 @@ impl Document {
             if l.parent == Some(index) {
                 l.parent = parent;
             }
-            if let Some(p) = l.parent {
-                if p > index {
-                    l.parent = Some(p - 1);
-                }
+            if let Some(p) = l.parent
+                && p > index
+            {
+                l.parent = Some(p - 1);
             }
         }
         self.metadata
@@ -1279,10 +1354,9 @@ impl Document {
                     .owner
                     .strip_prefix(prefix)
                     .and_then(|s| s.parse::<usize>().ok())
+                    && i > index
                 {
-                    if i > index {
-                        m.owner = format!("{prefix}{}", i - 1);
-                    }
+                    m.owner = format!("{prefix}{}", i - 1);
                 }
             }
         }

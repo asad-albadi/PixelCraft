@@ -512,6 +512,10 @@ impl Session {
 /// Interactive hosts receive declarative widgets and validated document snapshots;
 /// Lua stays on its worker thread while the editor owns all UI operations.
 pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the established public API"
+)]
 pub fn run_source_with_host(
     doc: &Document,
     source: &str,

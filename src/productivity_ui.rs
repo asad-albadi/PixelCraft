@@ -5,12 +5,31 @@ use pixelcraft::{
     productivity::*,
 };
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Preferences {
     recent: Vec<PathBuf>,
     onion: OnionOptions,
     preset: String,
+    interface_scale: f32,
+    checker_size: usize,
+    checker_colors: Option<[[u8; 3]; 2]>,
+    autosave: bool,
+    sample_references: bool,
+}
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            recent: vec![],
+            onion: OnionOptions::default(),
+            preset: String::new(),
+            interface_scale: 1.,
+            checker_size: 8,
+            checker_colors: None,
+            autosave: true,
+            sample_references: false,
+        }
+    }
 }
 pub(super) struct PowerTools {
     pub open: bool,
@@ -35,6 +54,9 @@ pub(super) struct PowerTools {
     bridge_tab: usize,
     bridge_session: String,
     pub shade_seen: std::collections::HashSet<usize>,
+    ramp_from: usize,
+    ramp_to: usize,
+    ramp_steps: usize,
     shortcut_key: String,
     shortcut_action: String,
 }
@@ -67,17 +89,125 @@ impl Default for PowerTools {
             bridge_tab: 0,
             bridge_session: format!("{}-{:?}", std::process::id(), std::time::SystemTime::now()),
             shade_seen: Default::default(),
+            ramp_from: 0,
+            ramp_to: 1,
+            ramp_steps: 5,
             shortcut_key: "W".into(),
             shortcut_action: "wand".into(),
         }
     }
 }
 impl PowerTools {
+    pub(super) fn interface_scale(&self) -> f32 {
+        self.preferences.interface_scale.clamp(0.5, 3.)
+    }
+    pub(super) fn autosave_enabled(&self) -> bool {
+        self.preferences.autosave
+    }
+    pub(super) fn checker_size(&self) -> f32 {
+        self.preferences.checker_size.clamp(1, 64) as f32
+    }
+    pub(super) fn checker_color(&self, index: usize) -> Option<Color32> {
+        self.preferences
+            .checker_colors
+            .map(|c| Color32::from_rgb(c[index][0], c[index][1], c[index][2]))
+    }
+
     pub(super) fn preferences_onion(&self) -> OnionOptions {
         self.preferences.onion.clone()
     }
 }
 impl PixelCraft {
+    pub(super) fn export_scale_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Export scale");
+            for scale in [1, 2, 4] {
+                ui.pc_selectable_value(&mut self.studio.sheet.scale, scale, format!("{scale}×"));
+            }
+            ui.add(
+                egui::DragValue::new(&mut self.studio.sheet.scale)
+                    .range(1..=16384)
+                    .prefix("Custom "),
+            );
+        });
+        ui.small("Nearest-neighbor scaling for PNG, BMP and sprite sheets.");
+    }
+    fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Export scaling", |ui| self.export_scale_ui(ui));
+        ui.collapsing("Interface & autosave", |ui| {
+            let before = serde_json::to_value(&self.power.preferences).ok();
+            let p = &mut self.power.preferences;
+            ui.add(egui::Slider::new(&mut p.interface_scale, 0.5..=3.).text("Interface scale"));
+            ui.add(
+                egui::DragValue::new(&mut p.checker_size)
+                    .range(1..=64)
+                    .prefix("Checker size "),
+            );
+            let mut custom = p.checker_colors.is_some();
+            ui.pc_checkbox(&mut custom, "Custom checker colors");
+            if custom {
+                let colors = p
+                    .checker_colors
+                    .get_or_insert([[210, 202, 202], [184, 176, 182]]);
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_srgb(&mut colors[0]);
+                    ui.color_edit_button_srgb(&mut colors[1]);
+                });
+            } else {
+                p.checker_colors = None;
+            }
+            ui.pc_checkbox(&mut p.autosave, "Enable recovery autosave");
+            if before != serde_json::to_value(&*p).ok() {
+                ui.ctx().set_zoom_factor(self.power.interface_scale());
+                self.save_workflow_preferences();
+            }
+        });
+    }
+    fn palette_arrangement_ui(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Palette order & ramps", |ui| {
+            let max = self.doc.palette.len() - 1;
+            ui.add(
+                egui::DragValue::new(&mut self.power.ramp_from)
+                    .range(0..=max)
+                    .prefix("From swatch "),
+            );
+            ui.add(
+                egui::DragValue::new(&mut self.power.ramp_to)
+                    .range(0..=max)
+                    .prefix("To swatch "),
+            );
+            if ui.pc_button("Move swatch to position").clicked() {
+                let mut next = self.doc.clone();
+                match next.reorder_palette(self.power.ramp_from, self.power.ramp_to) {
+                    Ok(()) => {
+                        self.remember();
+                        self.doc = next;
+                    }
+                    Err(e) => self.status = e,
+                }
+            }
+            ui.add(
+                egui::DragValue::new(&mut self.power.ramp_steps)
+                    .range(3..=256)
+                    .prefix("Ramp steps (including endpoints) "),
+            );
+            if ui.pc_button("Add ramp between swatches").clicked() {
+                let mut next = self.doc.clone();
+                match next.palette_ramp(
+                    self.power.ramp_from,
+                    self.power.ramp_to,
+                    self.power.ramp_steps,
+                ) {
+                    Ok(()) => {
+                        self.remember();
+                        self.doc = next;
+                    }
+                    Err(e) => self.status = e,
+                }
+            }
+            ui.small("Swatch numbers start at 0. Existing indexed artwork keeps its colors.");
+        });
+    }
     pub(super) fn recent_files(&self) -> Vec<PathBuf> {
         self.power.preferences.recent.clone()
     }
@@ -275,15 +405,31 @@ impl PixelCraft {
         }
         let mut open = true;
         egui::Window::new("Workflow tools").open(&mut open).default_width(530.).default_height(650.).show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{
+ self.settings_ui(ui);
+ self.palette_arrangement_ui(ui);
  ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
- ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember();self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("Wraparound drawing is independent of View → Seamless preview.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
- ui.collapsing("Reference images",|ui|{if ui.pc_button("Import PNG / JPEG overlay…").clicked(){if let Some(path)=rfd::FileDialog::new().add_filter("Reference image",&["png","jpg","jpeg"]).pick_file(){match import_reference(&path){Ok(r)=>{let mut next=self.doc.clone();next.references.push(r);match next.validate(){Ok(())=>{self.remember();self.doc=next;},Err(e)=>self.status=e}},Err(e)=>self.status=e}}}ui.small("Saved inside .pixel projects; excluded from artwork exports. Enable Move to drag; Shift-drag scales.");let mut remove=None;for i in 0..self.doc.references.len(){let mut r=self.doc.references[i].clone();ui.separator();ui.horizontal(|ui|{ui_icons::checkbox(ui,&mut r.visible,"eye",&r.name);if ui_icons::button_as(ui,"move","reference-move","Move / scale",self.power.reference_edit==Some(i),false).clicked(){self.power.reference_edit=if self.power.reference_edit==Some(i){None}else{Some(i)};}if ui.pc_small_button("Remove").clicked(){remove=Some(i);}});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut r.x).prefix("X ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.y).prefix("Y ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.scale).prefix("Scale ").speed(0.01).range(0.01..=1000.));});ui.add(egui::Slider::new(&mut r.opacity,0..=255).text("Opacity"));if r!=self.doc.references[i]{self.remember();self.doc.references[i]=r;}}if let Some(i)=remove{self.remember();self.doc.references.remove(i);self.power.reference_edit=None;}if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
+ ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember();self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("Wraparound drawing is independent of View → Seamless preview.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
+if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
+ ui.collapsing("Reference images",|ui|{if ui.pc_checkbox(&mut self.power.preferences.sample_references,"Sample reference colors").changed(){self.save_workflow_preferences();}
+if ui.pc_button("Import PNG / JPEG overlay…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("Reference image",&["png","jpg","jpeg"]).pick_file(){match import_reference(&path){Ok(r)=>{let mut next=self.doc.clone();next.references.push(r);match next.validate(){Ok(())=>{self.remember();self.doc=next;},Err(e)=>self.status=e}},Err(e)=>self.status=e}}ui.small("Saved inside .pixel projects; excluded from artwork exports. Enable Move to drag; Shift-drag scales.");let mut remove=None;for i in 0..self.doc.references.len(){let mut r=self.doc.references[i].clone();ui.separator();ui.horizontal(|ui|{ui_icons::checkbox(ui,&mut r.visible,"eye",&r.name);if ui_icons::button_as(ui,"move","reference-move","Move / scale",self.power.reference_edit==Some(i),false).clicked(){self.power.reference_edit=if self.power.reference_edit==Some(i){None}else{Some(i)};}
+if ui.pc_small_button("Remove").clicked(){remove=Some(i);}});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut r.x).prefix("X ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.y).prefix("Y ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.scale).prefix("Scale ").speed(0.01).range(0.01..=1000.));});ui.add(egui::Slider::new(&mut r.opacity,0..=255).text("Opacity"));
+ui.horizontal(|ui|{ui.pc_checkbox(&mut r.behind,"Behind artwork");ui.pc_checkbox(&mut r.floating,"Floating window");});
+ui.horizontal(|ui|{if ui.pc_button("Fit to canvas").clicked(){r.scale=(self.doc.width as f32/r.width as f32).min(self.doc.height as f32/r.height as f32).clamp(0.01,1000.);r.x=(self.doc.width as f32-r.width as f32*r.scale)/2.;r.y=(self.doc.height as f32-r.height as f32*r.scale)/2.;}
+if ui.pc_button("Copy to layer").clicked(){let mut d=self.doc.clone();match reference_to_layer(&mut d,&r,self.frame){Ok(())=>{self.remember();self.doc=d;self.layer=self.doc.layers.len()-1;},Err(e)=>self.status=e}}});if r!=self.doc.references[i]{self.remember();self.doc.references[i]=r;}}
+if let Some(i)=remove{self.remember();self.doc.references.remove(i);self.power.reference_edit=None;}
+if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
  ui.collapsing("Onion skin",|ui|{ui.pc_checkbox(&mut self.onion,"Enable onion skin");let before=self.power.preferences.onion.clone();let o=&mut self.power.preferences.onion;ui.add(egui::Slider::new(&mut o.previous,0..=8).text("Previous frames"));ui.add(egui::Slider::new(&mut o.next,0..=8).text("Next frames"));ui.horizontal(|ui|{ui.label("Previous tint");ui.color_edit_button_srgb(&mut o.previous_tint);});ui.add(egui::Slider::new(&mut o.previous_opacity,0..=255).text("Previous opacity"));ui.horizontal(|ui|{ui.label("Next tint");ui.color_edit_button_srgb(&mut o.next_tint);});ui.add(egui::Slider::new(&mut o.next_opacity,0..=255).text("Next opacity"));if serde_json::to_value(before).ok()!=serde_json::to_value(&*o).ok(){self.save_workflow_preferences();}});
- ui.collapsing("Grid sprite-sheet import",|ui|{if ui.pc_button("Choose sprite sheet…").clicked(){if let Some(p)=rfd::FileDialog::new().add_filter("Image",&["png","jpg","jpeg"]).pick_file(){match read_image(&p){Ok(im)=>{self.power.grid_texture=Some(ctx.load_texture("grid-import",color_image(&im.pixels().map(|p|p.0).collect::<Vec<_>>(),im.width() as usize,im.height() as usize),egui::TextureOptions::NEAREST));self.power.grid_source=Some(im);},Err(e)=>self.status=e}}}let g=&mut self.power.grid;ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.width).prefix("Cell W ").range(1..=16384));ui.add(egui::DragValue::new(&mut g.height).prefix("H ").range(1..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.offset_x).prefix("Offset X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.offset_y).prefix("Y ").range(0..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.spacing_x).prefix("Spacing X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.spacing_y).prefix("Y ").range(0..=16384));});ui.pc_checkbox(&mut g.layers,"Import as layers (otherwise frames)");if let(Some(im),Some(tex))=(&self.power.grid_source,&self.power.grid_texture){match grid_cells(im,g){Ok(cells)=>{ui.label(format!("{} complete cells · row-major order",cells.len()));let scale=(ui.available_width()/im.width() as f32).min(260./im.height() as f32).min(8.);let response=ui.add(egui::Image::new(tex).fit_to_exact_size(Vec2::new(im.width() as f32,im.height() as f32)*scale));let painter=ui.painter_at(response.rect);for(x,y)in cells.iter().take(4096){painter.rect_stroke(Rect::from_min_size(response.rect.min+Vec2::new(*x as f32,*y as f32)*scale,Vec2::new(g.width as f32,g.height as f32)*scale),0,Stroke::new(1.,Color32::from_rgb(255,200,60)),egui::StrokeKind::Inside);}if ui.pc_button("Import cells into a new sprite").clicked(){match import_grid(im,g){Ok(d)=>{self.open_document(d,None);self.status="Imported sheet cells".into();},Err(e)=>self.status=e}}},Err(e)=>{ui.colored_label(Color32::RED,e);}}}});
- ui.collapsing("Batch export animation tags",|ui|{ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");egui::ComboBox::from_label("Sheet engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.horizontal(|ui|{for(gif,label)in [(true,"Export tag GIFs…"),(false,"Export tag sheets…")]{if ui.pc_button(label).clicked(){if let Some(dir)=rfd::FileDialog::new().pick_folder(){self.status=match batch_tags(&dir,&self.doc,gif,&self.studio.sheet){Ok(p)=>format!("Exported {} animation tags",p.len()),Err(e)=>format!("Export failed: {e}")};}}}});});
- ui.collapsing("Multi-file atlas",|ui|{if ui.pc_button("Choose sprites…").clicked(){if let Some(paths)=rfd::FileDialog::new().add_filter("Sprites",&["pixel","aseprite","ase","png","gif","json"]).pick_files(){self.power.atlas_files=paths;}}for p in &self.power.atlas_files{ui.small(p.display().to_string());}let o=&mut self.power.atlas;ui.horizontal(|ui|{ui.pc_selectable_value(&mut o.layout,AtlasLayout::Rows,"Rows");ui.pc_selectable_value(&mut o.layout,AtlasLayout::MaxRects,"MaxRects");});ui.add(egui::DragValue::new(&mut o.width).range(1..=16384).prefix("Maximum width "));ui.add(egui::DragValue::new(&mut o.padding).range(0..=256).prefix("Padding "));ui.pc_checkbox(&mut o.trim,"Trim transparent borders");ui.pc_checkbox(&mut o.deduplicate,"Remove duplicate frame pixels");ui.pc_checkbox(&mut o.power_of_two,"Power-of-two dimensions");if ui.pc_button("Pack & export PNG + JSON…").clicked(){if let Some(path)=rfd::FileDialog::new().add_filter("PNG atlas",&["png"]).set_file_name("atlas.png").save_file(){let result=(||{let mut sources=vec![];for p in &self.power.atlas_files{sources.push((p.file_name().unwrap_or_default().to_string_lossy().into_owned(),formats::load(p)?));}export_atlas(&path,&sources,&self.power.atlas)})();self.status=match result{Ok(())=>"Exported multi-file atlas".into(),Err(e)=>format!("Export failed: {e}")};}}});
- ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for p in &self.power.preferences.recent{if ui_icons::button(ui,"open",&p.display().to_string(),false,false).clicked(){chosen=Some(p.clone());}}if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}if let Some(k)=remove{self.custom_shortcuts.remove(&k);self.save_shortcut_bindings();}});
- ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));match LiveBridge::start(config){Ok(b)=>{self.power.bridge=Some(b);self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{self.power.bridge=None;self.status="Live editor access disabled".into();}}if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
+ ui.collapsing("Grid sprite-sheet import",|ui|{if ui.pc_button("Choose sprite sheet…").clicked()&& let Some(p)=rfd::FileDialog::new().add_filter("Image",&["png","jpg","jpeg"]).pick_file(){match read_image(&p){Ok(im)=>{self.power.grid_texture=Some(ctx.load_texture("grid-import",color_image(&im.pixels().map(|p|p.0).collect::<Vec<_>>(),im.width() as usize,im.height() as usize),egui::TextureOptions::NEAREST));self.power.grid_source=Some(im);},Err(e)=>self.status=e}}let g=&mut self.power.grid;ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.width).prefix("Cell W ").range(1..=16384));ui.add(egui::DragValue::new(&mut g.height).prefix("H ").range(1..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.offset_x).prefix("Offset X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.offset_y).prefix("Y ").range(0..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.spacing_x).prefix("Spacing X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.spacing_y).prefix("Y ").range(0..=16384));});ui.pc_checkbox(&mut g.layers,"Import as layers (otherwise frames)");if let(Some(im),Some(tex))=(&self.power.grid_source,&self.power.grid_texture){match grid_cells(im,g){Ok(cells)=>{ui.label(format!("{} complete cells · row-major order",cells.len()));let scale=(ui.available_width()/im.width() as f32).min(260./im.height() as f32).min(8.);let response=ui.add(egui::Image::new(tex).fit_to_exact_size(Vec2::new(im.width() as f32,im.height() as f32)*scale));let painter=ui.painter_at(response.rect);for(x,y)in cells.iter().take(4096){painter.rect_stroke(Rect::from_min_size(response.rect.min+Vec2::new(*x as f32,*y as f32)*scale,Vec2::new(g.width as f32,g.height as f32)*scale),0,Stroke::new(1.,Color32::from_rgb(255,200,60)),egui::StrokeKind::Inside);}
+if ui.pc_button("Import cells into a new sprite").clicked(){match import_grid(im,g){Ok(d)=>{self.open_document(d,None);self.status="Imported sheet cells".into();},Err(e)=>self.status=e}}},Err(e)=>{ui.colored_label(Color32::RED,e);}}}});
+ ui.collapsing("Batch export animation tags",|ui|{ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");egui::ComboBox::from_label("Sheet engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.horizontal(|ui|{for(gif,label)in [(true,"Export tag GIFs…"),(false,"Export tag sheets…")]{if ui.pc_button(label).clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){self.status=match batch_tags(&dir,&self.doc,gif,&self.studio.sheet){Ok(p)=>format!("Exported {} animation tags",p.len()),Err(e)=>format!("Export failed: {e}")};}}});});
+ ui.collapsing("Multi-file atlas",|ui|{if ui.pc_button("Choose sprites…").clicked()&& let Some(paths)=rfd::FileDialog::new().add_filter("Sprites",ATLAS_EXTENSIONS).pick_files(){self.power.atlas_files=paths;}
+if ui.pc_button("Add folder…").clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){match expand_atlas_inputs(&[dir]){Ok(paths)=>self.power.atlas_files.extend(paths),Err(e)=>self.status=e}}for p in &self.power.atlas_files{ui.small(p.display().to_string());}let o=&mut self.power.atlas;ui.horizontal(|ui|{ui.pc_selectable_value(&mut o.layout,AtlasLayout::Rows,"Rows");ui.pc_selectable_value(&mut o.layout,AtlasLayout::MaxRects,"MaxRects");});ui.add(egui::DragValue::new(&mut o.width).range(1..=16384).prefix("Maximum width "));ui.add(egui::DragValue::new(&mut o.padding).range(0..=256).prefix("Padding "));ui.pc_checkbox(&mut o.trim,"Trim transparent borders");ui.pc_checkbox(&mut o.deduplicate,"Remove duplicate frame pixels");ui.pc_checkbox(&mut o.power_of_two,"Power-of-two dimensions");if ui.pc_button("Pack & export PNG + JSON…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG atlas",&["png"]).set_file_name("atlas.png").save_file(){let result=(||{let mut sources=vec![];for p in &self.power.atlas_files{sources.push((p.file_name().unwrap_or_default().to_string_lossy().into_owned(),formats::load(p)?));}export_atlas(&path,&sources,&self.power.atlas)})();self.status=match result{Ok(())=>"Exported multi-file atlas".into(),Err(e)=>format!("Export failed: {e}")};}});
+ ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for p in &self.power.preferences.recent{if ui_icons::button(ui,"open",&p.display().to_string(),false,false).clicked(){chosen=Some(p.clone());}}
+if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
+if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}
+if let Some(k)=remove{self.custom_shortcuts.remove(&k);self.save_shortcut_bindings();}});
+ ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));match LiveBridge::start(config){Ok(b)=>{self.power.bridge=Some(b);self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{self.power.bridge=None;self.status="Live editor access disabled".into();}}
+if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
  });});
         self.power.open = open;
     }
@@ -347,10 +493,28 @@ impl PixelCraft {
                 }
             });
     }
+    pub(super) fn sample_color(&self, x: i32, y: i32) -> Pixel {
+        sample_canvas(
+            &self.doc,
+            self.frame,
+            x,
+            y,
+            self.power.preferences.sample_references,
+        )
+    }
     pub(super) fn draw_references(&mut self, ui: &mut egui::Ui, board: Rect) {
+        self.draw_references_pass(ui, board, false);
+    }
+    pub(super) fn draw_references_pass(&mut self, ui: &mut egui::Ui, board: Rect, behind: bool) {
         for i in 0..self.doc.references.len() {
             let r = self.doc.references[i].clone();
-            if !r.visible {
+            if !r.visible
+                || (if r.floating {
+                    behind
+                } else {
+                    r.behind != behind
+                })
+            {
                 continue;
             }
             let tex = if let Some((_, t)) = self
@@ -371,6 +535,46 @@ impl PixelCraft {
                     .push((r.pixels.clone(), t.clone()));
                 t
             };
+            if r.floating {
+                if !behind {
+                    let mut open = true;
+                    egui::Window::new(format!("Reference: {}", r.name))
+                        .id(egui::Id::new(("floating-reference", i)))
+                        .open(&mut open)
+                        .default_width(300.)
+                        .show(ui.ctx(), |ui| {
+                            ui.pc_checkbox(
+                                &mut self.power.preferences.sample_references,
+                                "Sample reference colors",
+                            );
+                            let size = Vec2::new(r.width as f32, r.height as f32);
+                            let scale = (ui.available_width() / size.x).min(450. / size.y);
+                            let response = ui.add(
+                                egui::Image::new(&tex)
+                                    .fit_to_exact_size(size * scale)
+                                    .sense(Sense::click()),
+                            );
+                            if response.clicked()
+                                && self.power.preferences.sample_references
+                                && let Some(pos) = response.interact_pointer_pos()
+                            {
+                                let xy = (pos - response.rect.min) / scale;
+                                let x = (xy.x as usize).min(r.width - 1);
+                                let y = (xy.y as usize).min(r.height - 1);
+                                self.set_drawing_color(over(
+                                    CLEAR,
+                                    r.pixels[y * r.width + x],
+                                    r.opacity,
+                                ));
+                            }
+                        });
+                    if !open {
+                        self.remember();
+                        self.doc.references[i].floating = false;
+                    }
+                }
+                continue;
+            }
             let rect = Rect::from_min_size(
                 board.min + Vec2::new(r.x, r.y) * self.zoom,
                 Vec2::new(r.width as f32, r.height as f32) * r.scale * self.zoom,
@@ -399,19 +603,19 @@ impl PixelCraft {
                         .input(|i| i.pointer.press_origin())
                         .map(|origin| (r.x, r.y, r.scale, origin));
                 }
-                if response.dragged() {
-                    if let Some((x, y, scale, origin)) = self.power.reference_drag {
-                        let Some(pointer) = response.interact_pointer_pos() else {
-                            continue;
-                        };
-                        let delta = (pointer - origin) / self.zoom;
-                        let reference = &mut self.doc.references[i];
-                        if ui.input(|i| i.modifiers.shift) {
-                            reference.scale = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);
-                        } else {
-                            reference.x = (x + delta.x).clamp(-16384., 16384.);
-                            reference.y = (y + delta.y).clamp(-16384., 16384.);
-                        }
+                if response.dragged()
+                    && let Some((x, y, scale, origin)) = self.power.reference_drag
+                {
+                    let Some(pointer) = response.interact_pointer_pos() else {
+                        continue;
+                    };
+                    let delta = (pointer - origin) / self.zoom;
+                    let reference = &mut self.doc.references[i];
+                    if ui.input(|i| i.modifiers.shift) {
+                        reference.scale = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);
+                    } else {
+                        reference.x = (x + delta.x).clamp(-16384., 16384.);
+                        reference.y = (y + delta.y).clamp(-16384., 16384.);
                     }
                 }
                 if response.drag_stopped() {
@@ -484,7 +688,7 @@ impl PixelCraft {
                     value["revision"] = serde_json::json!(revision);
                     Ok(value)
                 }
-                "live-edit" | "live-undo" => {
+                "live-edit" | "live-commands" | "live-create" | "live-undo" => {
                     if self.start.is_some()
                         || self.script_job.is_some()
                         || self.extension_session.is_some()
@@ -501,13 +705,36 @@ impl PixelCraft {
                         let mut args = request.arguments.clone();
                         args["revision"] =
                             serde_json::json!(automation::document_revision(&self.doc));
-                        let next = automation::apply_edits(&self.doc, &args)?;
+                        let next = if request.operation == "live-create" {
+                            let w = args["width"].as_u64().unwrap_or(0) as usize;
+                            let h = args["height"].as_u64().unwrap_or(0) as usize;
+                            if w == 0
+                                || h == 0
+                                || w > MAX_DIMENSION
+                                || h > MAX_DIMENSION
+                                || w.saturating_mul(h) > MAX_PIXELS
+                            {
+                                return Err("Invalid canvas dimensions".into());
+                            }
+                            Document::new(w, h)
+                        } else if request.operation == "live-commands" {
+                            automation::apply_commands(&self.doc, &args)?
+                        } else {
+                            automation::apply_edits(&self.doc, &args)?
+                        };
                         if Instant::now() >= request.deadline {
                             return Err("Live request expired; no changes applied".into());
                         }
-                        if next != self.doc {
+                        if request.operation == "live-create" {
+                            let previous = self.doc.clone();
+                            self.open_document(next, None);
+                            self.push_undo(previous);
+                            self.status =
+                                "Assistant created an untitled sprite — Ctrl+Z to undo".into();
+                        } else if next != self.doc {
                             self.remember();
                             self.doc = next;
+                            self.clamp();
                             self.status = "Assistant edited the sprite — Ctrl+Z to undo".into();
                         }
                     }
@@ -623,6 +850,46 @@ mod bridge_tests {
         rx.recv().unwrap()
     }
     #[test]
+    fn live_structural_commands_and_create_are_single_undo_steps() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(2, 2), None);
+        a.path = Some(PathBuf::from("existing.pixel"));
+        let original_tab = a.active_tab;
+        let before = a.doc.clone();
+        a.selection = Some((0, 0, 0, 0));
+        a.studio.mask = Some(vec![true, false, false, false]);
+        let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
+        let args = serde_json::json!({"revision":info["revision"],"commands":[{"op":"add-layer","name":"Ink"},{"op":"add-frame","frame":0}]});
+        assert!(request(&mut a, "live-commands", args.clone(), true).is_err());
+        assert_eq!(a.doc, before);
+        request(&mut a, "live-commands", args.clone(), false).unwrap();
+        assert_eq!(a.undo.len(), 1);
+        assert_eq!(a.doc.layers.len(), 2);
+        assert_eq!(a.doc.durations.len(), 2);
+        assert!(request(&mut a, "live-commands", args, false).is_err());
+        a.undo();
+        assert_eq!(a.doc, before);
+        assert_eq!(a.studio.mask, Some(vec![true, false, false, false]));
+        let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
+        request(
+            &mut a,
+            "live-create",
+            serde_json::json!({"revision":info["revision"],"width":4,"height":3}),
+            false,
+        )
+        .unwrap();
+        assert_eq!((a.doc.width, a.doc.height), (4, 3));
+        assert_ne!(a.active_tab, original_tab);
+        assert!(a.path.is_none());
+        a.undo();
+        assert_eq!(a.doc, before);
+        assert!(a.path.is_none());
+        a.switch_tab(original_tab);
+        assert_eq!(a.path, Some(PathBuf::from("existing.pixel")));
+        assert_eq!(a.doc, before);
+    }
+    #[test]
     fn live_edits_are_revision_checked_undoable_and_expire() {
         let ctx = egui::Context::default();
         let mut a = PixelCraft::with_context(&ctx, None);
@@ -653,6 +920,8 @@ mod reference_drag_regressions {
             let ctx = egui::Context::default();
             let mut a = PixelCraft::with_context(&ctx, None);
             a.doc.references.push(ReferenceImage {
+                behind: false,
+                floating: false,
                 name: "guide".into(),
                 width: 100,
                 height: 100,

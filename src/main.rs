@@ -9,6 +9,7 @@ mod productivity_ui;
 mod script_ui;
 mod studio;
 mod system_appearance;
+mod system_clipboard;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use pixelcraft::{
     extensions::{self, Manager, PluginCommand, Session},
@@ -132,11 +133,29 @@ enum Pending {
     CloseTab,
     Demo,
 }
+#[derive(PartialEq)]
+struct ClipboardTarget {
+    tab: usize,
+    generation: u64,
+    layer: usize,
+    frame: usize,
+    selection: Option<(i32, i32, i32, i32)>,
+    mask: Option<Vec<bool>>,
+}
 #[derive(Clone)]
 struct Clipboard {
     w: usize,
     h: usize,
     pixels: Vec<Pixel>,
+}
+#[derive(Clone)]
+struct HistoryEntry {
+    doc: Document,
+    selection: Option<(i32, i32, i32, i32)>,
+    mask: Option<Vec<bool>>,
+    polygon: Vec<(i32, i32)>,
+    layer: usize,
+    frame: usize,
 }
 struct SpriteTab {
     doc: Document,
@@ -144,8 +163,8 @@ struct SpriteTab {
     path: Option<PathBuf>,
     layer: usize,
     frame: usize,
-    undo: Vec<Document>,
-    redo: Vec<Document>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
     zoom: f32,
     pan: Vec2,
     selection: Option<(i32, i32, i32, i32)>,
@@ -209,10 +228,13 @@ struct PixelCraft {
     filled: bool,
     playing: bool,
     last_tick: Instant,
-    undo: Vec<Document>,
-    redo: Vec<Document>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
     clipboard: Option<Clipboard>,
+    system_clipboard: system_clipboard::SystemClipboard,
+    clipboard_target: Option<ClipboardTarget>,
+    native_paste_handled: bool,
     start: Option<(i32, i32)>,
     last: Option<(i32, i32)>,
     stroke_base: Option<Document>,
@@ -245,6 +267,8 @@ struct PixelCraft {
     about_info: AboutInfo,
     update_job: Option<std::sync::mpsc::Receiver<Result<Release, String>>>,
     latest_release: Option<Release>,
+    download_job: Option<std::sync::mpsc::Receiver<Result<updates::VerifiedDownload, String>>>,
+    downloaded_update: Option<updates::VerifiedDownload>,
     update_status: String,
     next_update_check: Option<Instant>,
     extensions_open: bool,
@@ -275,6 +299,7 @@ impl PixelCraft {
         app.about_info = AboutInfo::load();
         app.check_updates(&cc.egui_ctx);
         app.refresh_extensions();
+        cc.egui_ctx.set_zoom_factor(app.power.interface_scale());
         app.studio.recovery_enabled = true;
         app.restore_workspace();
         app
@@ -333,6 +358,9 @@ impl PixelCraft {
             redo: vec![],
             selection: None,
             clipboard: None,
+            system_clipboard: system_clipboard::SystemClipboard::default(),
+            clipboard_target: None,
+            native_paste_handled: false,
             start: None,
             last: None,
             stroke_base: None,
@@ -374,6 +402,8 @@ impl PixelCraft {
             about_info: AboutInfo::default(),
             update_job: None,
             latest_release: None,
+            download_job: None,
+            downloaded_update: None,
             update_status: "Not checked yet.".into(),
             next_update_check: None,
             extensions_open: false,
@@ -806,7 +836,8 @@ impl PixelCraft {
             ui.add(egui::DragValue::new(&mut edited.layers[self.layer].cel_meta[self.frame].z_index).range(-32768..=32767).prefix("Cel order "));
             if ui.pc_button("+ New group").clicked(){add_group=true;}
             ui.separator();ui.heading("Tilesets & tile layers");
-            ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
+            ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}
+if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             if !edited.tilesets.is_empty(){ui.horizontal(|ui|{if ui.pc_button("+ Tile layer from last tileset").clicked(){add_tile=true;}ui.add(egui::DragValue::new(&mut self.selected_tile).range(1..=edited.tilesets.last().map(|t|t.tiles.len()).unwrap_or(1).max(1) as u32).prefix("Paint tile "));});}
             ui.small("Select a tile layer, then paint with Pencil; Eraser clears a tile. Tile 0 is empty.");
             ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
@@ -866,10 +897,8 @@ impl PixelCraft {
             });
             self.selected_tile = 1;
         }
-        if import {
-            if let Err(e) = self.import_tileset() {
-                self.status = format!("Could not import tileset: {e}");
-            }
+        if import && let Err(e) = self.import_tileset() {
+            self.status = format!("Could not import tileset: {e}");
         }
     }
     fn remember(&mut self) {
@@ -878,7 +907,7 @@ impl PixelCraft {
         self.redo.clear();
     }
     fn push_undo(&mut self, d: Document) {
-        self.undo.push(d);
+        self.undo.push(self.history_entry(d));
         while self.undo.len() > 1 && (self.undo.len() > 64 || self.history_bytes() > 192_000_000) {
             self.undo.remove(0);
         }
@@ -889,6 +918,8 @@ impl PixelCraft {
         for d in self
             .undo
             .iter()
+            .map(|entry| &entry.doc)
+            .chain(self.redo.iter().map(|entry| &entry.doc))
             .chain(std::iter::once(&self.doc))
             .chain(std::iter::once(&self.saved))
         {
@@ -899,10 +930,10 @@ impl PixelCraft {
                     }
                 }
                 for m in &l.cel_meta {
-                    if let Some(p) = &m.indices {
-                        if seen.insert(std::sync::Arc::as_ptr(p) as usize) {
-                            bytes = bytes.saturating_add(p.len());
-                        }
+                    if let Some(p) = &m.indices
+                        && seen.insert(std::sync::Arc::as_ptr(p) as usize)
+                    {
+                        bytes = bytes.saturating_add(p.len());
                     }
                     bytes =
                         bytes.saturating_add(m.outside.len() * std::mem::size_of::<OutsidePixel>());
@@ -958,20 +989,39 @@ impl PixelCraft {
         self.power.reference_edit = None;
         self.studio.polygon.clear();
     }
+    fn history_entry(&self, doc: Document) -> HistoryEntry {
+        HistoryEntry {
+            doc,
+            selection: self.selection,
+            mask: self.studio.mask.clone(),
+            polygon: self.studio.polygon.clone(),
+            layer: self.layer,
+            frame: self.frame,
+        }
+    }
+    fn restore_history(&mut self, entry: HistoryEntry) {
+        self.cancel_gesture();
+        self.doc = entry.doc;
+        self.clamp();
+        self.layer = entry.layer.min(self.doc.layers.len() - 1);
+        self.frame = entry.frame.min(self.doc.durations.len() - 1);
+        self.selection = entry.selection;
+        self.studio.mask = entry.mask;
+        self.studio.polygon = entry.polygon;
+    }
     fn undo(&mut self) {
         self.power.bridge_generation += 1;
         if let Some(d) = self.undo.pop() {
-            self.redo.push(std::mem::replace(&mut self.doc, d));
-            self.clamp();
+            self.redo.push(self.history_entry(self.doc.clone()));
+            self.restore_history(d);
             self.status = "Undo".into();
         }
     }
     fn redo(&mut self) {
         self.power.bridge_generation += 1;
         if let Some(d) = self.redo.pop() {
-            let old = std::mem::replace(&mut self.doc, d);
-            self.push_undo(old);
-            self.clamp();
+            self.push_undo(self.doc.clone());
+            self.restore_history(d);
             self.status = "Redo".into();
         }
     }
@@ -1004,15 +1054,15 @@ impl PixelCraft {
             doc: self.doc.clone(),
             saved: self.saved.clone(),
             path: self.path.clone(),
-            layer: self.layer.clone(),
-            frame: self.frame.clone(),
+            layer: self.layer,
+            frame: self.frame,
             undo: self.undo.clone(),
             redo: self.redo.clone(),
-            zoom: self.zoom.clone(),
-            pan: self.pan.clone(),
-            selection: self.selection.clone(),
-            palette_index: self.palette_index.clone(),
-            active_tag: self.active_tag.clone(),
+            zoom: self.zoom,
+            pan: self.pan,
+            selection: self.selection,
+            palette_index: self.palette_index,
+            active_tag: self.active_tag,
             polygon: self.studio.polygon.clone(),
             mask: self.studio.mask.clone(),
         };
@@ -1216,7 +1266,13 @@ impl PixelCraft {
         }
     }
     fn export(&mut self, kind: &str) {
-        let ext = if kind == "gif" { "gif" } else { "png" };
+        let ext = if kind == "gif" {
+            "gif"
+        } else if kind == "bmp" {
+            "bmp"
+        } else {
+            "png"
+        };
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Export", &[ext])
             .set_file_name(format!("sprite.{ext}"))
@@ -1225,7 +1281,13 @@ impl PixelCraft {
             let result = if kind == "gif" {
                 formats::export_gif(&path, &self.doc)
             } else {
-                formats::export_png(&path, &self.doc, self.frame, kind == "sheet")
+                formats::export_raster_scaled(
+                    &path,
+                    &self.doc,
+                    self.frame,
+                    kind == "sheet",
+                    self.studio.sheet.scale,
+                )
             };
             self.status = match result {
                 Ok(()) => format!(
@@ -1237,9 +1299,11 @@ impl PixelCraft {
         }
     }
     fn copy(&mut self) {
+        self.clipboard_target = None;
         let (x0, y0, x1, y1) =
             self.selection
                 .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
+        let (x0, y0, x1, y1) = (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
         let w = (x1 - x0 + 1) as usize;
         let h = (y1 - y0 + 1) as usize;
         let mut pixels = vec![];
@@ -1254,10 +1318,80 @@ impl PixelCraft {
                 });
             }
         }
-        self.clipboard = Some(Clipboard { w, h, pixels });
+        self.clipboard = Some(Clipboard {
+            w,
+            h,
+            pixels: pixels.clone(),
+        });
         self.status = "Copied pixels from the active layer".into();
+        if self.shot.is_none() && !cfg!(test) {
+            let result = self.system_clipboard.copy(w, h, pixels);
+            if let Err(e) = result {
+                self.status = format!("Copied internally; system clipboard: {e}");
+            }
+        }
     }
     fn paste(&mut self) {
+        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+            return;
+        }
+        if self.shot.is_none() && !cfg!(test) {
+            match self.system_clipboard.paste() {
+                Ok(()) => {
+                    self.clipboard_target = Some(self.clipboard_destination());
+                    self.status = "Reading system clipboard…".into();
+                }
+                Err(e) => {
+                    self.paste_internal();
+                    self.status = format!("{e}; using internal clipboard");
+                }
+            }
+            return;
+        }
+        self.paste_internal();
+    }
+    fn clipboard_destination(&self) -> ClipboardTarget {
+        ClipboardTarget {
+            tab: self.active_tab,
+            generation: self.power.bridge_generation,
+            layer: self.layer,
+            frame: self.frame,
+            selection: self.selection,
+            mask: self.studio.mask.clone(),
+        }
+    }
+    fn poll_clipboard(&mut self, ctx: &egui::Context) {
+        if let Some(result) = self.system_clipboard.poll() {
+            match result {
+                system_clipboard::Completion::Copy(Err(e)) => {
+                    self.status = format!("Copied internally; {e}")
+                }
+                system_clipboard::Completion::Copy(Ok(())) => {}
+                system_clipboard::Completion::Paste(result) => {
+                    if self.clipboard_target.take() == Some(self.clipboard_destination()) {
+                        match result {
+                            Ok((w, h, pixels)) => {
+                                self.clipboard = Some(Clipboard { w, h, pixels });
+                                self.paste_internal();
+                            }
+                            Err(e) => {
+                                if !e.contains("timed out") && !e.contains("exceeds limits") {
+                                    self.paste_internal();
+                                }
+                                self.status = format!("{e}; internal clipboard retained");
+                            }
+                        }
+                    } else {
+                        self.status = "Paste cancelled because the document changed".into();
+                    }
+                }
+            }
+        }
+        if self.system_clipboard.busy() {
+            ctx.request_repaint_after(Duration::from_millis(25));
+        }
+    }
+    fn paste_internal(&mut self) {
         if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
             return;
         }
@@ -1286,10 +1420,10 @@ impl PixelCraft {
                 .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
         for y in y0..=y1 {
             for x in x0..=x1 {
-                if self.selected(x, y) {
-                    if let Some(i) = self.doc.index(x, y) {
-                        self.doc.set_pixel(self.layer, self.frame, i, CLEAR);
-                    }
+                if self.selected(x, y)
+                    && let Some(i) = self.doc.index(x, y)
+                {
+                    self.doc.set_pixel(self.layer, self.frame, i, CLEAR);
                 }
             }
         }
@@ -1309,7 +1443,7 @@ impl PixelCraft {
             "saveas" => {
                 self.save(true);
             }
-            "png" | "sheet" | "gif" => self.export(s),
+            "png" | "bmp" | "sheet" | "gif" => self.export(s),
             "undo" => self.undo(),
             "redo" => self.redo(),
             "copy" => self.copy(),
@@ -1588,10 +1722,10 @@ impl PixelCraft {
             Some(Ok(result)) => {
                 self.script_job = None;
                 self.script_ui.disconnect();
-                if let Some(session) = &self.extension_session {
-                    if let Ok(original) = formats::load(&session.input_path()) {
-                        self.doc = original;
-                    }
+                if let Some(session) = &self.extension_session
+                    && let Ok(original) = formats::load(&session.input_path())
+                {
+                    self.doc = original;
                 }
                 let result = result.and_then(|()| self.import_extension_result());
                 if let Err(e) = result {
@@ -1601,10 +1735,10 @@ impl PixelCraft {
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.script_job = None;
                 self.script_ui.disconnect();
-                if let Some(session) = &self.extension_session {
-                    if let Ok(original) = formats::load(&session.input_path()) {
-                        self.doc = original;
-                    }
+                if let Some(session) = &self.extension_session
+                    && let Ok(original) = formats::load(&session.input_path())
+                {
+                    self.doc = original;
                 }
                 self.status =
                     "Extension failed: the Lua worker stopped. Your sprite is unchanged.".into();
@@ -1618,6 +1752,18 @@ impl PixelCraft {
     }
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let clipboard_action = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Copy => Some("copy"),
+                egui::Event::Cut => Some("cut"),
+                egui::Event::Paste(_) => Some("paste"),
+                _ => None,
+            })
+        });
+        if let Some(action) = clipboard_action {
+            self.action(action);
             return;
         }
         let custom = self.custom_shortcuts.iter().find_map(|(binding, action)| {
@@ -1668,6 +1814,7 @@ impl PixelCraft {
                         ("Export sprite sheet…", "sheet"),
                         ("Export animation GIF…", "gif"),
                         ("Export Tiled map…", "tiledexport"),
+                        ("Export BMP…", "bmp"),
                         ("Open sample garden", "demo"),
                     ],
                 ),
@@ -1881,10 +2028,9 @@ impl PixelCraft {
                             .on_hover_text("Download the latest PixelCraft release")
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked()
+                            && let Some(url) = self.about_info.releases_url()
                         {
-                            if let Some(url) = self.about_info.releases_url() {
-                                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                            }
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
                         }
                     }
                 }
@@ -2513,18 +2659,20 @@ impl PixelCraft {
             ),
         );
         // Draw only visible checker squares, including at high zoom and while panning.
-        let check = 8.;
+        let check = self.power.checker_size();
         let check_size = check * self.zoom;
         let cols = (self.doc.width as f32 / check).ceil() as i32;
         let rows = (self.doc.height as f32 / check).ceil() as i32;
         painter.rect_filled(
             board,
             0,
-            if self.dark_mode {
-                Color32::from_rgb(82, 83, 94)
-            } else {
-                Color32::from_rgb(210, 202, 202)
-            },
+            self.power.checker_color(0).unwrap_or_else(|| {
+                if self.dark_mode {
+                    Color32::from_rgb(82, 83, 94)
+                } else {
+                    Color32::from_rgb(210, 202, 202)
+                }
+            }),
         );
         for y in (((r.min.y - board.min.y) / check_size).floor() as i32).clamp(0, rows)
             ..(((r.max.y - board.min.y) / check_size).ceil() as i32).clamp(0, rows)
@@ -2541,15 +2689,18 @@ impl PixelCraft {
                     painter.rect_filled(
                         q,
                         0,
-                        if self.dark_mode {
-                            Color32::from_rgb(64, 65, 76)
-                        } else {
-                            Color32::from_rgb(184, 176, 182)
-                        },
+                        self.power.checker_color(1).unwrap_or_else(|| {
+                            if self.dark_mode {
+                                Color32::from_rgb(64, 65, 76)
+                            } else {
+                                Color32::from_rgb(184, 176, 182)
+                            }
+                        }),
                     );
                 }
             }
         }
+        self.draw_references_pass(ui, board, true);
         if self.onion && !self.playing {
             let pixels = pixelcraft::productivity::onion_pixels(
                 &self.doc,
@@ -2622,9 +2773,7 @@ impl PixelCraft {
             let p = self.hover.unwrap();
             self.stroke_color = self.fg;
             if ctx.input(|i| i.modifiers.alt) || self.tool == Tool::Picker {
-                self.set_active_color(
-                    self.doc.composite(self.frame)[self.doc.index(p.0, p.1).unwrap()],
-                );
+                self.set_active_color(self.sample_color(p.0, p.1));
             } else if self.tool == Tool::Wand {
                 let op = ctx.input(|i| {
                     if i.modifiers.command {
@@ -2772,12 +2921,12 @@ impl PixelCraft {
                 }
             }
         } else {
-            if self.tool == Tool::Move {
-                if let (Some(a), Some(b)) = (self.start, self.last) {
-                    for p in &mut self.studio.polygon {
-                        p.0 += b.0 - a.0;
-                        p.1 += b.1 - a.1;
-                    }
+            if self.tool == Tool::Move
+                && let (Some(a), Some(b)) = (self.start, self.last)
+            {
+                for p in &mut self.studio.polygon {
+                    p.0 += b.0 - a.0;
+                    p.1 += b.1 - a.1;
                 }
             }
             self.start = None;
@@ -2813,19 +2962,18 @@ impl PixelCraft {
                 egui::StrokeKind::Outside,
             );
         }
-        if let Some((x, y)) = self.hover {
-            if matches!(self.tool, Tool::Pencil | Tool::Eraser) {
-                let size = self.brush as f32 * self.zoom;
-                let p = board.min
-                    + Vec2::new((x - self.brush / 2) as f32, (y - self.brush / 2) as f32)
-                        * self.zoom;
-                painter.rect_stroke(
-                    Rect::from_min_size(p, Vec2::splat(size)),
-                    0,
-                    Stroke::new(1., Color32::WHITE),
-                    egui::StrokeKind::Outside,
-                );
-            }
+        if let Some((x, y)) = self.hover
+            && matches!(self.tool, Tool::Pencil | Tool::Eraser)
+        {
+            let size = self.brush as f32 * self.zoom;
+            let p = board.min
+                + Vec2::new((x - self.brush / 2) as f32, (y - self.brush / 2) as f32) * self.zoom;
+            painter.rect_stroke(
+                Rect::from_min_size(p, Vec2::splat(size)),
+                0,
+                Stroke::new(1., Color32::WHITE),
+                egui::StrokeKind::Outside,
+            );
         }
         painter.text(
             r.min + Vec2::new(14., 12.),
@@ -2949,7 +3097,8 @@ impl PixelCraft {
                 ui.separator();
                 if let Some(manager)=&self.extension_manager {
                     ui.small(format!("Storage: {}",manager.root.display()));
-                    match manager.list(){Ok(packages)=>{if packages.is_empty(){ui.label("No extensions installed yet.");}for p in packages{ui.horizontal(|ui|{let mut enabled=p.enabled;if ui_icons::checkbox(ui,&mut enabled,"extensions",if p.manifest.display_name.is_empty(){&p.id}else{&p.manifest.display_name}).changed(){change=Some((p.id.clone(),Some(enabled)));}if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}});if p.enabled{for a in &p.manifest.contributes.palettes{if ui.pc_button(format!("Use palette: {}",a.path)).clicked(){asset=Some(("palette",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.themes{if ui.pc_button(format!("Use theme: {}",a.path)).clicked(){asset=Some(("theme",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.languages{if ui.pc_button(format!("Use language: {}",a.id)).clicked(){asset=Some(("language",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.dithering_matrices{if ui.pc_button(format!("Use dithering: {}",a.id)).clicked(){asset=Some(("dither",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.shortcuts{if ui.pc_button(format!("Use shortcuts: {}",a.path)).clicked(){asset=Some(("shortcuts",p.id.clone(),a.clone()));}}}}},Err(e)=>{ui.label(e);}}
+                    match manager.list(){Ok(packages)=>{if packages.is_empty(){ui.label("No extensions installed yet.");}for p in packages{ui.horizontal(|ui|{let mut enabled=p.enabled;if ui_icons::checkbox(ui,&mut enabled,"extensions",if p.manifest.display_name.is_empty(){&p.id}else{&p.manifest.display_name}).changed(){change=Some((p.id.clone(),Some(enabled)));}
+if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}});if p.enabled{for a in &p.manifest.contributes.palettes{if ui.pc_button(format!("Use palette: {}",a.path)).clicked(){asset=Some(("palette",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.themes{if ui.pc_button(format!("Use theme: {}",a.path)).clicked(){asset=Some(("theme",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.languages{if ui.pc_button(format!("Use language: {}",a.id)).clicked(){asset=Some(("language",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.dithering_matrices{if ui.pc_button(format!("Use dithering: {}",a.id)).clicked(){asset=Some(("dither",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.shortcuts{if ui.pc_button(format!("Use shortcuts: {}",a.path)).clicked(){asset=Some(("shortcuts",p.id.clone(),a.clone()));}}}}},Err(e)=>{ui.label(e);}}
                 }else{ui.label("Extension storage could not be created.");}
                 ui.separator();ui.strong("Plugin commands");
                 for c in &self.plugin_commands{if ui.add_enabled_ui(self.script_job.is_none(),|ui| ui_icons::local_button(ui,"terminal",&format!("{} · {}",c.package,c.title))).inner.clicked(){run=Some(c.clone());}}
@@ -2978,12 +3127,11 @@ impl PixelCraft {
                     self.status = format!("Extension failed: {e}");
                 }
             }
-            if let Some(c) = run {
-                if let Err(e) =
+            if let Some(c) = run
+                && let Err(e) =
                     self.start_script(c.script, if c.id.is_empty() { None } else { Some(c.id) })
-                {
-                    self.status = e;
-                }
+            {
+                self.status = e;
             }
             if let Some(action) = action {
                 self.cancel_gesture();
@@ -3002,6 +3150,12 @@ impl PixelCraft {
         ui_icons::set_bindings(ui.ctx(), &self.custom_shortcuts);
         self.dark_mode = ui.ctx().theme() == egui::Theme::Dark;
         let ctx = ui.ctx().clone();
+        if self.script_job.is_none() && self.start.is_none() {
+            let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+            for file in dropped {
+                self.open_recent(file.path().to_path_buf());
+            }
+        }
         self.autosave(ctx.input(|i| i.viewport().close_requested()));
         ctx.request_repaint_after(Duration::from_secs(15));
         if let Some(next_check) = self.next_update_check {
@@ -3011,24 +3165,37 @@ impl PixelCraft {
                 ctx.request_repaint_after(next_check.saturating_duration_since(Instant::now()));
             }
         }
-        if let Some(job) = &self.update_job {
-            if let Ok(result) = job.try_recv() {
-                match result {
-                    Ok(release) => {
-                        self.update_status = if release.is_newer_than(INSTALLED_VERSION) {
-                            "A new version is available.".into()
-                        } else {
-                            "You are up to date.".into()
-                        };
-                        self.latest_release = Some(release);
-                    }
-                    Err(error) => {
-                        self.latest_release = None;
-                        self.update_status = error;
-                    }
+        if let Some(job) = &self.update_job
+            && let Ok(result) = job.try_recv()
+        {
+            match result {
+                Ok(release) => {
+                    self.update_status = if release.is_newer_than(INSTALLED_VERSION) {
+                        "A new version is available.".into()
+                    } else {
+                        "You are up to date.".into()
+                    };
+                    self.latest_release = Some(release);
                 }
-                self.update_job = None;
+                Err(error) => {
+                    self.latest_release = None;
+                    self.update_status = error;
+                }
             }
+            self.update_job = None;
+        }
+        if let Some(job) = &self.download_job
+            && let Ok(result) = job.try_recv()
+        {
+            match result {
+                Ok(download) => {
+                    self.downloaded_update = Some(download);
+                    self.update_status =
+                        "Download verified. Ready to install when you confirm.".into();
+                }
+                Err(e) => self.update_status = e,
+            }
+            self.download_job = None;
         }
         self.about_dialog(&ctx);
         if self.script_ui.modeless
@@ -3043,13 +3210,13 @@ impl PixelCraft {
             self.script_preview_doc = Some(self.doc.clone());
         }
         self.script_ui.show(&ctx);
-        if let Some(request) = self.script_ui.preview.take() {
-            if let Ok(document) = serde_json::from_value::<Document>(request["document"].clone()) {
-                if document.validate().is_ok() && self.script_ui.editor_update.is_none() {
-                    self.doc = document;
-                    self.script_preview_doc = Some(self.doc.clone());
-                }
-            }
+        if let Some(request) = self.script_ui.preview.take()
+            && let Ok(document) = serde_json::from_value::<Document>(request["document"].clone())
+            && document.validate().is_ok()
+            && self.script_ui.editor_update.is_none()
+        {
+            self.doc = document;
+            self.script_preview_doc = Some(self.doc.clone());
         }
         if let Some(context) = self.script_ui.final_context.take() {
             let s = &context["selection"];
@@ -3076,14 +3243,14 @@ impl PixelCraft {
         if self.script_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
-        if ctx.input(|i| i.viewport().close_requested()) && !self.dirty() {
-            if let Some(i) = self
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.dirty()
+            && let Some(i) = self
                 .tabs
                 .iter()
                 .position(|t| t.as_ref().is_some_and(|t| t.doc != t.saved))
-            {
-                self.switch_tab(i);
-            }
+        {
+            self.switch_tab(i);
         }
         if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -3294,6 +3461,7 @@ impl PixelCraft {
         self.dialogs(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
+        self.poll_clipboard(&ctx);
         self.poll_bridge(&ctx);
         if let Some(path) = &self.shot {
             self.shot_frames += 1;
@@ -3338,6 +3506,20 @@ impl PixelCraft {
 }
 impl eframe::App for PixelCraft {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
+        // egui-winit consumes Ctrl+V even when an image clipboard has no text.
+        // Its key release still arrives; synthesize the missing paste event once.
+        if input
+            .events
+            .iter()
+            .any(|e| matches!(e, egui::Event::Paste(_)))
+        {
+            self.native_paste_handled = true;
+        }
+        if input.events.iter().any(|e|matches!(e,egui::Event::Key{key:Key::V,pressed:false,modifiers,..} if modifiers.command)) {
+            if !self.native_paste_handled {input.events.push(egui::Event::Paste(String::new()));}
+            self.native_paste_handled=false;
+        }
+
         if let Some(rx) = &self.system_theme_rx {
             for theme in rx.try_iter() {
                 self.system_theme = Some(theme);
@@ -3535,14 +3717,50 @@ fn main() -> eframe::Result {
             .with_app_id("pixelcraft")
             .with_inner_size([1180., 840.])
             .with_min_inner_size([800., 620.]),
-        renderer: eframe::Renderer::Glow,
+        renderer: if std::env::var_os("PIXELCRAFT_OPENGL").is_some() {
+            eframe::Renderer::Glow
+        } else {
+            eframe::Renderer::Wgpu
+        },
         ..Default::default()
     };
-    eframe::run_native(
-        "PixelCraft",
-        options,
-        Box::new(move |cc| Ok(Box::new(PixelCraft::new(cc, shot)))),
-    )
+    let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let created = app_created.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        eframe::run_native(
+            "PixelCraft",
+            options,
+            Box::new(move |cc| {
+                let app = PixelCraft::new(cc, shot);
+                created.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(Box::new(app))
+            }),
+        )
+    }));
+    match result {
+        Ok(Ok(())) => Ok(()),
+        failed
+            if std::env::var_os("PIXELCRAFT_OPENGL").is_none()
+                && !app_created.load(std::sync::atomic::Ordering::Relaxed) =>
+        {
+            eprintln!("wgpu unavailable; restarting with OpenGL");
+            let _ = failed;
+            let status = std::process::Command::new(
+                std::env::current_exe().map_err(|e| eframe::Error::AppCreation(e.into()))?,
+            )
+            .args(std::env::args_os().skip(1))
+            .env("PIXELCRAFT_OPENGL", "1")
+            .status()
+            .map_err(|e| eframe::Error::AppCreation(e.into()))?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err(eframe::Error::AppCreation("OpenGL fallback failed".into()))
+            }
+        }
+        Ok(Err(e)) => Err(e),
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 #[cfg(test)]
@@ -4279,9 +4497,21 @@ impl PixelCraft {
                     .latest_release
                     .as_ref()
                     .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION))
-                {
-                    if let Some(url) = self.about_info.releases_url() {
+                    && let Some(url) = self.about_info.releases_url() {
                         ui.pc_hyperlink_to("Download the latest update", url);
+                    }
+                if self.latest_release.as_ref().is_some_and(|r|r.is_newer_than(INSTALLED_VERSION)&&r.download_available()) && self.download_job.is_none() && self.downloaded_update.is_none()
+                    && ui.pc_button("Download update in PixelCraft").clicked(){
+                        self.update_status="Downloading update and verifying SHA-256…".into();
+                        self.download_job=Some(updates::download(self.latest_release.as_ref().unwrap().clone(),self.about_info.repository.clone(),extensions::config_directory().join("updates"),ctx.clone()));
+                    }
+                if let Some(download)=&self.downloaded_update {
+                    ui.small(format!("Verified: {}",download.name));
+                    if ui.pc_button("Install verified update…").clicked(){
+                        let target=if cfg!(target_os="linux") {std::env::var_os("APPIMAGE").map(PathBuf::from).or_else(||rfd::FileDialog::new().add_filter("AppImage",&["AppImage"]).set_file_name(&download.name).save_file())}else{None};
+                        if (!cfg!(target_os="linux")||target.is_some()) && rfd::MessageDialog::new().set_title("Install PixelCraft update?").set_description("Install the verified update now? Your current editor stays open. Reopen PixelCraft after installation to use the new version.").set_buttons(rfd::MessageButtons::YesNo).show()==rfd::MessageDialogResult::Yes {
+                            self.update_status=match updates::install(download,target.as_deref()){Ok(())=>"Update installed or installer started. Reopen PixelCraft when ready.".into(),Err(e)=>format!("Could not install update: {e}")};
+                        }
                     }
                 }
                 if ui
@@ -4396,6 +4626,8 @@ mod merge_regressions {
         a.doc
             .references
             .push(pixelcraft::productivity::ReferenceImage {
+                behind: false,
+                floating: false,
                 name: "guide".into(),
                 width: 1,
                 height: 1,
@@ -4470,3 +4702,77 @@ mod merge_regressions {
 
 #[cfg(test)]
 mod ui_icon_tests;
+
+#[cfg(test)]
+mod selection_history_expansion {
+    use super::*;
+    #[test]
+    fn undo_redo_restores_rectangle_mask_and_active_frame() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(4, 2), None);
+        let mask = vec![true, false, true, false, false, false, false, false];
+        a.selection = Some((0, 0, 2, 0));
+        a.studio.mask = Some(mask.clone());
+        a.remember();
+        a.doc.add_frame(0, false);
+        a.frame = 1;
+        a.selection = Some((1, 1, 2, 1));
+        a.studio.mask = None;
+        a.undo();
+        assert_eq!(a.selection, Some((0, 0, 2, 0)));
+        assert_eq!(a.studio.mask, Some(mask));
+        assert_eq!(a.frame, 0);
+        a.redo();
+        assert_eq!(a.selection, Some((1, 1, 2, 1)));
+        assert_eq!(a.studio.mask, None);
+        assert_eq!(a.frame, 1);
+    }
+}
+#[cfg(test)]
+mod native_paste_expansion {
+    use super::*;
+    fn release() -> egui::Event {
+        egui::Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }
+    }
+    #[test]
+    fn image_only_paste_shortcut_generates_one_paste_event() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        let mut input = egui::RawInput {
+            events: vec![release()],
+            ..Default::default()
+        };
+        eframe::App::raw_input_hook(&mut a, &ctx, &mut input);
+        assert_eq!(
+            input
+                .events
+                .iter()
+                .filter(|e| matches!(e, egui::Event::Paste(_)))
+                .count(),
+            1
+        );
+        let mut input = egui::RawInput {
+            events: vec![egui::Event::Paste("text".into())],
+            ..Default::default()
+        };
+        eframe::App::raw_input_hook(&mut a, &ctx, &mut input);
+        let mut input = egui::RawInput {
+            events: vec![release()],
+            ..Default::default()
+        };
+        eframe::App::raw_input_hook(&mut a, &ctx, &mut input);
+        assert!(
+            !input
+                .events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Paste(_)))
+        );
+    }
+}

@@ -330,7 +330,7 @@ fn rasterize(
         let Some(texture) = textures.get(&id) else {
             continue;
         };
-        for triangle in mesh.indices.chunks_exact(3) {
+        for triangle in mesh.indices.as_chunks::<3>().0 {
             let v = [
                 mesh.vertices[triangle[0] as usize],
                 mesh.vertices[triangle[1] as usize],
@@ -420,7 +420,7 @@ fn rasterize(
                     } else {
                         None
                     };
-                    for c in 0..4 {
+                    for (c, channel) in src.iter_mut().enumerate() {
                         let tex = (0..4)
                             .map(|i| colors[i].to_array()[c] as f32 * blend[i])
                             .sum::<f32>();
@@ -428,7 +428,7 @@ fn rasterize(
                         let color = (0..3)
                             .map(|i| v[i].color.to_array()[c] as f32 * weights[i])
                             .sum::<f32>();
-                        src[c] = tex * color / 255.;
+                        *channel = tex * color / 255.;
                     }
                     let dst = &mut output[(y * w + x) * 4..(y * w + x + 1) * 4];
                     for c in 0..4 {

@@ -194,6 +194,12 @@ function Color(c,g,b,a)
 end
 -- Point_new 0x3e48f0 selects named fields when x is nonnil;
 -- both coordinates use lua_tointegerx then low signed32 storage.
+local pointFields=setmetatable({}, {__mode='k'})
+-- Point_eq 0x3e4a40 compares the two stored int32 coordinates exactly.
+local function pointEqual(a,b)
+ local left,right=pointFields[a],pointFields[b]
+ return left~=nil and right~=nil and left.x==right.x and left.y==right.y
+end
 function Point(x,y)
  if type(x)=='table' then
   local t=x
@@ -202,8 +208,9 @@ function Point(x,y)
  -- Point setters 0x3e5050/0x3e50c0 convert every assignment,
  -- including repeated writes and nil, before storing signed32 coordinates.
  local fields={x=colorInteger(x),y=colorInteger(y)}
- return setmetatable({}, {
+ local result=setmetatable({}, {
   __name='Point',
+  __eq=pointEqual,
   __index=fields,
   __newindex=function(t,k,v)
    if k=='x' or k=='y' then fields[k]=colorInteger(v)
@@ -211,9 +218,17 @@ function Point(x,y)
   end,
   __pairs=function() return next,fields,nil end
  })
+ pointFields[result]=fields
+ return result
 end
 -- Size_new 0x3ef330 selects width/height, then w/h, then [1]/[2]
 -- as a pair. All components use floor-mode integer conversion and signed32 storage.
+local sizeFields=setmetatable({}, {__mode='k'})
+-- Size_eq 0x3ef470 compares both stored int32 dimensions exactly.
+local function sizeEqual(a,b)
+ local left,right=sizeFields[a],sizeFields[b]
+ return left~=nil and right~=nil and left.width==right.width and left.height==right.height
+end
 function Size(w,h)
  if type(w)=='table' then
   local t=w
@@ -225,8 +240,9 @@ function Size(w,h)
  -- the property table 0x1cbcff0 maps w/h to the same storage.
  local fields={width=colorInteger(w),height=colorInteger(h)}
  local aliases={w='width',h='height'}
- return setmetatable({}, {
+ local result=setmetatable({}, {
   __name='Size',
+  __eq=sizeEqual,
   __index=function(_,k) return fields[aliases[k] or k] end,
   __newindex=function(t,k,v)
    k=aliases[k] or k
@@ -235,9 +251,18 @@ function Size(w,h)
   end,
   __pairs=function() return next,fields,nil end
  })
+ sizeFields[result]=fields
+ return result
 end
 -- Rectangle_new 0x3e9ea0 selects all array fields when x is nil.
 -- Named coordinates select width/height or w/h as a pair by width nonnil.
+local rectangleFields=setmetatable({}, {__mode='k'})
+-- Rectangle_eq 0x3ea110 compares all four int32 fields, even when empty.
+local function rectangleEqual(a,b)
+ local left,right=rectangleFields[a],rectangleFields[b]
+ return left~=nil and right~=nil and left.x==right.x and left.y==right.y
+  and left.width==right.width and left.height==right.height
+end
 function Rectangle(x,y,w,h)
  if type(x)=='table' then
   local t=x
@@ -248,8 +273,9 @@ function Rectangle(x,y,w,h)
  -- Native setters 0x3ea6d0/0x3ea740/0x3ea7b0/0x3ea820 convert on
  -- every write. Keep fields behind the proxy so repeated writes also convert.
  local fields={x=colorInteger(x),y=colorInteger(y),width=colorInteger(w),height=colorInteger(h)}
- return setmetatable({}, {
+ local result=setmetatable({}, {
   __name='Rectangle',
+  __eq=rectangleEqual,
   __index=fields,
   __newindex=function(t,k,v)
    if k=='x' or k=='y' or k=='width' or k=='height' then fields[k]=colorInteger(v)
@@ -257,6 +283,8 @@ function Rectangle(x,y,w,h)
   end,
   __pairs=function() return next,fields,nil end
  })
+ rectangleFields[result]=fields
+ return result
 end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}

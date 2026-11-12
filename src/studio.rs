@@ -130,7 +130,7 @@ impl PixelCraft {
         }
     }
     pub(super) fn autosave(&mut self, force: bool) {
-        if self.shot.is_some() || !self.studio.recovery_enabled {
+        if self.shot.is_some() || !self.studio.recovery_enabled || !self.power.autosave_enabled() {
             return;
         }
         if !force && self.studio.last_save.elapsed() < Duration::from_secs(15) {
@@ -167,7 +167,7 @@ impl PixelCraft {
         }
     }
     pub(super) fn restore_workspace(&mut self) {
-        if self.shot.is_some() || !self.studio.recovery_enabled {
+        if self.shot.is_some() || !self.studio.recovery_enabled || !self.power.autosave_enabled() {
             return;
         }
         let root = self.studio.recovery_root.clone();
@@ -425,6 +425,28 @@ impl PixelCraft {
             self.status = "Select an unlocked image layer".into();
             return;
         }
+        if kind == "Outline" || kind == "Drop shadow" {
+            let mask = (0..self.doc.width * self.doc.height)
+                .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
+                .collect::<Vec<_>>();
+            let mut next = self.doc.clone();
+            let offset = if kind == "Drop shadow" {
+                Some((self.studio.dx, self.studio.dy))
+            } else {
+                None
+            };
+            match workflows::spatial_effect(
+                &mut next, self.layer, self.frame, &mask, self.fg, offset,
+            ) {
+                Ok(()) => {
+                    self.remember();
+                    self.doc = next;
+                    self.status = format!("Applied {kind}");
+                }
+                Err(e) => self.status = e,
+            }
+            return;
+        }
         self.remember();
         for i in 0..self.doc.width * self.doc.height {
             if !self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
@@ -560,12 +582,13 @@ impl PixelCraft {
                         }
                     });
                     ui.horizontal(|ui| {
-                        for label in ["Invert", "Grayscale", "Lighten", "Darken"] {
+                        for label in ["Invert", "Grayscale", "Lighten", "Darken", "Outline", "Drop shadow"] {
                             if ui.pc_button(label).clicked() {
                                 self.effects(label)
                             }
                         }
                     });
+                    ui.small("Outline/shadow use the active color and selection. Shadow uses the movement X/Y offsets above.");
                     ui.separator();
                     ui.small(&self.studio.recovery_status);
                 });
@@ -573,12 +596,13 @@ impl PixelCraft {
         }
         if self.studio.sheet_open {
             let mut open = true;
-            egui::Window::new("Export sprite sheet").open(&mut open).default_width(390.).show(ctx,|ui|{ui.label("Pack frames into rows with transparent padding.");ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.studio.sheet.columns).range(1..=256).prefix("Columns "));ui.add(egui::DragValue::new(&mut self.studio.sheet.padding).range(0..=256).prefix("Padding "));});ui.pc_checkbox(&mut self.studio.sheet.trim,"Trim transparent borders (compact packing)");egui::ComboBox::from_label("Frames").selected_text(self.studio.sheet.tag.and_then(|i|self.doc.tags.get(i)).map_or("All frames",|t|t.name.as_str())).show_ui(ui,|ui|{ui.pc_selectable_value(&mut self.studio.sheet.tag,None,"All frames");for(i,t)in self.doc.tags.iter().enumerate(){ui.pc_selectable_value(&mut self.studio.sheet.tag,Some(i),&t.name);}});egui::ComboBox::from_label("Engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.small("PNG + JSON with frame positions, durations and tags. Godot adds SpriteFrames (.tres); Unity adds multiple-sprite importer (.png.meta). Place the Godot files together at res://.");if let Ok((im,meta))=workflows::pack_sheet(&self.doc,&self.studio.sheet){ui.label(format!("{} × {} · {} frames",im.width(),im.height(),meta["frames"].as_array().unwrap().len()));}if ui.pc_button("Export PNG + metadata…").clicked(){if let Some(path)=rfd::FileDialog::new().add_filter("PNG sheet",&["png"]).set_file_name("sprite.png").save_file(){self.status=match interchange::export_sheet(&path,&self.doc,&self.studio.sheet){Ok(())=>"Exported sprite sheet and metadata".into(),Err(e)=>format!("Export failed: {e}")};}}ui.small("To import an atlas, open its JSON metadata. Use File → Import PNG sequence for numbered frames.");});
+            egui::Window::new("Export sprite sheet").open(&mut open).default_width(390.).show(ctx,|ui|{ui.label("Pack frames into rows with transparent padding.");self.export_scale_ui(ui);ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.studio.sheet.columns).range(1..=256).prefix("Columns "));ui.add(egui::DragValue::new(&mut self.studio.sheet.padding).range(0..=256).prefix("Padding "));});ui.pc_checkbox(&mut self.studio.sheet.trim,"Trim transparent borders (compact packing)");egui::ComboBox::from_label("Frames").selected_text(self.studio.sheet.tag.and_then(|i|self.doc.tags.get(i)).map_or("All frames",|t|t.name.as_str())).show_ui(ui,|ui|{ui.pc_selectable_value(&mut self.studio.sheet.tag,None,"All frames");for(i,t)in self.doc.tags.iter().enumerate(){ui.pc_selectable_value(&mut self.studio.sheet.tag,Some(i),&t.name);}});egui::ComboBox::from_label("Engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.small("PNG + JSON with frame positions, durations and tags. Godot adds SpriteFrames (.tres); Unity adds multiple-sprite importer (.png.meta). Place the Godot files together at res://.");if let Ok((im,meta))=workflows::pack_sheet(&self.doc,&self.studio.sheet){ui.label(format!("{} × {} · {} frames",im.width(),im.height(),meta["frames"].as_array().unwrap().len()));}
+if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG sheet",&["png"]).set_file_name("sprite.png").save_file(){self.status=match interchange::export_sheet(&path,&self.doc,&self.studio.sheet){Ok(())=>"Exported sprite sheet and metadata".into(),Err(e)=>format!("Export failed: {e}")};}ui.small("To import an atlas, open its JSON metadata. Use File → Import PNG sequence for numbered frames.");});
             self.studio.sheet_open = open;
         }
         if self.studio.tiles_open {
             let mut open = true;
-            egui::Window::new("Tileset browser").open(&mut open).default_width(330.).show(ctx,|ui|{if ui.pc_button("Import PNG tilesheet…").clicked(){if let Err(e)=self.import_tileset(){self.status=e}}ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if self.doc.tilesets.is_empty(){ui.label("Import a tilesheet to browse and paint tiles.");}let mut choose=None;egui::ScrollArea::vertical().max_height(450.).show(ui,|ui|{for(ti,t)in self.doc.tilesets.iter().enumerate(){ui.strong(&t.name);ui.horizontal_wrapped(|ui|{for(i,tile)in t.tiles.iter().enumerate(){let tex=ctx.load_texture(format!("tile-{ti}-{i}"),color_image(tile,t.width,t.height),egui::TextureOptions::NEAREST);let selected=self.doc.layers[self.layer].tileset==Some(ti)&&self.selected_tile==i as u32+1;let button=egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(Vec2::splat(32.))).selected(selected);if ui.add(button).on_hover_text(format!("Tile {}",i+1)).clicked(){choose=Some((ti,i as u32+1));}}});}});if let Some((ti,id))=choose{if self.doc.layers[self.layer].tileset!=Some(ti){if let Some(l)=self.doc.layers.iter().position(|l|l.tileset==Some(ti)){self.layer=l}else{self.remember();if self.doc.add_tile_layer(ti).is_ok(){self.layer=self.doc.layers.len()-1}}}self.selected_tile=id;self.tool=Tool::Pencil;}ui.pc_checkbox(&mut self.studio.seamless,"Seamless preview");if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked(){self.studio_action("tiledexport");}ui.small("Open .tmj / .tsj for finite orthogonal Tiled JSON maps and image tilesets.");});
+            egui::Window::new("Tileset browser").open(&mut open).default_width(330.).show(ctx,|ui|{if ui.pc_button("Import PNG tilesheet…").clicked()&& let Err(e)=self.import_tileset(){self.status=e}ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if self.doc.tilesets.is_empty(){ui.label("Import a tilesheet to browse and paint tiles.");}let mut choose=None;egui::ScrollArea::vertical().max_height(450.).show(ui,|ui|{for(ti,t)in self.doc.tilesets.iter().enumerate(){ui.strong(&t.name);ui.horizontal_wrapped(|ui|{for(i,tile)in t.tiles.iter().enumerate(){let tex=ctx.load_texture(format!("tile-{ti}-{i}"),color_image(tile,t.width,t.height),egui::TextureOptions::NEAREST);let selected=self.doc.layers[self.layer].tileset==Some(ti)&&self.selected_tile==i as u32+1;let button=egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(Vec2::splat(32.))).selected(selected);if ui.add(button).on_hover_text(format!("Tile {}",i+1)).clicked(){choose=Some((ti,i as u32+1));}}});}});if let Some((ti,id))=choose{if self.doc.layers[self.layer].tileset!=Some(ti){if let Some(l)=self.doc.layers.iter().position(|l|l.tileset==Some(ti)){self.layer=l}else{self.remember();if self.doc.add_tile_layer(ti).is_ok(){self.layer=self.doc.layers.len()-1}}}self.selected_tile=id;self.tool=Tool::Pencil;}ui.pc_checkbox(&mut self.studio.seamless,"Seamless preview");if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked(){self.studio_action("tiledexport");}ui.small("Open .tmj / .tsj for finite orthogonal Tiled JSON maps and image tilesets.");});
             self.studio.tiles_open = open;
         }
         if self.studio.seamless {

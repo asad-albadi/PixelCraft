@@ -62,7 +62,9 @@ pub fn to_srgb(profile: &[u8], pixels: &[Pixel]) -> Result<Vec<Pixel>, String> {
         .transform(&src, &mut dst)
         .map_err(|e| format!("ICC rendering: {e}"))?;
     Ok(dst
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .zip(pixels)
         .map(|(c, p)| [c[0], c[1], c[2], p[3]])
         .collect())

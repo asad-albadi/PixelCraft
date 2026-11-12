@@ -1,0 +1,192 @@
+[
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "derived",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "ghidra",
+      "engine_version": "12.1.4",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_5d5cd5e769f26ecb884a1edb1e45417cb9ccd965dc3b668b18cd84a82f09c308",
+    "limitations": [
+      {
+        "code": "deep_engine",
+        "message": "the pseudo-C comes from the external Deep engine (Ghidra), not the original source"
+      },
+      {
+        "code": "engine_rebased",
+        "message": "Ghidra loaded this program at 0x100000, not where the built-in engine reads it (0x0); entry is the built-in address, engine_entry Ghidra's, and the addresses in Ghidra's names inside the pseudo-C (FUN_…, DAT_…) are Ghidra's"
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3e4a40"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x3e4a40"
+    },
+    "result": {
+      "engine": "ghidra",
+      "engine_entry": "0x4e4a40",
+      "entry": "0x3e4a40",
+      "function": "Point_eq",
+      "pseudo_code": "\n/* app::script::(anonymous namespace)::Point_eq(lua_State*) */\n\nvoid app::script::(anonymous_namespace)::Point_eq(lua_State *param_1)\n\n{\n                    /* WARNING: Subroutine does not return */\n  luaL_checkudata(param_1,1,\"gfx::Point\");\n}\n\n",
+      "signature": "void app::script::(anonymous_namespace)::Point_eq(lua_State *param_1);"
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for Point_eq from the Deep engine (10 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "derived",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "ghidra",
+      "engine_version": "12.1.4",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_26e38daba8af6283538d094338c23eeae1e9fd122311de98eae125eb9f15f5e3",
+    "limitations": [
+      {
+        "code": "deep_engine",
+        "message": "the pseudo-C comes from the external Deep engine (Ghidra), not the original source"
+      },
+      {
+        "code": "engine_rebased",
+        "message": "Ghidra loaded this program at 0x100000, not where the built-in engine reads it (0x0); entry is the built-in address, engine_entry Ghidra's, and the addresses in Ghidra's names inside the pseudo-C (FUN_…, DAT_…) are Ghidra's"
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x52f380"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x52f380"
+    },
+    "result": {
+      "engine": "ghidra",
+      "engine_entry": "0x62f380",
+      "entry": "0x52f380",
+      "function": "luaL_checkudata",
+      "pseudo_code": "\n/* luaL_checkudata(lua_State*, int, char const*) */\n\nundefined8 luaL_checkudata(lua_State *param_1,int param_2,char *param_3)\n\n{\n  int iVar1;\n  long lVar2;\n  \n  lVar2 = lua_touserdata(param_1,param_2);\n  if (lVar2 != 0) {\n                    /* try { // try from 0062f39a to 0072f3ab has its CatchHandler @ 0062f427 */\n    iVar1 = lua_getmetatable(param_1,param_2);\n    if (iVar1 != 0) {\n                    /* try { // try from 0062f3af to 0072f3e3 has its CatchHandler @ 0062f3e4 */\n      lua_getfield(param_1,-0xf4628,param_3);\n      lua_rawequal(param_1,-1,-2);\n                    /* WARNING: Subroutine does not return */\n      lua_settop(param_1,-3);\n    }\n  }\n                    /* try { // try from 0062f3e4 to 0072f446 has its CatchHandler @ 0062f330 */\n  luaL_typeerror(param_1,param_2,param_3);\n  return 0;\n}\n\n",
+      "signature": "undefined8 luaL_checkudata(lua_State *param_1,int param_2,char *param_3);"
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for luaL_checkudata from the Deep engine (26 lines)."
+  },
+  {
+    "authority": "original-files",
+    "carries_target_content": true,
+    "confidence": "derived",
+    "coverage": {
+      "status": "unknown"
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "ghidra",
+      "engine_version": "12.1.4",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_d4ceb2bb003686f87a57743bcb21297e12525415ee468acd06413a7a0e00ff28",
+    "limitations": [
+      {
+        "code": "deep_engine",
+        "message": "the pseudo-C comes from the external Deep engine (Ghidra), not the original source"
+      },
+      {
+        "code": "engine_rebased",
+        "message": "Ghidra loaded this program at 0x100000, not where the built-in engine reads it (0x0); entry is the built-in address, engine_entry Ghidra's, and the addresses in Ghidra's names inside the pseudo-C (FUN_…, DAT_…) are Ghidra's"
+      }
+    ],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x53f500"
+      }
+    ],
+    "operation": "native_function_pseudocode",
+    "params": {
+      "function": "0x53f500"
+    },
+    "result": {
+      "engine": "ghidra",
+      "engine_entry": "0x63f500",
+      "entry": "0x53f500",
+      "function": "lua_pushboolean",
+      "pseudo_code": "\n/* lua_pushboolean(lua_State*, int) */\n\nvoid lua_pushboolean(lua_State *param_1,int param_2)\n\n{\n  *(char *)(*(long *)(param_1 + 0x10) + 8) = (param_2 != 0) * '\\x10' + '\\x01';\n  *(long *)(param_1 + 0x10) = *(long *)(param_1 + 0x10) + 0x10;\n  return;\n}\n\n",
+      "signature": "void lua_pushboolean(lua_State *param_1,int param_2);"
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "Pseudo-C for lua_pushboolean from the Deep engine (11 lines)."
+  },
+  {
+    "authority": "original-files",
+    "confidence": "observed",
+    "coverage": {
+      "examined": 28,
+      "status": "complete",
+      "total": 28
+    },
+    "environment": {
+      "clean_room": false,
+      "engine": "builtin",
+      "engine_version": "0.6.1",
+      "host": "linux-x86_64"
+    },
+    "id": "ev_c664b713e17b91e8917a83eb4011903c71b8f86d1dff7eee718142c4f2355285",
+    "limitations": [],
+    "links": [],
+    "locations": [
+      {
+        "kind": "address",
+        "value": "0x3e4a40"
+      }
+    ],
+    "operation": "native_function_disassemble",
+    "params": {
+      "function": "0x3e4a40"
+    },
+    "result": {
+      "assembly": "_ZN3app6script12_GLOBAL__N_18Point_eqEP9lua_State:\n  0x3e4a40  4157                 push r15\n  0x3e4a42  4156                 push r14\n  0x3e4a44  53                   push rbx\n  0x3e4a45  4889fb               mov rbx, rdi\n  0x3e4a48  4c8d356cbfb500       lea r14, [0xf409bb]  ; \"gfx::\"\n  0x3e4a4f  be01000000           mov esi, 1\n  0x3e4a54  4c89f2               mov rdx, r14\n  0x3e4a57  e824a91400           call 0x52f380  ; _Z15luaL_checkudataP9lua_StateiPKc\n  0x3e4a5c  4989c7               mov r15, rax\n  0x3e4a5f  4889df               mov rdi, rbx\n  0x3e4a62  be02000000           mov esi, 2\n  0x3e4a67  4c89f2               mov rdx, r14\n  0x3e4a6a  e811a91400           call 0x52f380  ; _Z15luaL_checkudataP9lua_StateiPKc\n  0x3e4a6f  f3410f7e07           movq xmm0, [r15]\n  0x3e4a74  f30f7e08             movq xmm1, [rax]\n  0x3e4a78  660f76c8             pcmpeqd xmm1, xmm0\n  0x3e4a7c  660f70c150           pshufd xmm0, xmm1, 0x50\n  0x3e4a81  660f50c0             movmskpd eax, xmm0\n  0x3e4a85  31f6                 xor esi, esi\n  0x3e4a87  83f803               cmp eax, 3\n  0x3e4a8a  400f94c6             sete sil\n  0x3e4a8e  4889df               mov rdi, rbx\n  0x3e4a91  e86aaa1500           call 0x53f500  ; _Z15lua_pushbooleanP9lua_Statei\n  0x3e4a96  b801000000           mov eax, 1\n  0x3e4a9b  5b                   pop rbx\n  0x3e4a9c  415e                 pop r14\n  0x3e4a9e  415f                 pop r15\n  0x3e4aa0  c3                   ret\n",
+      "entry": "0x3e4a40",
+      "function": "_ZN3app6script12_GLOBAL__N_18Point_eqEP9lua_State",
+      "instructions": 28
+    },
+    "subject": {
+      "kind": "elf",
+      "name": "aseprite",
+      "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+    },
+    "summary": "28 instructions of _ZN3app6script12_GLOBAL__N_18Point_eqEP9lua_State."
+  }
+]

@@ -4,6 +4,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      windows_only:
+        description: Build only the Windows test artifact
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -14,6 +19,7 @@ concurrency:
 
 jobs:
   appimage:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     permissions:
@@ -38,6 +44,7 @@ jobs:
       - name: Install stable Rust
         run: |
           rustup toolchain install stable --profile minimal
+          rustup component add clippy rustfmt
           rustup override set stable
 
       # The checked-in development Lua binary requires a newer glibc.
@@ -50,9 +57,17 @@ jobs:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
           XDG_CONFIG_HOME: ${{ runner.temp }}/pixelcraft-native-config
         run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
           cargo build --release --locked
           target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
+
+      - name: Native clipboard and automatic graphics fallback on Linux
+        run: |
+          xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
+          WGPU_BACKEND=metal xvfb-run -a bash checks/graphical-startup.sh target/release/pixelcraft "$RUNNER_TEMP/fallback-linux"
+          rg 'restarting with OpenGL' "$RUNNER_TEMP/fallback-linux/startup.log"
 
       - name: Set artifact version
         shell: bash
@@ -186,6 +201,7 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
+          rustup component add clippy rustfmt
           rustup override set stable
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
       - name: Build embedded Windows Lua
@@ -200,6 +216,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Strict lint and native clipboard on Windows
+        run: |
+          cargo fmt --check
+          if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
+          cargo clippy --locked --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'Strict lint failed' }
+          cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Native clipboard failed' }
+          ./checks/graphics-fallback.ps1
+
       - name: Check Windows UI themes, scaling, accessibility and keyboard navigation
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-ui-data

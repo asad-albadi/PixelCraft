@@ -116,10 +116,7 @@ pub fn shortcuts(bytes: &[u8]) -> Result<Shortcuts, String> {
         }
         if let Some(action) = shortcut_action(command) {
             result.bindings.insert(
-                binding
-                    .replace("Space", "Space")
-                    .replace("Esc", "Escape")
-                    .replace("Del", "Delete"),
+                binding.replace("Esc", "Escape").replace("Del", "Delete"),
                 action.into(),
             );
         } else {

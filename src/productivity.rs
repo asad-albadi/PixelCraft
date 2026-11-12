@@ -188,10 +188,8 @@ pub fn paint_brush(
                     continue;
                 }
             }
-            BrushMode::Dither => {
-                if (x + y).rem_euclid(2) == 1 {
-                    c = o.alternate;
-                }
+            BrushMode::Dither if (x + y).rem_euclid(2) == 1 => {
+                c = o.alternate;
             }
             _ => {}
         }
@@ -203,6 +201,10 @@ pub fn paint_brush(
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReferenceImage {
+    #[serde(default)]
+    pub behind: bool,
+    #[serde(default)]
+    pub floating: bool,
     pub name: String,
     pub width: usize,
     pub height: usize,
@@ -231,6 +233,8 @@ pub fn read_image(path: &Path) -> Result<RgbaImage, String> {
 pub fn import_reference(path: &Path) -> Result<ReferenceImage, String> {
     let im = read_image(path)?;
     Ok(ReferenceImage {
+        behind: false,
+        floating: false,
         name: path
             .file_name()
             .unwrap_or_default()
@@ -660,4 +664,103 @@ pub fn shortcut_preset(name: &str) -> std::collections::BTreeMap<String, String>
         m.insert("Shift+G".into(), "fill".into());
     }
     m
+}
+
+/// Rasterize a reference's placement to a new image layer using nearest sampling.
+pub fn reference_to_layer(
+    d: &mut Document,
+    r: &ReferenceImage,
+    frame: usize,
+) -> Result<(), String> {
+    if frame >= d.durations.len() || !d.can_grow(d.width * d.height * d.durations.len()) {
+        return Err("Layer exceeds document limits".into());
+    }
+    let n = d.layers.len();
+    d.add_layer();
+    d.layers[n].name = r.name.clone();
+    for y in 0..d.height {
+        for x in 0..d.width {
+            let sx = ((x as f32 - r.x) / r.scale).floor();
+            let sy = ((y as f32 - r.y) / r.scale).floor();
+            if sx >= 0. && sy >= 0. && sx < r.width as f32 && sy < r.height as f32 {
+                let mut p = r.pixels[sy as usize * r.width + sx as usize];
+                p[3] = ((p[3] as u16 * r.opacity as u16 + 127) / 255) as u8;
+                d.set_pixel(n, frame, y * d.width + x, p);
+            }
+        }
+    }
+    d.validate()
+}
+
+/// Expand folders deterministically. Symlinks are not followed to avoid cycles.
+pub const ATLAS_EXTENSIONS: &[&str] = &[
+    "pixel", "ase", "aseprite", "png", "gif", "bmp", "jpg", "jpeg", "jfif", "webp", "json", "ora",
+    "apng", "tmj", "tsj",
+];
+pub fn expand_atlas_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    fn visit(p: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        let meta = std::fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+        if meta.file_type().is_symlink() {
+            return Ok(());
+        }
+        if meta.is_dir() {
+            let mut children = std::fs::read_dir(p)
+                .map_err(|e| e.to_string())?
+                .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            children.sort();
+            for child in children {
+                visit(&child, out)?;
+            }
+        } else if meta.is_file()
+            && p.extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| ATLAS_EXTENSIONS.contains(&s.to_ascii_lowercase().as_str()))
+        {
+            if out.len() >= 4096 {
+                return Err("Atlas input limit is 4096 files".into());
+            }
+            out.push(p.to_path_buf());
+        }
+        Ok(())
+    }
+    let mut out = vec![];
+    for p in inputs {
+        visit(p, &mut out)?;
+    }
+    out.sort();
+    out.dedup();
+    if out.is_empty() {
+        return Err("No supported sprites found".into());
+    }
+    Ok(out)
+}
+
+/// Sample the rendered reference stack, excluding checkerboard and onion skin.
+pub fn sample_canvas(d: &Document, frame: usize, x: i32, y: i32, references: bool) -> Pixel {
+    let artwork = d.index(x, y).map_or(CLEAR, |i| d.composite(frame)[i]);
+    if !references {
+        return artwork;
+    }
+    let mut color = CLEAR;
+    for behind in [true, false] {
+        if !behind {
+            color = over(color, artwork, 255);
+        }
+        for r in &d.references {
+            if !r.visible || r.floating || r.behind != behind {
+                continue;
+            }
+            let rx = ((x as f32 - r.x) / r.scale).floor();
+            let ry = ((y as f32 - r.y) / r.scale).floor();
+            if rx >= 0. && ry >= 0. && rx < r.width as f32 && ry < r.height as f32 {
+                color = over(
+                    color,
+                    r.pixels[ry as usize * r.width + rx as usize],
+                    r.opacity,
+                );
+            }
+        }
+    }
+    color
 }

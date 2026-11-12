@@ -51,6 +51,175 @@ pub fn apply_edits(d: &Document, v: &Value) -> Result<Document, String> {
     out.validate()?;
     Ok(out)
 }
+/// Apply a complete assistant transaction to a private copy; failures never mutate the source.
+pub fn apply_commands(d: &Document, v: &Value) -> Result<Document, String> {
+    if v["revision"].as_str() != Some(&document_revision(d)) {
+        return Err("Stale revision; inspect the document again".into());
+    }
+    let commands = v["commands"].as_array().ok_or("Expected commands array")?;
+    if commands.len() > 1024 {
+        return Err("Too many commands".into());
+    }
+    let mut out = d.clone();
+    for c in commands {
+        let layer = || {
+            let l = number(c, "layer")?;
+            if l >= out.layers.len() {
+                Err("Invalid layer".to_string())
+            } else {
+                Ok(l)
+            }
+        };
+        let frame = || {
+            let f = number(c, "frame")?;
+            if f >= out.durations.len() {
+                Err("Invalid frame".to_string())
+            } else {
+                Ok(f)
+            }
+        };
+        match c["op"].as_str().ok_or("Missing command op")? {
+            "add-layer" => {
+                let n = out.layers.len();
+                out.add_layer();
+                if n == out.layers.len() {
+                    return Err("Layer limit reached".into());
+                }
+                if let Some(name) = c["name"].as_str() {
+                    out.layers[n].name = name.into();
+                }
+            }
+            "remove-layer" => {
+                let l = layer()?;
+                if out.layers.len() == 1 {
+                    return Err("Cannot remove last layer".into());
+                }
+                if !out.editable(l) {
+                    return Err("Layer is locked".into());
+                }
+                out.remove_layer(l);
+            }
+            "set-layer" => {
+                let l = layer()?;
+                let target = &mut out.layers[l];
+                if let Some(n) = c["name"].as_str() {
+                    target.name = n.into();
+                }
+                if let Some(b) = c["visible"].as_bool() {
+                    target.visible = b;
+                }
+                if let Some(b) = c["locked"].as_bool() {
+                    target.locked = b;
+                }
+                if let Some(a) = c.get("opacity") {
+                    target.opacity =
+                        serde_json::from_value(a.clone()).map_err(|_| "Invalid opacity")?;
+                }
+            }
+            "move-layer" => {
+                let l = layer()?;
+                let to = number(c, "to")?;
+                if to >= out.layers.len() {
+                    return Err("Invalid destination layer".into());
+                }
+                if l < to {
+                    for i in l..to {
+                        out.swap_layers(i, i + 1);
+                    }
+                } else {
+                    for i in (to..l).rev() {
+                        out.swap_layers(i, i + 1);
+                    }
+                }
+            }
+            "add-frame" => {
+                let f = frame()?;
+                let n = out.durations.len();
+                if n >= 65535 {
+                    return Err("Frame limit reached".into());
+                }
+                out.add_frame(f, c["duplicate"].as_bool().unwrap_or(false));
+                if out.durations.len() == n {
+                    return Err("Frame limit reached".into());
+                }
+            }
+            "remove-frame" => {
+                let f = frame()?;
+                if out.durations.len() == 1 {
+                    return Err("Cannot remove last frame".into());
+                }
+                out.remove_frame(f);
+            }
+            "set-frame" => {
+                let f = frame()?;
+                let duration = number(c, "duration")?;
+                if !(1..=65535).contains(&duration) {
+                    return Err("Duration must be 1–65535 ms".into());
+                }
+                out.durations[f] = duration as u16;
+            }
+            "set-tag" | "add-tag" => {
+                let tag: FrameTag =
+                    serde_json::from_value(c["tag"].clone()).map_err(|e| e.to_string())?;
+                if c["op"] == "add-tag" {
+                    out.tags.push(tag);
+                } else {
+                    let i = number(c, "index")?;
+                    *out.tags.get_mut(i).ok_or("Invalid tag")? = tag;
+                }
+            }
+            "remove-tag" => {
+                let i = number(c, "index")?;
+                if i >= out.tags.len() {
+                    return Err("Invalid tag".into());
+                }
+                out.tags.remove(i);
+            }
+            "shape" => {
+                let l = layer()?;
+                let f = frame()?;
+                if !out.editable(l) || out.layers[l].tileset.is_some() {
+                    return Err("Choose an unlocked image layer".into());
+                }
+                let coord = |k: &str| -> Result<i32, String> {
+                    let n = number(c, k)?;
+                    let max = if k.starts_with('x') {
+                        out.width
+                    } else {
+                        out.height
+                    };
+                    if n >= max {
+                        return Err("Shape outside canvas".into());
+                    }
+                    Ok(n as i32)
+                };
+                let a = (coord("x")?, coord("y")?);
+                let b = (coord("x2")?, coord("y2")?);
+                let color: Pixel =
+                    serde_json::from_value(c["color"].clone()).map_err(|_| "Invalid RGBA color")?;
+                let filled = c["filled"].as_bool().unwrap_or(false);
+                match c["kind"].as_str().unwrap_or("rectangle") {
+                    "line" => out.line(l, f, a, b, color, 1),
+                    "ellipse" => out.ellipse(l, f, a, b, color, filled, 1),
+                    "rectangle" => {
+                        for y in a.1.min(b.1)..=a.1.max(b.1) {
+                            for x in a.0.min(b.0)..=a.0.max(b.0) {
+                                if filled || x == a.0 || x == b.0 || y == a.1 || y == b.1 {
+                                    let i = out.index(x, y).unwrap();
+                                    out.set_pixel(l, f, i, color);
+                                }
+                            }
+                        }
+                    }
+                    _ => return Err("Unknown shape".into()),
+                }
+            }
+            _ => return Err("Unknown document command".into()),
+        }
+        out.validate()?;
+    }
+    Ok(out)
+}
 fn number(v: &Value, key: &str) -> Result<usize, String> {
     v[key]
         .as_u64()
@@ -73,11 +242,32 @@ fn options<T: serde::de::DeserializeOwned + Default>(v: &Value) -> Result<T, Str
 }
 pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
     match op {
+        "create" => {
+            let (w, h) = (number(v, "width")?, number(v, "height")?);
+            if w == 0
+                || h == 0
+                || w > MAX_DIMENSION
+                || h > MAX_DIMENSION
+                || w.saturating_mul(h) > MAX_PIXELS
+            {
+                return Err("Invalid canvas dimensions".into());
+            }
+            let d = Document::new(w, h);
+            let output = path(v, "output")?;
+            if output.exists() {
+                return Err("Output already exists".into());
+            }
+            formats::save(&output, &d)?;
+            Ok(inspect(&d))
+        }
         "atlas" => {
             let paths = v["inputs"].as_array().ok_or("Expected inputs array")?;
             let mut docs = vec![];
-            for p in paths {
-                let p = PathBuf::from(p.as_str().ok_or("Input must be a path")?);
+            let paths = paths
+                .iter()
+                .map(|p| p.as_str().map(PathBuf::from).ok_or("Input must be a path"))
+                .collect::<Result<Vec<_>, _>>()?;
+            for p in expand_atlas_inputs(&paths)? {
                 docs.push((
                     p.file_name()
                         .unwrap_or_default()
@@ -139,12 +329,18 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                             &options::<SheetOptions>(&v["options"])?,
                         )?,
                         "pixel" | "ase" | "aseprite" => formats::save(&out, &d)?,
-                        "png" => {
+                        "png" | "bmp" => {
                             let f = v["frame"].as_u64().unwrap_or(0) as usize;
                             if f >= d.durations.len() {
                                 return Err("Invalid frame".into());
                             }
-                            formats::export_png(&out, &d, f, false)?;
+                            formats::export_raster_scaled(
+                                &out,
+                                &d,
+                                f,
+                                false,
+                                v["scale"].as_u64().unwrap_or(1) as usize,
+                            )?;
                         }
                         _ => return Err("Unknown export format".into()),
                     }
@@ -175,8 +371,12 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                     formats::save(&path(v, "output")?, &d)?;
                     Ok(inspect(&d))
                 }
-                "edit" => {
-                    let d = apply_edits(&d, v)?;
+                "edit" | "commands" => {
+                    let d = if op == "commands" {
+                        apply_commands(&d, v)?
+                    } else {
+                        apply_edits(&d, v)?
+                    };
                     formats::save(&path(v, "output")?, &d)?;
                     Ok(inspect(&d))
                 }
@@ -189,6 +389,8 @@ fn extension(p: &Path) -> &str {
     p.extension().and_then(|s| s.to_str()).unwrap_or("")
 }
 const OPERATIONS: &[&str] = &[
+    "create",
+    "commands",
     "inspect",
     "render",
     "edit",
@@ -202,7 +404,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: inspect, render, edit, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|gif|sheet|pixel|aseprite; frame is zero-based.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers.\nSheet options: columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nMCP exposes these operations and live-inspect, live-render, live-edit, live-undo. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: create, commands, inspect, render, edit, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|bmp|gif|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers.\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});
@@ -218,7 +420,11 @@ pub fn run_cli(args: &[String]) -> Result<Value, String> {
                 .strip_prefix("--")
                 .ok_or("Expected --argument value")?;
             let value = args.get(i + 1).ok_or("Missing argument value")?;
-            v[key] = if ["inputs", "options", "edits", "frame"].contains(&key) {
+            v[key] = if [
+                "inputs", "options", "edits", "commands", "frame", "width", "height", "scale",
+            ]
+            .contains(&key)
+            {
                 serde_json::from_str(value).map_err(|e| e.to_string())?
             } else {
                 json!(value)
@@ -252,9 +458,7 @@ pub fn serve_mcp(live: Option<&Path>) -> Result<(), String> {
     Ok(())
 }
 pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
-    if r.get("id").is_none() {
-        return None;
-    }
+    r.get("id")?;
     let method = r["method"].as_str().unwrap_or("");
     let result: Result<Value, String> = match method {
         "initialize" => Ok(
@@ -264,10 +468,17 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
         "tools/list" => {
             let mut names = OPERATIONS.to_vec();
             if live.is_some() {
-                names.extend(["live-inspect", "live-render", "live-edit", "live-undo"]);
+                names.extend([
+                    "live-inspect",
+                    "live-render",
+                    "live-edit",
+                    "live-commands",
+                    "live-create",
+                    "live-undo",
+                ]);
             }
             Ok(
-                json!({"tools":names.iter().map(|name|json!({"name":name,"description":format!("PixelCraft {name}. File operations use input/output paths; edit requires revision from inspect. {}",CLI_HELP),"inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"}},"additionalProperties":false}})).collect::<Vec<_>>()}),
+                json!({"tools":names.iter().map(|name|json!({"name":name,"description":format!("PixelCraft {name}. File operations use input/output paths; edit requires revision from inspect. {}",CLI_HELP),"inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}})).collect::<Vec<_>>()}),
             )
         }
         "tools/call" => {

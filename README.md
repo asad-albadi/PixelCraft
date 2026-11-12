@@ -252,3 +252,26 @@ Live access starts **disabled** and is never restored from preferences. Enable *
 Live inspection returns a session/document revision. Supply that exact revision to edit or undo; user edits, undo/redo and document changes invalidate it. Assistant changes are one regular undo step. Active gestures and scripts block edits, and expired requests are discarded rather than applied after a stalled editor resumes. Reference overlays are excluded from assistant artwork rendering too.
 
 `cargo test --offline` covers shared operations, masks, stamp transparency, shade replay, tag timing/direction, atlas reconstruction, revision guards, undo and expiry. `python3 checks/productivity-headless.py` checks the executable CLI and MCP with display variables removed. The separate loopback authentication test is ignored in the restricted build sandbox; run `cargo test --test productivity live_bridge_authentication -- --ignored` in a normal desktop environment to exercise the socket transport.
+
+
+## Clipboard, display and export controls
+
+Copy/Cut/Paste now exchanges RGBA images with the system clipboard, retaining transparent and partially transparent pixels. Linux Wayland uses `wl-copy`/`wl-paste` when installed (the `wl-clipboard` package), with XWayland clipboard fallback; Windows, macOS and X11 use native image clipboard access. Undo and Redo restore the selection rectangle, mask, layer and frame together with artwork.
+
+In **Workflow tools**, **Export scaling** offers 1×, 2×, 4× or a custom positive integer. The same scale applies to PNG, BMP and sprite-sheet exports; sheet coordinates and source sizes scale with the PNG. **File → Export BMP** exports the active frame. Folders can be added to atlas inputs (including supported sprites in subfolders), and dropping files opens them as document tabs.
+
+**Drawing & selection studio** adds Outline and Drop shadow using the active color, clipped to the active rectangle/mask. Shadow uses the studio's X/Y movement offsets. Reference controls add behind-art placement, fit-to-canvas, floating draggable previews with click-to-sample color, and copy-to-layer. Copying rasterizes the current reference placement and opacity as one Undo step. Enable **Sample reference colors** to include references in eyedropper sampling; transparency and behind-art placement are respected.
+
+**Palette order & ramps** moves swatches by zero-based position and adds intermediate shades between existing palette endpoints. Indexed swatch moves remap indices, including the transparent slot, so existing artwork keeps its colors. Ramps append shades without changing existing slots. Palette changes can be undone; documents with differently sized frame palettes report an error instead of altering artwork. **Interface & autosave** remembers interface scale, checker size/colors and recovery autosave on/off.
+
+The app starts with wgpu and automatically retries OpenGL if graphics initialization fails. Set `PIXELCRAFT_OPENGL=1` to select OpenGL explicitly. Fallback never restarts an already running editor after an application error.
+
+**Help → About** offers optional in-app update downloads for published x86-64 Windows/Linux assets. Downloads must include a matching SHA-256 sidecar and belong to the configured GitHub repository. Installation rechecks the bytes and requires confirmation. Windows starts the installer; Linux replaces the chosen AppImage atomically, retaining a `.previous` backup. Reopen the app after installation. This source build needs a build-time repository identity for release discovery; update networking/installation on other desktops has not been exercised locally.
+
+Sprite-sheet JSON now retains tag repeat counts. Godot animations use unique names; repeat 0 loops indefinitely, while positive counts export a finite sequence with looping disabled. The exporter rejects finite sequences larger than one million entries.
+
+### Assistant document commands
+
+File tools add `create` (`width`, `height`, `output`, which must not already exist) and `commands` (`input`, `output`, `revision`, `commands`). Live tools add `live-create` and `live-commands`, both requiring the current live revision; they are one regular Undo step. `live-create` opens a separate untitled sprite, preserves the original tab, and supports Undo. A command batch validates transactionally and leaves the source unchanged on any error.
+
+Command `op` values: `add-layer`, `set-layer`, `move-layer`, `remove-layer`, `add-frame`, `set-frame`, `remove-frame`, `add-tag`, `set-tag`, `remove-tag`, and `shape`. Layer commands accept zero-based `layer`; `set-layer` accepts `name`, `visible`, `locked`, `opacity`; move uses `to`. Add-frame inserts after `frame`, optionally `duplicate`; set-frame uses `duration` in milliseconds. Tag creation/update accepts `tag: {name,from,to,direction,repeat,color}` (direction 0–3, repeat 0 infinite, color RGB); update/remove uses `index`. Shape accepts `layer`, `frame`, `kind` (`line`, `rectangle`, `ellipse`), canvas coordinates `x,y,x2,y2`, RGBA `color` and optional `filled`. File raster export accepts `scale`; sheet export accepts `options.scale`.

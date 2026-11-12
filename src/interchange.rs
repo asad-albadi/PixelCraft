@@ -80,7 +80,7 @@ pub fn load_animation(path: &Path) -> Result<Document, String> {
 }
 pub fn load_sequence(paths: &[PathBuf]) -> Result<Document, String> {
     let mut paths = paths.to_vec();
-    paths.sort_by(|a, b| natural_key(a).cmp(&natural_key(b)));
+    paths.sort_by_key(|a| natural_key(a));
     let frames = paths.iter().map(|p| {
         image::open(p).map(|im| {
             image::Frame::from_parts(
@@ -120,22 +120,20 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
     im.save(path).map_err(|e| e.to_string())?;
     write_json(&path.with_extension("json"), &meta)?;
     if o.preset == "Godot" {
-        std::fs::write(path.with_extension("tres"), godot(&meta, &name))
+        std::fs::write(path.with_extension("tres"), godot(&meta, &name)?)
             .map_err(|e| e.to_string())?;
     }
     if o.preset == "Unity" {
         let meta_path = PathBuf::from(format!("{}.meta", path.display()));
         let mut output = unity(&meta, &path.to_string_lossy(), im.height());
-        if let Ok(previous) = std::fs::read_to_string(&meta_path) {
-            if let Some(guid) = previous
+        if let Ok(previous) = std::fs::read_to_string(&meta_path)
+            && let Some(guid) = previous
                 .lines()
                 .find_map(|l| l.strip_prefix("guid: "))
                 .filter(|v| v.len() == 32 && v.bytes().all(|b| b.is_ascii_hexdigit()))
-            {
-                if let Some(line) = output.lines().find(|l| l.starts_with("guid: ")) {
-                    output = output.replace(line, &format!("guid: {guid}"));
-                }
-            }
+            && let Some(line) = output.lines().find(|l| l.starts_with("guid: "))
+        {
+            output = output.replace(line, &format!("guid: {guid}"));
         }
         std::fs::write(meta_path, output).map_err(|e| e.to_string())?;
     }
@@ -148,7 +146,7 @@ pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())
 }
-fn godot(meta: &Value, name: &str) -> String {
+fn godot(meta: &Value, name: &str) -> Result<String, String> {
     let frames = meta["frames"].as_array().unwrap();
     let quoted = serde_json::to_string(&format!("res://{name}")).unwrap();
     let mut s = format!(
@@ -176,6 +174,7 @@ fn godot(meta: &Value, name: &str) -> String {
         .filter(|v| !v.is_empty())
         .unwrap_or(&default);
     let mut animations = vec![];
+    let mut names = std::collections::HashSet::new();
     for t in tags {
         let mut order: Vec<usize> =
             (t["from"].as_u64().unwrap() as usize..=t["to"].as_u64().unwrap() as usize).collect();
@@ -187,6 +186,27 @@ fn godot(meta: &Value, name: &str) -> String {
             let back: Vec<_> = order[1..order.len() - 1].iter().rev().copied().collect();
             order.extend(back)
         }
+        let repeat = t["repeat"].as_u64().unwrap_or(0);
+        if order.len().saturating_mul(repeat.max(1) as usize) > 1_000_000 {
+            return Err("Godot finite animation exceeds one million entries".into());
+        }
+        if repeat > 0 {
+            // SpriteFrames has a boolean loop flag: finite repeats are expanded.
+            let cycle = order.clone();
+            for _ in 1..repeat {
+                order.extend_from_slice(&cycle);
+            }
+        }
+        let base = t["name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Animation");
+        let mut name = base.to_string();
+        let mut suffix = 2;
+        while !names.insert(name.clone()) {
+            name = format!("{base}_{suffix}");
+            suffix += 1;
+        }
         let fs: Vec<String> = order
             .iter()
             .map(|i| {
@@ -197,13 +217,14 @@ fn godot(meta: &Value, name: &str) -> String {
             })
             .collect();
         animations.push(format!(
-            "{{\"frames\": [{}], \"loop\": true, \"name\": &{}, \"speed\": 1.0}}",
+            "{{\"frames\": [{}], \"loop\": {}, \"name\": &{}, \"speed\": 1.0}}",
             fs.join(", "),
-            serde_json::to_string(t["name"].as_str().unwrap_or("Animation")).unwrap()
+            repeat == 0,
+            serde_json::to_string(&name).unwrap()
         ));
     }
     s += &format!("\n[resource]\nanimations = [{}]\n", animations.join(",\n"));
-    s
+    Ok(s)
 }
 fn unity(meta: &Value, name: &str, height: u32) -> String {
     // Stable asset identity; export_sheet retains a pre-existing Unity GUID.
@@ -458,7 +479,9 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
                 }
                 let pixels = std::slice::from_raw_parts(ptr, d.width * d.height * 4);
                 d.layers[0].cels[f] = pixels
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|p| [p[0], p[1], p[2], p[3]])
                     .collect();
                 d.durations[f] = (stamp - last).clamp(1, 65535) as u16;
