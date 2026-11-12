@@ -200,6 +200,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Check Windows UI themes, scaling, accessibility and keyboard navigation
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-ui-data
+          PIXELCRAFT_UI_REVIEW_DIR: ${{ runner.temp }}/pixelcraft-ui-review
+        run: |
+          cargo test --locked --bin pixelcraft ui_icon_tests -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'Windows UI checks failed' }
+      - name: Upload Windows UI snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelCraft-Windows-UI-review
+          path: ${{ runner.temp }}/pixelcraft-ui-review/*.png
+          if-no-files-found: warn
       - name: Package Windows installer
         run: |
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json

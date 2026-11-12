@@ -1,4 +1,5 @@
 //! The Lua worker blocks on replies; egui remains responsive and owns the widgets.
+use crate::ui_icons::UiIcons;
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
 use std::{
@@ -70,11 +71,11 @@ impl ScriptUi {
                 }
                 if let Some(buttons) = value["buttons"].as_array() {
                     for (i, b) in buttons.iter().enumerate() {
-                        if ui.button(b.as_str().unwrap_or("OK")).clicked() {
+                        if ui.pc_button(b.as_str().unwrap_or("OK")).clicked() {
                             response = Some(json!({"button":i+1}));
                         }
                     }
-                } else if ui.button("OK").clicked() {
+                } else if ui.pc_button("OK").clicked() {
                     response = Some(json!({"button":1}));
                 }
             });
@@ -110,7 +111,7 @@ impl ScriptUi {
             .anchor(egui::Align2::RIGHT_BOTTOM, [-12., -12.])
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                if ui.button("Stop extension").clicked() {
+                if ui.pc_button("Stop extension").clicked() {
                     response = Some(json!({"cancelled":true,"closed":true}));
                 }
             });
@@ -146,9 +147,9 @@ fn draw_dialog(ctx: &egui::Context, dialog: &mut Value) -> Option<Value> {
                 match kind {
                     "label"=>{ui.label(data[id].as_str().unwrap_or(&text));},
                     "separator"=>{ui.separator();if !text.is_empty(){ui.strong(text);}},
-                    "button"=>{if ui.button(&text).clicked(){data[id]=json!(true);changed=true;}},
+                    "button"=>{if ui.pc_button(&text).clicked(){data[id]=json!(true);changed=true;}},
                     "check"|"radio"=>{let mut value=data[id].as_bool().unwrap_or(false);changed=ui.checkbox(&mut value,&text).changed();data[id]=json!(value);},
-                    "entry"|"file"=>{let mut value=data[id].as_str().unwrap_or("").to_string();changed=ui.text_edit_singleline(&mut value).changed();if kind=="file"&&ui.small_button("Browse…").clicked(){let path=if w["save"]==true {rfd::FileDialog::new().set_file_name(&value).save_file()}else{rfd::FileDialog::new().pick_file()};if let Some(p)=path{value=p.to_string_lossy().to_string();changed=true;}}data[id]=json!(value);},
+                    "entry"|"file"=>{let mut value=data[id].as_str().unwrap_or("").to_string();changed=ui.text_edit_singleline(&mut value).changed();if kind=="file"&&ui.pc_small_button("Browse…").clicked(){let path=if w["save"]==true {rfd::FileDialog::new().set_file_name(&value).save_file()}else{rfd::FileDialog::new().pick_file()};if let Some(p)=path{value=p.to_string_lossy().to_string();changed=true;}}data[id]=json!(value);},
                     "number"=>{let mut value=data[id].as_f64().unwrap_or(0.);changed=ui.add(egui::DragValue::new(&mut value).max_decimals(w["decimals"].as_u64().unwrap_or(0)as usize)).changed();data[id]=json!(value);},
                     "slider"=>{let mut value=data[id].as_f64().unwrap_or(0.);changed=ui.add(egui::Slider::new(&mut value,w["min"].as_f64().unwrap_or(0.)..=w["max"].as_f64().unwrap_or(100.)).integer()).changed();data[id]=json!(value);},
                     "combobox"=>{let mut value=data[id].as_str().unwrap_or("").to_string();egui::ComboBox::from_id_salt((dialog_id,n)).selected_text(&value).show_ui(ui,|ui|{if let Some(options)=w["options"].as_array(){for option in options{let s=option.as_str().unwrap_or("");if ui.selectable_value(&mut value,s.to_string(),s).changed(){changed=true;}}}});data[id]=json!(value);},

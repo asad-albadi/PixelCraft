@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en" data-theme="dark"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelCraft UI icon assets</title>
+<style>
+:root { font-family: Inter, system-ui, sans-serif; --size:24px; }
+html[data-theme=dark] { color-scheme:dark; --bg:#152125; --surface:#1e3035; --text:#edf2f2; --muted:#a7b8bb; --line:#3b5056; --accent:#256e72; --filter:invert(1); }
+html[data-theme=light] { color-scheme:light; --bg:#f6f4ee; --surface:#fffefa; --text:#233337; --muted:#50666b; --line:#bac7c8; --accent:#d0ece9; --filter:none; }
+* { box-sizing:border-box; }
+body { max-width:1280px; margin:auto; padding:32px; background:var(--bg); color:var(--text); }
+h1 { font-size:26px; margin:0 0 8px; font-weight:600; }
+p { color:var(--muted); margin:0; line-height:1.6; }
+.controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:24px 0; }
+input,select,button { color:var(--text); border:1px solid var(--line); background:var(--surface); padding:9px 12px; border-radius:6px; font:inherit; }
+input { min-width:200px; flex:1; }
+button { cursor:pointer; }
+:focus-visible { outline:2px solid #35b7b1; outline-offset:3px; }
+h2 { font-size:16px; font-weight:600; margin:30px 0 12px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(145px,1fr)); gap:1px; border:1px solid var(--line); background:var(--line); }
+article { text-align:center; background:var(--surface); padding:16px 8px 12px; }
+img { width:var(--size); height:var(--size); filter:var(--filter); }
+.source { display:flex; min-height:65px; gap:12px; flex-direction:column; align-items:center; justify-content:start; color:var(--text); text-decoration:none; }
+.source span { font-size:12px; line-height:1.4; }
+.downloads { display:flex; justify-content:center; gap:10px; margin-top:8px; }
+.downloads a { font-size:10px; color:var(--muted); text-underline-offset:3px; }
+.states { display:flex; gap:18px; flex-wrap:wrap; }
+.state { display:flex; flex-direction:column; align-items:center; gap:8px; font-size:12px; color:var(--muted); }
+.sample { display:grid; place-items:center; height:36px; width:36px; padding:0; }
+.sample img { width:20px; height:20px; }
+.hover { background:var(--line); }
+.selected { background:var(--accent); border-color:#35b7b1; }
+.focused { outline:2px solid #35b7b1; outline-offset:2px; }
+.sample:disabled img { opacity:.35; }
+article[hidden],section[hidden] { display:none; }
+footer { margin-top:28px; font-size:12px; }
+@media(max-width:600px) { body { padding:18px; } }
+</style>
+<h1>PixelCraft UI icons</h1>
+<p>129 transparent icons. Download SVG sources or white PNGs for theme tinting.</p>
+<div class="controls"><input id="search" type="search" placeholder="Find an icon" aria-label="Find an icon">
+<label>Size <select id="size"><option>16</option><option>20</option><option selected>24</option></select></label>
+<button id="theme">Use light theme</button></div>
+<h2>Button states</h2>
+<div class="states">
+<div class="state"><button class="sample" aria-label="Pencil"><img src="svg/pencil.svg" alt=""></button>Default</div>
+<div class="state"><button class="sample hover" aria-label="Pencil hover sample"><img src="svg/pencil.svg" alt=""></button>Hover</div>
+<div class="state"><button class="sample selected" aria-label="Pencil selected" aria-pressed="true"><img src="svg/pencil.svg" alt=""></button>Selected</div>
+<div class="state"><button class="sample focused" aria-label="Pencil focus sample"><img src="svg/pencil.svg" alt=""></button>Focus</div>
+<div class="state"><button class="sample" aria-label="Pencil disabled" disabled><img src="svg/pencil.svg" alt=""></button>Disabled</div>
+</div>
+<section><h2>Drawing</h2><div class="grid"><article data-search="Drawing pencil Pencil">
+<a class="source" href="svg/pencil.svg" download title="Download Pencil SVG">
+<img src="svg/pencil.svg" alt="Pencil"><span>Pencil</span></a>
+<div class="downloads"><a href="png/16/pencil.png" download>16 px</a> <a href="png/20/pencil.png" download>20 px</a> <a href="png/24/pencil.png" download>24 px</a> <a href="png/32/pencil.png" download>32 px</a> <a href="png/40/pencil.png" download>40 px</a> <a href="png/48/pencil.png" download>48 px</a></div></article><article data-search="Drawing eraser Eraser">
+<a class="source" href="svg/eraser.svg" download title="Download Eraser SVG">
+<img src="svg/eraser.svg" alt="Eraser"><span>Eraser</span></a>
+<div class="downloads"><a href="png/16/eraser.png" download>16 px</a> <a href="png/20/eraser.png" download>20 px</a> <a href="png/24/eraser.png" download>24 px</a> <a href="png/32/eraser.png" download>32 px</a> <a href="png/40/eraser.png" download>40 px</a> <a href="png/48/eraser.png" download>48 px</a></div></article><article data-search="Drawing fill Fill">
+<a class="source" href="svg/fill.svg" download title="Download Fill SVG">
+<img src="svg/fill.svg" alt="Fill"><span>Fill</span></a>
+<div class="downloads"><a href="png/16/fill.png" download>16 px</a> <a href="png/20/fill.png" download>20 px</a> <a href="png/24/fill.png" download>24 px</a> <a href="png/32/fill.png" download>32 px</a> <a href="png/40/fill.png" download>40 px</a> <a href="png/48/fill.png" download>48 px</a></div></article><article data-search="Drawing eyedropper Eyedropper">
+<a class="source" href="svg/eyedropper.svg" download title="Download Eyedropper SVG">
+<img src="svg/eyedropper.svg" alt="Eyedropper"><span>Eyedropper</span></a>
+<div class="downloads"><a href="png/16/eyedropper.png" download>16 px</a> <a href="png/20/eyedropper.png" download>20 px</a> <a href="png/24/eyedropper.png" download>24 px</a> <a href="png/32/eyedropper.png" download>32 px</a> <a href="png/40/eyedropper.png" download>40 px</a> <a href="png/48/eyedropper.png" download>48 px</a></div></article><article data-search="Drawing line Line">
+<a class="source" href="svg/line.svg" download title="Download Line SVG">
+<img src="svg/line.svg" alt="Line"><span>Line</span></a>
+<div class="downloads"><a href="png/16/line.png" download>16 px</a> <a href="png/20/line.png" download>20 px</a> <a href="png/24/line.png" download>24 px</a> <a href="png/32/line.png" download>32 px</a> <a href="png/40/line.png" download>40 px</a> <a href="png/48/line.png" download>48 px</a></div></article><article data-search="Drawing rectangle Rectangle">
+<a class="source" href="svg/rectangle.svg" download title="Download Rectangle SVG">
+<img src="svg/rectangle.svg" alt="Rectangle"><span>Rectangle</span></a>
+<div class="downloads"><a href="png/16/rectangle.png" download>16 px</a> <a href="png/20/rectangle.png" download>20 px</a> <a href="png/24/rectangle.png" download>24 px</a> <a href="png/32/rectangle.png" download>32 px</a> <a href="png/40/rectangle.png" download>40 px</a> <a href="png/48/rectangle.png" download>48 px</a></div></article><article data-search="Drawing ellipse Ellipse">
+<a class="source" href="svg/ellipse.svg" download title="Download Ellipse SVG">
+<img src="svg/ellipse.svg" alt="Ellipse"><span>Ellipse</span></a>
+<div class="downloads"><a href="png/16/ellipse.png" download>16 px</a> <a href="png/20/ellipse.png" download>20 px</a> <a href="png/24/ellipse.png" download>24 px</a> <a href="png/32/ellipse.png" download>32 px</a> <a href="png/40/ellipse.png" download>40 px</a> <a href="png/48/ellipse.png" download>48 px</a></div></article><article data-search="Drawing select Rectangular selection">
+<a class="source" href="svg/select.svg" download title="Download Rectangular selection SVG">
+<img src="svg/select.svg" alt="Rectangular selection"><span>Rectangular selection</span></a>
+<div class="downloads"><a href="png/16/select.png" download>16 px</a> <a href="png/20/select.png" download>20 px</a> <a href="png/24/select.png" download>24 px</a> <a href="png/32/select.png" download>32 px</a> <a href="png/40/select.png" download>40 px</a> <a href="png/48/select.png" download>48 px</a></div></article><article data-search="Drawing wand Magic Wand">
+<a class="source" href="svg/wand.svg" download title="Download Magic Wand SVG">
+<img src="svg/wand.svg" alt="Magic Wand"><span>Magic Wand</span></a>
+<div class="downloads"><a href="png/16/wand.png" download>16 px</a> <a href="png/20/wand.png" download>20 px</a> <a href="png/24/wand.png" download>24 px</a> <a href="png/32/wand.png" download>32 px</a> <a href="png/40/wand.png" download>40 px</a> <a href="png/48/wand.png" download>48 px</a></div></article><article data-search="Drawing lasso Lasso selection">
+<a class="source" href="svg/lasso.svg" download title="Download Lasso selection SVG">
+<img src="svg/lasso.svg" alt="Lasso selection"><span>Lasso selection</span></a>
+<div class="downloads"><a href="png/16/lasso.png" download>16 px</a> <a href="png/20/lasso.png" download>20 px</a> <a href="png/24/lasso.png" download>24 px</a> <a href="png/32/lasso.png" download>32 px</a> <a href="png/40/lasso.png" download>40 px</a> <a href="png/48/lasso.png" download>48 px</a></div></article><article data-search="Drawing move Move">
+<a class="source" href="svg/move.svg" download title="Download Move SVG">
+<img src="svg/move.svg" alt="Move"><span>Move</span></a>
+<div class="downloads"><a href="png/16/move.png" download>16 px</a> <a href="png/20/move.png" download>20 px</a> <a href="png/24/move.png" download>24 px</a> <a href="png/32/move.png" download>32 px</a> <a href="png/40/move.png" download>40 px</a> <a href="png/48/move.png" download>48 px</a></div></article><article data-search="Drawing gradient Gradient">
+<a class="source" href="svg/gradient.svg" download title="Download Gradient SVG">
+<img src="svg/gradient.svg" alt="Gradient"><span>Gradient</span></a>
+<div class="downloads"><a href="png/16/gradient.png" download>16 px</a> <a href="png/20/gradient.png" download>20 px</a> <a href="png/24/gradient.png" download>24 px</a> <a href="png/32/gradient.png" download>32 px</a> <a href="png/40/gradient.png" download>40 px</a> <a href="png/48/gradient.png" download>48 px</a></div></article><article data-search="Drawing hand Hand">
+<a class="source" href="svg/hand.svg" download title="Download Hand SVG">
+<img src="svg/hand.svg" alt="Hand"><span>Hand</span></a>
+<div class="downloads"><a href="png/16/hand.png" download>16 px</a> <a href="png/20/hand.png" download>20 px</a> <a href="png/24/hand.png" download>24 px</a> <a href="png/32/hand.png" download>32 px</a> <a href="png/40/hand.png" download>40 px</a> <a href="png/48/hand.png" download>48 px</a></div></article></div></section><section><h2>Brushes</h2><div class="grid"><article data-search="Brushes brush Brush">
+<a class="source" href="svg/brush.svg" download title="Download Brush SVG">
+<img src="svg/brush.svg" alt="Brush"><span>Brush</span></a>
+<div class="downloads"><a href="png/16/brush.png" download>16 px</a> <a href="png/20/brush.png" download>20 px</a> <a href="png/24/brush.png" download>24 px</a> <a href="png/32/brush.png" download>32 px</a> <a href="png/40/brush.png" download>40 px</a> <a href="png/48/brush.png" download>48 px</a></div></article><article data-search="Brushes shade Shade brush">
+<a class="source" href="svg/shade.svg" download title="Download Shade brush SVG">
+<img src="svg/shade.svg" alt="Shade brush"><span>Shade brush</span></a>
+<div class="downloads"><a href="png/16/shade.png" download>16 px</a> <a href="png/20/shade.png" download>20 px</a> <a href="png/24/shade.png" download>24 px</a> <a href="png/32/shade.png" download>32 px</a> <a href="png/40/shade.png" download>40 px</a> <a href="png/48/shade.png" download>48 px</a></div></article><article data-search="Brushes dither Dither brush">
+<a class="source" href="svg/dither.svg" download title="Download Dither brush SVG">
+<img src="svg/dither.svg" alt="Dither brush"><span>Dither brush</span></a>
+<div class="downloads"><a href="png/16/dither.png" download>16 px</a> <a href="png/20/dither.png" download>20 px</a> <a href="png/24/dither.png" download>24 px</a> <a href="png/32/dither.png" download>32 px</a> <a href="png/40/dither.png" download>40 px</a> <a href="png/48/dither.png" download>48 px</a></div></article><article data-search="Brushes stamp Selection stamp">
+<a class="source" href="svg/stamp.svg" download title="Download Selection stamp SVG">
+<img src="svg/stamp.svg" alt="Selection stamp"><span>Selection stamp</span></a>
+<div class="downloads"><a href="png/16/stamp.png" download>16 px</a> <a href="png/20/stamp.png" download>20 px</a> <a href="png/24/stamp.png" download>24 px</a> <a href="png/32/stamp.png" download>32 px</a> <a href="png/40/stamp.png" download>40 px</a> <a href="png/48/stamp.png" download>48 px</a></div></article><article data-search="Brushes brush-round Round brush">
+<a class="source" href="svg/brush-round.svg" download title="Download Round brush SVG">
+<img src="svg/brush-round.svg" alt="Round brush"><span>Round brush</span></a>
+<div class="downloads"><a href="png/16/brush-round.png" download>16 px</a> <a href="png/20/brush-round.png" download>20 px</a> <a href="png/24/brush-round.png" download>24 px</a> <a href="png/32/brush-round.png" download>32 px</a> <a href="png/40/brush-round.png" download>40 px</a> <a href="png/48/brush-round.png" download>48 px</a></div></article><article data-search="Brushes brush-square Square brush">
+<a class="source" href="svg/brush-square.svg" download title="Download Square brush SVG">
+<img src="svg/brush-square.svg" alt="Square brush"><span>Square brush</span></a>
+<div class="downloads"><a href="png/16/brush-square.png" download>16 px</a> <a href="png/20/brush-square.png" download>20 px</a> <a href="png/24/brush-square.png" download>24 px</a> <a href="png/32/brush-square.png" download>32 px</a> <a href="png/40/brush-square.png" download>40 px</a> <a href="png/48/brush-square.png" download>48 px</a></div></article></div></section><section><h2>Selection</h2><div class="grid"><article data-search="Selection select-add Add to selection">
+<a class="source" href="svg/select-add.svg" download title="Download Add to selection SVG">
+<img src="svg/select-add.svg" alt="Add to selection"><span>Add to selection</span></a>
+<div class="downloads"><a href="png/16/select-add.png" download>16 px</a> <a href="png/20/select-add.png" download>20 px</a> <a href="png/24/select-add.png" download>24 px</a> <a href="png/32/select-add.png" download>32 px</a> <a href="png/40/select-add.png" download>40 px</a> <a href="png/48/select-add.png" download>48 px</a></div></article><article data-search="Selection select-subtract Subtract from selection">
+<a class="source" href="svg/select-subtract.svg" download title="Download Subtract from selection SVG">
+<img src="svg/select-subtract.svg" alt="Subtract from selection"><span>Subtract from selection</span></a>
+<div class="downloads"><a href="png/16/select-subtract.png" download>16 px</a> <a href="png/20/select-subtract.png" download>20 px</a> <a href="png/24/select-subtract.png" download>24 px</a> <a href="png/32/select-subtract.png" download>32 px</a> <a href="png/40/select-subtract.png" download>40 px</a> <a href="png/48/select-subtract.png" download>48 px</a></div></article><article data-search="Selection select-intersect Intersect selections">
+<a class="source" href="svg/select-intersect.svg" download title="Download Intersect selections SVG">
+<img src="svg/select-intersect.svg" alt="Intersect selections"><span>Intersect selections</span></a>
+<div class="downloads"><a href="png/16/select-intersect.png" download>16 px</a> <a href="png/20/select-intersect.png" download>20 px</a> <a href="png/24/select-intersect.png" download>24 px</a> <a href="png/32/select-intersect.png" download>32 px</a> <a href="png/40/select-intersect.png" download>40 px</a> <a href="png/48/select-intersect.png" download>48 px</a></div></article><article data-search="Selection select-all Select all">
+<a class="source" href="svg/select-all.svg" download title="Download Select all SVG">
+<img src="svg/select-all.svg" alt="Select all"><span>Select all</span></a>
+<div class="downloads"><a href="png/16/select-all.png" download>16 px</a> <a href="png/20/select-all.png" download>20 px</a> <a href="png/24/select-all.png" download>24 px</a> <a href="png/32/select-all.png" download>32 px</a> <a href="png/40/select-all.png" download>40 px</a> <a href="png/48/select-all.png" download>48 px</a></div></article><article data-search="Selection deselect Deselect">
+<a class="source" href="svg/deselect.svg" download title="Download Deselect SVG">
+<img src="svg/deselect.svg" alt="Deselect"><span>Deselect</span></a>
+<div class="downloads"><a href="png/16/deselect.png" download>16 px</a> <a href="png/20/deselect.png" download>20 px</a> <a href="png/24/deselect.png" download>24 px</a> <a href="png/32/deselect.png" download>32 px</a> <a href="png/40/deselect.png" download>40 px</a> <a href="png/48/deselect.png" download>48 px</a></div></article><article data-search="Selection crop Crop">
+<a class="source" href="svg/crop.svg" download title="Download Crop SVG">
+<img src="svg/crop.svg" alt="Crop"><span>Crop</span></a>
+<div class="downloads"><a href="png/16/crop.png" download>16 px</a> <a href="png/20/crop.png" download>20 px</a> <a href="png/24/crop.png" download>24 px</a> <a href="png/32/crop.png" download>32 px</a> <a href="png/40/crop.png" download>40 px</a> <a href="png/48/crop.png" download>48 px</a></div></article><article data-search="Selection rotate-cw Rotate clockwise">
+<a class="source" href="svg/rotate-cw.svg" download title="Download Rotate clockwise SVG">
+<img src="svg/rotate-cw.svg" alt="Rotate clockwise"><span>Rotate clockwise</span></a>
+<div class="downloads"><a href="png/16/rotate-cw.png" download>16 px</a> <a href="png/20/rotate-cw.png" download>20 px</a> <a href="png/24/rotate-cw.png" download>24 px</a> <a href="png/32/rotate-cw.png" download>32 px</a> <a href="png/40/rotate-cw.png" download>40 px</a> <a href="png/48/rotate-cw.png" download>48 px</a></div></article><article data-search="Selection flip-horizontal Flip horizontally">
+<a class="source" href="svg/flip-horizontal.svg" download title="Download Flip horizontally SVG">
+<img src="svg/flip-horizontal.svg" alt="Flip horizontally"><span>Flip horizontally</span></a>
+<div class="downloads"><a href="png/16/flip-horizontal.png" download>16 px</a> <a href="png/20/flip-horizontal.png" download>20 px</a> <a href="png/24/flip-horizontal.png" download>24 px</a> <a href="png/32/flip-horizontal.png" download>32 px</a> <a href="png/40/flip-horizontal.png" download>40 px</a> <a href="png/48/flip-horizontal.png" download>48 px</a></div></article><article data-search="Selection flip-vertical Flip vertically">
+<a class="source" href="svg/flip-vertical.svg" download title="Download Flip vertically SVG">
+<img src="svg/flip-vertical.svg" alt="Flip vertically"><span>Flip vertically</span></a>
+<div class="downloads"><a href="png/16/flip-vertical.png" download>16 px</a> <a href="png/20/flip-vertical.png" download>20 px</a> <a href="png/24/flip-vertical.png" download>24 px</a> <a href="png/32/flip-vertical.png" download>32 px</a> <a href="png/40/flip-vertical.png" download>40 px</a> <a href="png/48/flip-vertical.png" download>48 px</a></div></article></div></section><section><h2>Files</h2><div class="grid"><article data-search="Files file-new New sprite">
+<a class="source" href="svg/file-new.svg" download title="Download New sprite SVG">
+<img src="svg/file-new.svg" alt="New sprite"><span>New sprite</span></a>
+<div class="downloads"><a href="png/16/file-new.png" download>16 px</a> <a href="png/20/file-new.png" download>20 px</a> <a href="png/24/file-new.png" download>24 px</a> <a href="png/32/file-new.png" download>32 px</a> <a href="png/40/file-new.png" download>40 px</a> <a href="png/48/file-new.png" download>48 px</a></div></article><article data-search="Files folder-open Open">
+<a class="source" href="svg/folder-open.svg" download title="Download Open SVG">
+<img src="svg/folder-open.svg" alt="Open"><span>Open</span></a>
+<div class="downloads"><a href="png/16/folder-open.png" download>16 px</a> <a href="png/20/folder-open.png" download>20 px</a> <a href="png/24/folder-open.png" download>24 px</a> <a href="png/32/folder-open.png" download>32 px</a> <a href="png/40/folder-open.png" download>40 px</a> <a href="png/48/folder-open.png" download>48 px</a></div></article><article data-search="Files document Document">
+<a class="source" href="svg/document.svg" download title="Download Document SVG">
+<img src="svg/document.svg" alt="Document"><span>Document</span></a>
+<div class="downloads"><a href="png/16/document.png" download>16 px</a> <a href="png/20/document.png" download>20 px</a> <a href="png/24/document.png" download>24 px</a> <a href="png/32/document.png" download>32 px</a> <a href="png/40/document.png" download>40 px</a> <a href="png/48/document.png" download>48 px</a></div></article><article data-search="Files file-close Close sprite">
+<a class="source" href="svg/file-close.svg" download title="Download Close sprite SVG">
+<img src="svg/file-close.svg" alt="Close sprite"><span>Close sprite</span></a>
+<div class="downloads"><a href="png/16/file-close.png" download>16 px</a> <a href="png/20/file-close.png" download>20 px</a> <a href="png/24/file-close.png" download>24 px</a> <a href="png/32/file-close.png" download>32 px</a> <a href="png/40/file-close.png" download>40 px</a> <a href="png/48/file-close.png" download>48 px</a></div></article><article data-search="Files save Save">
+<a class="source" href="svg/save.svg" download title="Download Save SVG">
+<img src="svg/save.svg" alt="Save"><span>Save</span></a>
+<div class="downloads"><a href="png/16/save.png" download>16 px</a> <a href="png/20/save.png" download>20 px</a> <a href="png/24/save.png" download>24 px</a> <a href="png/32/save.png" download>32 px</a> <a href="png/40/save.png" download>40 px</a> <a href="png/48/save.png" download>48 px</a></div></article><article data-search="Files save-as Save as">
+<a class="source" href="svg/save-as.svg" download title="Download Save as SVG">
+<img src="svg/save-as.svg" alt="Save as"><span>Save as</span></a>
+<div class="downloads"><a href="png/16/save-as.png" download>16 px</a> <a href="png/20/save-as.png" download>20 px</a> <a href="png/24/save-as.png" download>24 px</a> <a href="png/32/save-as.png" download>32 px</a> <a href="png/40/save-as.png" download>40 px</a> <a href="png/48/save-as.png" download>48 px</a></div></article><article data-search="Files import Import">
+<a class="source" href="svg/import.svg" download title="Download Import SVG">
+<img src="svg/import.svg" alt="Import"><span>Import</span></a>
+<div class="downloads"><a href="png/16/import.png" download>16 px</a> <a href="png/20/import.png" download>20 px</a> <a href="png/24/import.png" download>24 px</a> <a href="png/32/import.png" download>32 px</a> <a href="png/40/import.png" download>40 px</a> <a href="png/48/import.png" download>48 px</a></div></article><article data-search="Files export Export">
+<a class="source" href="svg/export.svg" download title="Download Export SVG">
+<img src="svg/export.svg" alt="Export"><span>Export</span></a>
+<div class="downloads"><a href="png/16/export.png" download>16 px</a> <a href="png/20/export.png" download>20 px</a> <a href="png/24/export.png" download>24 px</a> <a href="png/32/export.png" download>32 px</a> <a href="png/40/export.png" download>40 px</a> <a href="png/48/export.png" download>48 px</a></div></article><article data-search="Files history Recent files">
+<a class="source" href="svg/history.svg" download title="Download Recent files SVG">
+<img src="svg/history.svg" alt="Recent files"><span>Recent files</span></a>
+<div class="downloads"><a href="png/16/history.png" download>16 px</a> <a href="png/20/history.png" download>20 px</a> <a href="png/24/history.png" download>24 px</a> <a href="png/32/history.png" download>32 px</a> <a href="png/40/history.png" download>40 px</a> <a href="png/48/history.png" download>48 px</a></div></article><article data-search="Files image Image">
+<a class="source" href="svg/image.svg" download title="Download Image SVG">
+<img src="svg/image.svg" alt="Image"><span>Image</span></a>
+<div class="downloads"><a href="png/16/image.png" download>16 px</a> <a href="png/20/image.png" download>20 px</a> <a href="png/24/image.png" download>24 px</a> <a href="png/32/image.png" download>32 px</a> <a href="png/40/image.png" download>40 px</a> <a href="png/48/image.png" download>48 px</a></div></article><article data-search="Files sheet Sprite sheet">
+<a class="source" href="svg/sheet.svg" download title="Download Sprite sheet SVG">
+<img src="svg/sheet.svg" alt="Sprite sheet"><span>Sprite sheet</span></a>
+<div class="downloads"><a href="png/16/sheet.png" download>16 px</a> <a href="png/20/sheet.png" download>20 px</a> <a href="png/24/sheet.png" download>24 px</a> <a href="png/32/sheet.png" download>32 px</a> <a href="png/40/sheet.png" download>40 px</a> <a href="png/48/sheet.png" download>48 px</a></div></article><article data-search="Files gif Animated image">
+<a class="source" href="svg/gif.svg" download title="Download Animated image SVG">
+<img src="svg/gif.svg" alt="Animated image"><span>Animated image</span></a>
+<div class="downloads"><a href="png/16/gif.png" download>16 px</a> <a href="png/20/gif.png" download>20 px</a> <a href="png/24/gif.png" download>24 px</a> <a href="png/32/gif.png" download>32 px</a> <a href="png/40/gif.png" download>40 px</a> <a href="png/48/gif.png" download>48 px</a></div></article><article data-search="Files tilemap Tile map">
+<a class="source" href="svg/tilemap.svg" download title="Download Tile map SVG">
+<img src="svg/tilemap.svg" alt="Tile map"><span>Tile map</span></a>
+<div class="downloads"><a href="png/16/tilemap.png" download>16 px</a> <a href="png/20/tilemap.png" download>20 px</a> <a href="png/24/tilemap.png" download>24 px</a> <a href="png/32/tilemap.png" download>32 px</a> <a href="png/40/tilemap.png" download>40 px</a> <a href="png/48/tilemap.png" download>48 px</a></div></article></div></section><section><h2>Edit</h2><div class="grid"><article data-search="Edit undo Undo">
+<a class="source" href="svg/undo.svg" download title="Download Undo SVG">
+<img src="svg/undo.svg" alt="Undo"><span>Undo</span></a>
+<div class="downloads"><a href="png/16/undo.png" download>16 px</a> <a href="png/20/undo.png" download>20 px</a> <a href="png/24/undo.png" download>24 px</a> <a href="png/32/undo.png" download>32 px</a> <a href="png/40/undo.png" download>40 px</a> <a href="png/48/undo.png" download>48 px</a></div></article><article data-search="Edit redo Redo">
+<a class="source" href="svg/redo.svg" download title="Download Redo SVG">
+<img src="svg/redo.svg" alt="Redo"><span>Redo</span></a>
+<div class="downloads"><a href="png/16/redo.png" download>16 px</a> <a href="png/20/redo.png" download>20 px</a> <a href="png/24/redo.png" download>24 px</a> <a href="png/32/redo.png" download>32 px</a> <a href="png/40/redo.png" download>40 px</a> <a href="png/48/redo.png" download>48 px</a></div></article><article data-search="Edit cut Cut">
+<a class="source" href="svg/cut.svg" download title="Download Cut SVG">
+<img src="svg/cut.svg" alt="Cut"><span>Cut</span></a>
+<div class="downloads"><a href="png/16/cut.png" download>16 px</a> <a href="png/20/cut.png" download>20 px</a> <a href="png/24/cut.png" download>24 px</a> <a href="png/32/cut.png" download>32 px</a> <a href="png/40/cut.png" download>40 px</a> <a href="png/48/cut.png" download>48 px</a></div></article><article data-search="Edit copy Copy">
+<a class="source" href="svg/copy.svg" download title="Download Copy SVG">
+<img src="svg/copy.svg" alt="Copy"><span>Copy</span></a>
+<div class="downloads"><a href="png/16/copy.png" download>16 px</a> <a href="png/20/copy.png" download>20 px</a> <a href="png/24/copy.png" download>24 px</a> <a href="png/32/copy.png" download>32 px</a> <a href="png/40/copy.png" download>40 px</a> <a href="png/48/copy.png" download>48 px</a></div></article><article data-search="Edit paste Paste">
+<a class="source" href="svg/paste.svg" download title="Download Paste SVG">
+<img src="svg/paste.svg" alt="Paste"><span>Paste</span></a>
+<div class="downloads"><a href="png/16/paste.png" download>16 px</a> <a href="png/20/paste.png" download>20 px</a> <a href="png/24/paste.png" download>24 px</a> <a href="png/32/paste.png" download>32 px</a> <a href="png/40/paste.png" download>40 px</a> <a href="png/48/paste.png" download>48 px</a></div></article><article data-search="Edit clear Clear pixels">
+<a class="source" href="svg/clear.svg" download title="Download Clear pixels SVG">
+<img src="svg/clear.svg" alt="Clear pixels"><span>Clear pixels</span></a>
+<div class="downloads"><a href="png/16/clear.png" download>16 px</a> <a href="png/20/clear.png" download>20 px</a> <a href="png/24/clear.png" download>24 px</a> <a href="png/32/clear.png" download>32 px</a> <a href="png/40/clear.png" download>40 px</a> <a href="png/48/clear.png" download>48 px</a></div></article></div></section><section><h2>View</h2><div class="grid"><article data-search="View zoom-in Zoom in">
+<a class="source" href="svg/zoom-in.svg" download title="Download Zoom in SVG">
+<img src="svg/zoom-in.svg" alt="Zoom in"><span>Zoom in</span></a>
+<div class="downloads"><a href="png/16/zoom-in.png" download>16 px</a> <a href="png/20/zoom-in.png" download>20 px</a> <a href="png/24/zoom-in.png" download>24 px</a> <a href="png/32/zoom-in.png" download>32 px</a> <a href="png/40/zoom-in.png" download>40 px</a> <a href="png/48/zoom-in.png" download>48 px</a></div></article><article data-search="View zoom-out Zoom out">
+<a class="source" href="svg/zoom-out.svg" download title="Download Zoom out SVG">
+<img src="svg/zoom-out.svg" alt="Zoom out"><span>Zoom out</span></a>
+<div class="downloads"><a href="png/16/zoom-out.png" download>16 px</a> <a href="png/20/zoom-out.png" download>20 px</a> <a href="png/24/zoom-out.png" download>24 px</a> <a href="png/32/zoom-out.png" download>32 px</a> <a href="png/40/zoom-out.png" download>40 px</a> <a href="png/48/zoom-out.png" download>48 px</a></div></article><article data-search="View fit Fit canvas">
+<a class="source" href="svg/fit.svg" download title="Download Fit canvas SVG">
+<img src="svg/fit.svg" alt="Fit canvas"><span>Fit canvas</span></a>
+<div class="downloads"><a href="png/16/fit.png" download>16 px</a> <a href="png/20/fit.png" download>20 px</a> <a href="png/24/fit.png" download>24 px</a> <a href="png/32/fit.png" download>32 px</a> <a href="png/40/fit.png" download>40 px</a> <a href="png/48/fit.png" download>48 px</a></div></article><article data-search="View grid Pixel grid">
+<a class="source" href="svg/grid.svg" download title="Download Pixel grid SVG">
+<img src="svg/grid.svg" alt="Pixel grid"><span>Pixel grid</span></a>
+<div class="downloads"><a href="png/16/grid.png" download>16 px</a> <a href="png/20/grid.png" download>20 px</a> <a href="png/24/grid.png" download>24 px</a> <a href="png/32/grid.png" download>32 px</a> <a href="png/40/grid.png" download>40 px</a> <a href="png/48/grid.png" download>48 px</a></div></article><article data-search="View preview Preview">
+<a class="source" href="svg/preview.svg" download title="Download Preview SVG">
+<img src="svg/preview.svg" alt="Preview"><span>Preview</span></a>
+<div class="downloads"><a href="png/16/preview.png" download>16 px</a> <a href="png/20/preview.png" download>20 px</a> <a href="png/24/preview.png" download>24 px</a> <a href="png/32/preview.png" download>32 px</a> <a href="png/40/preview.png" download>40 px</a> <a href="png/48/preview.png" download>48 px</a></div></article><article data-search="View wrap Wraparound">
+<a class="source" href="svg/wrap.svg" download title="Download Wraparound SVG">
+<img src="svg/wrap.svg" alt="Wraparound"><span>Wraparound</span></a>
+<div class="downloads"><a href="png/16/wrap.png" download>16 px</a> <a href="png/20/wrap.png" download>20 px</a> <a href="png/24/wrap.png" download>24 px</a> <a href="png/32/wrap.png" download>32 px</a> <a href="png/40/wrap.png" download>40 px</a> <a href="png/48/wrap.png" download>48 px</a></div></article><article data-search="View onion-skin Onion skin">
+<a class="source" href="svg/onion-skin.svg" download title="Download Onion skin SVG">
+<img src="svg/onion-skin.svg" alt="Onion skin"><span>Onion skin</span></a>
+<div class="downloads"><a href="png/16/onion-skin.png" download>16 px</a> <a href="png/20/onion-skin.png" download>20 px</a> <a href="png/24/onion-skin.png" download>24 px</a> <a href="png/32/onion-skin.png" download>32 px</a> <a href="png/40/onion-skin.png" download>40 px</a> <a href="png/48/onion-skin.png" download>48 px</a></div></article></div></section><section><h2>Layers</h2><div class="grid"><article data-search="Layers layers Layers">
+<a class="source" href="svg/layers.svg" download title="Download Layers SVG">
+<img src="svg/layers.svg" alt="Layers"><span>Layers</span></a>
+<div class="downloads"><a href="png/16/layers.png" download>16 px</a> <a href="png/20/layers.png" download>20 px</a> <a href="png/24/layers.png" download>24 px</a> <a href="png/32/layers.png" download>32 px</a> <a href="png/40/layers.png" download>40 px</a> <a href="png/48/layers.png" download>48 px</a></div></article><article data-search="Layers layer-add Add layer">
+<a class="source" href="svg/layer-add.svg" download title="Download Add layer SVG">
+<img src="svg/layer-add.svg" alt="Add layer"><span>Add layer</span></a>
+<div class="downloads"><a href="png/16/layer-add.png" download>16 px</a> <a href="png/20/layer-add.png" download>20 px</a> <a href="png/24/layer-add.png" download>24 px</a> <a href="png/32/layer-add.png" download>32 px</a> <a href="png/40/layer-add.png" download>40 px</a> <a href="png/48/layer-add.png" download>48 px</a></div></article><article data-search="Layers layer-duplicate Duplicate layer">
+<a class="source" href="svg/layer-duplicate.svg" download title="Download Duplicate layer SVG">
+<img src="svg/layer-duplicate.svg" alt="Duplicate layer"><span>Duplicate layer</span></a>
+<div class="downloads"><a href="png/16/layer-duplicate.png" download>16 px</a> <a href="png/20/layer-duplicate.png" download>20 px</a> <a href="png/24/layer-duplicate.png" download>24 px</a> <a href="png/32/layer-duplicate.png" download>32 px</a> <a href="png/40/layer-duplicate.png" download>40 px</a> <a href="png/48/layer-duplicate.png" download>48 px</a></div></article><article data-search="Layers layer-delete Delete layer">
+<a class="source" href="svg/layer-delete.svg" download title="Download Delete layer SVG">
+<img src="svg/layer-delete.svg" alt="Delete layer"><span>Delete layer</span></a>
+<div class="downloads"><a href="png/16/layer-delete.png" download>16 px</a> <a href="png/20/layer-delete.png" download>20 px</a> <a href="png/24/layer-delete.png" download>24 px</a> <a href="png/32/layer-delete.png" download>32 px</a> <a href="png/40/layer-delete.png" download>40 px</a> <a href="png/48/layer-delete.png" download>48 px</a></div></article><article data-search="Layers eye Visible">
+<a class="source" href="svg/eye.svg" download title="Download Visible SVG">
+<img src="svg/eye.svg" alt="Visible"><span>Visible</span></a>
+<div class="downloads"><a href="png/16/eye.png" download>16 px</a> <a href="png/20/eye.png" download>20 px</a> <a href="png/24/eye.png" download>24 px</a> <a href="png/32/eye.png" download>32 px</a> <a href="png/40/eye.png" download>40 px</a> <a href="png/48/eye.png" download>48 px</a></div></article><article data-search="Layers eye-off Hidden">
+<a class="source" href="svg/eye-off.svg" download title="Download Hidden SVG">
+<img src="svg/eye-off.svg" alt="Hidden"><span>Hidden</span></a>
+<div class="downloads"><a href="png/16/eye-off.png" download>16 px</a> <a href="png/20/eye-off.png" download>20 px</a> <a href="png/24/eye-off.png" download>24 px</a> <a href="png/32/eye-off.png" download>32 px</a> <a href="png/40/eye-off.png" download>40 px</a> <a href="png/48/eye-off.png" download>48 px</a></div></article><article data-search="Layers lock Locked">
+<a class="source" href="svg/lock.svg" download title="Download Locked SVG">
+<img src="svg/lock.svg" alt="Locked"><span>Locked</span></a>
+<div class="downloads"><a href="png/16/lock.png" download>16 px</a> <a href="png/20/lock.png" download>20 px</a> <a href="png/24/lock.png" download>24 px</a> <a href="png/32/lock.png" download>32 px</a> <a href="png/40/lock.png" download>40 px</a> <a href="png/48/lock.png" download>48 px</a></div></article><article data-search="Layers unlock Unlocked">
+<a class="source" href="svg/unlock.svg" download title="Download Unlocked SVG">
+<img src="svg/unlock.svg" alt="Unlocked"><span>Unlocked</span></a>
+<div class="downloads"><a href="png/16/unlock.png" download>16 px</a> <a href="png/20/unlock.png" download>20 px</a> <a href="png/24/unlock.png" download>24 px</a> <a href="png/32/unlock.png" download>32 px</a> <a href="png/40/unlock.png" download>40 px</a> <a href="png/48/unlock.png" download>48 px</a></div></article><article data-search="Layers group Layer group">
+<a class="source" href="svg/group.svg" download title="Download Layer group SVG">
+<img src="svg/group.svg" alt="Layer group"><span>Layer group</span></a>
+<div class="downloads"><a href="png/16/group.png" download>16 px</a> <a href="png/20/group.png" download>20 px</a> <a href="png/24/group.png" download>24 px</a> <a href="png/32/group.png" download>32 px</a> <a href="png/40/group.png" download>40 px</a> <a href="png/48/group.png" download>48 px</a></div></article><article data-search="Layers arrow-up Move up">
+<a class="source" href="svg/arrow-up.svg" download title="Download Move up SVG">
+<img src="svg/arrow-up.svg" alt="Move up"><span>Move up</span></a>
+<div class="downloads"><a href="png/16/arrow-up.png" download>16 px</a> <a href="png/20/arrow-up.png" download>20 px</a> <a href="png/24/arrow-up.png" download>24 px</a> <a href="png/32/arrow-up.png" download>32 px</a> <a href="png/40/arrow-up.png" download>40 px</a> <a href="png/48/arrow-up.png" download>48 px</a></div></article><article data-search="Layers arrow-down Move down">
+<a class="source" href="svg/arrow-down.svg" download title="Download Move down SVG">
+<img src="svg/arrow-down.svg" alt="Move down"><span>Move down</span></a>
+<div class="downloads"><a href="png/16/arrow-down.png" download>16 px</a> <a href="png/20/arrow-down.png" download>20 px</a> <a href="png/24/arrow-down.png" download>24 px</a> <a href="png/32/arrow-down.png" download>32 px</a> <a href="png/40/arrow-down.png" download>40 px</a> <a href="png/48/arrow-down.png" download>48 px</a></div></article><article data-search="Layers link Linked cel">
+<a class="source" href="svg/link.svg" download title="Download Linked cel SVG">
+<img src="svg/link.svg" alt="Linked cel"><span>Linked cel</span></a>
+<div class="downloads"><a href="png/16/link.png" download>16 px</a> <a href="png/20/link.png" download>20 px</a> <a href="png/24/link.png" download>24 px</a> <a href="png/32/link.png" download>32 px</a> <a href="png/40/link.png" download>40 px</a> <a href="png/48/link.png" download>48 px</a></div></article><article data-search="Layers cel Cel">
+<a class="source" href="svg/cel.svg" download title="Download Cel SVG">
+<img src="svg/cel.svg" alt="Cel"><span>Cel</span></a>
+<div class="downloads"><a href="png/16/cel.png" download>16 px</a> <a href="png/20/cel.png" download>20 px</a> <a href="png/24/cel.png" download>24 px</a> <a href="png/32/cel.png" download>32 px</a> <a href="png/40/cel.png" download>40 px</a> <a href="png/48/cel.png" download>48 px</a></div></article><article data-search="Layers opacity Opacity">
+<a class="source" href="svg/opacity.svg" download title="Download Opacity SVG">
+<img src="svg/opacity.svg" alt="Opacity"><span>Opacity</span></a>
+<div class="downloads"><a href="png/16/opacity.png" download>16 px</a> <a href="png/20/opacity.png" download>20 px</a> <a href="png/24/opacity.png" download>24 px</a> <a href="png/32/opacity.png" download>32 px</a> <a href="png/40/opacity.png" download>40 px</a> <a href="png/48/opacity.png" download>48 px</a></div></article></div></section><section><h2>Animation</h2><div class="grid"><article data-search="Animation frame Frame">
+<a class="source" href="svg/frame.svg" download title="Download Frame SVG">
+<img src="svg/frame.svg" alt="Frame"><span>Frame</span></a>
+<div class="downloads"><a href="png/16/frame.png" download>16 px</a> <a href="png/20/frame.png" download>20 px</a> <a href="png/24/frame.png" download>24 px</a> <a href="png/32/frame.png" download>32 px</a> <a href="png/40/frame.png" download>40 px</a> <a href="png/48/frame.png" download>48 px</a></div></article><article data-search="Animation frame-add Add frame">
+<a class="source" href="svg/frame-add.svg" download title="Download Add frame SVG">
+<img src="svg/frame-add.svg" alt="Add frame"><span>Add frame</span></a>
+<div class="downloads"><a href="png/16/frame-add.png" download>16 px</a> <a href="png/20/frame-add.png" download>20 px</a> <a href="png/24/frame-add.png" download>24 px</a> <a href="png/32/frame-add.png" download>32 px</a> <a href="png/40/frame-add.png" download>40 px</a> <a href="png/48/frame-add.png" download>48 px</a></div></article><article data-search="Animation frame-duplicate Duplicate frame">
+<a class="source" href="svg/frame-duplicate.svg" download title="Download Duplicate frame SVG">
+<img src="svg/frame-duplicate.svg" alt="Duplicate frame"><span>Duplicate frame</span></a>
+<div class="downloads"><a href="png/16/frame-duplicate.png" download>16 px</a> <a href="png/20/frame-duplicate.png" download>20 px</a> <a href="png/24/frame-duplicate.png" download>24 px</a> <a href="png/32/frame-duplicate.png" download>32 px</a> <a href="png/40/frame-duplicate.png" download>40 px</a> <a href="png/48/frame-duplicate.png" download>48 px</a></div></article><article data-search="Animation frame-delete Delete frame">
+<a class="source" href="svg/frame-delete.svg" download title="Download Delete frame SVG">
+<img src="svg/frame-delete.svg" alt="Delete frame"><span>Delete frame</span></a>
+<div class="downloads"><a href="png/16/frame-delete.png" download>16 px</a> <a href="png/20/frame-delete.png" download>20 px</a> <a href="png/24/frame-delete.png" download>24 px</a> <a href="png/32/frame-delete.png" download>32 px</a> <a href="png/40/frame-delete.png" download>40 px</a> <a href="png/48/frame-delete.png" download>48 px</a></div></article><article data-search="Animation play Play">
+<a class="source" href="svg/play.svg" download title="Download Play SVG">
+<img src="svg/play.svg" alt="Play"><span>Play</span></a>
+<div class="downloads"><a href="png/16/play.png" download>16 px</a> <a href="png/20/play.png" download>20 px</a> <a href="png/24/play.png" download>24 px</a> <a href="png/32/play.png" download>32 px</a> <a href="png/40/play.png" download>40 px</a> <a href="png/48/play.png" download>48 px</a></div></article><article data-search="Animation pause Pause">
+<a class="source" href="svg/pause.svg" download title="Download Pause SVG">
+<img src="svg/pause.svg" alt="Pause"><span>Pause</span></a>
+<div class="downloads"><a href="png/16/pause.png" download>16 px</a> <a href="png/20/pause.png" download>20 px</a> <a href="png/24/pause.png" download>24 px</a> <a href="png/32/pause.png" download>32 px</a> <a href="png/40/pause.png" download>40 px</a> <a href="png/48/pause.png" download>48 px</a></div></article><article data-search="Animation stop Stop">
+<a class="source" href="svg/stop.svg" download title="Download Stop SVG">
+<img src="svg/stop.svg" alt="Stop"><span>Stop</span></a>
+<div class="downloads"><a href="png/16/stop.png" download>16 px</a> <a href="png/20/stop.png" download>20 px</a> <a href="png/24/stop.png" download>24 px</a> <a href="png/32/stop.png" download>32 px</a> <a href="png/40/stop.png" download>40 px</a> <a href="png/48/stop.png" download>48 px</a></div></article><article data-search="Animation frame-previous Previous frame">
+<a class="source" href="svg/frame-previous.svg" download title="Download Previous frame SVG">
+<img src="svg/frame-previous.svg" alt="Previous frame"><span>Previous frame</span></a>
+<div class="downloads"><a href="png/16/frame-previous.png" download>16 px</a> <a href="png/20/frame-previous.png" download>20 px</a> <a href="png/24/frame-previous.png" download>24 px</a> <a href="png/32/frame-previous.png" download>32 px</a> <a href="png/40/frame-previous.png" download>40 px</a> <a href="png/48/frame-previous.png" download>48 px</a></div></article><article data-search="Animation frame-next Next frame">
+<a class="source" href="svg/frame-next.svg" download title="Download Next frame SVG">
+<img src="svg/frame-next.svg" alt="Next frame"><span>Next frame</span></a>
+<div class="downloads"><a href="png/16/frame-next.png" download>16 px</a> <a href="png/20/frame-next.png" download>20 px</a> <a href="png/24/frame-next.png" download>24 px</a> <a href="png/32/frame-next.png" download>32 px</a> <a href="png/40/frame-next.png" download>40 px</a> <a href="png/48/frame-next.png" download>48 px</a></div></article><article data-search="Animation frame-first First frame">
+<a class="source" href="svg/frame-first.svg" download title="Download First frame SVG">
+<img src="svg/frame-first.svg" alt="First frame"><span>First frame</span></a>
+<div class="downloads"><a href="png/16/frame-first.png" download>16 px</a> <a href="png/20/frame-first.png" download>20 px</a> <a href="png/24/frame-first.png" download>24 px</a> <a href="png/32/frame-first.png" download>32 px</a> <a href="png/40/frame-first.png" download>40 px</a> <a href="png/48/frame-first.png" download>48 px</a></div></article><article data-search="Animation frame-last Last frame">
+<a class="source" href="svg/frame-last.svg" download title="Download Last frame SVG">
+<img src="svg/frame-last.svg" alt="Last frame"><span>Last frame</span></a>
+<div class="downloads"><a href="png/16/frame-last.png" download>16 px</a> <a href="png/20/frame-last.png" download>20 px</a> <a href="png/24/frame-last.png" download>24 px</a> <a href="png/32/frame-last.png" download>32 px</a> <a href="png/40/frame-last.png" download>40 px</a> <a href="png/48/frame-last.png" download>48 px</a></div></article><article data-search="Animation repeat Loop playback">
+<a class="source" href="svg/repeat.svg" download title="Download Loop playback SVG">
+<img src="svg/repeat.svg" alt="Loop playback"><span>Loop playback</span></a>
+<div class="downloads"><a href="png/16/repeat.png" download>16 px</a> <a href="png/20/repeat.png" download>20 px</a> <a href="png/24/repeat.png" download>24 px</a> <a href="png/32/repeat.png" download>32 px</a> <a href="png/40/repeat.png" download>40 px</a> <a href="png/48/repeat.png" download>48 px</a></div></article><article data-search="Animation ping-pong Ping-pong playback">
+<a class="source" href="svg/ping-pong.svg" download title="Download Ping-pong playback SVG">
+<img src="svg/ping-pong.svg" alt="Ping-pong playback"><span>Ping-pong playback</span></a>
+<div class="downloads"><a href="png/16/ping-pong.png" download>16 px</a> <a href="png/20/ping-pong.png" download>20 px</a> <a href="png/24/ping-pong.png" download>24 px</a> <a href="png/32/ping-pong.png" download>32 px</a> <a href="png/40/ping-pong.png" download>40 px</a> <a href="png/48/ping-pong.png" download>48 px</a></div></article><article data-search="Animation tag Animation tag">
+<a class="source" href="svg/tag.svg" download title="Download Animation tag SVG">
+<img src="svg/tag.svg" alt="Animation tag"><span>Animation tag</span></a>
+<div class="downloads"><a href="png/16/tag.png" download>16 px</a> <a href="png/20/tag.png" download>20 px</a> <a href="png/24/tag.png" download>24 px</a> <a href="png/32/tag.png" download>32 px</a> <a href="png/40/tag.png" download>40 px</a> <a href="png/48/tag.png" download>48 px</a></div></article><article data-search="Animation clock Frame duration">
+<a class="source" href="svg/clock.svg" download title="Download Frame duration SVG">
+<img src="svg/clock.svg" alt="Frame duration"><span>Frame duration</span></a>
+<div class="downloads"><a href="png/16/clock.png" download>16 px</a> <a href="png/20/clock.png" download>20 px</a> <a href="png/24/clock.png" download>24 px</a> <a href="png/32/clock.png" download>32 px</a> <a href="png/40/clock.png" download>40 px</a> <a href="png/48/clock.png" download>48 px</a></div></article></div></section><section><h2>Color</h2><div class="grid"><article data-search="Color palette Palette">
+<a class="source" href="svg/palette.svg" download title="Download Palette SVG">
+<img src="svg/palette.svg" alt="Palette"><span>Palette</span></a>
+<div class="downloads"><a href="png/16/palette.png" download>16 px</a> <a href="png/20/palette.png" download>20 px</a> <a href="png/24/palette.png" download>24 px</a> <a href="png/32/palette.png" download>32 px</a> <a href="png/40/palette.png" download>40 px</a> <a href="png/48/palette.png" download>48 px</a></div></article><article data-search="Color color-add Add color">
+<a class="source" href="svg/color-add.svg" download title="Download Add color SVG">
+<img src="svg/color-add.svg" alt="Add color"><span>Add color</span></a>
+<div class="downloads"><a href="png/16/color-add.png" download>16 px</a> <a href="png/20/color-add.png" download>20 px</a> <a href="png/24/color-add.png" download>24 px</a> <a href="png/32/color-add.png" download>32 px</a> <a href="png/40/color-add.png" download>40 px</a> <a href="png/48/color-add.png" download>48 px</a></div></article><article data-search="Color color-remove Remove color">
+<a class="source" href="svg/color-remove.svg" download title="Download Remove color SVG">
+<img src="svg/color-remove.svg" alt="Remove color"><span>Remove color</span></a>
+<div class="downloads"><a href="png/16/color-remove.png" download>16 px</a> <a href="png/20/color-remove.png" download>20 px</a> <a href="png/24/color-remove.png" download>24 px</a> <a href="png/32/color-remove.png" download>32 px</a> <a href="png/40/color-remove.png" download>40 px</a> <a href="png/48/color-remove.png" download>48 px</a></div></article><article data-search="Color swatches Used colors">
+<a class="source" href="svg/swatches.svg" download title="Download Used colors SVG">
+<img src="svg/swatches.svg" alt="Used colors"><span>Used colors</span></a>
+<div class="downloads"><a href="png/16/swatches.png" download>16 px</a> <a href="png/20/swatches.png" download>20 px</a> <a href="png/24/swatches.png" download>24 px</a> <a href="png/32/swatches.png" download>32 px</a> <a href="png/40/swatches.png" download>40 px</a> <a href="png/48/swatches.png" download>48 px</a></div></article><article data-search="Color swap Swap colors">
+<a class="source" href="svg/swap.svg" download title="Download Swap colors SVG">
+<img src="svg/swap.svg" alt="Swap colors"><span>Swap colors</span></a>
+<div class="downloads"><a href="png/16/swap.png" download>16 px</a> <a href="png/20/swap.png" download>20 px</a> <a href="png/24/swap.png" download>24 px</a> <a href="png/32/swap.png" download>32 px</a> <a href="png/40/swap.png" download>40 px</a> <a href="png/48/swap.png" download>48 px</a></div></article><article data-search="Color alpha Transparency">
+<a class="source" href="svg/alpha.svg" download title="Download Transparency SVG">
+<img src="svg/alpha.svg" alt="Transparency"><span>Transparency</span></a>
+<div class="downloads"><a href="png/16/alpha.png" download>16 px</a> <a href="png/20/alpha.png" download>20 px</a> <a href="png/24/alpha.png" download>24 px</a> <a href="png/32/alpha.png" download>32 px</a> <a href="png/40/alpha.png" download>40 px</a> <a href="png/48/alpha.png" download>48 px</a></div></article><article data-search="Color color-mode Color mode">
+<a class="source" href="svg/color-mode.svg" download title="Download Color mode SVG">
+<img src="svg/color-mode.svg" alt="Color mode"><span>Color mode</span></a>
+<div class="downloads"><a href="png/16/color-mode.png" download>16 px</a> <a href="png/20/color-mode.png" download>20 px</a> <a href="png/24/color-mode.png" download>24 px</a> <a href="png/32/color-mode.png" download>32 px</a> <a href="png/40/color-mode.png" download>40 px</a> <a href="png/48/color-mode.png" download>48 px</a></div></article></div></section><section><h2>Workflow</h2><div class="grid"><article data-search="Workflow reference Reference image">
+<a class="source" href="svg/reference.svg" download title="Download Reference image SVG">
+<img src="svg/reference.svg" alt="Reference image"><span>Reference image</span></a>
+<div class="downloads"><a href="png/16/reference.png" download>16 px</a> <a href="png/20/reference.png" download>20 px</a> <a href="png/24/reference.png" download>24 px</a> <a href="png/32/reference.png" download>32 px</a> <a href="png/40/reference.png" download>40 px</a> <a href="png/48/reference.png" download>48 px</a></div></article><article data-search="Workflow scale Scale reference">
+<a class="source" href="svg/scale.svg" download title="Download Scale reference SVG">
+<img src="svg/scale.svg" alt="Scale reference"><span>Scale reference</span></a>
+<div class="downloads"><a href="png/16/scale.png" download>16 px</a> <a href="png/20/scale.png" download>20 px</a> <a href="png/24/scale.png" download>24 px</a> <a href="png/32/scale.png" download>32 px</a> <a href="png/40/scale.png" download>40 px</a> <a href="png/48/scale.png" download>48 px</a></div></article><article data-search="Workflow sheet-import Grid sheet import">
+<a class="source" href="svg/sheet-import.svg" download title="Download Grid sheet import SVG">
+<img src="svg/sheet-import.svg" alt="Grid sheet import"><span>Grid sheet import</span></a>
+<div class="downloads"><a href="png/16/sheet-import.png" download>16 px</a> <a href="png/20/sheet-import.png" download>20 px</a> <a href="png/24/sheet-import.png" download>24 px</a> <a href="png/32/sheet-import.png" download>32 px</a> <a href="png/40/sheet-import.png" download>40 px</a> <a href="png/48/sheet-import.png" download>48 px</a></div></article><article data-search="Workflow atlas Pack atlas">
+<a class="source" href="svg/atlas.svg" download title="Download Pack atlas SVG">
+<img src="svg/atlas.svg" alt="Pack atlas"><span>Pack atlas</span></a>
+<div class="downloads"><a href="png/16/atlas.png" download>16 px</a> <a href="png/20/atlas.png" download>20 px</a> <a href="png/24/atlas.png" download>24 px</a> <a href="png/32/atlas.png" download>32 px</a> <a href="png/40/atlas.png" download>40 px</a> <a href="png/48/atlas.png" download>48 px</a></div></article><article data-search="Workflow batch-export Batch export">
+<a class="source" href="svg/batch-export.svg" download title="Download Batch export SVG">
+<img src="svg/batch-export.svg" alt="Batch export"><span>Batch export</span></a>
+<div class="downloads"><a href="png/16/batch-export.png" download>16 px</a> <a href="png/20/batch-export.png" download>20 px</a> <a href="png/24/batch-export.png" download>24 px</a> <a href="png/32/batch-export.png" download>32 px</a> <a href="png/40/batch-export.png" download>40 px</a> <a href="png/48/batch-export.png" download>48 px</a></div></article><article data-search="Workflow studio Drawing studio">
+<a class="source" href="svg/studio.svg" download title="Download Drawing studio SVG">
+<img src="svg/studio.svg" alt="Drawing studio"><span>Drawing studio</span></a>
+<div class="downloads"><a href="png/16/studio.png" download>16 px</a> <a href="png/20/studio.png" download>20 px</a> <a href="png/24/studio.png" download>24 px</a> <a href="png/32/studio.png" download>32 px</a> <a href="png/40/studio.png" download>40 px</a> <a href="png/48/studio.png" download>48 px</a></div></article></div></section><section><h2>Settings</h2><div class="grid"><article data-search="Settings settings Settings">
+<a class="source" href="svg/settings.svg" download title="Download Settings SVG">
+<img src="svg/settings.svg" alt="Settings"><span>Settings</span></a>
+<div class="downloads"><a href="png/16/settings.png" download>16 px</a> <a href="png/20/settings.png" download>20 px</a> <a href="png/24/settings.png" download>24 px</a> <a href="png/32/settings.png" download>32 px</a> <a href="png/40/settings.png" download>40 px</a> <a href="png/48/settings.png" download>48 px</a></div></article><article data-search="Settings properties Properties">
+<a class="source" href="svg/properties.svg" download title="Download Properties SVG">
+<img src="svg/properties.svg" alt="Properties"><span>Properties</span></a>
+<div class="downloads"><a href="png/16/properties.png" download>16 px</a> <a href="png/20/properties.png" download>20 px</a> <a href="png/24/properties.png" download>24 px</a> <a href="png/32/properties.png" download>32 px</a> <a href="png/40/properties.png" download>40 px</a> <a href="png/48/properties.png" download>48 px</a></div></article><article data-search="Settings keyboard Keyboard shortcuts">
+<a class="source" href="svg/keyboard.svg" download title="Download Keyboard shortcuts SVG">
+<img src="svg/keyboard.svg" alt="Keyboard shortcuts"><span>Keyboard shortcuts</span></a>
+<div class="downloads"><a href="png/16/keyboard.png" download>16 px</a> <a href="png/20/keyboard.png" download>20 px</a> <a href="png/24/keyboard.png" download>24 px</a> <a href="png/32/keyboard.png" download>32 px</a> <a href="png/40/keyboard.png" download>40 px</a> <a href="png/48/keyboard.png" download>48 px</a></div></article><article data-search="Settings theme Theme">
+<a class="source" href="svg/theme.svg" download title="Download Theme SVG">
+<img src="svg/theme.svg" alt="Theme"><span>Theme</span></a>
+<div class="downloads"><a href="png/16/theme.png" download>16 px</a> <a href="png/20/theme.png" download>20 px</a> <a href="png/24/theme.png" download>24 px</a> <a href="png/32/theme.png" download>32 px</a> <a href="png/40/theme.png" download>40 px</a> <a href="png/48/theme.png" download>48 px</a></div></article><article data-search="Settings extensions Extensions">
+<a class="source" href="svg/extensions.svg" download title="Download Extensions SVG">
+<img src="svg/extensions.svg" alt="Extensions"><span>Extensions</span></a>
+<div class="downloads"><a href="png/16/extensions.png" download>16 px</a> <a href="png/20/extensions.png" download>20 px</a> <a href="png/24/extensions.png" download>24 px</a> <a href="png/32/extensions.png" download>32 px</a> <a href="png/40/extensions.png" download>40 px</a> <a href="png/48/extensions.png" download>48 px</a></div></article><article data-search="Settings install Install extension">
+<a class="source" href="svg/install.svg" download title="Download Install extension SVG">
+<img src="svg/install.svg" alt="Install extension"><span>Install extension</span></a>
+<div class="downloads"><a href="png/16/install.png" download>16 px</a> <a href="png/20/install.png" download>20 px</a> <a href="png/24/install.png" download>24 px</a> <a href="png/32/install.png" download>32 px</a> <a href="png/40/install.png" download>40 px</a> <a href="png/48/install.png" download>48 px</a></div></article><article data-search="Settings uninstall Uninstall extension">
+<a class="source" href="svg/uninstall.svg" download title="Download Uninstall extension SVG">
+<img src="svg/uninstall.svg" alt="Uninstall extension"><span>Uninstall extension</span></a>
+<div class="downloads"><a href="png/16/uninstall.png" download>16 px</a> <a href="png/20/uninstall.png" download>20 px</a> <a href="png/24/uninstall.png" download>24 px</a> <a href="png/32/uninstall.png" download>32 px</a> <a href="png/40/uninstall.png" download>40 px</a> <a href="png/48/uninstall.png" download>48 px</a></div></article></div></section><section><h2>Assistants</h2><div class="grid"><article data-search="Assistants assistant Assistant tools">
+<a class="source" href="svg/assistant.svg" download title="Download Assistant tools SVG">
+<img src="svg/assistant.svg" alt="Assistant tools"><span>Assistant tools</span></a>
+<div class="downloads"><a href="png/16/assistant.png" download>16 px</a> <a href="png/20/assistant.png" download>20 px</a> <a href="png/24/assistant.png" download>24 px</a> <a href="png/32/assistant.png" download>32 px</a> <a href="png/40/assistant.png" download>40 px</a> <a href="png/48/assistant.png" download>48 px</a></div></article><article data-search="Assistants plug Connected">
+<a class="source" href="svg/plug.svg" download title="Download Connected SVG">
+<img src="svg/plug.svg" alt="Connected"><span>Connected</span></a>
+<div class="downloads"><a href="png/16/plug.png" download>16 px</a> <a href="png/20/plug.png" download>20 px</a> <a href="png/24/plug.png" download>24 px</a> <a href="png/32/plug.png" download>32 px</a> <a href="png/40/plug.png" download>40 px</a> <a href="png/48/plug.png" download>48 px</a></div></article><article data-search="Assistants unplug Disconnected">
+<a class="source" href="svg/unplug.svg" download title="Download Disconnected SVG">
+<img src="svg/unplug.svg" alt="Disconnected"><span>Disconnected</span></a>
+<div class="downloads"><a href="png/16/unplug.png" download>16 px</a> <a href="png/20/unplug.png" download>20 px</a> <a href="png/24/unplug.png" download>24 px</a> <a href="png/32/unplug.png" download>32 px</a> <a href="png/40/unplug.png" download>40 px</a> <a href="png/48/unplug.png" download>48 px</a></div></article><article data-search="Assistants terminal Headless commands">
+<a class="source" href="svg/terminal.svg" download title="Download Headless commands SVG">
+<img src="svg/terminal.svg" alt="Headless commands"><span>Headless commands</span></a>
+<div class="downloads"><a href="png/16/terminal.png" download>16 px</a> <a href="png/20/terminal.png" download>20 px</a> <a href="png/24/terminal.png" download>24 px</a> <a href="png/32/terminal.png" download>32 px</a> <a href="png/40/terminal.png" download>40 px</a> <a href="png/48/terminal.png" download>48 px</a></div></article><article data-search="Assistants shield Access permission">
+<a class="source" href="svg/shield.svg" download title="Download Access permission SVG">
+<img src="svg/shield.svg" alt="Access permission"><span>Access permission</span></a>
+<div class="downloads"><a href="png/16/shield.png" download>16 px</a> <a href="png/20/shield.png" download>20 px</a> <a href="png/24/shield.png" download>24 px</a> <a href="png/32/shield.png" download>32 px</a> <a href="png/40/shield.png" download>40 px</a> <a href="png/48/shield.png" download>48 px</a></div></article><article data-search="Assistants live-on Live access enabled">
+<a class="source" href="svg/live-on.svg" download title="Download Live access enabled SVG">
+<img src="svg/live-on.svg" alt="Live access enabled"><span>Live access enabled</span></a>
+<div class="downloads"><a href="png/16/live-on.png" download>16 px</a> <a href="png/20/live-on.png" download>20 px</a> <a href="png/24/live-on.png" download>24 px</a> <a href="png/32/live-on.png" download>32 px</a> <a href="png/40/live-on.png" download>40 px</a> <a href="png/48/live-on.png" download>48 px</a></div></article><article data-search="Assistants live-off Live access disabled">
+<a class="source" href="svg/live-off.svg" download title="Download Live access disabled SVG">
+<img src="svg/live-off.svg" alt="Live access disabled"><span>Live access disabled</span></a>
+<div class="downloads"><a href="png/16/live-off.png" download>16 px</a> <a href="png/20/live-off.png" download>20 px</a> <a href="png/24/live-off.png" download>24 px</a> <a href="png/32/live-off.png" download>32 px</a> <a href="png/40/live-off.png" download>40 px</a> <a href="png/48/live-off.png" download>48 px</a></div></article></div></section><section><h2>Common</h2><div class="grid"><article data-search="Common plus Add">
+<a class="source" href="svg/plus.svg" download title="Download Add SVG">
+<img src="svg/plus.svg" alt="Add"><span>Add</span></a>
+<div class="downloads"><a href="png/16/plus.png" download>16 px</a> <a href="png/20/plus.png" download>20 px</a> <a href="png/24/plus.png" download>24 px</a> <a href="png/32/plus.png" download>32 px</a> <a href="png/40/plus.png" download>40 px</a> <a href="png/48/plus.png" download>48 px</a></div></article><article data-search="Common minus Remove">
+<a class="source" href="svg/minus.svg" download title="Download Remove SVG">
+<img src="svg/minus.svg" alt="Remove"><span>Remove</span></a>
+<div class="downloads"><a href="png/16/minus.png" download>16 px</a> <a href="png/20/minus.png" download>20 px</a> <a href="png/24/minus.png" download>24 px</a> <a href="png/32/minus.png" download>32 px</a> <a href="png/40/minus.png" download>40 px</a> <a href="png/48/minus.png" download>48 px</a></div></article><article data-search="Common close Close">
+<a class="source" href="svg/close.svg" download title="Download Close SVG">
+<img src="svg/close.svg" alt="Close"><span>Close</span></a>
+<div class="downloads"><a href="png/16/close.png" download>16 px</a> <a href="png/20/close.png" download>20 px</a> <a href="png/24/close.png" download>24 px</a> <a href="png/32/close.png" download>32 px</a> <a href="png/40/close.png" download>40 px</a> <a href="png/48/close.png" download>48 px</a></div></article><article data-search="Common check Confirm">
+<a class="source" href="svg/check.svg" download title="Download Confirm SVG">
+<img src="svg/check.svg" alt="Confirm"><span>Confirm</span></a>
+<div class="downloads"><a href="png/16/check.png" download>16 px</a> <a href="png/20/check.png" download>20 px</a> <a href="png/24/check.png" download>24 px</a> <a href="png/32/check.png" download>32 px</a> <a href="png/40/check.png" download>40 px</a> <a href="png/48/check.png" download>48 px</a></div></article><article data-search="Common info Information">
+<a class="source" href="svg/info.svg" download title="Download Information SVG">
+<img src="svg/info.svg" alt="Information"><span>Information</span></a>
+<div class="downloads"><a href="png/16/info.png" download>16 px</a> <a href="png/20/info.png" download>20 px</a> <a href="png/24/info.png" download>24 px</a> <a href="png/32/info.png" download>32 px</a> <a href="png/40/info.png" download>40 px</a> <a href="png/48/info.png" download>48 px</a></div></article><article data-search="Common help Help">
+<a class="source" href="svg/help.svg" download title="Download Help SVG">
+<img src="svg/help.svg" alt="Help"><span>Help</span></a>
+<div class="downloads"><a href="png/16/help.png" download>16 px</a> <a href="png/20/help.png" download>20 px</a> <a href="png/24/help.png" download>24 px</a> <a href="png/32/help.png" download>32 px</a> <a href="png/40/help.png" download>40 px</a> <a href="png/48/help.png" download>48 px</a></div></article><article data-search="Common warning Warning">
+<a class="source" href="svg/warning.svg" download title="Download Warning SVG">
+<img src="svg/warning.svg" alt="Warning"><span>Warning</span></a>
+<div class="downloads"><a href="png/16/warning.png" download>16 px</a> <a href="png/20/warning.png" download>20 px</a> <a href="png/24/warning.png" download>24 px</a> <a href="png/32/warning.png" download>32 px</a> <a href="png/40/warning.png" download>40 px</a> <a href="png/48/warning.png" download>48 px</a></div></article><article data-search="Common error Error">
+<a class="source" href="svg/error.svg" download title="Download Error SVG">
+<img src="svg/error.svg" alt="Error"><span>Error</span></a>
+<div class="downloads"><a href="png/16/error.png" download>16 px</a> <a href="png/20/error.png" download>20 px</a> <a href="png/24/error.png" download>24 px</a> <a href="png/32/error.png" download>32 px</a> <a href="png/40/error.png" download>40 px</a> <a href="png/48/error.png" download>48 px</a></div></article><article data-search="Common chevron-right Expand submenu">
+<a class="source" href="svg/chevron-right.svg" download title="Download Expand submenu SVG">
+<img src="svg/chevron-right.svg" alt="Expand submenu"><span>Expand submenu</span></a>
+<div class="downloads"><a href="png/16/chevron-right.png" download>16 px</a> <a href="png/20/chevron-right.png" download>20 px</a> <a href="png/24/chevron-right.png" download>24 px</a> <a href="png/32/chevron-right.png" download>32 px</a> <a href="png/40/chevron-right.png" download>40 px</a> <a href="png/48/chevron-right.png" download>48 px</a></div></article><article data-search="Common chevron-left Previous">
+<a class="source" href="svg/chevron-left.svg" download title="Download Previous SVG">
+<img src="svg/chevron-left.svg" alt="Previous"><span>Previous</span></a>
+<div class="downloads"><a href="png/16/chevron-left.png" download>16 px</a> <a href="png/20/chevron-left.png" download>20 px</a> <a href="png/24/chevron-left.png" download>24 px</a> <a href="png/32/chevron-left.png" download>32 px</a> <a href="png/40/chevron-left.png" download>40 px</a> <a href="png/48/chevron-left.png" download>48 px</a></div></article><article data-search="Common chevron-down Expand">
+<a class="source" href="svg/chevron-down.svg" download title="Download Expand SVG">
+<img src="svg/chevron-down.svg" alt="Expand"><span>Expand</span></a>
+<div class="downloads"><a href="png/16/chevron-down.png" download>16 px</a> <a href="png/20/chevron-down.png" download>20 px</a> <a href="png/24/chevron-down.png" download>24 px</a> <a href="png/32/chevron-down.png" download>32 px</a> <a href="png/40/chevron-down.png" download>40 px</a> <a href="png/48/chevron-down.png" download>48 px</a></div></article><article data-search="Common chevron-up Collapse">
+<a class="source" href="svg/chevron-up.svg" download title="Download Collapse SVG">
+<img src="svg/chevron-up.svg" alt="Collapse"><span>Collapse</span></a>
+<div class="downloads"><a href="png/16/chevron-up.png" download>16 px</a> <a href="png/20/chevron-up.png" download>20 px</a> <a href="png/24/chevron-up.png" download>24 px</a> <a href="png/32/chevron-up.png" download>32 px</a> <a href="png/40/chevron-up.png" download>40 px</a> <a href="png/48/chevron-up.png" download>48 px</a></div></article><article data-search="Common external-link Open external link">
+<a class="source" href="svg/external-link.svg" download title="Download Open external link SVG">
+<img src="svg/external-link.svg" alt="Open external link"><span>Open external link</span></a>
+<div class="downloads"><a href="png/16/external-link.png" download>16 px</a> <a href="png/20/external-link.png" download>20 px</a> <a href="png/24/external-link.png" download>24 px</a> <a href="png/32/external-link.png" download>32 px</a> <a href="png/40/external-link.png" download>40 px</a> <a href="png/48/external-link.png" download>48 px</a></div></article><article data-search="Common download Download update">
+<a class="source" href="svg/download.svg" download title="Download Download update SVG">
+<img src="svg/download.svg" alt="Download update"><span>Download update</span></a>
+<div class="downloads"><a href="png/16/download.png" download>16 px</a> <a href="png/20/download.png" download>20 px</a> <a href="png/24/download.png" download>24 px</a> <a href="png/32/download.png" download>32 px</a> <a href="png/40/download.png" download>40 px</a> <a href="png/48/download.png" download>48 px</a></div></article><article data-search="Common upload Upload">
+<a class="source" href="svg/upload.svg" download title="Download Upload SVG">
+<img src="svg/upload.svg" alt="Upload"><span>Upload</span></a>
+<div class="downloads"><a href="png/16/upload.png" download>16 px</a> <a href="png/20/upload.png" download>20 px</a> <a href="png/24/upload.png" download>24 px</a> <a href="png/32/upload.png" download>32 px</a> <a href="png/40/upload.png" download>40 px</a> <a href="png/48/upload.png" download>48 px</a></div></article><article data-search="Common refresh Refresh">
+<a class="source" href="svg/refresh.svg" download title="Download Refresh SVG">
+<img src="svg/refresh.svg" alt="Refresh"><span>Refresh</span></a>
+<div class="downloads"><a href="png/16/refresh.png" download>16 px</a> <a href="png/20/refresh.png" download>20 px</a> <a href="png/24/refresh.png" download>24 px</a> <a href="png/32/refresh.png" download>32 px</a> <a href="png/40/refresh.png" download>40 px</a> <a href="png/48/refresh.png" download>48 px</a></div></article><article data-search="Common trash Delete">
+<a class="source" href="svg/trash.svg" download title="Download Delete SVG">
+<img src="svg/trash.svg" alt="Delete"><span>Delete</span></a>
+<div class="downloads"><a href="png/16/trash.png" download>16 px</a> <a href="png/20/trash.png" download>20 px</a> <a href="png/24/trash.png" download>24 px</a> <a href="png/32/trash.png" download>32 px</a> <a href="png/40/trash.png" download>40 px</a> <a href="png/48/trash.png" download>48 px</a></div></article><article data-search="Common rename Rename">
+<a class="source" href="svg/rename.svg" download title="Download Rename SVG">
+<img src="svg/rename.svg" alt="Rename"><span>Rename</span></a>
+<div class="downloads"><a href="png/16/rename.png" download>16 px</a> <a href="png/20/rename.png" download>20 px</a> <a href="png/24/rename.png" download>24 px</a> <a href="png/32/rename.png" download>32 px</a> <a href="png/40/rename.png" download>40 px</a> <a href="png/48/rename.png" download>48 px</a></div></article><article data-search="Common unsaved Unsaved changes">
+<a class="source" href="svg/unsaved.svg" download title="Download Unsaved changes SVG">
+<img src="svg/unsaved.svg" alt="Unsaved changes"><span>Unsaved changes</span></a>
+<div class="downloads"><a href="png/16/unsaved.png" download>16 px</a> <a href="png/20/unsaved.png" download>20 px</a> <a href="png/24/unsaved.png" download>24 px</a> <a href="png/32/unsaved.png" download>32 px</a> <a href="png/40/unsaved.png" download>40 px</a> <a href="png/48/unsaved.png" download>48 px</a></div></article></div></section>
+<footer><p>Original icons under the repository's MIT license. App integration checks include theme contrast, keyboard and accessibility behavior, and display scaling.</p></footer>
+<script>
+document.querySelector('#theme').onclick = () => {
+  const light = document.documentElement.dataset.theme !== 'light';
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  document.querySelector('#theme').textContent = light ? 'Use dark theme' : 'Use light theme';
+};
+document.querySelector('#size').onchange = event => {
+  document.documentElement.style.setProperty('--size', event.target.value + 'px');
+};
+document.querySelector('#search').oninput = event => {
+  const query = event.target.value.toLowerCase().trim();
+  document.querySelectorAll('article').forEach(card => {
+    card.hidden = !card.dataset.search.toLowerCase().includes(query);
+  });
+  document.querySelectorAll('section').forEach(section => {
+    section.hidden = !section.querySelector('article:not([hidden])');
+  });
+};
+</script></html>

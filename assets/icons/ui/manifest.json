@@ -1,0 +1,731 @@
+{
+  "name": "PixelCraft UI icons",
+  "version": 1,
+  "license": "MIT",
+  "viewBox": [
+    0,
+    0,
+    24,
+    24
+  ],
+  "strokeWidth": 1.75,
+  "pngColor": "#ffffff",
+  "pngSizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48
+  ],
+  "icons": [
+    {
+      "name": "pencil",
+      "label": "Pencil",
+      "category": "Drawing"
+    },
+    {
+      "name": "eraser",
+      "label": "Eraser",
+      "category": "Drawing"
+    },
+    {
+      "name": "fill",
+      "label": "Fill",
+      "category": "Drawing"
+    },
+    {
+      "name": "eyedropper",
+      "label": "Eyedropper",
+      "category": "Drawing"
+    },
+    {
+      "name": "line",
+      "label": "Line",
+      "category": "Drawing"
+    },
+    {
+      "name": "rectangle",
+      "label": "Rectangle",
+      "category": "Drawing"
+    },
+    {
+      "name": "ellipse",
+      "label": "Ellipse",
+      "category": "Drawing"
+    },
+    {
+      "name": "select",
+      "label": "Rectangular selection",
+      "category": "Drawing"
+    },
+    {
+      "name": "wand",
+      "label": "Magic Wand",
+      "category": "Drawing"
+    },
+    {
+      "name": "lasso",
+      "label": "Lasso selection",
+      "category": "Drawing"
+    },
+    {
+      "name": "move",
+      "label": "Move",
+      "category": "Drawing"
+    },
+    {
+      "name": "gradient",
+      "label": "Gradient",
+      "category": "Drawing"
+    },
+    {
+      "name": "hand",
+      "label": "Hand",
+      "category": "Drawing"
+    },
+    {
+      "name": "brush",
+      "label": "Brush",
+      "category": "Brushes"
+    },
+    {
+      "name": "shade",
+      "label": "Shade brush",
+      "category": "Brushes"
+    },
+    {
+      "name": "dither",
+      "label": "Dither brush",
+      "category": "Brushes"
+    },
+    {
+      "name": "stamp",
+      "label": "Selection stamp",
+      "category": "Brushes"
+    },
+    {
+      "name": "brush-round",
+      "label": "Round brush",
+      "category": "Brushes"
+    },
+    {
+      "name": "brush-square",
+      "label": "Square brush",
+      "category": "Brushes"
+    },
+    {
+      "name": "select-add",
+      "label": "Add to selection",
+      "category": "Selection"
+    },
+    {
+      "name": "select-subtract",
+      "label": "Subtract from selection",
+      "category": "Selection"
+    },
+    {
+      "name": "select-intersect",
+      "label": "Intersect selections",
+      "category": "Selection"
+    },
+    {
+      "name": "select-all",
+      "label": "Select all",
+      "category": "Selection"
+    },
+    {
+      "name": "deselect",
+      "label": "Deselect",
+      "category": "Selection"
+    },
+    {
+      "name": "crop",
+      "label": "Crop",
+      "category": "Selection"
+    },
+    {
+      "name": "rotate-cw",
+      "label": "Rotate clockwise",
+      "category": "Selection"
+    },
+    {
+      "name": "flip-horizontal",
+      "label": "Flip horizontally",
+      "category": "Selection"
+    },
+    {
+      "name": "flip-vertical",
+      "label": "Flip vertically",
+      "category": "Selection"
+    },
+    {
+      "name": "file-new",
+      "label": "New sprite",
+      "category": "Files"
+    },
+    {
+      "name": "folder-open",
+      "label": "Open",
+      "category": "Files"
+    },
+    {
+      "name": "document",
+      "label": "Document",
+      "category": "Files"
+    },
+    {
+      "name": "file-close",
+      "label": "Close sprite",
+      "category": "Files"
+    },
+    {
+      "name": "save",
+      "label": "Save",
+      "category": "Files"
+    },
+    {
+      "name": "save-as",
+      "label": "Save as",
+      "category": "Files"
+    },
+    {
+      "name": "import",
+      "label": "Import",
+      "category": "Files"
+    },
+    {
+      "name": "export",
+      "label": "Export",
+      "category": "Files"
+    },
+    {
+      "name": "history",
+      "label": "Recent files",
+      "category": "Files"
+    },
+    {
+      "name": "image",
+      "label": "Image",
+      "category": "Files"
+    },
+    {
+      "name": "sheet",
+      "label": "Sprite sheet",
+      "category": "Files"
+    },
+    {
+      "name": "gif",
+      "label": "Animated image",
+      "category": "Files"
+    },
+    {
+      "name": "tilemap",
+      "label": "Tile map",
+      "category": "Files"
+    },
+    {
+      "name": "undo",
+      "label": "Undo",
+      "category": "Edit"
+    },
+    {
+      "name": "redo",
+      "label": "Redo",
+      "category": "Edit"
+    },
+    {
+      "name": "cut",
+      "label": "Cut",
+      "category": "Edit"
+    },
+    {
+      "name": "copy",
+      "label": "Copy",
+      "category": "Edit"
+    },
+    {
+      "name": "paste",
+      "label": "Paste",
+      "category": "Edit"
+    },
+    {
+      "name": "clear",
+      "label": "Clear pixels",
+      "category": "Edit"
+    },
+    {
+      "name": "zoom-in",
+      "label": "Zoom in",
+      "category": "View"
+    },
+    {
+      "name": "zoom-out",
+      "label": "Zoom out",
+      "category": "View"
+    },
+    {
+      "name": "fit",
+      "label": "Fit canvas",
+      "category": "View"
+    },
+    {
+      "name": "grid",
+      "label": "Pixel grid",
+      "category": "View"
+    },
+    {
+      "name": "preview",
+      "label": "Preview",
+      "category": "View"
+    },
+    {
+      "name": "wrap",
+      "label": "Wraparound",
+      "category": "View"
+    },
+    {
+      "name": "onion-skin",
+      "label": "Onion skin",
+      "category": "View"
+    },
+    {
+      "name": "layers",
+      "label": "Layers",
+      "category": "Layers"
+    },
+    {
+      "name": "layer-add",
+      "label": "Add layer",
+      "category": "Layers"
+    },
+    {
+      "name": "layer-duplicate",
+      "label": "Duplicate layer",
+      "category": "Layers"
+    },
+    {
+      "name": "layer-delete",
+      "label": "Delete layer",
+      "category": "Layers"
+    },
+    {
+      "name": "eye",
+      "label": "Visible",
+      "category": "Layers"
+    },
+    {
+      "name": "eye-off",
+      "label": "Hidden",
+      "category": "Layers"
+    },
+    {
+      "name": "lock",
+      "label": "Locked",
+      "category": "Layers"
+    },
+    {
+      "name": "unlock",
+      "label": "Unlocked",
+      "category": "Layers"
+    },
+    {
+      "name": "group",
+      "label": "Layer group",
+      "category": "Layers"
+    },
+    {
+      "name": "arrow-up",
+      "label": "Move up",
+      "category": "Layers"
+    },
+    {
+      "name": "arrow-down",
+      "label": "Move down",
+      "category": "Layers"
+    },
+    {
+      "name": "link",
+      "label": "Linked cel",
+      "category": "Layers"
+    },
+    {
+      "name": "cel",
+      "label": "Cel",
+      "category": "Layers"
+    },
+    {
+      "name": "opacity",
+      "label": "Opacity",
+      "category": "Layers"
+    },
+    {
+      "name": "frame",
+      "label": "Frame",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-add",
+      "label": "Add frame",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-duplicate",
+      "label": "Duplicate frame",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-delete",
+      "label": "Delete frame",
+      "category": "Animation"
+    },
+    {
+      "name": "play",
+      "label": "Play",
+      "category": "Animation"
+    },
+    {
+      "name": "pause",
+      "label": "Pause",
+      "category": "Animation"
+    },
+    {
+      "name": "stop",
+      "label": "Stop",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-previous",
+      "label": "Previous frame",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-next",
+      "label": "Next frame",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-first",
+      "label": "First frame",
+      "category": "Animation"
+    },
+    {
+      "name": "frame-last",
+      "label": "Last frame",
+      "category": "Animation"
+    },
+    {
+      "name": "repeat",
+      "label": "Loop playback",
+      "category": "Animation"
+    },
+    {
+      "name": "ping-pong",
+      "label": "Ping-pong playback",
+      "category": "Animation"
+    },
+    {
+      "name": "tag",
+      "label": "Animation tag",
+      "category": "Animation"
+    },
+    {
+      "name": "clock",
+      "label": "Frame duration",
+      "category": "Animation"
+    },
+    {
+      "name": "palette",
+      "label": "Palette",
+      "category": "Color"
+    },
+    {
+      "name": "color-add",
+      "label": "Add color",
+      "category": "Color"
+    },
+    {
+      "name": "color-remove",
+      "label": "Remove color",
+      "category": "Color"
+    },
+    {
+      "name": "swatches",
+      "label": "Used colors",
+      "category": "Color"
+    },
+    {
+      "name": "swap",
+      "label": "Swap colors",
+      "category": "Color"
+    },
+    {
+      "name": "alpha",
+      "label": "Transparency",
+      "category": "Color"
+    },
+    {
+      "name": "color-mode",
+      "label": "Color mode",
+      "category": "Color"
+    },
+    {
+      "name": "reference",
+      "label": "Reference image",
+      "category": "Workflow"
+    },
+    {
+      "name": "scale",
+      "label": "Scale reference",
+      "category": "Workflow"
+    },
+    {
+      "name": "sheet-import",
+      "label": "Grid sheet import",
+      "category": "Workflow"
+    },
+    {
+      "name": "atlas",
+      "label": "Pack atlas",
+      "category": "Workflow"
+    },
+    {
+      "name": "batch-export",
+      "label": "Batch export",
+      "category": "Workflow"
+    },
+    {
+      "name": "studio",
+      "label": "Drawing studio",
+      "category": "Workflow"
+    },
+    {
+      "name": "settings",
+      "label": "Settings",
+      "category": "Settings"
+    },
+    {
+      "name": "properties",
+      "label": "Properties",
+      "category": "Settings"
+    },
+    {
+      "name": "keyboard",
+      "label": "Keyboard shortcuts",
+      "category": "Settings"
+    },
+    {
+      "name": "theme",
+      "label": "Theme",
+      "category": "Settings"
+    },
+    {
+      "name": "extensions",
+      "label": "Extensions",
+      "category": "Settings"
+    },
+    {
+      "name": "install",
+      "label": "Install extension",
+      "category": "Settings"
+    },
+    {
+      "name": "uninstall",
+      "label": "Uninstall extension",
+      "category": "Settings"
+    },
+    {
+      "name": "assistant",
+      "label": "Assistant tools",
+      "category": "Assistants"
+    },
+    {
+      "name": "plug",
+      "label": "Connected",
+      "category": "Assistants"
+    },
+    {
+      "name": "unplug",
+      "label": "Disconnected",
+      "category": "Assistants"
+    },
+    {
+      "name": "terminal",
+      "label": "Headless commands",
+      "category": "Assistants"
+    },
+    {
+      "name": "shield",
+      "label": "Access permission",
+      "category": "Assistants"
+    },
+    {
+      "name": "live-on",
+      "label": "Live access enabled",
+      "category": "Assistants"
+    },
+    {
+      "name": "live-off",
+      "label": "Live access disabled",
+      "category": "Assistants"
+    },
+    {
+      "name": "plus",
+      "label": "Add",
+      "category": "Common"
+    },
+    {
+      "name": "minus",
+      "label": "Remove",
+      "category": "Common"
+    },
+    {
+      "name": "close",
+      "label": "Close",
+      "category": "Common"
+    },
+    {
+      "name": "check",
+      "label": "Confirm",
+      "category": "Common"
+    },
+    {
+      "name": "info",
+      "label": "Information",
+      "category": "Common"
+    },
+    {
+      "name": "help",
+      "label": "Help",
+      "category": "Common"
+    },
+    {
+      "name": "warning",
+      "label": "Warning",
+      "category": "Common"
+    },
+    {
+      "name": "error",
+      "label": "Error",
+      "category": "Common"
+    },
+    {
+      "name": "chevron-right",
+      "label": "Expand submenu",
+      "category": "Common"
+    },
+    {
+      "name": "chevron-left",
+      "label": "Previous",
+      "category": "Common"
+    },
+    {
+      "name": "chevron-down",
+      "label": "Expand",
+      "category": "Common"
+    },
+    {
+      "name": "chevron-up",
+      "label": "Collapse",
+      "category": "Common"
+    },
+    {
+      "name": "external-link",
+      "label": "Open external link",
+      "category": "Common"
+    },
+    {
+      "name": "download",
+      "label": "Download update",
+      "category": "Common"
+    },
+    {
+      "name": "upload",
+      "label": "Upload",
+      "category": "Common"
+    },
+    {
+      "name": "refresh",
+      "label": "Refresh",
+      "category": "Common"
+    },
+    {
+      "name": "trash",
+      "label": "Delete",
+      "category": "Common"
+    },
+    {
+      "name": "rename",
+      "label": "Rename",
+      "category": "Common"
+    },
+    {
+      "name": "unsaved",
+      "label": "Unsaved changes",
+      "category": "Common"
+    }
+  ],
+  "actions": {
+    "new": "file-new",
+    "open": "folder-open",
+    "closetab": "file-close",
+    "save": "save",
+    "saveas": "save-as",
+    "sequence": "import",
+    "workflow": "atlas",
+    "png": "image",
+    "sheet": "sheet",
+    "gif": "gif",
+    "tiledexport": "tilemap",
+    "demo": "image",
+    "undo": "undo",
+    "redo": "redo",
+    "copy": "copy",
+    "cut": "cut",
+    "paste": "paste",
+    "clear": "clear",
+    "selectall": "select-all",
+    "deselect": "deselect",
+    "studio": "studio",
+    "wand": "wand",
+    "lasso": "lasso",
+    "move": "move",
+    "gradient": "gradient",
+    "rotate": "rotate-cw",
+    "selectionflipx": "flip-horizontal",
+    "selectionflipy": "flip-vertical",
+    "crop": "crop",
+    "properties": "properties",
+    "tiles": "tilemap",
+    "flipx": "flip-horizontal",
+    "flipy": "flip-vertical",
+    "layer": "layer-add",
+    "deletelayer": "layer-delete",
+    "up": "arrow-up",
+    "down": "arrow-down",
+    "frame": "frame-duplicate",
+    "blank": "frame-add",
+    "deleteframe": "frame-delete",
+    "play": "play",
+    "prev": "frame-previous",
+    "next": "frame-next",
+    "grid": "grid",
+    "onion": "onion-skin",
+    "fit": "fit",
+    "seamless": "wrap",
+    "extensions": "extensions",
+    "help": "help",
+    "about": "info",
+    "pencil": "pencil",
+    "eraser": "eraser",
+    "fill": "fill",
+    "picker": "eyedropper",
+    "line": "line",
+    "rectangle": "rectangle",
+    "ellipse": "ellipse",
+    "selection": "select",
+    "hand": "hand",
+    "swap": "swap",
+    "resetcolors": "swatches"
+  }
+}

@@ -196,10 +196,21 @@ end
 -- both coordinates use lua_tointegerx then low signed32 storage.
 function Point(x,y)
  if type(x)=='table' then
-  if x.x~=nil then return {x=colorInteger(x.x),y=colorInteger(x.y)} end
-  return {x=colorInteger(x[1]),y=colorInteger(x[2])}
+  local t=x
+  if t.x~=nil then x,y=t.x,t.y else x,y=t[1],t[2] end
  end
- return {x=colorInteger(x),y=colorInteger(y)}
+ -- Point setters 0x3e5050/0x3e50c0 convert every assignment,
+ -- including repeated writes and nil, before storing signed32 coordinates.
+ local fields={x=colorInteger(x),y=colorInteger(y)}
+ return setmetatable({}, {
+  __name='Point',
+  __index=fields,
+  __newindex=function(t,k,v)
+   if k=='x' or k=='y' then fields[k]=colorInteger(v)
+   else rawset(t,k,v) end
+  end,
+  __pairs=function() return next,fields,nil end
+ })
 end
 -- Size_new 0x3ef330 selects width/height, then w/h, then [1]/[2]
 -- as a pair. All components use floor-mode integer conversion and signed32 storage.
@@ -210,9 +221,43 @@ function Size(w,h)
   elseif t.w~=nil then w,h=t.w,t.h
   else w,h=t[1],t[2] end
  end
- return {width=colorInteger(w),height=colorInteger(h)}
+ -- Size setters 0x3efb20/0x3efb90 convert on every write;
+ -- the property table 0x1cbcff0 maps w/h to the same storage.
+ local fields={width=colorInteger(w),height=colorInteger(h)}
+ local aliases={w='width',h='height'}
+ return setmetatable({}, {
+  __name='Size',
+  __index=function(_,k) return fields[aliases[k] or k] end,
+  __newindex=function(t,k,v)
+   k=aliases[k] or k
+   if k=='width' or k=='height' then fields[k]=colorInteger(v)
+   else rawset(t,k,v) end
+  end,
+  __pairs=function() return next,fields,nil end
+ })
 end
-function Rectangle(x,y,w,h) if type(x)=='table' then return copy(x) end return {x=x or 0,y=y or 0,width=w or 0,height=h or 0} end
+-- Rectangle_new 0x3e9ea0 selects all array fields when x is nil.
+-- Named coordinates select width/height or w/h as a pair by width nonnil.
+function Rectangle(x,y,w,h)
+ if type(x)=='table' then
+  local t=x
+  if t.x==nil then x,y,w,h=t[1],t[2],t[3],t[4]
+  elseif t.width~=nil then x,y,w,h=t.x,t.y,t.width,t.height
+  else x,y,w,h=t.x,t.y,t.w,t.h end
+ end
+ -- Native setters 0x3ea6d0/0x3ea740/0x3ea7b0/0x3ea820 convert on
+ -- every write. Keep fields behind the proxy so repeated writes also convert.
+ local fields={x=colorInteger(x),y=colorInteger(y),width=colorInteger(w),height=colorInteger(h)}
+ return setmetatable({}, {
+  __name='Rectangle',
+  __index=fields,
+  __newindex=function(t,k,v)
+   if k=='x' or k=='y' or k=='width' or k=='height' then fields[k]=colorInteger(v)
+   else rawset(t,k,v) end
+  end,
+  __pairs=function() return next,fields,nil end
+ })
+end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}
 AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}

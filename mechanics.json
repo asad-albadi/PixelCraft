@@ -248,6 +248,30 @@
       "group": "scripting",
       "value": "First nonnil width selects width/height, else w selects w/h, else array1/2; scalar arguments otherwise. Each dimension signed32(I(v)); floor numeric conversion, failure zero.",
       "source": "Size_new helper 0x3ef330; wrapper 0x3ef2a0; lua_tointegerx 0x53eab0; luaV_tointeger 0x554930; ev_3a75063906a1e7dbdff274872f231897f27cd5d858e3455f09a908c7212caa90; assembly ev_95d0a5ace6f74dde9f2ccba68aa9849ee9d3a0c53f60c50384b4b2833ea206c0; completed fallback reads, Ghidra unavailable"
+    },
+    {
+      "name": "Lua Rectangle constructor field selection and conversion",
+      "group": "scripting",
+      "value": "x nonnil selects named x/y and width/height if width nonnil, else w/h; otherwise array1/2/3/4. Each field signed32(I(v)), floor numeric conversion, failure zero; negative dimensions preserved.",
+      "source": "Rectangle_new helper 0x3e9ea0, wrapper0x3e9e10; lua_tointegerx0x53eab0; luaV_tointeger0x554930; ev_6b3d47bb493b09ced45c30fe34ad1cb2acb08902a8a00ac9daa3f703bd241dc6; evidence/rectangle_constructor.asm; completed fallback pseudocode, Ghidra unavailable"
+    },
+    {
+      "name": "Lua Rectangle canonical field assignment",
+      "group": "scripting",
+      "value": "Every x/y/width/height write stores signed32(I(v)); I is floor-mode signed64 numeric conversion with failure zero; preserve negative dimensions",
+      "source": "Rectangle setters 0x3ea6d0/0x3ea740/0x3ea7b0/0x3ea820 -> lua_tointegerx 0x53eab0 -> luaV_tointeger 0x554930; evidence/rectangle_setters.json; completed fallback pseudocode and assembly; limits in MECHANICS.md"
+    },
+    {
+      "name": "Lua Size assignment conversion",
+      "group": "scripting",
+      "value": "signed32(I(v)); I floors numeric floats, failure zero; w/h alias width/height",
+      "source": "Size_set_width 0x3efb20, Size_set_height 0x3efb90, lua_tointegerx 0x53eab0, luaV_tointeger 0x554930; ev_8f5d05eca6f0728fe79112fa6a6c7e973011541057d3c7ca7105c13a20dd9437; ev_92410839d97cbca6dd1bbfb27f6d0e2048be2106cc23f4e7658bb1163493dc96"
+    },
+    {
+      "name": "Lua Point assignment conversion",
+      "group": "scripting",
+      "value": "Every x/y write stores signed32(I(v)); I floors numeric floats and parses numeric strings; failed conversion zero; no canvas clamp",
+      "source": "Point_set_x 0x3e5050; Point_set_y 0x3e50c0; lua_tointegerx 0x53eab0; luaV_tointeger 0x554930; evidence/point_setters.json and .asm; fallback pseudocode, Ghidra timeout disclosed in MECHANICS.md"
     }
   ]
 }

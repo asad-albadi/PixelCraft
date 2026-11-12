@@ -4,6 +4,9 @@ local function json(v,key)
  if t=='nil' then return 'null' elseif t=='boolean' or t=='number' then return tostring(v) elseif t=='string' then return '"'..v:gsub('[%z\1-\31\\"]',function(c)return string.format('\\u%04x',c:byte())end)..'"'
  elseif t=='table' then
   if getmetatable(v) and getmetatable(v).__name=='Color' then return json({r=v.red,g=v.green,b=v.blue,a=v.alpha}) end
+  if getmetatable(v) and getmetatable(v).__name=='Rectangle' then return json({x=v.x,y=v.y,width=v.width,height=v.height}) end
+  if getmetatable(v) and getmetatable(v).__name=='Size' then return json({width=v.width,height=v.height}) end
+  if getmetatable(v) and getmetatable(v).__name=='Point' then return json({x=v.x,y=v.y}) end
   local out={};local objects={data=true,preferences=true,pluginPreferences=true,params=true,event=true};local array=#v>0 or next(v)==nil and not objects[key]
   if array then for i=1,#v do out[i]=json(v[i]) end else for k,val in pairs(v) do if type(val)~='function' and tostring(k):sub(1,1)~='_' then out[#out+1]=json(tostring(k))..':'..json(val,k) end end end
   return (array and '[' or '{')..table.concat(out,',')..(array and ']' or '}')

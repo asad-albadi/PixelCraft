@@ -6,7 +6,7 @@ authors = ["Asad"]
 license = "MIT"
 
 [dependencies]
-eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "x11", "wayland"] }
 image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg"] }
 rfd = "0.17.2"
 flate2 = "1.1.10"
