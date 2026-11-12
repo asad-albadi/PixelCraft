@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-labelledby="settings-title">
+  <title id="settings-title">Settings</title>
+  <g transform="translate(12 12) scale(0.917431) translate(-12 -12)"><path d="m10 2-.7 3a7 7 0 0 0-2 .9L4.7 4.3 2 9l2.5 1.8a8 8 0 0 0 0 2.4L2 15l2.7 4.7 2.6-1.6a7 7 0 0 0 2 .9l.7 3h4l.7-3a7 7 0 0 0 2-.9l2.6 1.6L22 15l-2.5-1.8a8 8 0 0 0 0-2.4L22 9l-2.7-4.7-2.6 1.6a7 7 0 0 0-2-.9L14 2Z"/><circle cx="12" cy="12" r="3"/></g>
+</svg>

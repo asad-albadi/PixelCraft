@@ -1,0 +1,1489 @@
+{
+  "sourceIssue": "https://github.com/asad-albadi/PixelCraft/issues/3",
+  "tooltipRule": "Action name plus all currently assigned keys. Removed bindings are omitted. No hardcoded default hotkeys.",
+  "entries": [
+    {
+      "label": "New sprite\u2026",
+      "action": "new",
+      "icon": "file-new",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Open\u2026",
+      "action": "open",
+      "icon": "folder-open",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Close sprite",
+      "action": "closetab",
+      "icon": "close",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Import PNG sequence\u2026",
+      "action": "sequence",
+      "icon": "import",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Grid import, tag batch & atlas\u2026",
+      "action": "workflow",
+      "icon": "settings",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Save",
+      "action": "save",
+      "icon": "save",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Save as\u2026",
+      "action": "saveas",
+      "icon": "save-as",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Export PNG\u2026",
+      "action": "png",
+      "icon": "image",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Export sprite sheet\u2026",
+      "action": "sheet",
+      "icon": "sheet",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Export animation GIF\u2026",
+      "action": "gif",
+      "icon": "gif",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Export Tiled map\u2026",
+      "action": "tiledexport",
+      "icon": "tilemap",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Open sample garden",
+      "action": "demo",
+      "icon": "image",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Undo",
+      "action": "undo",
+      "icon": "undo",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Redo",
+      "action": "redo",
+      "icon": "redo",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Copy",
+      "action": "copy",
+      "icon": "copy",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Cut",
+      "action": "cut",
+      "icon": "cut",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Paste",
+      "action": "paste",
+      "icon": "paste",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Clear",
+      "action": "clear",
+      "icon": "clear",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Select all",
+      "action": "selectall",
+      "icon": "select-all",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Deselect",
+      "action": "deselect",
+      "icon": "deselect",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Drawing & selection studio\u2026",
+      "action": "studio",
+      "icon": "studio",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Magic Wand",
+      "action": "wand",
+      "icon": "wand",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Brushes, references & workflow tools\u2026",
+      "action": "workflow",
+      "icon": "settings",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Lasso selection",
+      "action": "lasso",
+      "icon": "lasso",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Move selection",
+      "action": "move",
+      "icon": "move",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Rotate selection 90\u00b0",
+      "action": "rotate",
+      "icon": "rotate-cw",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Flip selection horizontally",
+      "action": "selectionflipx",
+      "icon": "flip-horizontal",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Flip selection vertically",
+      "action": "selectionflipy",
+      "icon": "flip-vertical",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Crop to selection",
+      "action": "crop",
+      "icon": "crop",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Properties, layers, tiles & ranges\u2026",
+      "action": "properties",
+      "icon": "properties",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Tileset browser\u2026",
+      "action": "tiles",
+      "icon": "tilemap",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Flip active cel horizontally",
+      "action": "flipx",
+      "icon": "flip-horizontal",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Flip active cel vertically",
+      "action": "flipy",
+      "icon": "flip-vertical",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "New layer",
+      "action": "layer",
+      "icon": "layer-add",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Delete layer",
+      "action": "deletelayer",
+      "icon": "layer-delete",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Move layer up",
+      "action": "up",
+      "icon": "arrow-up",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Move layer down",
+      "action": "down",
+      "icon": "arrow-down",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Duplicate frame",
+      "action": "frame",
+      "icon": "frame-duplicate",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "New empty frame",
+      "action": "blank",
+      "icon": "frame-add",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Delete frame",
+      "action": "deleteframe",
+      "icon": "frame-delete",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Play / stop",
+      "action": "play",
+      "icon": "play",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Previous frame",
+      "action": "prev",
+      "icon": "frame-previous",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Next frame",
+      "action": "next",
+      "icon": "frame-next",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Toggle pixel grid",
+      "action": "grid",
+      "icon": "grid",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Toggle onion skin",
+      "action": "onion",
+      "icon": "onion-skin",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Fit canvas",
+      "action": "fit",
+      "icon": "fit",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Seamless preview",
+      "action": "seamless",
+      "icon": "wrap",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Extensions & scripts\u2026",
+      "action": "extensions",
+      "icon": "extensions",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "Tools and file support",
+      "action": "help",
+      "icon": "help",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "About",
+      "action": "about",
+      "icon": "info",
+      "locations": [
+        "menu",
+        "command dispatch"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts (live command bindings)"
+    },
+    {
+      "label": "+ New",
+      "action": "new",
+      "icon": "file-new",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Create sprite",
+      "action": "file-new",
+      "icon": "file-new",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Open\u2026",
+      "action": "open",
+      "icon": "folder-open",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Browse\u2026",
+      "action": "open",
+      "icon": "folder-open",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Choose sprites\u2026",
+      "action": "open",
+      "icon": "folder-open",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Save",
+      "action": "save",
+      "icon": "save",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Save as\u2026",
+      "action": "saveas",
+      "icon": "save-as",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Close",
+      "action": "close",
+      "icon": "close",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Close preview",
+      "action": "close",
+      "icon": "close",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Cancel",
+      "action": "close",
+      "icon": "close",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "\u00d7",
+      "action": "close",
+      "icon": "close",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Close sprite",
+      "action": "closetab",
+      "icon": "close",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "OK",
+      "action": "check",
+      "icon": "check",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Bind",
+      "action": "check",
+      "icon": "check",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Finish moving references",
+      "action": "check",
+      "icon": "check",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Discard changes",
+      "action": "trash",
+      "icon": "trash",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "+ Add Color",
+      "action": "color-add",
+      "icon": "color-add",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Delete color",
+      "action": "color-remove",
+      "icon": "color-remove",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Save palette\u2026",
+      "action": "savepalette",
+      "icon": "save",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Load\u2026",
+      "action": "loadpalette",
+      "icon": "folder-open",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Properties & color mode\u2026",
+      "action": "properties",
+      "icon": "properties",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Properties & ranges\u2026",
+      "action": "properties",
+      "icon": "properties",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Rename",
+      "action": "rename",
+      "icon": "rename",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Up",
+      "action": "up",
+      "icon": "arrow-up",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Down",
+      "action": "down",
+      "icon": "arrow-down",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Del layer",
+      "action": "deletelayer",
+      "icon": "layer-delete",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Del frame",
+      "action": "deleteframe",
+      "icon": "frame-delete",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "+ Layer",
+      "action": "layer",
+      "icon": "layer-add",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "+ Frame",
+      "action": "frame",
+      "icon": "frame-duplicate",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "+ New group",
+      "action": "group",
+      "icon": "group",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Import PNG tilesheet\u2026",
+      "action": "import",
+      "icon": "import",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Import palette\u2026",
+      "action": "import",
+      "icon": "import",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Import PNG / JPEG overlay\u2026",
+      "action": "import",
+      "icon": "import",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Export palette\u2026",
+      "action": "export",
+      "icon": "export",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Export PNG + metadata\u2026",
+      "action": "export",
+      "icon": "export",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Export Tiled map\u2026",
+      "action": "tiledexport",
+      "icon": "tilemap",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Capture selection as tile",
+      "action": "stamp",
+      "icon": "stamp",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Capture selection as stamp",
+      "action": "stamp",
+      "icon": "stamp",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "+ Tile layer from last tileset",
+      "action": "layer-add",
+      "icon": "layer-add",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "+ Range",
+      "action": "tag",
+      "icon": "tag",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Use all frames for playback",
+      "action": "repeat",
+      "icon": "repeat",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Magic Wand (W)",
+      "action": "wand",
+      "icon": "wand",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Magic Wand",
+      "action": "wand",
+      "icon": "wand",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Lasso",
+      "action": "lasso",
+      "icon": "lasso",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Move",
+      "action": "move",
+      "icon": "move",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Gradient",
+      "action": "gradient",
+      "icon": "gradient",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Resize",
+      "action": "scale",
+      "icon": "scale",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Crop canvas",
+      "action": "crop",
+      "icon": "crop",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Add shading ramp",
+      "action": "shade",
+      "icon": "shade",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Choose sprite sheet\u2026",
+      "action": "sheet-import",
+      "icon": "sheet-import",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Import cells",
+      "action": "sheet-import",
+      "icon": "sheet-import",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Import cells into a new sprite",
+      "action": "sheet-import",
+      "icon": "sheet-import",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Export tag GIFs\u2026",
+      "action": "batch-export",
+      "icon": "batch-export",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Export tag sheets\u2026",
+      "action": "batch-export",
+      "icon": "batch-export",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Pack & export PNG + JSON\u2026",
+      "action": "atlas",
+      "icon": "atlas",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Clear recent files",
+      "action": "history",
+      "icon": "history",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "PixelCraft",
+      "action": "keyboard",
+      "icon": "keyboard",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Aseprite",
+      "action": "keyboard",
+      "icon": "keyboard",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Photoshop",
+      "action": "keyboard",
+      "icon": "keyboard",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Install\u2026",
+      "action": "install",
+      "icon": "install",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Install ZIP\u2026",
+      "action": "install",
+      "icon": "install",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Install extension\u2026",
+      "action": "install",
+      "icon": "install",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Uninstall",
+      "action": "uninstall",
+      "icon": "uninstall",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Tools\u2026",
+      "action": "settings",
+      "icon": "settings",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Fit",
+      "action": "fit",
+      "icon": "fit",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Stop extension",
+      "action": "stop",
+      "icon": "stop",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Remove",
+      "action": "trash",
+      "icon": "trash",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Run .lua\u2026",
+      "action": "terminal",
+      "icon": "terminal",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Install package\u2026",
+      "action": "install",
+      "icon": "install",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Install folder\u2026",
+      "action": "install",
+      "icon": "install",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Check for updates",
+      "action": "refresh",
+      "icon": "refresh",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Normal",
+      "action": "brush",
+      "icon": "brush",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Shade",
+      "action": "shade",
+      "icon": "shade",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Dither",
+      "action": "dither",
+      "icon": "dither",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Selection",
+      "action": "stamp",
+      "icon": "stamp",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Round",
+      "action": "brush-round",
+      "icon": "brush-round",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Square",
+      "action": "brush-square",
+      "icon": "brush-square",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Diamond",
+      "action": "brush-square",
+      "icon": "brush-square",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Horizontal",
+      "action": "brush-square",
+      "icon": "brush-square",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Vertical",
+      "action": "brush-square",
+      "icon": "brush-square",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Replace",
+      "action": "select",
+      "icon": "select",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Add",
+      "action": "select-add",
+      "icon": "select-add",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Subtract",
+      "action": "select-subtract",
+      "icon": "select-subtract",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Intersect",
+      "action": "select-intersect",
+      "icon": "select-intersect",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Forward",
+      "action": "play",
+      "icon": "play",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Reverse",
+      "action": "frame-previous",
+      "icon": "frame-previous",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Ping-pong",
+      "action": "ping-pong",
+      "icon": "ping-pong",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Ping-pong reverse",
+      "action": "ping-pong",
+      "icon": "ping-pong",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Rotate 90\u00b0",
+      "action": "rotate",
+      "icon": "rotate-cw",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Flip X",
+      "action": "selectionflipx",
+      "icon": "flip-horizontal",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Flip Y",
+      "action": "selectionflipy",
+      "icon": "flip-vertical",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Invert",
+      "action": "color-mode",
+      "icon": "color-mode",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Grayscale",
+      "action": "color-mode",
+      "icon": "color-mode",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Lighten",
+      "action": "color-mode",
+      "icon": "color-mode",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Darken",
+      "action": "color-mode",
+      "icon": "color-mode",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "System",
+      "action": "theme",
+      "icon": "theme",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Dark",
+      "action": "theme",
+      "icon": "theme",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Light",
+      "action": "theme",
+      "icon": "theme",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Recent files",
+      "action": "history",
+      "icon": "history",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Theme",
+      "action": "theme",
+      "icon": "theme",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "Onion skin",
+      "action": "onion",
+      "icon": "onion-skin",
+      "locations": [
+        "dialog / panel / workflow; src/ui_icons.rs label_action"
+      ],
+      "shortcutSource": "PixelCraft.custom_shortcuts when this action has a binding; omitted otherwise"
+    },
+    {
+      "label": "play",
+      "action": "play",
+      "icons": [
+        "play",
+        "stop"
+      ],
+      "locations": [
+        "Frame menu",
+        "timeline"
+      ],
+      "shortcutSource": "live bindings for play / closetab; other state controls have no registered shortcut"
+    },
+    {
+      "label": "visibility",
+      "action": "visibility",
+      "icons": [
+        "eye",
+        "eye-off"
+      ],
+      "locations": [
+        "layer rows",
+        "reference controls"
+      ],
+      "shortcutSource": "live bindings for play / closetab; other state controls have no registered shortcut"
+    },
+    {
+      "label": "locking",
+      "action": "locking",
+      "icons": [
+        "lock",
+        "unlock"
+      ],
+      "locations": [
+        "layer rows"
+      ],
+      "shortcutSource": "live bindings for play / closetab; other state controls have no registered shortcut"
+    },
+    {
+      "label": "live permission",
+      "action": "live permission",
+      "icons": [
+        "live-on",
+        "live-off"
+      ],
+      "locations": [
+        "workflow assistant settings"
+      ],
+      "shortcutSource": "live bindings for play / closetab; other state controls have no registered shortcut"
+    },
+    {
+      "label": "document",
+      "action": "document",
+      "icons": [
+        "unsaved",
+        "close"
+      ],
+      "locations": [
+        "sprite tabs"
+      ],
+      "shortcutSource": "live bindings for play / closetab; other state controls have no registered shortcut"
+    },
+    {
+      "label": "cel",
+      "action": "cel",
+      "icons": [
+        "cel",
+        "plus"
+      ],
+      "locations": [
+        "timeline cel grid"
+      ],
+      "shortcutSource": "live bindings for play / closetab; other state controls have no registered shortcut"
+    }
+  ]
+}
