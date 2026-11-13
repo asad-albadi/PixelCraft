@@ -1308,3 +1308,78 @@ fn interaction_audit_buttons_and_switches_obey_enabled_and_keyboard_states() {
         assert!(!draw(true, vec![key_event(Key::Enter)], 0).3);
     }
 }
+
+#[test]
+fn artwork_swatch_accessibility_updates_when_selected() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(8, 8);
+    let color = [220, 30, 70, 128];
+    doc.set_pixel(0, 0, 0, color);
+    app.replace(doc, None);
+    let size = Vec2::new(264., 768.);
+    let draw = |app: &mut PixelCraft, events| {
+        let mut out = ctx.run_ui(input(size, 1., events), |ui| app.palette(ui));
+        out.textures_delta.clear();
+        out
+    };
+    let swatch = |out: &egui::FullOutput| {
+        out.platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Use #DC1E4680"))
+            .expect("artwork swatch has an accessible RGBA name")
+            .clone()
+    };
+    let (id, before) = swatch(&draw(&mut app, vec![]));
+    assert_eq!(before.toggled(), Some(egui::accesskit::Toggled::False));
+    let bounds = before.bounds().unwrap();
+    let center = Pos2::new(
+        ((bounds.x0 + bounds.x1) / 2.) as f32,
+        ((bounds.y0 + bounds.y1) / 2.) as f32,
+    );
+    let (selected_id, after) = swatch(&draw(&mut app, click(center)));
+    assert_eq!(id, selected_id);
+    assert_eq!(after.toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(app.fg, color);
+}
+
+#[test]
+fn edit_menu_history_actions_follow_active_tab_history() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("/tmp/unused-history.png")));
+    let size = Vec2::new(1180., 840.);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let edit = text_position(&mut frame(&mut app, &ctx, size, 1., vec![]), "Edit");
+    discard_frame(&mut app, &ctx, size, 1., click(edit));
+    for (undo_disabled, redo_disabled) in [(true, true), (false, true), (true, false), (true, true)]
+    {
+        let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+        out.textures_delta.clear();
+        let tree = out.platform_output.accesskit_update.as_ref().unwrap();
+        for (label, disabled) in [("Undo", undo_disabled), ("Redo", redo_disabled)] {
+            let (_, node) = tree
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some(label))
+                .unwrap();
+            assert_eq!(node.is_disabled(), disabled, "{label}");
+        }
+        match (undo_disabled, redo_disabled) {
+            (true, true) => {
+                app.remember();
+                app.doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
+            }
+            (false, true) => app.undo(),
+            (true, false) => app.open_document(Document::new(8, 8), None),
+            _ => unreachable!(),
+        }
+    }
+}

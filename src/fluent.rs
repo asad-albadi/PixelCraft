@@ -28,12 +28,34 @@ pub(super) fn install_fonts(ctx: &egui::Context) {
     );
     ctx.set_fonts(fonts);
 }
+fn paint_outline(ui: &egui::Ui, rect: Rect, radius: u8, width: f32) {
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        Stroke::new(width + 1., ui.visuals().panel_fill),
+        egui::StrokeKind::Outside,
+    );
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        Stroke::new(width, ui.visuals().text_color()),
+        egui::StrokeKind::Outside,
+    );
+}
+
+fn paint_focus(ui: &egui::Ui, response: &egui::Response, radius: u8) {
+    if response.enabled() && response.has_focus() {
+        paint_outline(ui, response.rect.expand(1.), radius, 1.5);
+    }
+}
+
 fn heading(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add_space(4.);
     let id = ui.make_persistent_id(("inspector-section", text));
     let mut expanded = ui
         .ctx()
         .data_mut(|d| d.get_persisted::<bool>(id).unwrap_or(true));
+    let background = ui.painter().add(egui::Shape::Noop);
     let row = ui.horizontal(|ui| {
         ui.label(
             RichText::new(text)
@@ -54,6 +76,21 @@ fn heading(ui: &mut egui::Ui, text: &str) -> bool {
         });
     });
     let response = ui.interact(row.response.rect, id, Sense::click());
+    if response.enabled() {
+        let fill = if response.is_pointer_button_down_on() {
+            ui.visuals()
+                .selection
+                .bg_fill
+                .lerp_to_gamma(ui.visuals().text_color(), 0.16)
+        } else if response.hovered() {
+            ui.visuals().widgets.hovered.weak_bg_fill
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter()
+            .set(background, egui::Shape::rect_filled(response.rect, 4, fill));
+    }
+    paint_focus(ui, &response, 4);
     if response.clicked() {
         expanded = !expanded;
         ui.ctx().data_mut(|d| d.insert_persisted(id, expanded));
@@ -83,7 +120,15 @@ pub(super) fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::
         } else {
             ui.visuals().widgets.noninteractive.bg_stroke.color
         };
+        let fill = if response.enabled() && response.is_pointer_button_down_on() {
+            fill.lerp_to_gamma(Color32::BLACK, 0.45)
+        } else if response.enabled() && response.hovered() {
+            fill.lerp_to_gamma(ui.visuals().text_color(), 0.24)
+        } else {
+            fill
+        };
         ui.painter().rect_filled(r.shrink(2.), 12, fill);
+        paint_focus(ui, &response, 12);
         ui.painter().circle_filled(
             Pos2::new(
                 if *value {
@@ -317,31 +362,52 @@ impl PixelCraft {
                         for (i, p) in colors.iter().enumerate() {
                             let (r, response) =
                                 ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+                            if response.clicked() {
+                                let selection_changed = self.fg != *p;
+                                self.set_drawing_color(*p);
+                                if selection_changed {
+                                    ui.ctx().request_repaint();
+                                }
+                            }
+                            let selected = *p == self.fg;
+                            let mut name = format!("Use #{:02X}{:02X}{:02X}", p[0], p[1], p[2]);
+                            if p[3] != 255 {
+                                use std::fmt::Write;
+                                let _ = write!(name, "{:02X}", p[3]);
+                            }
+                            response.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::WidgetType::SelectableLabel,
+                                    response.enabled(),
+                                    selected,
+                                    &name,
+                                )
+                            });
                             ui.painter().rect_filled(
                                 r,
                                 5,
                                 Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]),
                             );
+                            let border = if selected {
+                                Stroke::new(2., self.colors().accent)
+                            } else {
+                                Stroke::new(1., Color32::from_black_alpha(45))
+                            };
                             ui.painter().rect_stroke(
                                 r.shrink(0.5),
                                 5,
-                                Stroke::new(
-                                    if *p == self.fg { 2. } else { 1. },
-                                    if *p == self.fg {
-                                        self.colors().accent
-                                    } else {
-                                        Color32::from_black_alpha(45)
-                                    },
-                                ),
+                                border,
                                 egui::StrokeKind::Inside,
                             );
-                            if response.clicked() {
-                                self.set_drawing_color(*p);
+                            if response.enabled() {
+                                if response.is_pointer_button_down_on() {
+                                    paint_outline(ui, r, 5, 2.);
+                                } else if response.hovered() {
+                                    paint_outline(ui, r, 5, 1.);
+                                }
                             }
-                            response.on_hover_text(format!(
-                                "Use #{:02X}{:02X}{:02X}",
-                                p[0], p[1], p[2]
-                            ));
+                            paint_focus(ui, &response, 5);
+                            response.on_hover_text(name);
                             if i % 5 == 4 {
                                 ui.end_row();
                             }

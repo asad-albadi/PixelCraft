@@ -2008,7 +2008,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         } else {
                             a
                         };
-                        let response = ui_icons::button_as(ui, icon, a, label, selected, true);
+                        let enabled = match a {
+                            "undo" => !self.undo.is_empty(),
+                            "redo" => !self.redo.is_empty(),
+                            _ => true,
+                        };
+                        let response = ui
+                            .add_enabled_ui(enabled, |ui| {
+                                ui_icons::button_as(ui, icon, a, label, selected, true)
+                            })
+                            .inner;
                         if response.clicked() {
                             action = Some(a);
                             ui.close();

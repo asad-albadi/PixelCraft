@@ -30,7 +30,7 @@
 </p>
 
 <p align="center">
-  <img src="shots/pixelcraft.png" alt="PixelCraft's current interface at 1920×1080, showing sprite tabs, the compact Colors selector, dominant-color swatches, mushroom garden artwork, drawing tools and animation timeline" width="100%">
+  <img src="shots/pixelcraft.png" alt="PixelCraft's current interface at 1920×1080, showing sprite tabs, the compact Colors selector, dominant-color swatches, mushroom garden artwork, the bottom-left sprite preview, drawing tools and animation timeline" width="100%">
   <br>
   <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
 </p>
@@ -265,6 +265,8 @@ In **Workflow tools**, **Export scaling** offers 1×, 2×, 4× or a custom posit
 **Interface density & panels.** Compact is the default, with 14-point body/button text, 16-point section headings, 28-point controls, a 52-point tool rail and 30-point swatches. Dimensions are logical display units: 100% interface zoom follows the operating system's display scale. Choose **View → Density → Compact / Comfortable** (also in **Workflow tools → Interface & autosave**) to change spacing without changing text size. Your density and explicit interface zoom are remembered.
 
 Drag the inspector's right edge or the timeline's top edge to resize them; their initial sizes are 264 and 200 logical points. The inspector header’s collapse button and **View → Show / Hide inspector** collapse and restore it. When hidden, a small restore button remains at the left edge. Windows and Linux use native window decorations; the operating system handles dragging, resizing, window controls and title-bar double-click behavior. Native close requests retain the save/discard/cancel confirmation for every unsaved tab. The inspector keeps its left dock on small windows; its preview stays pinned at the bottom while colors and properties scroll above it. Secondary drawing settings move into **Drawing…** when needed. Narrow timelines keep frame/layer creation and duration settings in **Layer & frame actions**. Tool and timeline contents scroll when they exceed the available space; the canvas fills the remaining area.
+
+Custom switches, inspector section headings, and artwork swatches show hover and pressed feedback and a visible keyboard-focus outline. Artwork swatches announce their hex color and selected state to screen readers. Translucent swatches include alpha in the hex value. In the Edit menu, Undo and Redo are available when the active tab has the corresponding history.
 
 **Palette order & ramps** moves swatches by zero-based position and adds intermediate shades between existing palette endpoints. Indexed swatch moves remap indices, including the transparent slot, so existing artwork keeps its colors. Ramps append shades without changing existing slots. Palette changes can be undone; documents with differently sized frame palettes report an error instead of altering artwork. **Interface & autosave** remembers interface scale, checker size/colors and recovery autosave on/off.
 
