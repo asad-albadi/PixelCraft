@@ -1,3 +1,27 @@
+## Deep decompilation audit: Rectangle emptiness (2026-11-13)
+
+Freshly opened the original main ELF with `core_target_open`: `<workspace>/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. Session was in Deep mode. This pass audits the missing Rectangle emptiness property; whole-application equivalence remains unverified.
+
+`native_strings_find` searched names/settings/messages (`^Rectangle$|^contains$|^intersects$|^isEmpty$|^grid_bounds$|invalid_fg_or_bg`), evidence `ev_c17ca591b42840ebe3694c180dfa8c907695b87b6922ef00ff612e7bee4428c6`. A separate `color_bar|grid_bounds` search returned navigation evidence `ev_e6c0fc5aa33fbaca5ebd9bd7715ef31171718e0892076444c6cacc7c24f93db7`; neither settings nor the color validation message establishes geometry behavior.
+
+Followed Rectangle string `0xf40c0a` to registration `0x3e9d40`, whose outgoing references identify Rectangle_properties `0x1cbca40` (`ev_2b70e48bb068fb7d7ab0f327fd2e87b24855bd1f507964361fa1979f9822ad76`). Read its complete 240-byte table (`ev_a2505370802ddb1ab579bfb4b3481a4a95fcba7428c1da5bc0ed331cd38ff115`): row `0x1cbcb00` points to isEmpty string `0xf402e8`, getter pointer `0x1cbcb08` points to `0x3eaa00`, setter pointer `0x1cbcb10` is null. Pointer reference evidence: `ev_fa36f8b38a9a4cffc0f559c4463f936ac8904bfd30daad64d8f843dd27a60fff`.
+
+Requested, awaited, and read each `native_function_pseudocode` result before requesting the next:
+
+| Function | Original address | Ghidra address | Evidence |
+| --- | --- | --- | --- |
+| Rectangle_get_isEmpty | `0x3eaa00` | `0x4eaa00` | `ev_748dffcc8c9d833c76d191178ca38d856852c24adf93925dcf0be35408630483` |
+| luaL_checkudata | `0x52f380` | `0x62f380` | `ev_26e38daba8af6283538d094338c23eeae1e9fd122311de98eae125eb9f15f5e3` |
+| lua_pushboolean | `0x53f500` | `0x63f500` | `ev_d4ceb2bb003686f87a57743bcb21297e12525415ee468acd06413a7a0e00ff28` |
+
+Ghidra 12.1.4 incorrectly propagates a nonreturning annotation through lua_settop/luaL_checkudata, truncating the getter's pseudo-C. It does not alone prove emptiness behavior. Followed the getter's outgoing references and read all 16 assembly instructions, evidence `ev_01f2763777a373493e198c134b2a604fe7c7a03b4f0a13f6fc9643c0c79b9c8c`. Two signed comparisons at `0x3eaa15` and `0x3eaa1c` test int32 fields at offsets 8 and 12 against zero; SETLE results are ORed, pushed as one boolean, and one Lua value is returned.
+
+Recovered formula: `Rectangle.isEmpty = (stored_width <= 0) or (stored_height <= 0)`. Position is irrelevant; negative dimensions count as empty; no multiplication, area test, extent normalization, or canvas clipping occurs. The property reads current fields after the signed32 conversion rules audited below. Positive 1×1 is nonempty. Zero on either axis or a negative extent is empty. Setter absence makes this a computed read-only property; the reconstruction's error wording is local and has not been matched to the original dispatcher.
+
+Changed `src/lua_api.lua` to compute the property from private canonical fields and reject assignment. `tests/native_rectangle_empty.rs` exercises actual embedded Lua, distinguishing missing/false/true values and checking zero, negative, position independence, mutation and signed32 wrapping. The test failed before correction because positive extents returned nil. Raw completed decompilations, registration table and assembly are retained in [rectangle_empty.json](evidence/rectangle_empty.json). Wider Rectangle methods and native userdata identity remain outside this pass.
+
+Validation: the focused regression failed before correction and passed afterward (logs `checks/native-rectangle-empty-red.log` and `checks/native-rectangle-empty-green.log`). The first full test attempt failed in `tests::native_assets_apply_inside_workshop_and_shortcuts_remain_local` because the sandbox made the default user preferences directory read-only. Reran the complete suite with `PIXELCRAFT_HOME=/tmp/pixelcraft-rectangle-empty`; 251 tests passed, zero failed, 4 existing tests ignored. Full log: `checks/native-rectangle-empty-tests.log`. `cargo fmt --check`, `cargo clippy --offline --locked --all-targets -- -D warnings` and `cargo build --offline --locked` passed. Craft Anything `rebuild_check` passed build and startup/render (938×990); screenshot visually inspected. Report: `checks/native-rectangle-empty-rebuild-check.json`. Mechanics sheet readability passed, but runtime comparison with the original and broader file/extension ecosystem compatibility remain unverified.
+
 ## Deep decompilation audit: Size and Rectangle equality (2026-11-12)
 
 Freshly opened the original main ELF with `core_target_open`: `<workspace>/work/aseprite-install/build/bin/aseprite`, SHA-256 `01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6`. `core_session_show` confirmed Deep mode. This is a bounded audit of two additional scripting mechanics; it does not establish whole-application parity.

@@ -12,6 +12,7 @@ struct Preferences {
     onion: OnionOptions,
     preset: String,
     interface_scale: f32,
+    comfortable: bool,
     checker_size: usize,
     checker_colors: Option<[[u8; 3]; 2]>,
     autosave: bool,
@@ -24,6 +25,7 @@ impl Default for Preferences {
             onion: OnionOptions::default(),
             preset: String::new(),
             interface_scale: 1.,
+            comfortable: false,
             checker_size: 8,
             checker_colors: None,
             autosave: true,
@@ -98,6 +100,29 @@ impl Default for PowerTools {
     }
 }
 impl PowerTools {
+    pub(super) fn comfortable(&self) -> bool {
+        self.preferences.comfortable
+    }
+    pub(super) fn apply_density(&self, ctx: &egui::Context) {
+        let (height, padding, spacing) = if self.comfortable() {
+            (32., Vec2::new(8., 5.), Vec2::new(6., 5.))
+        } else {
+            (28., Vec2::new(6., 3.), Vec2::new(4., 3.))
+        };
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let style = ctx.style_of(theme);
+            if style.spacing.interact_size.y != height
+                || style.spacing.button_padding != padding
+                || style.spacing.item_spacing != spacing
+            {
+                let mut style = (*style).clone();
+                style.spacing.interact_size.y = height;
+                style.spacing.button_padding = padding;
+                style.spacing.item_spacing = spacing;
+                ctx.set_style_of(theme, style);
+            }
+        }
+    }
     pub(super) fn interface_scale(&self) -> f32 {
         self.preferences.interface_scale.clamp(0.5, 3.)
     }
@@ -132,11 +157,25 @@ impl PixelCraft {
         });
         ui.small("Nearest-neighbor scaling for PNG, BMP and sprite sheets.");
     }
+    pub(super) fn density_options(&mut self, ui: &mut egui::Ui) {
+        let before = self.power.preferences.comfortable;
+        ui.selectable_value(&mut self.power.preferences.comfortable, false, "Compact");
+        ui.selectable_value(&mut self.power.preferences.comfortable, true, "Comfortable");
+        if before != self.power.preferences.comfortable {
+            self.save_workflow_preferences();
+        }
+    }
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Export scaling", |ui| self.export_scale_ui(ui));
         ui.collapsing("Interface & autosave", |ui| {
             let before = serde_json::to_value(&self.power.preferences).ok();
             let p = &mut self.power.preferences;
+            ui.horizontal(|ui| {
+                ui.label("Density");
+                ui.selectable_value(&mut p.comfortable, false, "Compact");
+                ui.selectable_value(&mut p.comfortable, true, "Comfortable");
+            });
+            ui.label("100% interface zoom follows system display scaling.");
             ui.add(egui::Slider::new(&mut p.interface_scale, 0.5..=3.).text("Interface scale"));
             ui.add(
                 egui::DragValue::new(&mut p.checker_size)
@@ -481,7 +520,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     pub(super) fn brush_mode_ui(&mut self, ui: &mut egui::Ui) {
         egui::ComboBox::from_id_salt(ui.id().with("brush-mode"))
             .selected_text(format!("{:?}", self.power.mode))
-            .width(90.)
+            .width(126.)
             .show_ui(ui, |ui| {
                 for mode in [
                     BrushMode::Normal,
@@ -970,5 +1009,31 @@ mod reference_drag_regressions {
                 assert_eq!((r.x, r.y), (12.5, 7.5));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::*;
+    #[test]
+    fn density_preferences_migrate_and_comfortable_keeps_readable_type() {
+        let old: Preferences = serde_json::from_str(r#"{"interface_scale":1.0}"#).unwrap();
+        assert!(!old.comfortable);
+        assert_eq!(old.interface_scale, 1.);
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.power.preferences.comfortable = true;
+        let bytes = serde_json::to_vec(&app.power.preferences).unwrap();
+        assert!(
+            serde_json::from_slice::<Preferences>(&bytes)
+                .unwrap()
+                .comfortable
+        );
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.render(ui);
+            assert_eq!(ui.spacing().interact_size.y, 32.);
+            assert_eq!(ui.style().text_styles[&egui::TextStyle::Body].size, 14.);
+        });
+        out.textures_delta.clear();
     }
 }

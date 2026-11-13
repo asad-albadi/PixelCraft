@@ -237,6 +237,7 @@ impl PixelCraft {
                     self.layer = t.layer;
                     self.frame = t.frame;
                     self.zoom = t.zoom;
+                    self.initial_view = 0;
                     self.pan = t.pan;
                     self.selection = t.selection;
                     self.studio.mask = t.mask;

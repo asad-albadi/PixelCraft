@@ -1,0 +1,636 @@
+[
+  {
+    "kind": "strings",
+    "result": {
+      "authority": "original-files",
+      "confidence": "observed",
+      "coverage": {
+        "examined": 5,
+        "status": "complete",
+        "total": 5
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "builtin",
+        "engine_version": "0.6.1",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_c17ca591b42840ebe3694c180dfa8c907695b87b6922ef00ff612e7bee4428c6",
+      "limitations": [
+        {
+          "code": "data_sections_only",
+          "message": "only strings stored in the file are searched (absence is not proof)"
+        }
+      ],
+      "links": [],
+      "locations": [],
+      "operation": "native_strings_find",
+      "params": {
+        "case_sensitive": false,
+        "limit": 40,
+        "mode": "regex",
+        "offset": 0,
+        "pattern": "^Rectangle$|^contains$|^intersects$|^isEmpty$|^grid_bounds$|invalid_fg_or_bg"
+      },
+      "result": {
+        "matches": [
+          {
+            "address": "0xf3976b",
+            "references": [
+              {
+                "from": "0x28ef42",
+                "function": "_ZN3app16create_tool_loopEPNS_6EditorEPNS_7ContextENS_5tools7Pointer6ButtonEbb"
+              }
+            ],
+            "section": ".rodata",
+            "text": "alerts.invalid_fg_or_bg_colors"
+          },
+          {
+            "address": "0xf402e8",
+            "references": [
+              {
+                "from": "0x5ecc8",
+                "function": null
+              },
+              {
+                "from": "0x60cd8",
+                "function": null
+              },
+              {
+                "from": "0x612f0",
+                "function": null
+              },
+              {
+                "from": "0x61ab8",
+                "function": null
+              },
+              {
+                "from": "0x1cbbac0",
+                "function": null
+              },
+              {
+                "from": "0x1cbc8b0",
+                "function": null
+              },
+              {
+                "from": "0x1cbcb00",
+                "function": null
+              },
+              {
+                "from": "0x1cbce10",
+                "function": null
+              }
+            ],
+            "section": ".rodata",
+            "text": "isEmpty"
+          },
+          {
+            "address": "0xf40bcd",
+            "references": [
+              {
+                "from": "0x60bb8",
+                "function": null
+              },
+              {
+                "from": "0x60ff0",
+                "function": null
+              },
+              {
+                "from": "0x619b0",
+                "function": null
+              },
+              {
+                "from": "0x1cbc830",
+                "function": null
+              },
+              {
+                "from": "0x1cbc9f0",
+                "function": null
+              },
+              {
+                "from": "0x1cbcda0",
+                "function": null
+              }
+            ],
+            "section": ".rodata",
+            "text": "contains"
+          },
+          {
+            "address": "0xf40c0a",
+            "references": [
+              {
+                "from": "0x3e9dcb",
+                "function": "_ZN3app6script19register_rect_classEP9lua_State"
+              }
+            ],
+            "section": ".rodata",
+            "text": "Rectangle"
+          },
+          {
+            "address": "0xf40c21",
+            "references": [
+              {
+                "from": "0x61020",
+                "function": null
+              },
+              {
+                "from": "0x1cbca00",
+                "function": null
+              }
+            ],
+            "section": ".rodata",
+            "text": "intersects"
+          }
+        ],
+        "total": 5
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "5 strings match \"^Rectangle$|^contains$|^intersects$|^isEmpty$|^grid_bounds$|invalid_fg_or_bg\"."
+    }
+  },
+  {
+    "kind": "registration_refs",
+    "result": {
+      "authority": "original-files",
+      "confidence": "derived",
+      "coverage": {
+        "examined": 21,
+        "status": "complete",
+        "total": 21
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "builtin",
+        "engine_version": "0.6.1",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_2b70e48bb068fb7d7ab0f327fd2e87b24855bd1f507964361fa1979f9822ad76",
+      "limitations": [],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x3e9d40"
+        }
+      ],
+      "operation": "native_function_references_list",
+      "params": {
+        "direction": "outgoing",
+        "function": "0x3e9d40"
+      },
+      "result": {
+        "direction": "outgoing",
+        "entry": "0x3e9d40",
+        "function": "_ZN3app6script19register_rect_classEP9lua_State",
+        "references": [
+          {
+            "from": "0x3e9d47",
+            "kind": "string",
+            "name": null,
+            "to": "0xf40c00"
+          },
+          {
+            "from": "0x3e9d51",
+            "kind": "call",
+            "name": "_Z17luaL_newmetatableP9lua_StatePKc",
+            "to": "0x52f250"
+          },
+          {
+            "from": "0x3e9d56",
+            "kind": "string",
+            "name": null,
+            "to": "0xf3fb57"
+          },
+          {
+            "from": "0x3e9d60",
+            "kind": "call",
+            "name": "_Z13lua_getglobalP9lua_StatePKc",
+            "to": "0x53f570"
+          },
+          {
+            "from": "0x3e9d65",
+            "kind": "string",
+            "name": null,
+            "to": "0xf3fb6a"
+          },
+          {
+            "from": "0x3e9d74",
+            "kind": "call",
+            "name": "_Z12lua_setfieldP9lua_StateiPKc",
+            "to": "0x540090"
+          },
+          {
+            "from": "0x3e9d79",
+            "kind": "string",
+            "name": null,
+            "to": "0xf3fb72"
+          },
+          {
+            "from": "0x3e9d83",
+            "kind": "call",
+            "name": "_Z13lua_getglobalP9lua_StatePKc",
+            "to": "0x53f570"
+          },
+          {
+            "from": "0x3e9d88",
+            "kind": "string",
+            "name": null,
+            "to": "0xf3fb88"
+          },
+          {
+            "from": "0x3e9d97",
+            "kind": "call",
+            "name": "_Z12lua_setfieldP9lua_StateiPKc",
+            "to": "0x540090"
+          },
+          {
+            "from": "0x3e9d9c",
+            "kind": "data",
+            "name": "_ZN3app6script12_GLOBAL__N_117Rectangle_methodsE",
+            "to": "0x1cbc9a0"
+          },
+          {
+            "from": "0x3e9da8",
+            "kind": "call",
+            "name": "_Z13luaL_setfuncsP9lua_StatePK8luaL_Regi",
+            "to": "0x530520"
+          },
+          {
+            "from": "0x3e9db5",
+            "kind": "call",
+            "name": "_Z10lua_settopP9lua_Statei",
+            "to": "0x53de60"
+          },
+          {
+            "from": "0x3e9dba",
+            "kind": "data",
+            "name": "_ZN3app6script12_GLOBAL__N_113Rectangle_newEP9lua_State",
+            "to": "0x3e9e10"
+          },
+          {
+            "from": "0x3e9dc6",
+            "kind": "call",
+            "name": "_Z16lua_pushcclosureP9lua_StatePFiS0_Ei",
+            "to": "0x53f410"
+          },
+          {
+            "from": "0x3e9dcb",
+            "kind": "string",
+            "name": null,
+            "to": "0xf40c0a"
+          },
+          {
+            "from": "0x3e9dd5",
+            "kind": "call",
+            "name": "_Z13lua_setglobalP9lua_StatePKc",
+            "to": "0x53fe80"
+          },
+          {
+            "from": "0x3e9de5",
+            "kind": "call",
+            "name": "_Z12lua_getfieldP9lua_StateiPKc",
+            "to": "0x53f710"
+          },
+          {
+            "from": "0x3e9dea",
+            "kind": "data",
+            "name": "_ZN3app6script12_GLOBAL__N_120Rectangle_propertiesE",
+            "to": "0x1cbca40"
+          },
+          {
+            "from": "0x3e9df7",
+            "kind": "call",
+            "name": "_ZN3app6script25create_mt_getters_settersEP9lua_StatePKcPKNS0_8PropertyE",
+            "to": "0x3e0720"
+          },
+          {
+            "from": "0x3e9e0b",
+            "kind": "jump",
+            "name": "_Z10lua_settopP9lua_Statei",
+            "to": "0x53de60"
+          }
+        ]
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "21 outgoing references for _ZN3app6script19register_rect_classEP9lua_State."
+    }
+  },
+  {
+    "kind": "properties",
+    "result": {
+      "authority": "original-files",
+      "confidence": "observed",
+      "coverage": {
+        "examined": 240,
+        "status": "complete",
+        "total": 240
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "builtin",
+        "engine_version": "0.6.1",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_a2505370802ddb1ab579bfb4b3481a4a95fcba7428c1da5bc0ed331cd38ff115",
+      "limitations": [],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x1cbca40"
+        }
+      ],
+      "operation": "native_bytes_show",
+      "params": {
+        "address": "0x1cbca40",
+        "length": 240
+      },
+      "result": {
+        "address": "0x1cbca40",
+        "ascii": ".-........>.......>...............>.....@.>...............>.......>......!........>..... .>.....&.........>.......>.....9.........>..... .>.....O.......`.>.......>.....*!......0.>.......>...............>.....................................",
+        "file_offset": 30132800,
+        "hex": "e12df60000000000a0a63e0000000000d0a63e0000000000c385f5000000000010a73e000000000040a73e00000000000986f5000000000080a73e0000000000b0a73e0000000000ce21f60000000000f0a73e000000000020a83e0000000000260cf6000000000080a73e0000000000b0a73e0000000000390cf60000000000f0a73e000000000020a83e00000000004f9ef3000000000060a83e0000000000c0a83e00000000002a21f7000000000030a93e000000000090a93e0000000000e802f4000000000000aa3e00000000000000000000000000000000000000000000000000000000000000000000000000",
+        "length": 240
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "240 bytes at 0x1cbca40."
+    }
+  },
+  {
+    "kind": "isEmpty_pseudocode",
+    "result": {
+      "authority": "original-files",
+      "carries_target_content": true,
+      "confidence": "derived",
+      "coverage": {
+        "status": "unknown"
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "ghidra",
+        "engine_version": "12.1.4",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_748dffcc8c9d833c76d191178ca38d856852c24adf93925dcf0be35408630483",
+      "limitations": [
+        {
+          "code": "deep_engine",
+          "message": "the pseudo-C comes from the external Deep engine (Ghidra), not the original source"
+        },
+        {
+          "code": "engine_rebased",
+          "message": "Ghidra loaded this program at 0x100000, not where the built-in engine reads it (0x0); entry is the built-in address, engine_entry Ghidra's, and the addresses in Ghidra's names inside the pseudo-C (FUN_…, DAT_…) are Ghidra's"
+        }
+      ],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x3eaa00"
+        }
+      ],
+      "operation": "native_function_pseudocode",
+      "params": {
+        "function": "0x3eaa00"
+      },
+      "result": {
+        "engine": "ghidra",
+        "engine_entry": "0x4eaa00",
+        "entry": "0x3eaa00",
+        "function": "Rectangle_get_isEmpty",
+        "pseudo_code": "\n/* app::script::(anonymous namespace)::Rectangle_get_isEmpty(lua_State*) */\n\nvoid app::script::(anonymous_namespace)::Rectangle_get_isEmpty(lua_State *param_1)\n\n{\n                    /* WARNING: Subroutine does not return */\n                    /* try { // try from 004eaa12 to 005eaa1e has its CatchHandler @ 004fda1d */\n  luaL_checkudata(param_1,1,\"gfx::Rect\");\n}\n\n",
+        "signature": "void app::script::(anonymous_namespace)::Rectangle_get_isEmpty(lua_State *param_1);"
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "Pseudo-C for Rectangle_get_isEmpty from the Deep engine (11 lines)."
+    }
+  },
+  {
+    "kind": "isEmpty_assembly",
+    "result": {
+      "authority": "original-files",
+      "confidence": "observed",
+      "coverage": {
+        "examined": 16,
+        "status": "complete",
+        "total": 16
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "builtin",
+        "engine_version": "0.6.1",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_01f2763777a373493e198c134b2a604fe7c7a03b4f0a13f6fc9643c0c79b9c8c",
+      "limitations": [],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x3eaa00"
+        }
+      ],
+      "operation": "native_function_disassemble",
+      "params": {
+        "function": "0x3eaa00"
+      },
+      "result": {
+        "assembly": "_ZN3app6script12_GLOBAL__N_121Rectangle_get_isEmptyEP9lua_State:\n  0x3eaa00  53                   push rbx\n  0x3eaa01  4889fb               mov rbx, rdi\n  0x3eaa04  488d15f561b500       lea rdx, [0xf40c00]  ; \"gfx::\"\n  0x3eaa0b  be01000000           mov esi, 1\n  0x3eaa10  e86b491400           call 0x52f380  ; _Z15luaL_checkudataP9lua_StateiPKc\n  0x3eaa15  83780800             cmp dword ptr [rax+8], 0\n  0x3eaa19  0f9ec1               setle cl\n  0x3eaa1c  83780c00             cmp dword ptr [rax+0xc], 0\n  0x3eaa20  0f9ec0               setle al\n  0x3eaa23  08c8                 or al, cl\n  0x3eaa25  0fb6f0               movzx esi, al\n  0x3eaa28  4889df               mov rdi, rbx\n  0x3eaa2b  e8d04a1500           call 0x53f500  ; _Z15lua_pushbooleanP9lua_Statei\n  0x3eaa30  b801000000           mov eax, 1\n  0x3eaa35  5b                   pop rbx\n  0x3eaa36  c3                   ret\n",
+        "entry": "0x3eaa00",
+        "function": "_ZN3app6script12_GLOBAL__N_121Rectangle_get_isEmptyEP9lua_State",
+        "instructions": 16
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "16 instructions of _ZN3app6script12_GLOBAL__N_121Rectangle_get_isEmptyEP9lua_State."
+    }
+  },
+  {
+    "kind": "isEmpty_refs",
+    "result": {
+      "authority": "original-files",
+      "confidence": "derived",
+      "coverage": {
+        "examined": 3,
+        "status": "complete",
+        "total": 3
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "builtin",
+        "engine_version": "0.6.1",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_5c16afa34436bd2a40db92bb00f0ae10a3c46398d4a4ef1f61c54deab96cf9dc",
+      "limitations": [],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x3eaa00"
+        }
+      ],
+      "operation": "native_function_references_list",
+      "params": {
+        "direction": "outgoing",
+        "function": "0x3eaa00"
+      },
+      "result": {
+        "direction": "outgoing",
+        "entry": "0x3eaa00",
+        "function": "_ZN3app6script12_GLOBAL__N_121Rectangle_get_isEmptyEP9lua_State",
+        "references": [
+          {
+            "from": "0x3eaa04",
+            "kind": "string",
+            "name": null,
+            "to": "0xf40c00"
+          },
+          {
+            "from": "0x3eaa10",
+            "kind": "call",
+            "name": "_Z15luaL_checkudataP9lua_StateiPKc",
+            "to": "0x52f380"
+          },
+          {
+            "from": "0x3eaa2b",
+            "kind": "call",
+            "name": "_Z15lua_pushbooleanP9lua_Statei",
+            "to": "0x53f500"
+          }
+        ]
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "3 outgoing references for _ZN3app6script12_GLOBAL__N_121Rectangle_get_isEmptyEP9lua_State."
+    }
+  },
+  {
+    "kind": "checkudata_pseudocode",
+    "result": {
+      "authority": "original-files",
+      "carries_target_content": true,
+      "confidence": "derived",
+      "coverage": {
+        "status": "unknown"
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "ghidra",
+        "engine_version": "12.1.4",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_26e38daba8af6283538d094338c23eeae1e9fd122311de98eae125eb9f15f5e3",
+      "limitations": [
+        {
+          "code": "deep_engine",
+          "message": "the pseudo-C comes from the external Deep engine (Ghidra), not the original source"
+        },
+        {
+          "code": "engine_rebased",
+          "message": "Ghidra loaded this program at 0x100000, not where the built-in engine reads it (0x0); entry is the built-in address, engine_entry Ghidra's, and the addresses in Ghidra's names inside the pseudo-C (FUN_…, DAT_…) are Ghidra's"
+        }
+      ],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x52f380"
+        }
+      ],
+      "operation": "native_function_pseudocode",
+      "params": {
+        "function": "0x52f380"
+      },
+      "result": {
+        "engine": "ghidra",
+        "engine_entry": "0x62f380",
+        "entry": "0x52f380",
+        "function": "luaL_checkudata",
+        "pseudo_code": "\n/* luaL_checkudata(lua_State*, int, char const*) */\n\nundefined8 luaL_checkudata(lua_State *param_1,int param_2,char *param_3)\n\n{\n  int iVar1;\n  long lVar2;\n  \n  lVar2 = lua_touserdata(param_1,param_2);\n  if (lVar2 != 0) {\n                    /* try { // try from 0062f39a to 0072f3ab has its CatchHandler @ 0062f427 */\n    iVar1 = lua_getmetatable(param_1,param_2);\n    if (iVar1 != 0) {\n                    /* try { // try from 0062f3af to 0072f3e3 has its CatchHandler @ 0062f3e4 */\n      lua_getfield(param_1,-0xf4628,param_3);\n      lua_rawequal(param_1,-1,-2);\n                    /* WARNING: Subroutine does not return */\n      lua_settop(param_1,-3);\n    }\n  }\n                    /* try { // try from 0062f3e4 to 0072f446 has its CatchHandler @ 0062f330 */\n  luaL_typeerror(param_1,param_2,param_3);\n  return 0;\n}\n\n",
+        "signature": "undefined8 luaL_checkudata(lua_State *param_1,int param_2,char *param_3);"
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "Pseudo-C for luaL_checkudata from the Deep engine (26 lines)."
+    }
+  },
+  {
+    "kind": "pushboolean_pseudocode",
+    "result": {
+      "authority": "original-files",
+      "carries_target_content": true,
+      "confidence": "derived",
+      "coverage": {
+        "status": "unknown"
+      },
+      "environment": {
+        "clean_room": false,
+        "engine": "ghidra",
+        "engine_version": "12.1.4",
+        "host": "linux-x86_64"
+      },
+      "id": "ev_d4ceb2bb003686f87a57743bcb21297e12525415ee468acd06413a7a0e00ff28",
+      "limitations": [
+        {
+          "code": "deep_engine",
+          "message": "the pseudo-C comes from the external Deep engine (Ghidra), not the original source"
+        },
+        {
+          "code": "engine_rebased",
+          "message": "Ghidra loaded this program at 0x100000, not where the built-in engine reads it (0x0); entry is the built-in address, engine_entry Ghidra's, and the addresses in Ghidra's names inside the pseudo-C (FUN_…, DAT_…) are Ghidra's"
+        }
+      ],
+      "links": [],
+      "locations": [
+        {
+          "kind": "address",
+          "value": "0x53f500"
+        }
+      ],
+      "operation": "native_function_pseudocode",
+      "params": {
+        "function": "0x53f500"
+      },
+      "result": {
+        "engine": "ghidra",
+        "engine_entry": "0x63f500",
+        "entry": "0x53f500",
+        "function": "lua_pushboolean",
+        "pseudo_code": "\n/* lua_pushboolean(lua_State*, int) */\n\nvoid lua_pushboolean(lua_State *param_1,int param_2)\n\n{\n  *(char *)(*(long *)(param_1 + 0x10) + 8) = (param_2 != 0) * '\\x10' + '\\x01';\n  *(long *)(param_1 + 0x10) = *(long *)(param_1 + 0x10) + 0x10;\n  return;\n}\n\n",
+        "signature": "void lua_pushboolean(lua_State *param_1,int param_2);"
+      },
+      "subject": {
+        "kind": "elf",
+        "name": "aseprite",
+        "sha256": "01841505e2dbef652d51380bcac03aba1188b9462f92ea3bac6d87630a7234e6"
+      },
+      "summary": "Pseudo-C for lua_pushboolean from the Deep engine (11 lines)."
+    }
+  }
+]

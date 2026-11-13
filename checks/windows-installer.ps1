@@ -28,7 +28,7 @@ try {
     foreach ($dll in @('libwebpdemux.dll', 'libwebp.dll', 'libsharpyuv.dll')) {
         if (!(Test-Path (Join-Path $installDir $dll))) { throw "Missing WebP runtime: $dll" }
     }
-    foreach ($notice in @('LICENSE', 'LUA-LICENSE.txt', 'WEBP-COPYING.txt', 'WEBP-PATENTS.txt', 'WEBP-AUTHORS.txt')) {
+    foreach ($notice in @('LICENSE', 'FONT-LICENSE.txt', 'LUA-LICENSE.txt', 'WEBP-COPYING.txt', 'WEBP-PATENTS.txt', 'WEBP-AUTHORS.txt')) {
         if (!(Test-Path (Join-Path $installDir $notice))) { throw "Missing license: $notice" }
     }
     # Exclude build tools and their DLLs from PATH/current directory. WebP must

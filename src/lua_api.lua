@@ -276,9 +276,14 @@ function Rectangle(x,y,w,h)
  local result=setmetatable({}, {
   __name='Rectangle',
   __eq=rectangleEqual,
-  __index=fields,
+  __index=function(_,k)
+   -- Rectangle_get_isEmpty 0x3eaa00 tests signed width/height, not area.
+   if k=='isEmpty' then return fields.width<=0 or fields.height<=0 end
+   return fields[k]
+  end,
   __newindex=function(t,k,v)
    if k=='x' or k=='y' or k=='width' or k=='height' then fields[k]=colorInteger(v)
+   elseif k=='isEmpty' then error('Rectangle.isEmpty is read-only')
    else rawset(t,k,v) end
   end,
   __pairs=function() return next,fields,nil end

@@ -40,8 +40,7 @@ fn dominant_swatch_click_preserves_saved_named_colors() {
         .iter()
         .find_map(|shape| match &shape.shape {
             egui::epaint::Shape::Rect(rect)
-                if rect.fill == Color32::from_rgb(220, 30, 70)
-                    && rect.rect.size() == Vec2::splat(27.) =>
+                if rect.fill == Color32::from_rgb(220, 30, 70) && rect.rect.width() < 80. =>
             {
                 Some(rect.rect.center())
             }
@@ -206,9 +205,10 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
         ("dark", 1., "editor", 1920.),
         ("light", 1., "editor", 1920.),
         ("dark", 1.5, "editor", 1180.),
-        ("light", 1.5, "editor", 1180.),
+        ("light", 1.25, "editor", 1536.),
+        ("light", 1.5, "editor", 1280.),
         ("dark", 2., "editor", 1180.),
-        ("light", 2., "editor", 1180.),
+        ("light", 2., "editor", 960.),
         ("dark", 1., "tabs", 800.),
         ("light", 2., "tabs", 800.),
         ("dark", 1., "file", 1180.),
@@ -220,6 +220,16 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
         ("dark", 1., "dialog", 1180.),
         ("light", 1., "dialog", 1180.),
         ("custom", 1.5, "editor", 1180.),
+        ("light", 1., "matrix-768", 1366.),
+        ("light", 1.25, "matrix-768", 1366.),
+        ("light", 1.5, "matrix-768", 1366.),
+        ("light", 1.75, "matrix-768", 1366.),
+        ("light", 2., "matrix-768", 1366.),
+        ("light", 1., "matrix-1080", 1920.),
+        ("light", 1.25, "matrix-1080", 1920.),
+        ("light", 1.5, "matrix-1080", 1920.),
+        ("light", 1.75, "matrix-1080", 1920.),
+        ("light", 2., "matrix-1080", 1920.),
     ] {
         let ctx = egui::Context::default();
         let mut a =
@@ -231,7 +241,22 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
                 &json!({"panel":[25,28,41],"text":[252,224,173],"accent":[83,63,122]}),
             );
         }
-        let size = Vec2::new(width, if width > 1800. { 1080. } else { 840. });
+        let size = Vec2::new(
+            if scene.starts_with("matrix") {
+                width / scale
+            } else {
+                width
+            },
+            if scene == "matrix-768" {
+                768. / scale
+            } else if scene == "matrix-1080" || (scene == "editor" && theme == "light") {
+                1080. / scale
+            } else if width > 1800. {
+                1080.
+            } else {
+                840.
+            },
+        );
         if scene == "tabs" {
             a.path = Some(PathBuf::from("Garden.pixel"));
             a.open_document(Document::new(16,16),Some(PathBuf::from("A very long sprite filename that must truncate without covering its close button.pixel")));
@@ -251,12 +276,12 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
             let events = if step == 3 {
                 let x = match scene {
                     "file" => 20.,
-                    "edit" => 55.,
-                    "frame" => 190.,
+                    "edit" => 85.,
+                    "frame" => 290.,
                     _ => -100.,
                 };
                 if x > 0. {
-                    click(Pos2::new(x, 15.))
+                    click(Pos2::new(x, 58.))
                 } else {
                     vec![]
                 }
@@ -293,6 +318,25 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
             last = Some(out);
         }
         let out = last.unwrap();
+        if scene.starts_with("matrix") {
+            let screen = Rect::from_min_size(Pos2::ZERO, size);
+            for action in ["pencil", "fit", "closetab", "prev", "next"] {
+                let rect = ctx
+                    .data(|d| d.get_temp::<Rect>(egui::Id::new(("ui-icon-test-target", action))))
+                    .unwrap();
+                assert!(
+                    screen.contains_rect(rect),
+                    "{action} outside {scene} at {scale}: {rect:?}"
+                );
+            }
+            let (_, cell, clip, _) = timeline_cell(&ctx, 2, 0);
+            assert!(
+                clip.contains_rect(cell),
+                "Timeline cell clipped at {scene} {scale}: {cell:?} in {clip:?}"
+            );
+            assert_eq!(ctx.zoom_factor(), 1.);
+            assert_eq!(out.pixels_per_point, scale);
+        }
         let primitives = ctx.tessellate(out.shapes, out.pixels_per_point);
         assert!(primitives.iter().any(|p| matches!(&p.primitive,egui::epaint::Primitive::Mesh(m) if m.texture_id!=egui::TextureId::default())));
         if let Some(dir) = &directory {
@@ -710,4 +754,158 @@ fn tool_has_one_tooltip_using_current_command_binding() {
             baseline.iter().filter(|s| s.starts_with("Pencil")).count() + 1
         );
     }
+}
+
+#[test]
+fn compact_density_is_default_at_all_window_sizes() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    for size in [Vec2::new(1366., 768.), Vec2::new(1920., 1080.)] {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        assert_eq!(
+            ctx.style_of(ctx.theme()).text_styles[&egui::TextStyle::Body].size,
+            14.
+        );
+        assert_eq!(
+            ctx.style_of(ctx.theme()).text_styles[&egui::TextStyle::Button].size,
+            14.
+        );
+        assert_eq!(ctx.zoom_factor(), 1.);
+    }
+}
+
+fn layout_rect(ctx: &egui::Context, name: &str) -> Rect {
+    ctx.data(|d| d.get_temp(egui::Id::new(name))).unwrap()
+}
+fn drag_layout(app: &mut PixelCraft, ctx: &egui::Context, size: Vec2, from: Pos2, to: Pos2) {
+    discard_frame(app, ctx, size, 1., vec![egui::Event::PointerMoved(from)]);
+    discard_frame(
+        app,
+        ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Default::default(),
+        }],
+    );
+    discard_frame(app, ctx, size, 1., vec![egui::Event::PointerMoved(to)]);
+    discard_frame(
+        app,
+        ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        }],
+    );
+    discard_frame(app, ctx, size, 1., vec![]);
+}
+#[test]
+fn panels_resize_in_both_directions_and_inspector_collapses() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("/tmp/unused-density.png")));
+    let size = Vec2::new(1366., 768.);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let inspector = layout_rect(&ctx, "inspector-bounds");
+    let timeline = layout_rect(&ctx, "timeline-bounds");
+    assert!((250.0..=280.).contains(&inspector.width()), "{inspector:?}");
+    assert!((180.0..=220.).contains(&timeline.height()), "{timeline:?}");
+    drag_layout(
+        &mut app,
+        &ctx,
+        size,
+        inspector.right_center() - Vec2::new(2., 0.),
+        inspector.right_center() + Vec2::new(60., 0.),
+    );
+    assert!(layout_rect(&ctx, "inspector-bounds").width() > inspector.width() + 40.);
+    let from = timeline.center_top() + Vec2::new(0., 2.);
+    drag_layout(&mut app, &ctx, size, from, from - Vec2::new(0., 70.));
+    let taller = layout_rect(&ctx, "timeline-bounds");
+    assert!(taller.height() > timeline.height() + 40.);
+    drag_layout(
+        &mut app,
+        &ctx,
+        size,
+        taller.center_top() + Vec2::new(0., 2.),
+        taller.center_top() + Vec2::new(0., 110.),
+    );
+    assert!(layout_rect(&ctx, "timeline-bounds").height() < timeline.height() - 20.);
+    let old_canvas = layout_rect(&ctx, "canvas-bounds");
+    let toggle = layout_rect(&ctx, "inspector-toggle");
+    discard_frame(&mut app, &ctx, size, 1., click(toggle.center()));
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    assert!(!app.inspector_open);
+    assert!(layout_rect(&ctx, "canvas-bounds").width() > old_canvas.width() + 200.);
+    discard_frame(&mut app, &ctx, size, 1., click(toggle.center()));
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    assert!(app.inspector_open);
+    assert!(layout_rect(&ctx, "inspector-bounds").width() > inspector.width() + 40.);
+    // Small windows keep the same dock position; only an explicit toggle hides it.
+    let small = Vec2::new(683., 384.);
+    discard_frame(&mut app, &ctx, small, 2., vec![]);
+    let toggle = layout_rect(&ctx, "inspector-toggle");
+    discard_frame(&mut app, &ctx, small, 2., click(toggle.center()));
+    assert!(!app.inspector_open);
+    discard_frame(&mut app, &ctx, small, 2., click(toggle.center()));
+    discard_frame(&mut app, &ctx, small, 2., vec![]);
+    assert!(app.inspector_open);
+    assert!(layout_rect(&ctx, "inspector-bounds").left() < 2.);
+}
+
+#[test]
+fn preview_stays_docked_bottom_left_at_normal_and_small_window_sizes() {
+    for size in [
+        Vec2::new(1366., 768.),
+        Vec2::new(1920., 1080.),
+        Vec2::new(683., 384.),
+    ] {
+        let ctx = egui::Context::default();
+        let mut app =
+            PixelCraft::with_context(&ctx, Some(PathBuf::from("/tmp/preview-layout-check.png")));
+        for _ in 0..3 {
+            discard_frame(&mut app, &ctx, size, 1., vec![]);
+        }
+        let inspector = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("inspector-bounds")))
+            .expect("left inspector stays docked until explicitly hidden");
+        let preview = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("pinned-preview-bounds")))
+            .expect("preview has a separate pinned panel");
+        assert!(
+            (preview.bottom() - inspector.bottom()).abs() <= 4.,
+            "{size:?}: {preview:?} in {inspector:?}"
+        );
+        assert!(preview.left() >= inspector.left() && preview.right() <= inspector.right());
+        assert!(
+            preview.height() >= 120.,
+            "preview stays readable: {preview:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "Manual CPU render profiling; run in both debug and release builds"]
+fn profile_steady_editor_render() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let size = Vec2::new(1366., 768.);
+    for _ in 0..8 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let start = std::time::Instant::now();
+    for _ in 0..200 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    eprintln!(
+        "Editor CPU render: {:.3} ms/frame (200 warm frames)",
+        start.elapsed().as_secs_f64() * 1000. / 200.
+    );
 }

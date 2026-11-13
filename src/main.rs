@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod fluent;
 mod ui_icons;
 use ui_icons::UiIcons;
 mod productivity_ui;
@@ -60,19 +61,19 @@ impl ThemeColors {
     fn new(dark: bool) -> Self {
         if dark {
             Self {
-                face: Color32::from_rgb(27, 43, 49),
-                ink: Color32::from_rgb(229, 241, 238),
-                canvas: Color32::from_rgb(16, 28, 34),
-                accent: Color32::from_rgb(38, 111, 113),
-                hover: Color32::from_rgb(45, 76, 82),
+                face: Color32::from_rgb(32, 34, 39),
+                ink: Color32::from_rgb(237, 238, 242),
+                canvas: Color32::from_rgb(26, 28, 33),
+                accent: Color32::from_rgb(0, 133, 133),
+                hover: Color32::from_rgb(50, 57, 63),
             }
         } else {
             Self {
-                face: Color32::from_rgb(222, 237, 233),
-                ink: Color32::from_rgb(27, 53, 60),
-                canvas: Color32::from_rgb(125, 153, 158),
-                accent: Color32::from_rgb(113, 187, 178),
-                hover: Color32::from_rgb(197, 225, 215),
+                face: Color32::from_rgb(247, 248, 252),
+                ink: Color32::from_rgb(24, 26, 31),
+                canvas: Color32::from_rgb(224, 227, 235),
+                accent: Color32::from_rgb(0, 133, 133),
+                hover: Color32::from_rgb(225, 241, 242),
             }
         }
     }
@@ -282,6 +283,8 @@ struct PixelCraft {
     shot: Option<PathBuf>,
     shot_frames: u32,
     shot_requested: bool,
+    initial_view: u8,
+    inspector_open: bool,
 }
 impl PixelCraft {
     fn new(cc: &eframe::CreationContext<'_>, shot: Option<PathBuf>) -> Self {
@@ -319,6 +322,7 @@ impl PixelCraft {
         }
     }
     fn with_context(ctx: &egui::Context, shot: Option<PathBuf>) -> Self {
+        fluent::install_fonts(ctx);
         Self::apply_theme(ctx, true);
         Self::apply_theme(ctx, false);
         ctx.options_mut(|options| options.fallback_theme = egui::Theme::Light);
@@ -417,6 +421,8 @@ impl PixelCraft {
             shot,
             shot_frames: 0,
             shot_requested: false,
+            initial_view: 3,
+            inspector_open: true,
         }
     }
     fn apply_theme(ctx: &egui::Context, dark: bool) {
@@ -434,38 +440,57 @@ impl PixelCraft {
         };
         style.visuals.panel_fill = colors.face;
         style.visuals.window_fill = if dark {
-            Color32::from_rgb(32, 52, 59)
+            Color32::from_rgb(37, 39, 45)
         } else {
-            Color32::from_rgb(237, 246, 241)
+            Color32::from_rgb(250, 251, 254)
         };
         style.visuals.override_text_color = Some(colors.ink);
-        style.visuals.selection.bg_fill = colors.accent;
-        style.visuals.selection.stroke = Stroke::new(1., colors.ink);
+        style.visuals.selection.bg_fill = if dark {
+            Color32::from_rgb(25, 90, 94)
+        } else {
+            Color32::from_rgb(206, 239, 240)
+        };
+        style.visuals.selection.stroke = Stroke::new(1., colors.accent);
         for w in [
             &mut style.visuals.widgets.inactive,
             &mut style.visuals.widgets.hovered,
             &mut style.visuals.widgets.active,
             &mut style.visuals.widgets.open,
         ] {
-            w.corner_radius = egui::CornerRadius::same(2);
+            w.corner_radius = egui::CornerRadius::same(5);
             w.fg_stroke = Stroke::new(1., colors.ink);
         }
         style.visuals.widgets.inactive.bg_fill = if dark {
-            Color32::from_rgb(36, 61, 68)
+            Color32::from_rgb(43, 45, 51)
         } else {
-            Color32::from_rgb(225, 217, 204)
+            Color32::from_rgb(251, 252, 255)
         };
+        style.visuals.widgets.inactive.weak_bg_fill = style.visuals.widgets.inactive.bg_fill;
+        let border = if dark {
+            Color32::from_rgb(65, 68, 77)
+        } else {
+            Color32::from_rgb(211, 215, 226)
+        };
+        style.visuals.widgets.inactive.bg_stroke = Stroke::new(1., border);
+        style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1., border);
         style.visuals.widgets.hovered.bg_fill = colors.hover;
+        style.visuals.widgets.hovered.weak_bg_fill = colors.hover;
+        style.visuals.widgets.active.weak_bg_fill = colors.hover;
+        style.visuals.window_corner_radius = egui::CornerRadius::same(8);
+        style.visuals.window_stroke = Stroke::new(1., border);
         style.visuals.widgets.active.bg_fill = colors.accent;
-        style.spacing.item_spacing = Vec2::new(7., 5.);
-        style.spacing.button_padding = Vec2::new(8., 5.);
-        style.spacing.interact_size.y = 26.;
+        style.spacing.item_spacing = Vec2::new(4., 3.);
+        style.spacing.button_padding = Vec2::new(6., 3.);
+        style.spacing.interact_size.y = 28.;
         style
             .text_styles
             .insert(egui::TextStyle::Body, egui::FontId::proportional(14.));
         style
             .text_styles
             .insert(egui::TextStyle::Button, egui::FontId::proportional(14.));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Heading, egui::FontId::proportional(16.));
         ctx.set_style_of(theme, style);
     }
     fn colors(&self) -> ThemeColors {
@@ -1789,6 +1814,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn menu(&mut self, ui: &mut egui::Ui) {
         let mut action = None;
         egui::MenuBar::new().ui(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.;
+            ui.add_space(2.);
             let bar_rect = ui.max_rect();
             let has_update = self
                 .latest_release
@@ -1919,6 +1946,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ui.separator();
                     }
                     if title == "View" {
+                        let open = self.inspector_open;
+                        if ui
+                            .button(if open {
+                                "Hide inspector"
+                            } else {
+                                "Show inspector"
+                            })
+                            .clicked()
+                        {
+                            self.inspector_open = !open;
+                            ui.close();
+                        }
+                        ui.menu_button("Density", |ui| {
+                            self.density_options(ui);
+                        });
                         ui_icons::submenu(ui, "theme", "Theme", |ui| {
                             for (label, preference) in [
                                 ("System", egui::ThemePreference::System),
@@ -1987,34 +2029,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         self.about = true;
                     }
                 }
-                ui.label(RichText::new("PixelCraft").strong());
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.), Sense::hover());
-                for (y, row) in BRAND_MARK.iter().enumerate() {
-                    for (x, cell) in row.bytes().enumerate() {
-                        if cell != b'.' {
-                            let color = if cell == b'g' {
-                                Color32::from_rgb(241, 190, 93)
-                            } else {
-                                Color32::from_rgb(86, 201, 184)
-                            };
-                            ui.painter().rect_filled(
-                                Rect::from_min_size(
-                                    rect.min + Vec2::new(x as f32 * 3., y as f32 * 3.),
-                                    Vec2::splat(3.),
-                                ),
-                                0.,
-                                color,
-                            );
-                        }
-                    }
-                }
+                let rect = github_rect;
                 if self
                     .latest_release
                     .as_ref()
                     .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION))
                 {
-                    let notice = Rect::from_center_size(bar_rect.center(), Vec2::new(148., 22.));
-                    // Keep the notice at the true center, hiding only when there is no room.
+                    let mut notice =
+                        Rect::from_center_size(bar_rect.center(), Vec2::new(148., 22.));
+                    if notice.left() <= menus_right + 8. {
+                        notice = Rect::from_min_size(
+                            Pos2::new(rect.left() - 164., notice.top()),
+                            Vec2::new(148., 22.),
+                        );
+                    }
+                    // Prefer the center; use the free trailing area in narrow windows.
                     if notice.left() > menus_right + 8. && notice.right() < rect.left() - 8. {
                         ui.painter().text(
                             notice.center(),
@@ -2131,133 +2160,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             palette.iter().position(|p| *p == color)
         }
     }
-    fn palette(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(5.);
-        ui.strong("Colors");
-        ui.add_space(4.);
-        let mut selected = self.active_color;
-        egui::ComboBox::from_id_salt("named_colors")
-            .width(150.)
-            .selected_text(&self.named_colors[selected].0)
-            .show_ui(ui, |ui| {
-                for (index, (name, _)) in self.named_colors.iter().enumerate() {
-                    ui.pc_selectable_value(&mut selected, index, name);
-                }
-            });
-        if selected != self.active_color {
-            self.select_named_color(selected);
-        }
-        ui.horizontal(|ui| {
-            if ui
-                .color_edit_button_srgba_unmultiplied(&mut self.fg)
-                .changed()
-            {
-                self.set_active_color(self.fg);
-            }
-            ui.monospace(format!(
-                "#{:02X}{:02X}{:02X}",
-                self.fg[0], self.fg[1], self.fg[2]
-            ));
-        });
-        ui.text_edit_singleline(&mut self.named_colors[self.active_color].0);
-        if self.named_colors.len() > 1 && ui.pc_small_button("Delete color").clicked() {
-            self.named_colors.remove(self.active_color);
-            self.select_named_color(self.active_color.min(self.named_colors.len() - 1));
-        }
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .pc_command_button("savepalette", "Save palette…")
-                .clicked()
-            {
-                self.studio_action("savepalette");
-            }
-            if ui.pc_command_button("loadpalette", "Load…").clicked() {
-                self.studio_action("loadpalette");
-            }
-        });
-        if ui.pc_button("+ Add Color").clicked() {
-            self.add_named_color();
-        }
-        ui.separator();
-        ui.label("Dominant colors");
-        let colors = self.sprite_colors();
-        if colors.is_empty() {
-            ui.small("Draw to add colors here.");
-        }
-        ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.y = 3.;
-            egui::ScrollArea::vertical()
-                .id_salt("sprite_used_colors")
-                .max_height(180.)
-                .show_rows(ui, 27., colors.len().div_ceil(4), |ui, rows| {
-                    egui::Grid::new("sprite_colors")
-                        .start_row(rows.start)
-                        .min_col_width(0.)
-                        .spacing(Vec2::splat(3.))
-                        .show(ui, |ui| {
-                            for (i, p) in colors
-                                .iter()
-                                .enumerate()
-                                .skip(rows.start * 4)
-                                .take(rows.len() * 4)
-                            {
-                                let (r, response) =
-                                    ui.allocate_exact_size(Vec2::splat(27.), Sense::click());
-                                ui.painter().rect_filled(
-                                    r,
-                                    0,
-                                    Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]),
-                                );
-                                if *p == self.fg {
-                                    ui.painter().rect_stroke(
-                                        r.shrink(1.),
-                                        0,
-                                        Stroke::new(2., self.colors().ink),
-                                        egui::StrokeKind::Inside,
-                                    );
-                                }
-                                if response.clicked() {
-                                    self.set_drawing_color(*p);
-                                }
-                                response.on_hover_text(format!(
-                                    "Use #{:02X}{:02X}{:02X} (alpha {})",
-                                    p[0], p[1], p[2], p[3]
-                                ));
-                                if i % 4 == 3 {
-                                    ui.end_row();
-                                }
-                            }
-                        });
-                });
-        });
-        ui.small(format!("{} dominant colors", colors.len()));
-        if ui.pc_button("Properties & color mode…").clicked() {
-            self.properties_open = true;
-        }
-    }
-    fn sprite_preview(&mut self, ui: &mut egui::Ui) {
-        ui.strong("Preview");
-        self.preview = Some(self.frame_texture(ui.ctx(), self.frame));
-        let (r, _) = ui.allocate_exact_size(Vec2::new(120., 120.), Sense::hover());
-        ui.painter().rect_filled(r, 0, self.colors().canvas);
-        let s = (100. / self.doc.width.max(self.doc.height) as f32).min(3.);
-        let ir = Rect::from_center_size(
-            r.center(),
-            Vec2::new(self.doc.width as f32 * s, self.doc.height as f32 * s),
-        );
-        if let Some(t) = &self.preview {
-            ui.painter().image(
-                t.id(),
-                ir,
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
-                Color32::WHITE,
-            );
-        }
-        ui.add_space(8.);
-        ui.label(
-            RichText::new("Left click: active color\nScroll: zoom · Middle drag: pan").size(11.),
-        );
-    }
     fn tools(&mut self, ui: &mut egui::Ui) {
         for t in [
             Tool::Pencil,
@@ -2291,7 +2193,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             };
             let response = ui
                 .scope(|ui| {
-                    ui.spacing_mut().interact_size = Vec2::splat(34.);
+                    ui.spacing_mut().interact_size =
+                        Vec2::new(36., if self.power.comfortable() { 36. } else { 30. });
+                    ui.spacing_mut().item_spacing.y = 2.;
+                    ui.spacing_mut().button_padding = Vec2::new(6., 4.);
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
                     ui_icons::button(ui, action, "", self.tool == t, false)
                 })
                 .inner;
@@ -2306,16 +2213,32 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .map(|f| self.frame_texture(ui.ctx(), f))
             .collect();
         let mut a = None;
+        let wide = ui.available_width() > 1100.;
+        let narrow = ui.available_width() < 700.;
+        let short = !self.power.comfortable();
+        let row_height = if short { 28. } else { 32. };
+        let header_height = if short { 32. } else { 36. };
+        ui.spacing_mut().interact_size.y = row_height;
+        let label_width = 200.;
+        let cell_width = if short { 56. } else { 64. };
         ui.horizontal_wrapped(|ui| {
-            if ui_icons::button_as(
-                ui,
-                if self.playing { "stop" } else { "play" },
-                "play",
-                if self.playing { "Stop" } else { "Play" },
-                self.playing,
-                false,
-            )
-            .clicked()
+            if ui
+                .scope(|ui| {
+                    ui.spacing_mut().interact_size.x = if short { 60. } else { 116. };
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = self.colors().accent;
+                    ui.visuals_mut().widgets.inactive.fg_stroke.color = Color32::WHITE;
+                    ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                    ui_icons::button_as(
+                        ui,
+                        if self.playing { "stop" } else { "play" },
+                        "play",
+                        if self.playing { "Stop" } else { "Play" },
+                        self.playing,
+                        false,
+                    )
+                })
+                .inner
+                .clicked()
             {
                 a = Some("play");
             }
@@ -2332,48 +2255,47 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.doc.durations.len()
             ));
             let mut ms = self.doc.durations[self.frame];
-            if ui
-                .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
-                .changed()
+            if !narrow
+                && ui
+                    .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
+                    .changed()
             {
                 self.remember();
                 self.doc.durations[self.frame] = ms;
             }
             ui.separator();
-            if ui.pc_command_button("frame", "Duplicate frame").clicked() {
+            if !narrow && ui.pc_command_button("frame", "+ Frame").clicked() {
                 a = Some("frame")
             }
-            if ui.pc_command_button("layer", "+ Layer").clicked() {
+            if !narrow && ui.pc_command_button("layer", "+ Layer").clicked() {
                 a = Some("layer")
             }
-            ui.pc_checkbox(&mut self.onion, "Onion skin");
-            if ui.pc_button("Properties & ranges…").clicked() {
-                self.properties_open = true;
+            if wide {
+                fluent::toggle(ui, &mut self.onion, "Onion skin");
             }
         });
         ui.separator();
         let mut toggle = None;
         let mut lock = None;
-        let mut opacity = None;
         let mut rename = None;
         egui::ScrollArea::both()
             .id_salt("timeline_scroll")
-            .max_height((ui.available_height() - 48.).max(28.))
+            .max_height((ui.available_height() - 36.).max(0.))
             .show(ui, |ui| {
                 egui::Grid::new("cels")
-                    .spacing(Vec2::new(3., 3.))
-                    .min_row_height(25.)
+                    .spacing(Vec2::ZERO)
+                    .min_row_height(row_height)
                     .show(ui, |ui| {
-                        ui.allocate_ui(Vec2::new(180., 24.), |ui| {
-                            ui.strong("Layers");
+                        ui.allocate_ui(Vec2::new(label_width, header_height), |ui| {
+                            ui.label("");
                         });
                         for f in 0..self.doc.durations.len() {
                             if ui
                                 .add_sized(
-                                    [54., 28.],
+                                    [cell_width, header_height],
                                     if let Some(t) = textures.get(f) {
                                         egui::Button::image_and_text(
-                                            egui::Image::new((t.id(), Vec2::new(24., 20.))),
+                                            egui::Image::new((t.id(), Vec2::new(20., 20.))),
                                             (f + 1).to_string(),
                                         )
                                         .selected(f == self.frame)
@@ -2422,7 +2344,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     lock = Some(li)
                                 }
                                 let response = ui.add_sized(
-                                    [118., 24.],
+                                    [label_width - 90., row_height],
                                     egui::Button::image_and_text(
                                         egui::Image::new((
                                             ui_icons::texture(
@@ -2473,7 +2395,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     if occupied { "occupied" } else { "empty" }
                                 );
                                 let response = ui.add_sized(
-                                    [54., 28.],
+                                    [cell_width, row_height],
                                     egui::Button::image(egui::Image::new((
                                         ui_icons::texture(
                                             ui.ctx(),
@@ -2516,31 +2438,42 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         }
                     });
             });
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().slider_width = 75.;
-            ui.small("Layer opacity");
-            let mut value = self.doc.layers[self.layer].opacity;
-            if ui
-                .add(egui::Slider::new(&mut value, 0..=255).show_value(false))
-                .changed()
-            {
-                opacity = Some(value)
+        ui.menu_button("Layer & frame actions", |ui| {
+            if narrow {
+                let mut ms = self.doc.durations[self.frame];
+                if ui
+                    .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
+                    .changed()
+                {
+                    self.remember();
+                    self.doc.durations[self.frame] = ms;
+                }
+                for (command, label) in [("frame", "+ Frame"), ("layer", "+ Layer")] {
+                    if ui.pc_command_button(command, label).clicked() {
+                        a = Some(command);
+                        ui.close();
+                    }
+                }
             }
-            ui.small(format!("{}%", value as u32 * 100 / 255));
+            ui.pc_checkbox(&mut self.onion, "Onion skin");
+            if ui.pc_button("Properties & ranges…").clicked() {
+                self.properties_open = true;
+                ui.close();
+            }
             if ui.pc_small_button("Rename").clicked() {
-                rename = Some(self.doc.layers[self.layer].name.clone())
+                rename = Some(self.doc.layers[self.layer].name.clone());
+                ui.close();
             }
-            if ui.pc_command_button("up", "Up").clicked() {
-                a = Some("up")
-            }
-            if ui.pc_command_button("down", "Down").clicked() {
-                a = Some("down")
-            }
-            if ui.pc_command_button("deletelayer", "Del layer").clicked() {
-                a = Some("deletelayer")
-            }
-            if ui.pc_command_button("deleteframe", "Del frame").clicked() {
-                a = Some("deleteframe")
+            for (command, label) in [
+                ("up", "Move layer up"),
+                ("down", "Move layer down"),
+                ("deletelayer", "Delete layer"),
+                ("deleteframe", "Delete frame"),
+            ] {
+                if ui.pc_command_button(command, label).clicked() {
+                    a = Some(command);
+                    ui.close();
+                }
             }
         });
         if let Some(li) = toggle {
@@ -2550,10 +2483,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if let Some(li) = lock {
             self.remember();
             self.doc.layers[li].locked = !self.doc.layers[li].locked
-        }
-        if let Some(v) = opacity {
-            self.remember();
-            self.doc.layers[self.layer].opacity = v
         }
         if let Some(s) = rename {
             self.rename = Some(s)
@@ -2610,6 +2539,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (r, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("canvas-bounds"), r));
         let painter = ui.painter_at(r);
         painter.rect_filled(r, 0, self.colors().canvas);
         let ctx = ui.ctx().clone();
@@ -2651,6 +2583,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         {
             self.pan += ctx.input(|i| i.pointer.delta());
         }
+        if self.initial_view > 0 && self.start.is_none() && !ctx.input(|i| i.pointer.any_down()) {
+            self.initial_view -= 1;
+            if self.initial_view == 0 {
+                self.zoom = self.zoom.min(
+                    ((r.width() - 16.) / self.doc.width as f32)
+                        .min((r.height() - 16.) / self.doc.height as f32)
+                        .floor()
+                        .max(1.),
+                );
+            }
+        }
         let board = Rect::from_center_size(
             r.center() + self.pan,
             Vec2::new(
@@ -2670,7 +2613,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 if self.dark_mode {
                     Color32::from_rgb(82, 83, 94)
                 } else {
-                    Color32::from_rgb(210, 202, 202)
+                    Color32::from_rgb(80, 81, 93)
                 }
             }),
         );
@@ -2693,7 +2636,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             if self.dark_mode {
                                 Color32::from_rgb(64, 65, 76)
                             } else {
-                                Color32::from_rgb(184, 176, 182)
+                                Color32::from_rgb(63, 64, 76)
                             }
                         }),
                     );
@@ -2980,7 +2923,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             egui::Align2::LEFT_TOP,
             format!("{} × {} px   /   RGBA", self.doc.width, self.doc.height),
             egui::FontId::proportional(12.),
-            Color32::from_rgb(220, 207, 216),
+            self.colors().ink,
         );
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -3150,6 +3093,18 @@ impl PixelCraft {
         ui_icons::set_bindings(ui.ctx(), &self.custom_shortcuts);
         self.dark_mode = ui.ctx().theme() == egui::Theme::Dark;
         let ctx = ui.ctx().clone();
+        let comfortable = self.power.comfortable();
+        self.power.apply_density(&ctx);
+        ui.spacing_mut().button_padding = Vec2::new(
+            if comfortable { 8. } else { 6. },
+            if comfortable { 5. } else { 3. },
+        );
+        ui.spacing_mut().interact_size.y = if comfortable { 32. } else { 28. };
+        ui.spacing_mut().item_spacing = if comfortable {
+            Vec2::new(6., 5.)
+        } else {
+            Vec2::new(4., 3.)
+        };
         if self.script_job.is_none() && self.start.is_none() {
             let dropped = ctx.input(|i| i.raw.dropped_files.clone());
             for file in dropped {
@@ -3270,11 +3225,12 @@ impl PixelCraft {
         if self.dialog_open() {
             ui.disable();
         }
+        self.fluent_titlebar(ui);
         egui::Panel::top("menu")
-            .exact_size(34.)
+            .exact_size(if comfortable { 36. } else { 32. })
             .show(ui, |ui| self.menu(ui));
         egui::Panel::top("document_tab")
-            .exact_size(42.)
+            .exact_size(if comfortable { 44. } else { 40. })
             .show(ui, |ui| {
                 egui::ScrollArea::horizontal().show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -3309,7 +3265,7 @@ impl PixelCraft {
                                 .fill(fill)
                                 .stroke(stroke)
                                 .corner_radius(3)
-                                .inner_margin(egui::Margin::symmetric(4, 0))
+                                .inner_margin(egui::Margin::symmetric(6, 0))
                                 .show(ui, |ui| {
                                     ui.spacing_mut().item_spacing.x = 2.;
                                     ui.horizontal(|ui| {
@@ -3322,15 +3278,23 @@ impl PixelCraft {
                                             )
                                             .size()
                                             .x
-                                            .clamp(58., 180.)
+                                            .clamp(80., 150.)
                                             + 12.;
                                         if ui
                                             .add_sized(
                                                 [width, 28.],
-                                                egui::Button::new(&name)
-                                                    .selected(active)
-                                                    .frame(false)
-                                                    .truncate(),
+                                                egui::Button::image_and_text(
+                                                    egui::Image::new((
+                                                        ui_icons::texture(ui.ctx(), "image", 18.)
+                                                            .id(),
+                                                        Vec2::splat(18.),
+                                                    )),
+                                                    &name,
+                                                )
+                                                .image_tint_follows_text_color(true)
+                                                .selected(active)
+                                                .frame(false)
+                                                .truncate(),
                                             )
                                             .on_hover_text(&name)
                                             .clicked()
@@ -3369,61 +3333,12 @@ impl PixelCraft {
                     });
                 });
             });
-        egui::Panel::top("context").exact_size(38.).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong(self.tool.name());
-                ui.separator();
-                ui.label("Brush");
-                ui.add(
-                    egui::DragValue::new(&mut self.brush)
-                        .range(MIN_BRUSH_SIZE..=MAX_BRUSH_SIZE)
-                        .suffix(" px"),
-                );
-                let mut shape = self.doc.brush_shape;
-                egui::ComboBox::from_id_salt("brush_shape")
-                    .width(84.)
-                    .selected_text(format!("{:?}", shape))
-                    .show_ui(ui, |ui| {
-                        for v in [
-                            BrushShape::Round,
-                            BrushShape::Square,
-                            BrushShape::Diamond,
-                            BrushShape::Horizontal,
-                            BrushShape::Vertical,
-                        ] {
-                            ui.pc_selectable_value(&mut shape, v, format!("{:?}", v));
-                        }
-                    });
-                if shape != self.doc.brush_shape {
-                    self.remember();
-                    self.doc.brush_shape = shape;
-                }
-                self.brush_mode_ui(ui);
-                if ui.pc_small_button("Tools…").clicked() {
-                    self.power.open = true;
-                }
-                if matches!(self.tool, Tool::Rect | Tool::Ellipse) {
-                    ui.pc_checkbox(&mut self.filled, "Filled");
-                }
-                ui.pc_checkbox(&mut self.grid, "Pixel grid");
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.pc_command_button("fit", "Fit").clicked() {
-                        self.action("fit")
-                    }
-                    ui.add(
-                        egui::Slider::new(&mut self.zoom, 0.02..=32.0)
-                            .show_value(false)
-                            .logarithmic(true),
-                    );
-                    ui.label(format!("{:.0}%", self.zoom * 100.));
-                });
-            });
-        });
+        self.fluent_context(ui);
         egui::Panel::bottom("status")
-            .exact_size(28.)
+            .exact_size(24.)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(&self.status).size(12.))
+                    ui.label(RichText::new(&self.status).size(14.))
                         .on_hover_text(&self.status);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if let Some((x, y)) = self.hover {
@@ -3433,31 +3348,45 @@ impl PixelCraft {
                     });
                 });
             });
-        egui::Panel::left("palette_panel")
-            .exact_size(174.)
-            .resizable(false)
-            .show(ui, |ui| {
-                egui::Panel::bottom("sidebar_preview")
-                    .exact_size(200.)
-                    .resizable(false)
-                    .frame(egui::Frame::NONE)
-                    .show(ui, |ui| self.sprite_preview(ui));
-                egui::ScrollArea::vertical().show(ui, |ui| self.palette(ui));
-            });
+        // All dimensions are logical points. The native pixels-per-point stays
+        // under the window system's control; only available space drives reflow.
+        if self.inspector_open {
+            let panel = egui::Panel::left("palette_panel")
+                .default_size(264.)
+                .size_range(180.0..=(ctx.content_rect().width() * 0.4).clamp(180., 420.))
+                .resizable(true)
+                .show(ui, |ui| self.inspector_contents(ui));
+            #[cfg(test)]
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), panel.response.rect));
+            let _ = panel;
+        }
         egui::Panel::right("tool_panel")
-            .exact_size(48.)
+            .exact_size(if comfortable { 56. } else { 52. })
             .resizable(false)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.tools(ui));
             });
-        egui::Panel::bottom("timeline")
-            .default_size(280.)
-            .size_range(260.0..=480.0)
+        let max_timeline = (ui.available_height() - 64.).max(120.);
+        let timeline_panel = egui::Panel::bottom("timeline")
+            .default_size(200.0_f32.min(max_timeline))
+            .size_range(120.0..=max_timeline)
             .resizable(true)
-            .show(ui, |ui| self.timeline(ui));
+            .show(ui, |ui| {
+                ui.set_min_height(ui.available_height());
+                self.timeline(ui);
+            });
+        #[cfg(test)]
+        ctx.data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("timeline-bounds"),
+                timeline_panel.response.rect,
+            )
+        });
+        let _ = timeline_panel;
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(self.colors().canvas))
             .show(ui, |ui| self.canvas(ui));
+        self.fluent_resize(ui);
         self.dialogs(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
@@ -3715,8 +3644,13 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_icon(app_icon())
             .with_app_id("pixelcraft")
-            .with_inner_size([1180., 840.])
-            .with_min_inner_size([800., 620.]),
+            .with_decorations(false)
+            .with_inner_size(if shot.is_some() {
+                [1920., 1080.]
+            } else {
+                [1180., 840.]
+            })
+            .with_min_inner_size([600., 360.]),
         renderer: if std::env::var_os("PIXELCRAFT_OPENGL").is_some() {
             eframe::Renderer::Glow
         } else {

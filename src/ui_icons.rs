@@ -545,10 +545,10 @@ fn button_named(
     menu: bool,
     accessible_name: Option<&str>,
 ) -> egui::Response {
-    let t = texture(ui.ctx(), icon, if label.is_empty() { 20. } else { 16. });
+    let t = texture(ui.ctx(), icon, if label.is_empty() { 20. } else { 18. });
     let image = egui::Image::new((
         t.id(),
-        Vec2::splat(if label.is_empty() { 20. } else { 16. }),
+        Vec2::splat(if label.is_empty() { 20. } else { 18. }),
     ));
     let mut b = if menu {
         let check = texture(ui.ctx(), "check", 12.);
@@ -564,7 +564,10 @@ fn button_named(
         egui::Button::new((image, label))
     }
     .image_tint_follows_text_color(true)
-    .min_size(Vec2::splat(28.))
+    .min_size(Vec2::new(
+        ui.spacing().interact_size.x.max(28.),
+        ui.spacing().interact_size.y.max(28.),
+    ))
     .corner_radius(3)
     .frame_when_inactive(action != "closetab" || menu);
     let toggle = selected

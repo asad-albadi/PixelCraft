@@ -87,6 +87,7 @@ jobs:
         run: |
           mkdir -p dist AppDir/usr/share/doc/pixelcraft
           install -m 644 LICENSE AppDir/usr/share/doc/pixelcraft/LICENSE
+          install -m 644 assets/fonts/LICENSE AppDir/usr/share/doc/pixelcraft/FONT-LICENSE.txt
           install -m 644 runtime/LUA-LICENSE.txt AppDir/usr/share/doc/pixelcraft/LUA-LICENSE.txt
           desktop-file-validate packaging/pixelcraft.desktop
           curl --fail --location --retry 3 \
