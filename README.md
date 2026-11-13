@@ -120,6 +120,8 @@ Open animated GIF, APNG (including animated `.png`), WebP and layered OpenRaster
 
 ## Editing
 
+New Sprite, Rename Layer, save confirmations, file errors, and **Help → Tools and file support** use a shared dialog. Drag the header to move it, or use the highlighted **×**, Escape, or the dimmed area around it to dismiss it. Dismissing a save confirmation keeps your edits open.
+
 Pencil B, eraser E, fill G, eyedropper I, line L, rectangle U, ellipse O, selection M, hand H. The compact **Colors** selector starts with one white entry, **Primary**. **Add Color** creates and selects another named entry; click its color chip to edit it. Selecting an entry makes it the active drawing color for either mouse button. **Dominant colors** groups similar nontransparent artwork shades across layers and frames into up to 10 representative swatches, ranked by frequency. Results are cached until artwork changes. Click a swatch to select the drawing color while keeping saved named colors unchanged. Drawing colors are shared across sprite tabs. Alt-click samples into the active entry; X swaps with the alternate color. Scroll zooms around the pointer; middle-drag pans. Ctrl+Z undoes; Ctrl+Y redoes; Ctrl+S saves. Copy/cut/paste/delete work on image-layer selections. A stroke is one undo step.
 
 Use **Sprite → Properties, layers, tiles & ranges** (also available beside the timeline) for:

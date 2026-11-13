@@ -49,6 +49,91 @@ fn paint_focus(ui: &egui::Ui, response: &egui::Response, radius: u8) {
     }
 }
 
+pub(super) fn modal_dialog(
+    ctx: &egui::Context,
+    title: &str,
+    content: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
+    let id = egui::Id::new(("editor-dialog", title));
+    let offset_id = id.with("offset");
+    let offset = ctx.data(|data| data.get_temp::<Vec2>(offset_id).unwrap_or_default());
+    let popup_open = egui::Popup::is_any_open(ctx);
+    let modal = egui::Modal::new(id)
+        .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_CENTER, offset))
+        .frame(egui::Frame::window(&ctx.style_of(ctx.theme())))
+        .backdrop_color(Color32::from_black_alpha(80))
+        .show(ctx, |ui| {
+            ui.set_width(360_f32.min((ctx.content_rect().width() - 32.).max(100.)));
+            let (header, _) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.), Sense::hover());
+            let close_rect = Rect::from_min_size(
+                Pos2::new(header.right() - 34., header.top()),
+                Vec2::splat(34.),
+            );
+            let close = ui.interact(close_rect, id.with("close"), Sense::click());
+            close.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, close.enabled(), "Close dialog")
+            });
+            let visuals = ui.style().interact(&close);
+            let fill = if close.is_pointer_button_down_on() {
+                ui.visuals()
+                    .selection
+                    .bg_fill
+                    .lerp_to_gamma(ui.visuals().text_color(), 0.16)
+            } else if close.hovered() {
+                visuals.bg_fill
+            } else {
+                Color32::TRANSPARENT
+            };
+            ui.painter().rect_filled(close_rect.shrink(2.), 5, fill);
+            paint_focus(ui, &close, 5);
+            ui.painter().text(
+                close_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "×",
+                egui::FontId::proportional(20.),
+                visuals.fg_stroke.color,
+            );
+            let close = close
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .on_hover_text("Close dialog");
+            let title_rect = header.with_max_x(close_rect.left() - 8.);
+            let drag = ui
+                .interact(
+                    header.with_max_x(close_rect.left()),
+                    id.with("header"),
+                    Sense::drag(),
+                )
+                .on_hover_and_drag_cursor(egui::CursorIcon::Grab);
+            ui.painter()
+                .with_clip_rect(title_rect.intersect(ui.clip_rect()))
+                .text(
+                    title_rect.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    title,
+                    egui::TextStyle::Heading.resolve(ui.style()),
+                    ui.visuals().text_color(),
+                );
+            ui.separator();
+            let content_closed = content(ui);
+            (close.clicked(), drag.drag_delta(), content_closed)
+        });
+    let (close, drag, content_closed) = modal.inner;
+    if drag != Vec2::ZERO {
+        let bounds = ctx.content_rect();
+        let limit = ((bounds.size() - modal.response.rect.size()) * 0.5).max(Vec2::ZERO);
+        let offset = (modal.response.rect.center() - bounds.center() + drag).clamp(-limit, limit);
+        ctx.data_mut(|data| data.insert_temp(offset_id, offset));
+        ctx.request_repaint();
+    }
+    let dismiss = close || (modal.is_top_modal && !popup_open && modal.should_close());
+    if dismiss || content_closed {
+        ctx.data_mut(|data| data.remove::<Vec2>(offset_id));
+        ctx.request_repaint();
+    }
+    dismiss
+}
+
 fn heading(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add_space(4.);
     let id = ui.make_persistent_id(("inspector-section", text));

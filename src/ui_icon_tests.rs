@@ -1383,3 +1383,90 @@ fn edit_menu_history_actions_follow_active_tab_history() {
         }
     }
 }
+
+#[test]
+fn modal_header_drags_and_backdrop_blocks_editor_clicks() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let size = Vec2::new(1180., 840.);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let new_button = ctx.data(|data| {
+        data.get_temp::<Rect>(egui::Id::new(("ui-icon-test-target", "new")))
+            .unwrap()
+    });
+    app.new_dialog = true;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let close_bounds = |app: &mut PixelCraft, events| {
+        let mut out = frame(app, &ctx, size, 1., events);
+        out.textures_delta.clear();
+        let bounds = out
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .unwrap()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Close dialog"))
+            .unwrap()
+            .1
+            .bounds()
+            .unwrap();
+        Rect::from_min_max(
+            Pos2::new(bounds.x0 as f32, bounds.y0 as f32),
+            Pos2::new(bounds.x1 as f32, bounds.y1 as f32),
+        )
+    };
+    let before = close_bounds(&mut app, vec![]);
+    let hover = close_bounds(&mut app, vec![egui::Event::PointerMoved(before.center())]);
+    assert_eq!(before.size(), Vec2::splat(34.));
+    assert_eq!(before, hover);
+    let header = before.center() - Vec2::new(100., 0.);
+    drag_layout(&mut app, &ctx, size, header, header + Vec2::new(96., 54.));
+    let after = close_bounds(&mut app, vec![]);
+    assert_eq!(after.size(), before.size());
+    assert!(after.left() - before.left() > 80.);
+    assert!(after.top() - before.top() > 40.);
+    assert!(app.new_dialog);
+
+    discard_frame(&mut app, &ctx, size, 1., click(new_button.center()));
+    assert!(!app.new_dialog);
+    assert_eq!(app.tabs.len(), 1);
+
+    app.doc.set_pixel(0, 0, 0, [12, 34, 56, 255]);
+    app.pending = Some(Pending::CloseTab);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let close = close_bounds(&mut app, vec![]);
+    discard_frame(&mut app, &ctx, size, 1., click(close.center()));
+    assert!(app.pending.is_none());
+    assert!(app.dirty());
+    assert_eq!(app.tabs.len(), 1);
+    app.help = true;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let close = close_bounds(&mut app, vec![]).center();
+    let mut hover = frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(close)],
+    );
+    hover.textures_delta.clear();
+    assert_eq!(
+        hover.platform_output.cursor_icon,
+        egui::CursorIcon::PointingHand
+    );
+    let [_, press, release] = click(close).try_into().unwrap();
+    discard_frame(&mut app, &ctx, size, 1., vec![press]);
+    assert!(app.help);
+    discard_frame(&mut app, &ctx, size, 1., vec![release]);
+    assert!(!app.help);
+}

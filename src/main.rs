@@ -2944,24 +2944,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
         if self.status.starts_with("Could not") || self.status.starts_with("Export failed") {
-            egui::Modal::new(egui::Id::new("File operation failed")).show(ctx, |ui| {
-                ui.set_max_width(460.);
-                ui.strong("File operation failed");
-                ui.separator();
+            if fluent::modal_dialog(ctx, "File operation failed", |ui| {
                 ui.label(&self.status);
                 if ui.pc_button("Close").clicked() {
                     self.status = "Ready".into();
+                    true
+                } else {
+                    false
                 }
-            });
+            }) {
+                self.status = "Ready".into();
+            }
+            return;
         }
-
         if self.pending.is_some() {
-            egui::Modal::new(egui::Id::new("Save your changes?")).show(ctx, |ui| {
-                ui.set_max_width(460.);
-                ui.strong("Save your changes?");
-                ui.separator();
+            if fluent::modal_dialog(ctx, "Save your changes?", |ui| {
                 ui_icons::feedback(ui, "warning", "Save the current sprite before continuing.");
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.pc_button("Save").clicked() && self.save(false) {
                         let p = self.pending.take().unwrap();
                         self.finish_pending(ctx, p);
@@ -2975,13 +2974,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         self.pending = None;
                     }
                 });
-            });
+                self.pending.is_none()
+            }) {
+                self.pending = None;
+            }
+            return;
         }
         if self.new_dialog {
-            egui::Modal::new(egui::Id::new("New sprite")).show(ctx, |ui| {
-                ui.set_max_width(460.);
-                ui.strong("New sprite");
-                ui.separator();
+            if fluent::modal_dialog(ctx, "New sprite", |ui| {
                 ui.label("Start with a transparent canvas.");
                 ui.horizontal(|ui| {
                     ui.label("Width");
@@ -3014,20 +3014,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         self.new_dialog = false;
                     }
                 });
-            });
+                !self.new_dialog
+            }) {
+                self.new_dialog = false;
+            }
+            return;
         }
         if let Some(mut name) = self.rename.clone() {
             let mut done = false;
             let mut cancel = false;
-            egui::Modal::new(egui::Id::new("Rename layer")).show(ctx, |ui| {
-                ui.set_max_width(460.);
-                ui.strong("Rename layer");
-                ui.separator();
+            let dismissed = fluent::modal_dialog(ctx, "Rename layer", |ui| {
                 ui.add(egui::TextEdit::singleline(&mut name).char_limit(80));
                 ui.horizontal(|ui| {
                     done = ui.pc_button("Rename").clicked();
                     cancel = ui.pc_button("Cancel").clicked();
                 });
+                done || cancel
             });
             if done {
                 if !name.trim().is_empty() {
@@ -3035,11 +3037,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.doc.layers[self.layer].name = name;
                 }
                 self.rename = None;
-            } else if cancel {
+            } else if cancel || dismissed {
                 self.rename = None
             } else {
                 self.rename = Some(name)
             }
+            return;
         }
         self.properties_dialog(ctx);
         if self.extensions_open {
@@ -3100,7 +3103,26 @@ if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}}
             }
         }
         if self.help {
-            egui::Window::new("PixelCraft — help").open(&mut self.help).default_width(440.).show(ctx,|ui|{ui.heading("PixelCraft");ui.label("Small pixels. Endless possibilities.");ui.separator();ui.strong("Draw, layer, animate");ui.label("B Pencil · E Eraser · G Fill · I Eyedropper\nL Line · U Rectangle · O Ellipse · M Selection · H Hand\nX Swap colors · Alt-click Pick color\nScroll Zoom · Middle drag Pan · Space Play\nCtrl+Z Undo · Ctrl+Y Redo · Ctrl+S Save");ui.separator();ui.label("Selections support copy, cut, paste and delete on the active layer. Paste starts at the selection's top-left, or the canvas origin.");ui.separator();ui.strong("File support");ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets and GIF animations.");ui.label("Sprite → Properties opens color modes, groups, blend modes, cel opacity, tile editing and named animation ranges. ASE profiles, metadata and off-canvas image pixels are retained. Embedded ICC profiles are converted to sRGB for display; source pixels are retained.");ui.label("PixelCraft is standalone. Extensions install into its own data directory. Lua, JSON themes, palettes and shortcuts run here through the documented supported native API.");});
+            let mut close = false;
+            let dismissed = fluent::modal_dialog(ctx, "Help", |ui| {
+                let max_height = (ctx.content_rect().height() - 112.).max(80.);
+                egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+                    ui.strong("Draw, layer, animate");
+                    ui.label("B Pencil · E Eraser · G Fill · I Eyedropper\nL Line · U Rectangle · O Ellipse · M Selection · H Hand\nX Swap colors · Alt-click Pick color\nScroll Zoom · Middle drag Pan · Space Play\nCtrl+Z Undo · Ctrl+Y Redo · Ctrl+S Save");
+                    ui.separator();
+                    ui.label("Selections support copy, cut, paste and delete on the active layer. Paste starts at the selection's top-left, or the canvas origin.");
+                    ui.separator();
+                    ui.strong("File support");
+                    ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets and GIF animations.");
+                    ui.label("Properties in the Sprite menu opens color modes, groups, blend modes, cel opacity, tile editing and named animation ranges. ASE profiles, metadata and off-canvas image pixels are retained. Embedded ICC profiles are converted to sRGB for display; source pixels are retained.");
+                    ui.label("PixelCraft is standalone. Extensions install into its own data directory. Lua, JSON themes, palettes and shortcuts run here through the documented supported native API.");
+                });
+                close = ui.pc_button("Close").clicked();
+                close
+            });
+            if close || dismissed {
+                self.help = false;
+            }
         }
     }
 }
