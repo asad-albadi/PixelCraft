@@ -104,16 +104,112 @@ pub(super) fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::
     .inner
 }
 
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(super) struct PreviewSettings {
+    pub height: f32,
+    // Zero is Fit; all other values are physical pixels per sprite pixel.
+    pub zoom: u8,
+}
+impl Default for PreviewSettings {
+    fn default() -> Self {
+        Self {
+            height: 240.,
+            zoom: 0,
+        }
+    }
+}
+
 impl PixelCraft {
+    pub(super) fn restore_preview_settings(&mut self, path: PathBuf) {
+        if let Ok(bytes) = std::fs::read(&path)
+            && let Ok(mut settings) = serde_json::from_slice::<PreviewSettings>(&bytes)
+        {
+            if !settings.height.is_finite() {
+                settings.height = 240.;
+            }
+            settings.height = settings.height.clamp(120., 4096.);
+            if ![0, 1, 2, 3, 4, 8].contains(&settings.zoom) {
+                settings.zoom = 0;
+            }
+            self.preview_settings = settings;
+        }
+        self.preview_settings_path = Some(path);
+    }
+    fn save_preview_settings(&mut self) {
+        if let Some(path) = &self.preview_settings_path {
+            let result = std::fs::create_dir_all(path.parent().unwrap()).and_then(|()| {
+                std::fs::write(path, serde_json::to_vec(&self.preview_settings).unwrap())
+            });
+            if let Err(error) = result {
+                self.status = format!("Preview preference could not be saved: {error}");
+            }
+        }
+    }
+
+    pub(super) fn inspector_toggle(&mut self, ui: &mut egui::Ui) {
+        let response = ui
+            .small_button(if self.inspector_open { "‹" } else { "›" })
+            .on_hover_text(if self.inspector_open {
+                "Hide inspector"
+            } else {
+                "Show inspector"
+            });
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                if self.inspector_open {
+                    "Hide inspector"
+                } else {
+                    "Show inspector"
+                },
+            )
+        });
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("inspector-toggle"), response.rect));
+        if response.clicked() {
+            self.inspector_open = !self.inspector_open;
+        }
+    }
+
     pub(super) fn inspector_contents(&mut self, ui: &mut egui::Ui) {
         ui.set_min_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.strong("Inspector");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.inspector_toggle(ui);
+            });
+        });
+        ui.separator();
         // Keep the original bottom-left preview separate from scrolling controls.
-        let preview_height = (ui.available_width() * 0.44).clamp(100., 160.) + 40.;
+        let max_height = (ui.available_height() - 36.).max(120.);
+        let preview_height = self.preview_settings.height.clamp(120., max_height);
         let preview = egui::Panel::bottom("sidebar_preview")
             .exact_size(preview_height)
             .resizable(false)
             .frame(egui::Frame::NONE)
-            .show(ui, |ui| self.sprite_preview(ui));
+            .show(ui, |ui| {
+                let (handle, response) =
+                    ui.allocate_exact_size(Vec2::new(ui.available_width(), 8.), Sense::drag());
+                let response = response
+                    .on_hover_cursor(egui::CursorIcon::ResizeVertical)
+                    .on_hover_text("Drag to resize Preview");
+                ui.painter().line_segment(
+                    [handle.left_center(), handle.right_center()],
+                    Stroke::new(1., ui.visuals().widgets.noninteractive.bg_stroke.color),
+                );
+                if response.dragged() {
+                    self.preview_settings.height =
+                        (preview_height - response.drag_delta().y).clamp(120., max_height);
+                    ui.ctx().request_repaint();
+                }
+                if response.drag_stopped() {
+                    self.save_preview_settings();
+                }
+                self.sprite_preview(ui);
+            });
         #[cfg(test)]
         ui.ctx().data_mut(|d| {
             d.insert_temp(
@@ -131,135 +227,6 @@ impl PixelCraft {
             });
     }
 
-    pub(super) fn fluent_resize(&self, ui: &mut egui::Ui) {
-        if ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false)) {
-            return;
-        }
-        let r = ui.ctx().content_rect();
-        for (index, rect, direction, cursor) in [
-            (
-                0,
-                Rect::from_min_max(r.min, Pos2::new(r.right(), r.top() + 4.)),
-                egui::ResizeDirection::North,
-                egui::CursorIcon::ResizeVertical,
-            ),
-            (
-                1,
-                Rect::from_min_max(Pos2::new(r.left(), r.bottom() - 4.), r.max),
-                egui::ResizeDirection::South,
-                egui::CursorIcon::ResizeVertical,
-            ),
-            (
-                2,
-                Rect::from_min_max(r.min, Pos2::new(r.left() + 4., r.bottom())),
-                egui::ResizeDirection::West,
-                egui::CursorIcon::ResizeHorizontal,
-            ),
-            (
-                3,
-                Rect::from_min_max(Pos2::new(r.right() - 4., r.top()), r.max),
-                egui::ResizeDirection::East,
-                egui::CursorIcon::ResizeHorizontal,
-            ),
-            (
-                4,
-                Rect::from_min_size(r.max - Vec2::splat(10.), Vec2::splat(10.)),
-                egui::ResizeDirection::SouthEast,
-                egui::CursorIcon::ResizeNwSe,
-            ),
-        ] {
-            let response = ui
-                .interact(rect, egui::Id::new(("window-resize", index)), Sense::drag())
-                .on_hover_cursor(cursor);
-            if response.drag_started() {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
-            }
-        }
-    }
-    pub(super) fn fluent_titlebar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("fluent_title")
-            .exact_size(if self.power.comfortable() { 36. } else { 30. })
-            .frame(
-                egui::Frame::NONE
-                    .fill(if self.dark_mode {
-                        Color32::from_rgb(39, 43, 50)
-                    } else {
-                        Color32::from_rgb(226, 234, 241)
-                    })
-                    .inner_margin(egui::Margin::symmetric(10, 0)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal_centered(|ui| {
-                    let (mark, _) = ui.allocate_exact_size(Vec2::splat(22.), Sense::hover());
-                    for (y, row) in BRAND_MARK.iter().enumerate() {
-                        for (x, c) in row.bytes().enumerate() {
-                            if c != b'.' {
-                                ui.painter().rect_filled(
-                                    Rect::from_min_size(
-                                        mark.min + Vec2::new(x as f32 * 3., y as f32 * 3.),
-                                        Vec2::splat(3.),
-                                    ),
-                                    0,
-                                    if c == b'g' {
-                                        Color32::from_rgb(241, 190, 93)
-                                    } else {
-                                        Color32::from_rgb(0, 149, 150)
-                                    },
-                                );
-                            }
-                        }
-                    }
-                    ui.label(
-                        RichText::new("PixelCraft")
-                            .family(egui::FontFamily::Name("Fluent bold".into())),
-                    );
-                    let inspector_toggle = ui.small_button("☰").on_hover_text("Toggle inspector");
-                    #[cfg(test)]
-                    ui.ctx().data_mut(|d| {
-                        d.insert_temp(egui::Id::new("inspector-toggle"), inspector_toggle.rect)
-                    });
-                    if inspector_toggle.clicked() {
-                        self.inspector_open = !self.inspector_open;
-                    }
-                    let space = (ui.available_width() - 120.).max(0.);
-                    let (drag, response) =
-                        ui.allocate_exact_size(Vec2::new(space, 24.), Sense::click_and_drag());
-                    if response.drag_started() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
-                    let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-                    if response.double_clicked() {
-                        ui.ctx()
-                            .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
-                    }
-                    let _ = drag;
-                    for (label, command) in [
-                        ("−", egui::ViewportCommand::Minimized(true)),
-                        ("□", egui::ViewportCommand::Maximized(!maximized)),
-                        ("×", egui::ViewportCommand::Close),
-                    ] {
-                        if ui
-                            .add_sized([32., 24.], egui::Button::new(label).frame(false))
-                            .clicked()
-                        {
-                            if label == "×" {
-                                self.close_window(ui.ctx());
-                            } else {
-                                ui.ctx().send_viewport_cmd(command);
-                            }
-                        }
-                    }
-                });
-            });
-    }
-    fn close_window(&mut self, ctx: &egui::Context) {
-        if self.dirty() {
-            self.pending = Some(Pending::Close);
-        } else {
-            self.finish_pending(ctx, Pending::Close);
-        }
-    }
     pub(super) fn palette(&mut self, ui: &mut egui::Ui) {
         egui::Frame::NONE
             .inner_margin(egui::Margin::symmetric(10, 0))
@@ -383,46 +350,68 @@ impl PixelCraft {
             });
     }
     pub(super) fn sprite_preview(&mut self, ui: &mut egui::Ui) {
-        egui::Frame::NONE
-            .inner_margin(egui::Margin::symmetric(10, 0))
-            .show(ui, |ui| {
-                if !heading(ui, "Preview") {
-                    return;
-                }
-                self.preview = Some(self.frame_texture(ui.ctx(), self.frame));
-                let side = (ui.available_width() * 0.44).clamp(100., 160.);
-                ui.horizontal(|ui| {
-                    ui.add_space((ui.available_width() - side) * 0.5);
-                    let (r, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
-                    for y in 0..6 {
-                        for x in 0..6 {
-                            let q = Rect::from_min_size(
-                                r.min + Vec2::new(x as f32, y as f32) * side / 6.,
-                                Vec2::splat(side / 6.),
-                            );
-                            ui.painter().rect_filled(
-                                q,
-                                0,
-                                if (x + y) % 2 == 0 {
-                                    Color32::from_rgb(80, 81, 93)
-                                } else {
-                                    Color32::from_rgb(63, 64, 76)
-                                },
-                            );
+        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 0)).show(ui, |ui| {
+            let old_zoom = self.preview_settings.zoom;
+            let controls = ui.horizontal(|ui| {
+                ui.strong("Preview");
+                egui::ComboBox::from_id_salt("preview_zoom")
+                    .width(72.)
+                    .selected_text(match old_zoom {
+                        0 => "Fit".into(), 1 => "1:1".into(), n => format!("{n}×"),
+                    })
+                    .show_ui(ui, |ui| {
+                        for (zoom, label) in [(0, "Fit"), (1, "1:1"), (2, "2×"),
+                            (3, "3×"), (4, "4×"), (8, "8×")] {
+                            ui.selectable_value(&mut self.preview_settings.zoom, zoom, label);
                         }
-                    }
-                    let size = Vec2::new(self.doc.width as f32, self.doc.height as f32)
-                        * (side / self.doc.width.max(self.doc.height) as f32);
-                    if let Some(t) = &self.preview {
-                        ui.painter().image(
-                            t.id(),
-                            Rect::from_center_size(r.center(), size),
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
-                            Color32::WHITE,
-                        );
-                    }
-                });
+                    }).response.on_hover_text("Fit the whole sprite, or zoom in physical pixels. Drag artwork to pan.");
             });
+            if old_zoom != self.preview_settings.zoom {
+                self.preview_pan = Vec2::ZERO;
+                self.save_preview_settings();
+            }
+            self.preview = Some(self.frame_texture(ui.ctx(), self.frame));
+            let (r, response) = ui.allocate_exact_size(
+                Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::drag());
+            let source = Vec2::new(self.doc.width as f32, self.doc.height as f32);
+            let scale = if self.preview_settings.zoom == 0 {
+                (r.width() / source.x).min(r.height() / source.y)
+            } else { self.preview_settings.zoom as f32 / ui.ctx().pixels_per_point() };
+            let size = source * scale;
+            let limit = ((size - r.size()) * 0.5).max(Vec2::ZERO);
+            if response.dragged() && limit != Vec2::ZERO {
+                self.preview_pan += response.drag_delta();
+            }
+            self.preview_pan = self.preview_pan.clamp(-limit, limit);
+            if limit != Vec2::ZERO { response.on_hover_cursor(egui::CursorIcon::Grab); }
+            let ppp = ui.ctx().pixels_per_point();
+            let origin = r.center() + self.preview_pan - size * 0.5;
+            let origin = if self.preview_settings.zoom == 0 { origin } else {
+                Pos2::new((origin.x * ppp).round() / ppp, (origin.y * ppp).round() / ppp)
+            };
+            let image = Rect::from_min_size(origin, size);
+            let painter = ui.painter().with_clip_rect(r.intersect(ui.clip_rect()));
+            // Paint only visible checker cells, regardless of sprite size or zoom.
+            let cell = 8.;
+            for y in 0..(r.height() / cell).ceil() as usize {
+                for x in 0..(r.width() / cell).ceil() as usize {
+                    painter.rect_filled(Rect::from_min_size(r.min + Vec2::new(x as f32, y as f32) * cell,
+                        Vec2::splat(cell)), 0, if (x+y)%2 == 0 {
+                            Color32::from_rgb(80,81,93)
+                        } else { Color32::from_rgb(63,64,76) });
+                }
+            }
+            if let Some(t) = &self.preview {
+                painter.image(t.id(), image, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.,1.)), Color32::WHITE);
+            }
+            #[cfg(test)]
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(egui::Id::new("preview-viewport"), r);
+                d.insert_temp(egui::Id::new("preview-image"), image);
+                d.insert_temp(egui::Id::new("preview-controls"), controls.response.rect);
+            });
+            let _ = controls;
+        });
     }
     pub(super) fn fluent_properties(&mut self, ui: &mut egui::Ui) {
         egui::Frame::NONE
@@ -627,21 +616,5 @@ impl PixelCraft {
         {
             self.power.open = true;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn title_close_checks_all_tabs_for_unsaved_artwork() {
-        let ctx = egui::Context::default();
-        let mut app = PixelCraft::with_context(&ctx, None);
-        app.doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
-        app.open_document(Document::new(8, 8), None);
-        app.close_window(&ctx);
-        assert_eq!(app.active_tab, 0);
-        assert!(matches!(app.pending, Some(Pending::Close)));
-        assert!(app.dirty());
     }
 }

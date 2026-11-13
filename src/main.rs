@@ -242,6 +242,9 @@ struct PixelCraft {
     stroke_color: Pixel,
     texture: Option<egui::TextureHandle>,
     preview: Option<egui::TextureHandle>,
+    preview_settings: fluent::PreviewSettings,
+    preview_pan: Vec2,
+    preview_settings_path: Option<PathBuf>,
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
     cel_occupied: Vec<Vec<bool>>,
@@ -290,6 +293,7 @@ impl PixelCraft {
     fn new(cc: &eframe::CreationContext<'_>, shot: Option<PathBuf>) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
         app.theme_path = theme_path();
+        app.restore_preview_settings(extensions::config_directory().join("preview.json"));
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("shortcuts.json")) {
             app.custom_shortcuts = pixelcraft::productivity::load_shortcuts(&bytes)
                 .unwrap_or_else(|_| pixelcraft::productivity::shortcut_preset("PixelCraft"));
@@ -371,6 +375,9 @@ impl PixelCraft {
             stroke_color: CLEAR,
             texture: None,
             preview: None,
+            preview_settings: fluent::PreviewSettings::default(),
+            preview_pan: Vec2::ZERO,
+            preview_settings_path: None,
             render_snapshot: None,
             frame_textures: vec![],
             cel_occupied: vec![],
@@ -3225,7 +3232,6 @@ impl PixelCraft {
         if self.dialog_open() {
             ui.disable();
         }
-        self.fluent_titlebar(ui);
         egui::Panel::top("menu")
             .exact_size(if comfortable { 36. } else { 32. })
             .show(ui, |ui| self.menu(ui));
@@ -3360,6 +3366,12 @@ impl PixelCraft {
             ctx.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), panel.response.rect));
             let _ = panel;
         }
+        if !self.inspector_open {
+            egui::Panel::left("inspector_restore")
+                .exact_size(32.)
+                .resizable(false)
+                .show(ui, |ui| self.inspector_toggle(ui));
+        }
         egui::Panel::right("tool_panel")
             .exact_size(if comfortable { 56. } else { 52. })
             .resizable(false)
@@ -3386,7 +3398,6 @@ impl PixelCraft {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(self.colors().canvas))
             .show(ui, |ui| self.canvas(ui));
-        self.fluent_resize(ui);
         self.dialogs(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
@@ -3644,7 +3655,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_icon(app_icon())
             .with_app_id("pixelcraft")
-            .with_decorations(false)
+            .with_decorations(true)
             .with_inner_size(if shot.is_some() {
                 [1920., 1080.]
             } else {

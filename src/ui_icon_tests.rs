@@ -204,6 +204,8 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
     for (theme, scale, scene, width) in [
         ("dark", 1., "editor", 1920.),
         ("light", 1., "editor", 1920.),
+        ("light", 1., "collapsed", 1366.),
+        ("light", 2., "collapsed", 683.),
         ("dark", 1.5, "editor", 1180.),
         ("light", 1.25, "editor", 1536.),
         ("light", 1.5, "editor", 1280.),
@@ -257,6 +259,9 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
                 840.
             },
         );
+        if scene == "collapsed" {
+            a.inspector_open = false;
+        }
         if scene == "tabs" {
             a.path = Some(PathBuf::from("Garden.pixel"));
             a.open_document(Document::new(16,16),Some(PathBuf::from("A very long sprite filename that must truncate without covering its close button.pixel")));
@@ -281,7 +286,7 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
                     _ => -100.,
                 };
                 if x > 0. {
-                    click(Pos2::new(x, 58.))
+                    click(Pos2::new(x, 16.))
                 } else {
                     vec![]
                 }
@@ -844,7 +849,8 @@ fn panels_resize_in_both_directions_and_inspector_collapses() {
     discard_frame(&mut app, &ctx, size, 1., vec![]);
     assert!(!app.inspector_open);
     assert!(layout_rect(&ctx, "canvas-bounds").width() > old_canvas.width() + 200.);
-    discard_frame(&mut app, &ctx, size, 1., click(toggle.center()));
+    let restore = layout_rect(&ctx, "inspector-toggle");
+    discard_frame(&mut app, &ctx, size, 1., click(restore.center()));
     discard_frame(&mut app, &ctx, size, 1., vec![]);
     assert!(app.inspector_open);
     assert!(layout_rect(&ctx, "inspector-bounds").width() > inspector.width() + 40.);
@@ -854,7 +860,9 @@ fn panels_resize_in_both_directions_and_inspector_collapses() {
     let toggle = layout_rect(&ctx, "inspector-toggle");
     discard_frame(&mut app, &ctx, small, 2., click(toggle.center()));
     assert!(!app.inspector_open);
-    discard_frame(&mut app, &ctx, small, 2., click(toggle.center()));
+    discard_frame(&mut app, &ctx, small, 2., vec![]);
+    let restore = layout_rect(&ctx, "inspector-toggle");
+    discard_frame(&mut app, &ctx, small, 2., click(restore.center()));
     discard_frame(&mut app, &ctx, small, 2., vec![]);
     assert!(app.inspector_open);
     assert!(layout_rect(&ctx, "inspector-bounds").left() < 2.);
@@ -908,4 +916,395 @@ fn profile_steady_editor_render() {
         "Editor CPU render: {:.3} ms/frame (200 warm frames)",
         start.elapsed().as_secs_f64() * 1000. / 200.
     );
+}
+
+#[test]
+fn inspector_header_and_restore_are_reachable_at_display_scales() {
+    for physical in [Vec2::new(1366., 768.), Vec2::new(1920., 1080.)] {
+        for scale in [1., 1.25, 1.5, 1.75, 2.] {
+            let size = physical / scale;
+            let ctx = egui::Context::default();
+            let mut app =
+                PixelCraft::with_context(&ctx, Some(PathBuf::from("/tmp/unused-native.png")));
+            for _ in 0..3 {
+                discard_frame(&mut app, &ctx, size, scale, vec![]);
+            }
+            let inspector = layout_rect(&ctx, "inspector-bounds");
+            let collapse = layout_rect(&ctx, "inspector-toggle");
+            assert!(
+                inspector.contains_rect(collapse),
+                "collapse must be in inspector header: {collapse:?} in {inspector:?}"
+            );
+            assert!(collapse.top() < inspector.top() + 40.);
+            discard_frame(&mut app, &ctx, size, scale, click(collapse.center()));
+            discard_frame(&mut app, &ctx, size, scale, vec![]);
+            assert!(!app.inspector_open);
+            let restore = layout_rect(&ctx, "inspector-toggle");
+            assert!(Rect::from_min_size(Pos2::ZERO, size).contains_rect(restore));
+            assert!(restore.left() < 12. && restore.right() < 44.);
+            discard_frame(&mut app, &ctx, size, scale, click(restore.center()));
+            discard_frame(&mut app, &ctx, size, scale, vec![]);
+            assert!(app.inspector_open);
+        }
+    }
+}
+
+#[test]
+fn native_close_requests_protect_active_and_background_dirty_tabs() {
+    for background in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
+        if background {
+            app.open_document(Document::new(8, 8), None);
+        }
+        let mut raw = input(Vec2::new(1180., 840.), 1., vec![]);
+        raw.viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let mut out = ctx.run_ui(raw, |ui| app.render(ui));
+        assert!(
+            out.viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|c| matches!(c, egui::ViewportCommand::CancelClose))
+        );
+        assert!(matches!(app.pending, Some(Pending::Close)));
+        assert_eq!(app.active_tab, 0);
+        assert!(app.dirty());
+        out.textures_delta.clear();
+    }
+}
+
+fn text_position(output: &mut egui::FullOutput, label: &str) -> Pos2 {
+    output.textures_delta.clear();
+    output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == label => {
+                Some(text.pos + text.galley.size() * 0.5)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("Missing visible label: {label}"))
+}
+
+#[test]
+fn view_menu_can_hide_and_restore_inspector() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("/tmp/unused-menu.png")));
+    let size = Vec2::new(1180., 840.);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    for expected in [false, true] {
+        let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+        let menu = text_position(&mut out, "View");
+        discard_frame(&mut app, &ctx, size, 1., click(menu));
+        let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+        let item = text_position(
+            &mut out,
+            if expected {
+                "Show inspector"
+            } else {
+                "Hide inspector"
+            },
+        );
+        discard_frame(&mut app, &ctx, size, 1., click(item));
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        assert_eq!(app.inspector_open, expected);
+    }
+}
+
+#[test]
+fn native_close_dialog_cancel_preserves_edits_and_discard_checks_remaining_tabs() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
+    app.open_document(Document::new(8, 8), None);
+    app.doc.set_pixel(0, 0, 0, [4, 5, 6, 255]);
+    let size = Vec2::new(1180., 840.);
+    let close = |app: &mut PixelCraft| {
+        let mut raw = input(size, 1., vec![]);
+        raw.viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .events
+            .push(egui::ViewportEvent::Close);
+        let mut out = ctx.run_ui(raw, |ui| app.render(ui));
+        out.textures_delta.clear();
+    };
+    close(&mut app);
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let cancel = text_position(&mut out, "Cancel");
+    discard_frame(&mut app, &ctx, size, 1., click(cancel));
+    assert!(app.pending.is_none());
+    assert!(app.dirty());
+    close(&mut app);
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let discard = text_position(&mut out, "Discard changes");
+    discard_frame(&mut app, &ctx, size, 1., click(discard));
+    assert_eq!(app.active_tab, 0);
+    assert!(app.dirty());
+    assert!(matches!(app.pending, Some(Pending::Close)));
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let discard = text_position(&mut out, "Discard changes");
+    let mut out = frame(&mut app, &ctx, size, 1., click(discard));
+    assert!(
+        out.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|c| matches!(c, egui::ViewportCommand::Close))
+    );
+    out.textures_delta.clear();
+}
+
+#[test]
+fn preview_fit_uses_available_width_and_preserves_sprite_aspect() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.doc = Document::new(200, 100);
+    let mut output = ctx.run_ui(input(Vec2::new(640., 400.), 1., vec![]), |ui| {
+        app.sprite_preview(ui);
+    });
+    output.textures_delta.clear();
+    let texture = app.preview.as_ref().unwrap().id();
+    let image = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Mesh(mesh) if mesh.texture_id == texture => Some(mesh.calc_bounds()),
+            _ => None,
+        })
+        .expect("sprite image painted");
+    assert!(
+        image.width() > 600.,
+        "Fit should use the panel width: {image:?}"
+    );
+    assert!((image.width() / image.height() - 2.).abs() < 0.001);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn preview_resize_pan_and_preferences_survive_restart() {
+    let size = Vec2::new(1366., 900.);
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let directory = std::env::temp_dir().join(format!("pixelcraft-preview-{}", std::process::id()));
+    let path = directory.join("preview.json");
+    let _ = std::fs::remove_dir_all(&directory);
+    app.restore_preview_settings(path.clone());
+    app.open_document(Document::new(256, 256), None);
+    app.preview_settings.zoom = 4;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let panel = layout_rect(&ctx, "pinned-preview-bounds");
+    let from = panel.center_top() + Vec2::new(0., 4.);
+    drag_layout(&mut app, &ctx, size, from, from - Vec2::new(0., 90.));
+    let taller = layout_rect(&ctx, "pinned-preview-bounds");
+    assert!(
+        taller.height() > panel.height() + 70.,
+        "{panel:?} -> {taller:?}"
+    );
+    let viewport = layout_rect(&ctx, "preview-viewport");
+    drag_layout(
+        &mut app,
+        &ctx,
+        size,
+        viewport.center(),
+        viewport.center() + Vec2::new(30., 24.),
+    );
+    assert!(
+        app.preview_pan.x > 20. && app.preview_pan.y > 15.,
+        "{:?}",
+        app.preview_pan
+    );
+    let mut restarted = PixelCraft::with_context(&egui::Context::default(), None);
+    restarted.restore_preview_settings(path);
+    assert_eq!(restarted.preview_settings.zoom, 4);
+    assert_eq!(
+        restarted.preview_settings.height,
+        app.preview_settings.height
+    );
+    // A short window constrains the visible area without overwriting the user's height.
+    let remembered = app.preview_settings.height;
+    discard_frame(&mut app, &ctx, Vec2::new(683., 384.), 1., vec![]);
+    assert_eq!(remembered, app.preview_settings.height);
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    assert!((layout_rect(&ctx, "pinned-preview-bounds").height() - taller.height()).abs() < 2.);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn preview_zoom_frame_sync_and_controls_across_sizes_and_scales() {
+    for scale in [1., 1.25, 1.5, 2.] {
+        for size in [
+            Vec2::new(683., 384.),
+            Vec2::new(1366., 768.),
+            Vec2::new(1920., 1080.),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = PixelCraft::with_context(&ctx, None);
+            app.open_document(Document::new(320, 160), None);
+            let tab = app.active_tab;
+            app.doc.add_frame(0, false);
+            for zoom in [0, 1, 2, 3, 4] {
+                app.preview_settings.zoom = zoom;
+                for _ in 0..3 {
+                    discard_frame(&mut app, &ctx, size, scale, vec![]);
+                }
+                let inspector = layout_rect(&ctx, "inspector-bounds");
+                let panel = layout_rect(&ctx, "pinned-preview-bounds");
+                let viewport = layout_rect(&ctx, "preview-viewport");
+                let image = layout_rect(&ctx, "preview-image");
+                let controls = layout_rect(&ctx, "preview-controls");
+                assert!((panel.bottom() - inspector.bottom()).abs() < 4.);
+                assert!(
+                    panel.contains_rect(controls),
+                    "{size:?} @ {scale}: {controls:?} in {panel:?}"
+                );
+                assert!(panel.contains_rect(viewport));
+                assert!(controls.bottom() <= viewport.top());
+                if zoom == 0 {
+                    assert!(
+                        image.width() <= viewport.width() + 1.
+                            && image.height() <= viewport.height() + 1.
+                    );
+                    assert!((image.width() / image.height() - 2.).abs() < 0.001);
+                } else {
+                    assert!(
+                        (image.width() * ctx.pixels_per_point() - 320. * zoom as f32).abs() < 0.01
+                    );
+                }
+                app.playing = true;
+                app.last_tick = Instant::now() - Duration::from_secs(1);
+                let previous = app.frame;
+                discard_frame(&mut app, &ctx, size, scale, vec![]);
+                assert_ne!(previous, app.frame);
+                assert_eq!(
+                    app.preview.as_ref().unwrap().id(),
+                    app.frame_texture(&ctx, app.frame).id()
+                );
+                app.playing = false;
+            }
+            app.open_document(Document::new(40, 80), None);
+            discard_frame(&mut app, &ctx, size, scale, vec![]);
+            assert_eq!(app.preview.as_ref().unwrap().size(), [40, 80]);
+            app.switch_tab(tab);
+            discard_frame(&mut app, &ctx, size, scale, vec![]);
+            assert_eq!(app.preview.as_ref().unwrap().size(), [320, 160]);
+            assert_eq!(app.preview_settings.zoom, 4);
+        }
+    }
+}
+
+#[test]
+fn preview_zoom_menu_selects_and_saves_fit_and_integer_choices() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(683., 500.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let directory =
+        std::env::temp_dir().join(format!("pixelcraft-preview-menu-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    app.restore_preview_settings(directory.join("preview.json"));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1.5, vec![]);
+    }
+    for (zoom, label) in [(2, "2×"), (1, "1:1"), (3, "3×"), (4, "4×"), (0, "Fit")] {
+        let previous = match app.preview_settings.zoom {
+            0 => "Fit".into(),
+            1 => "1:1".into(),
+            n => format!("{n}×"),
+        };
+        let mut output = frame(&mut app, &ctx, size, 1.5, vec![]);
+        output.textures_delta.clear();
+        let controls = layout_rect(&ctx, "preview-controls");
+        let selector = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text)
+                    if text.galley.job.text == previous && controls.contains(text.pos) =>
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Preview zoom selector");
+        discard_frame(&mut app, &ctx, size, 1.5, click(selector));
+        let mut output = frame(&mut app, &ctx, size, 1.5, vec![]);
+        output.textures_delta.clear();
+        let option = output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Preview zoom option");
+        discard_frame(&mut app, &ctx, size, 1.5, click(option));
+        assert_eq!(app.preview_settings.zoom, zoom);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("preview.json")).unwrap())
+                .unwrap();
+        assert_eq!(saved["zoom"], zoom);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn interaction_audit_buttons_and_switches_obey_enabled_and_keyboard_states() {
+    for dark in [false, true] {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.set_dark_mode(&ctx, dark);
+        let mut value = false;
+        let mut hits = 0;
+        let mut button = Rect::NOTHING;
+        let mut switch = Rect::NOTHING;
+        let mut draw = |enabled: bool, events: Vec<egui::Event>, focus: u8| {
+            let mut out = ctx.run_ui(input(Vec2::new(400., 180.), 1., events), |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    let response = ui_icons::button(ui, "play", "Play", false, false);
+                    button = response.rect;
+                    assert_eq!(response.enabled(), enabled);
+                    if focus == 1 {
+                        response.request_focus();
+                    }
+                    if response.clicked() {
+                        hits += 1;
+                    }
+                    let response = fluent::toggle(ui, &mut value, "Pixel grid");
+                    switch = response.rect;
+                    assert_eq!(response.enabled(), enabled);
+                    if focus == 2 {
+                        response.request_focus();
+                    }
+                });
+            });
+            out.textures_delta.clear();
+            (button, switch, hits, value)
+        };
+        let (b, s, _, _) = draw(false, vec![], 0);
+        assert_eq!(draw(false, click(b.center()), 0).2, 0);
+        assert!(!draw(false, click(s.center()), 0).3);
+        draw(true, vec![], 0);
+        assert_eq!(draw(true, click(b.center()), 0).2, 1);
+        assert!(draw(true, click(s.center()), 0).3);
+        draw(true, vec![], 1);
+        assert_eq!(draw(true, vec![key_event(Key::Enter)], 0).2, 2);
+        let mut release = key_event(Key::Enter);
+        if let egui::Event::Key { pressed, .. } = &mut release {
+            *pressed = false;
+        }
+        draw(true, vec![release], 2);
+        assert!(!draw(true, vec![key_event(Key::Enter)], 0).3);
+    }
 }
