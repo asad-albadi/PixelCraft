@@ -5,7 +5,8 @@ use std::{
     path::Path,
 };
 const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x01";
-const MAX_PROJECT_BYTES: u64 = 1_500_000_000;
+// Four 3-digit channels, commas and brackets can use 18 JSON bytes per pixel.
+const MAX_PROJECT_BYTES: u64 = MAX_DOCUMENT_PIXELS as u64 * 18 + 128 * 1024 * 1024;
 fn u16at(b: &[u8], p: usize) -> Result<u16, String> {
     Ok(u16::from_le_bytes(
         b.get(p..p + 2)
@@ -497,8 +498,9 @@ pub fn decode_ase_with_resolver(
         || h == 0
         || w > MAX_DIMENSION
         || h > MAX_DIMENSION
+        || w * h > MAX_PIXELS
         || frames == 0
-        || w * h * frames > MAX_PIXELS
+        || w * h * frames > MAX_DOCUMENT_PIXELS
     {
         return Err("Sprite exceeds canvas or memory limits".into());
     }
@@ -647,7 +649,7 @@ pub fn decode_ase_with_resolver(
                     }
                     let mut q = 16;
                     let name = read_string(data, &mut q)?;
-                    if w * h * frames * (d.layers.len() + 1) > MAX_PIXELS {
+                    if w * h * frames * (d.layers.len() + 1) > MAX_DOCUMENT_PIXELS {
                         return Err("Too many layers for this sprite size".into());
                     }
                     let mut l = Layer::new(name, w, h, frames);

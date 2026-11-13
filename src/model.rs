@@ -10,6 +10,7 @@ pub const MIN_BRUSH_SIZE: i32 = 1;
 pub const MAX_BRUSH_SIZE: i32 = 64;
 pub const MAX_DIMENSION: usize = 16384;
 pub const MAX_PIXELS: usize = 64_000_000;
+pub const MAX_DOCUMENT_PIXELS: usize = 128_000_000;
 pub(crate) fn line_pixels<E>(
     a: (i32, i32),
     b: (i32, i32),
@@ -544,11 +545,12 @@ impl Document {
             || self.height == 0
             || self.width > MAX_DIMENSION
             || self.height > MAX_DIMENSION
+            || self.width.saturating_mul(self.height) > MAX_PIXELS
             || self.durations.is_empty()
             || self.layers.is_empty()
             || self.durations.len() > 65535
             || self.layers.len() > 65535
-            || self.stored_pixels() > MAX_PIXELS
+            || self.stored_pixels() > MAX_DOCUMENT_PIXELS
         {
             return Err("Project dimensions or stored pixel count exceed limits".into());
         }
@@ -663,7 +665,7 @@ impl Document {
             .saturating_mul(self.durations.len())
     }
     pub fn can_grow(&self, pixels: usize) -> bool {
-        self.stored_pixels().saturating_add(pixels) <= MAX_PIXELS
+        self.stored_pixels().saturating_add(pixels) <= MAX_DOCUMENT_PIXELS
     }
     pub fn index(&self, x: i32, y: i32) -> Option<usize> {
         if x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height {

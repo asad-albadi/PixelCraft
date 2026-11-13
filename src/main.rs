@@ -903,7 +903,7 @@ impl PixelCraft {
             ui.heading("Color & project");let mut mode=edited.color_mode;
             egui::ComboBox::from_label("Color mode").selected_text(format!("{:?}",mode)).show_ui(ui,|ui|{for value in [ColorMode::Rgba,ColorMode::Indexed,ColorMode::Grayscale]{ui.pc_selectable_value(&mut mode,value,format!("{:?}",value));}});if mode!=edited.color_mode{edited.set_color_mode(mode);}
             let mut palette_size=edited.palette.len();ui.add(egui::DragValue::new(&mut palette_size).range(1..=256).prefix("Palette entries "));if palette_size!=edited.palette.len(){edited.palette.resize(palette_size,[0,0,0,255]);edited.palette_names.resize(palette_size,String::new());for p in &mut edited.frame_palettes{p.resize(palette_size,[0,0,0,255]);}let mode=edited.color_mode;edited.set_color_mode(mode);self.palette_index=self.palette_index.min(palette_size-1);}
-            ui.small(format!("Canvas: {} × {} · Limit: 16384 per side, 64 million stored pixels",edited.width,edited.height));
+            ui.small(format!("Canvas: {} × {} · Limit: 16384 per side, 128 million pixels across layers and frames",edited.width,edited.height));
             ui.small(format!("Preserved: {} metadata chunks · {} profile bytes · {} off-canvas pixels",edited.metadata.len(),edited.color_profile.len(),edited.layers.iter().flat_map(|l|&l.cel_meta).map(|m|m.outside.len()).sum::<usize>()));
             ui.separator();ui.heading("Active layer & cel");ui.label(&edited.layers[self.layer].name);
             let mut blend=edited.layers[self.layer].blend;

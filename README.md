@@ -133,7 +133,7 @@ Use **Sprite → Properties, layers, tiles & ranges** (also available beside the
 
 The context bar offers round, square, diamond, horizontal and vertical brushes. Ellipses use a symmetric integer rasterizer, including small and degenerate bounds. Pixel-exact agreement with every original editor brush mask is not claimed.
 
-Canvases support up to 16384 pixels per side and 64 million stored canvas pixels across layers/frames. Dimensions and project structures are validated. Cel pixels and indexed buffers use copy-on-write sharing across frame copies and undo snapshots. Undo retains up to 64 steps with a 192 MB allocation budget; a single oversized step is retained. Unchanged frame textures are cached and the checkerboard is clipped to the viewport.
+Canvases support up to 16384 pixels per side and 64 million pixels per canvas and 128 million stored pixels across layers and frames. Dimensions and project structures are validated. Cel pixels and indexed buffers use copy-on-write sharing across frame copies and undo snapshots. Undo retains up to 64 steps with a 192 MB allocation budget; a single oversized step is retained. Unchanged frame textures are cached and the checkerboard is clipped to the viewport.
 
 ## Projects and interchange
 
