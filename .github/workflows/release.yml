@@ -67,7 +67,7 @@ jobs:
         run: |
           xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
           WGPU_BACKEND=metal xvfb-run -a bash checks/graphical-startup.sh target/release/pixelcraft "$RUNNER_TEMP/fallback-linux"
-          rg 'restarting with OpenGL' "$RUNNER_TEMP/fallback-linux/startup.log"
+          grep -F 'restarting with OpenGL' "$RUNNER_TEMP/fallback-linux/startup.log"
 
       - name: Set artifact version
         shell: bash
