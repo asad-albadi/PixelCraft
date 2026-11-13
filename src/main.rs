@@ -220,6 +220,7 @@ struct PixelCraft {
     named_colors: Vec<(String, Pixel)>,
     active_color: usize,
     used_colors_snapshot: Option<Document>,
+    used_colors_job: Option<std::sync::mpsc::Receiver<(Document, Vec<Pixel>)>>,
     used_colors: Vec<Pixel>,
     brush: i32,
     zoom: f32,
@@ -248,6 +249,15 @@ struct PixelCraft {
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
     cel_occupied: Vec<Vec<bool>>,
+    open_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<Document, String>)>>,
+    play_after_open: bool,
+    export_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
+    animation_export: Option<&'static str>,
+    save_job: Option<(
+        usize,
+        std::sync::mpsc::Receiver<(PathBuf, Document, Result<(), String>)>,
+    )>,
+    frame_texture_order: std::collections::VecDeque<usize>,
     onion_texture: Option<egui::TextureHandle>,
     properties_open: bool,
     palette_index: usize,
@@ -353,6 +363,7 @@ impl PixelCraft {
             named_colors: vec![("Primary".into(), DEFAULT_FG)],
             active_color: 0,
             used_colors_snapshot: None,
+            used_colors_job: None,
             used_colors: vec![],
             brush: 1,
             zoom: 10.,
@@ -381,6 +392,12 @@ impl PixelCraft {
             render_snapshot: None,
             frame_textures: vec![],
             cel_occupied: vec![],
+            open_job: None,
+            play_after_open: false,
+            export_job: None,
+            animation_export: None,
+            save_job: None,
+            frame_texture_order: Default::default(),
             onion_texture: None,
             properties_open: false,
             palette_index: 0,
@@ -543,6 +560,8 @@ impl PixelCraft {
     fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
         if self.render_snapshot.as_ref() != Some(&self.doc) {
             self.frame_textures = vec![None; self.doc.durations.len()];
+            self.frame_texture_order.clear();
+            let mut occupied_pixels = std::collections::HashMap::new();
             self.cel_occupied = self
                 .doc
                 .layers
@@ -552,7 +571,9 @@ impl PixelCraft {
                         .map(|f| {
                             l.group
                                 || l.tile_cels[f].iter().any(|v| *v != 0)
-                                || l.cels[f].iter().any(|p| p[3] > 0)
+                                || *occupied_pixels
+                                    .entry(std::sync::Arc::as_ptr(&l.cels[f].0))
+                                    .or_insert_with(|| l.cels[f].iter().any(|p| p[3] > 0))
                         })
                         .collect()
                 })
@@ -560,6 +581,13 @@ impl PixelCraft {
             self.render_snapshot = Some(self.doc.clone());
         }
         if self.frame_textures[f].is_none() {
+            let frame_bytes = self.doc.width * self.doc.height * 4;
+            let capacity = (64 * 1024 * 1024 / frame_bytes).max(1);
+            if self.frame_texture_order.len() >= capacity
+                && let Some(old) = self.frame_texture_order.pop_front()
+            {
+                self.frame_textures[old] = None;
+            }
             let pixels = pixelcraft::color::display_pixels(&self.doc, f).unwrap_or_else(|error| {
                 self.status = format!("Color profile: {error}; showing unconverted values");
                 self.doc.composite(f)
@@ -569,6 +597,7 @@ impl PixelCraft {
                 color_image(&pixels, self.doc.width, self.doc.height),
                 egui::TextureOptions::NEAREST,
             ));
+            self.frame_texture_order.push_back(f);
         }
         self.frame_textures[f].as_ref().unwrap().clone()
     }
@@ -618,6 +647,23 @@ impl PixelCraft {
             }
         }
         self.doc.drawing_index = None;
+    }
+    fn update_playback_clock(&mut self, now: Instant) -> Duration {
+        let duration =
+            |app: &Self| Duration::from_millis(u64::from(app.doc.durations[app.frame].max(1)));
+        let mut elapsed = now.saturating_duration_since(self.last_tick);
+        // A long suspension should not make the editor replay a backlog.
+        if elapsed > Duration::from_secs(1) {
+            self.last_tick = now;
+            return duration(self);
+        }
+        while elapsed >= duration(self) {
+            let step = duration(self);
+            self.last_tick += step;
+            elapsed -= step;
+            self.advance_playback();
+        }
+        duration(self) - elapsed
     }
     fn advance_playback(&mut self) {
         if let Some(t) = self.active_tag.and_then(|i| self.doc.tags.get(i)) {
@@ -996,6 +1042,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.rename.is_some()
             || self.help
             || self.properties_open
+            || self.animation_export.is_some()
             || self.studio.open
             || self.studio.sheet_open
             || self.studio.tiles_open
@@ -1134,6 +1181,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.status = "Switched sprite".into();
     }
     fn request(&mut self, p: Pending) {
+        if self.save_job.is_some() && matches!(p, Pending::CloseTab) {
+            self.status = "Wait for the current save before closing a tab".into();
+            return;
+        }
         if self.dirty() && matches!(p, Pending::Close | Pending::CloseTab) {
             self.pending = Some(p)
         } else {
@@ -1161,18 +1212,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     )
                     .pick_file()
                 {
-                    match formats::load(&path) {
-                        Ok(d) => {
-                            self.add_recent(path.clone());
-                            let ase = matches!(
-                                path.extension().and_then(|e| e.to_str()),
-                                Some("pixel" | "ase" | "aseprite")
-                            );
-                            self.open_document(d, if ase { Some(path) } else { None });
-                            self.status = "Opened sprite".into();
-                        }
-                        Err(e) => self.status = format!("Could not open: {e}"),
-                    }
+                    self.open_recent(path);
                 }
             }
             Pending::CloseTab => {
@@ -1201,15 +1241,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.switch_tab(index);
                 self.pending = Some(Pending::Close);
             } else {
-                self.autosave(true);
+                self.autosave(true, ctx);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         } else {
             self.perform(pending);
-            self.autosave(true);
+            self.autosave(false, ctx);
         }
     }
     fn save(&mut self, as_new: bool) -> bool {
+        if self.save_job.is_some() {
+            self.status = "A save is already running".into();
+            return false;
+        }
         let path = if !as_new { self.path.clone() } else { None }.or_else(|| {
             rfd::FileDialog::new()
                 .add_filter("PixelCraft project", &["pixel"])
@@ -1273,7 +1317,52 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 _ => return false,
             }
         }
-        self.finish_save(path, saving)
+        if self.pending.is_some() || saving != self.doc {
+            return self.finish_save(path, saving);
+        }
+        self.queue_save(path, saving);
+        false
+    }
+    fn queue_save(&mut self, path: PathBuf, saving: Document) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.save_job = Some((self.active_tab, rx));
+        self.status = format!(
+            "Saving {}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        std::thread::spawn(move || {
+            let result = formats::save(&path, &saving);
+            let _ = tx.send((path, saving, result));
+        });
+    }
+    fn poll_save(&mut self) {
+        let Some((tab, job)) = &self.save_job else {
+            return;
+        };
+        let tab = *tab;
+        let result = job.try_recv();
+        if matches!(result, Err(std::sync::mpsc::TryRecvError::Empty)) {
+            return;
+        }
+        self.save_job = None;
+        match result {
+            Ok((path, saving, Ok(()))) => {
+                self.add_recent(path.clone());
+                self.status = format!(
+                    "Saved {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                );
+                if tab == self.active_tab {
+                    self.path = Some(path);
+                    self.saved = saving;
+                } else if let Some(Some(tab)) = self.tabs.get_mut(tab) {
+                    tab.path = Some(path);
+                    tab.saved = saving;
+                }
+            }
+            Ok((_, _, Err(e))) => self.status = format!("Could not save: {e}"),
+            Err(_) => self.status = "Save worker stopped unexpectedly".into(),
+        }
     }
     fn finish_save(&mut self, path: PathBuf, saving: Document) -> bool {
         match formats::save(&path, &saving) {
@@ -1298,37 +1387,74 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn export(&mut self, kind: &str) {
-        let ext = if kind == "gif" {
-            "gif"
-        } else if kind == "bmp" {
-            "bmp"
-        } else {
-            "png"
+        if self.export_job.is_some() {
+            self.status = "An export is already running".into();
+            return;
+        }
+        let ext = match kind {
+            "gif" => "gif",
+            "mp4" => "mp4",
+            "bmp" => "bmp",
+            _ => "png",
         };
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Export", &[ext])
             .set_file_name(format!("sprite.{ext}"))
             .save_file()
         {
-            let result = if kind == "gif" {
-                formats::export_gif(&path, &self.doc)
-            } else {
-                formats::export_raster_scaled(
-                    &path,
-                    &self.doc,
-                    self.frame,
-                    kind == "sheet",
-                    self.studio.sheet.scale,
-                )
-            };
-            self.status = match result {
+            if matches!(kind, "gif" | "mp4")
+                && !path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case(ext))
+            {
+                self.status = format!("Export failed: choose a .{ext} filename");
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            let doc = self.doc.clone();
+            let frame = self.frame;
+            let scale = self.studio.sheet.scale;
+            let gif = kind == "gif";
+            let video = kind == "mp4";
+            let sheet = kind == "sheet";
+            self.status = format!(
+                "Exporting {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
+            self.export_job = Some(rx);
+            std::thread::spawn(move || {
+                let result = if gif || video {
+                    pixelcraft::automation::write_animation_export(
+                        if gif { "gif" } else { "mp4" },
+                        &path,
+                        &doc,
+                        scale,
+                    )
+                } else {
+                    formats::export_raster_scaled(&path, &doc, frame, sheet, scale)
+                };
+                let _ = tx.send((path, result));
+            });
+        }
+    }
+    fn poll_export(&mut self) {
+        let Some(job) = &self.export_job else { return };
+        let result = job.try_recv();
+        if matches!(result, Err(std::sync::mpsc::TryRecvError::Empty)) {
+            return;
+        }
+        self.export_job = None;
+        self.status = match result {
+            Ok((path, result)) => match result {
                 Ok(()) => format!(
                     "Exported {}",
                     path.file_name().unwrap_or_default().to_string_lossy()
                 ),
                 Err(e) => format!("Export failed: {e}"),
-            };
-        }
+            },
+            Err(_) => "Export worker stopped unexpectedly".into(),
+        };
     }
     fn copy(&mut self) {
         self.clipboard_target = None;
@@ -1475,7 +1601,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "saveas" => {
                 self.save(true);
             }
-            "png" | "bmp" | "sheet" | "gif" => self.export(s),
+            "png" | "bmp" | "sheet" => self.export(s),
+            "gif" => self.animation_export = Some("gif"),
+            "mp4" => self.animation_export = Some("mp4"),
             "undo" => self.undo(),
             "redo" => self.redo(),
             "copy" => self.copy(),
@@ -1847,6 +1975,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export PNG…", "png"),
                         ("Export sprite sheet…", "sheet"),
                         ("Export animation GIF…", "gif"),
+                        ("Export video MP4…", "mp4"),
                         ("Export Tiled map…", "tiledexport"),
                         ("Export BMP…", "bmp"),
                         ("Open sample garden", "demo"),
@@ -2110,63 +2239,95 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.active_color = self.named_colors.len() - 1;
     }
     fn sprite_colors(&mut self) -> Vec<Pixel> {
+        if let Some(job) = &self.used_colors_job {
+            match job.try_recv() {
+                Ok((snapshot, colors)) => {
+                    self.used_colors_job = None;
+                    if same_color_artwork(&snapshot, &self.doc) {
+                        self.used_colors_snapshot = Some(snapshot);
+                        self.used_colors = colors;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return self.used_colors.clone(),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.used_colors_job = None,
+            }
+        }
         if !self
             .used_colors_snapshot
             .as_ref()
             .is_some_and(|old| same_color_artwork(old, &self.doc))
         {
-            let mut counts = std::collections::BTreeMap::<Pixel, u64>::new();
-            for (index, layer) in self.doc.layers.iter().enumerate() {
-                if layer.group {
-                    continue;
-                }
-                for frame in 0..layer.cels.len() {
-                    if layer.tileset.is_some() {
-                        for pixel in self.doc.layer_pixels(index, frame) {
-                            if pixel[3] != 0 {
-                                *counts.entry(pixel).or_default() += 1;
-                            }
-                        }
-                    } else {
-                        for &pixel in &layer.cels[frame] {
-                            if pixel[3] != 0 {
-                                *counts.entry(pixel).or_default() += 1;
-                            }
-                        }
-                    }
-                }
+            if self.doc.stored_pixels() > 1_000_000 {
+                let snapshot = self.doc.clone();
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.used_colors_job = Some(rx);
+                std::thread::spawn(move || {
+                    let colors = Self::compute_sprite_colors(&snapshot);
+                    let _ = tx.send((snapshot, colors));
+                });
+                return self.used_colors.clone();
             }
-            let mut colors: Vec<_> = counts.into_iter().collect();
-            colors.sort_by_key(|&(pixel, count)| (std::cmp::Reverse(count), pixel));
-            let mut groups: Vec<(Pixel, u64)> = Vec::new();
-            for (pixel, count) in colors {
-                let nearest = groups
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (representative, _))| {
-                        let distance: i32 = pixel
-                            .iter()
-                            .zip(representative)
-                            .map(|(&a, &b)| (a as i32 - b as i32).pow(2))
-                            .sum();
-                        (distance, i)
-                    })
-                    .min();
-                // Keep real artwork colors as representatives. Merge nearby shades,
-                // and assign remaining shades to their nearest group once ten exist.
-                if let Some((_, index)) =
-                    nearest.filter(|&(d, _)| d <= 48 * 48 || groups.len() == 10)
-                {
-                    groups[index].1 += count;
-                } else {
-                    groups.push((pixel, count));
-                }
-            }
-            groups.sort_by_key(|&(pixel, count)| (std::cmp::Reverse(count), pixel));
-            self.used_colors = groups.into_iter().map(|(pixel, _)| pixel).collect();
+            self.used_colors = Self::compute_sprite_colors(&self.doc);
             self.used_colors_snapshot = Some(self.doc.clone());
         }
         self.used_colors.clone()
+    }
+    fn compute_sprite_colors(doc: &Document) -> Vec<Pixel> {
+        let mut counts = std::collections::BTreeMap::<Pixel, u64>::new();
+        let mut unique = std::collections::HashMap::new();
+        for (index, layer) in doc.layers.iter().enumerate() {
+            if layer.group {
+                continue;
+            }
+            for frame in 0..layer.cels.len() {
+                if layer.tileset.is_some() {
+                    for pixel in doc.layer_pixels(index, frame) {
+                        if pixel[3] != 0 {
+                            *counts.entry(pixel).or_default() += 1;
+                        }
+                    }
+                } else {
+                    let cel = &layer.cels[frame];
+                    unique
+                        .entry(std::sync::Arc::as_ptr(&cel.0))
+                        .and_modify(|entry: &mut (&Pixels, u64)| entry.1 += 1)
+                        .or_insert((cel, 1));
+                }
+            }
+        }
+        for (_, (cel, uses)) in unique {
+            for &pixel in cel {
+                if pixel[3] != 0 {
+                    *counts.entry(pixel).or_default() += uses;
+                }
+            }
+        }
+        let mut colors: Vec<_> = counts.into_iter().collect();
+        colors.sort_by_key(|&(pixel, count)| (std::cmp::Reverse(count), pixel));
+        let mut groups: Vec<(Pixel, u64)> = Vec::new();
+        for (pixel, count) in colors {
+            let nearest = groups
+                .iter()
+                .enumerate()
+                .map(|(i, (representative, _))| {
+                    let distance: i32 = pixel
+                        .iter()
+                        .zip(representative)
+                        .map(|(&a, &b)| (a as i32 - b as i32).pow(2))
+                        .sum();
+                    (distance, i)
+                })
+                .min();
+            // Keep real artwork colors as representatives. Merge nearby shades,
+            // and assign remaining shades to their nearest group once ten exist.
+            if let Some((_, index)) = nearest.filter(|&(d, _)| d <= 48 * 48 || groups.len() == 10) {
+                groups[index].1 += count;
+            } else {
+                groups.push((pixel, count));
+            }
+        }
+        groups.sort_by_key(|&(pixel, count)| (std::cmp::Reverse(count), pixel));
+        groups.into_iter().map(|(pixel, _)| pixel).collect()
     }
     fn drawing_palette_index(&self, color: Pixel) -> Option<usize> {
         let palette = self.doc.palette_for(self.frame);
@@ -2225,9 +2386,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn timeline(&mut self, ui: &mut egui::Ui) {
-        let textures: Vec<_> = (0..self.doc.durations.len().min(256))
-            .map(|f| self.frame_texture(ui.ctx(), f))
-            .collect();
+        // The timeline must not composite every frame when a single cel changes.
+        // Show thumbnails for frames the canvas or playback has already rendered.
+        let _ = self.frame_texture(ui.ctx(), self.frame);
         let mut a = None;
         let wide = ui.available_width() > 1100.;
         let narrow = ui.available_width() < 700.;
@@ -2309,7 +2470,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             if ui
                                 .add_sized(
                                     [cell_width, header_height],
-                                    if let Some(t) = textures.get(f) {
+                                    if let Some(Some(t)) = self.frame_textures.get(f) {
                                         egui::Button::image_and_text(
                                             egui::Image::new((t.id(), Vec2::new(20., 20.))),
                                             (f + 1).to_string(),
@@ -2943,6 +3104,43 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         );
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(kind) = self.animation_export {
+            let mut accept = false;
+            let title = if kind == "gif" {
+                "Export animated GIF"
+            } else {
+                "Export MP4 video"
+            };
+            if fluent::modal_dialog(ctx, title, |ui| {
+                self.export_scale_ui(ui);
+                let scale = self.studio.sheet.scale;
+                let width = self.doc.width.saturating_mul(scale);
+                let height = self.doc.height.saturating_mul(scale);
+                let dimensions = if kind == "mp4" {
+                    ui.small("60 fps. Transparency is composited onto black. Requires FFmpeg with libx264 on PATH.");
+                    (width.next_multiple_of(2), height.next_multiple_of(2))
+                } else {
+                    (width, height)
+                };
+                ui.label(format!(
+                    "{} × {} · {} animation frames",
+                    dimensions.0,
+                    dimensions.1,
+                    self.doc.durations.len()
+                ));
+                if ui.pc_button("Choose export location…").clicked() {
+                    accept = true;
+                    true
+                } else {
+                    ui.pc_button("Cancel").clicked()
+                }
+            }) {
+                self.animation_export = None;
+                if accept {
+                    self.export(kind);
+                }
+            }
+        }
         if self.status.starts_with("Could not") || self.status.starts_with("Export failed") {
             if fluent::modal_dialog(ctx, "File operation failed", |ui| {
                 ui.label(&self.status);
@@ -3113,7 +3311,7 @@ if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}}
                     ui.label("Selections support copy, cut, paste and delete on the active layer. Paste starts at the selection's top-left, or the canvas origin.");
                     ui.separator();
                     ui.strong("File support");
-                    ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets and GIF animations.");
+                    ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets, animated GIF and MP4.");
                     ui.label("Properties in the Sprite menu opens color modes, groups, blend modes, cel opacity, tile editing and named animation ranges. ASE profiles, metadata and off-canvas image pixels are retained. Embedded ICC profiles are converted to sRGB for display; source pixels are retained.");
                     ui.label("PixelCraft is standalone. Extensions install into its own data directory. Lua, JSON themes, palettes and shortcuts run here through the documented supported native API.");
                 });
@@ -3149,7 +3347,17 @@ impl PixelCraft {
                 self.open_recent(file.path().to_path_buf());
             }
         }
-        self.autosave(ctx.input(|i| i.viewport().close_requested()));
+        self.autosave(false, &ctx);
+        self.poll_open_document();
+        self.poll_export();
+        self.poll_save();
+        if self.open_job.is_some()
+            || self.export_job.is_some()
+            || self.save_job.is_some()
+            || self.used_colors_job.is_some()
+        {
+            ctx.request_repaint_after(Duration::from_millis(25));
+        }
         ctx.request_repaint_after(Duration::from_secs(15));
         if let Some(next_check) = self.next_update_check {
             if Instant::now() >= next_check && self.update_job.is_none() {
@@ -3236,7 +3444,10 @@ impl PixelCraft {
         if self.script_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
-        if ctx.input(|i| i.viewport().close_requested())
+        if self.save_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.status = "Wait for the current save before closing PixelCraft".into();
+        } else if ctx.input(|i| i.viewport().close_requested())
             && !self.dirty()
             && let Some(i) = self
                 .tabs
@@ -3245,7 +3456,8 @@ impl PixelCraft {
         {
             self.switch_tab(i);
         }
-        if ctx.input(|i| i.viewport().close_requested()) && self.dirty() {
+        if self.save_job.is_none() && ctx.input(|i| i.viewport().close_requested()) && self.dirty()
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending = Some(Pending::Close);
         }
@@ -3253,12 +3465,7 @@ impl PixelCraft {
             self.shortcuts(&ctx)
         }
         if self.playing {
-            let ms = self.doc.durations[self.frame] as u64;
-            if self.last_tick.elapsed() >= Duration::from_millis(ms) {
-                self.advance_playback();
-                self.last_tick = Instant::now();
-            }
-            ctx.request_repaint_after(Duration::from_millis(10));
+            ctx.request_repaint_after(self.update_playback_clock(Instant::now()));
         }
         if self.dialog_open() {
             ui.disable();
@@ -3659,8 +3866,20 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let mut shot = None;
+    let mut opening = None;
+    let mut play = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
+        if a == "--open" {
+            opening = Some(PathBuf::from(args.next().ok_or_else(|| {
+                eframe::Error::AppCreation("--open requires a project path".into())
+            })?));
+            continue;
+        }
+        if a == "--play" {
+            play = true;
+            continue;
+        }
         if a == "--standalone-check" {
             let root = args
                 .next()
@@ -3707,7 +3926,11 @@ fn main() -> eframe::Result {
             "PixelCraft",
             options,
             Box::new(move |cc| {
-                let app = PixelCraft::new(cc, shot);
+                let mut app = PixelCraft::new(cc, shot);
+                if let Some(path) = opening {
+                    app.open_recent(path);
+                    app.play_after_open = play;
+                }
                 created.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok(Box::new(app))
             }),

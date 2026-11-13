@@ -2377,6 +2377,7 @@ name = "pixelcraft"
 version = "0.5.2"
 dependencies = [
  "arboard",
+ "base64",
  "eframe",
  "flate2",
  "image",

@@ -14,4 +14,5 @@ pub mod workflows;
 
 pub mod atlas;
 pub mod automation;
+mod automation_paint;
 pub mod productivity;

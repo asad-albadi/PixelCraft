@@ -55,6 +55,7 @@ pub(super) struct PowerTools {
     pub bridge_generation: u64,
     bridge_tab: usize,
     bridge_session: String,
+    bridge_work: Option<std::sync::mpsc::Receiver<PreparedLive>>,
     pub shade_seen: std::collections::HashSet<usize>,
     ramp_from: usize,
     ramp_to: usize,
@@ -90,6 +91,7 @@ impl Default for PowerTools {
             bridge_generation: 0,
             bridge_tab: 0,
             bridge_session: format!("{}-{:?}", std::process::id(), std::time::SystemTime::now()),
+            bridge_work: None,
             shade_seen: Default::default(),
             ramp_from: 0,
             ramp_to: 1,
@@ -98,6 +100,19 @@ impl Default for PowerTools {
             shortcut_action: "wand".into(),
         }
     }
+}
+
+enum LiveResult {
+    Read(serde_json::Value),
+    Export(automation::PreparedExport),
+    Save(automation::PreparedExport, Document),
+    Edit(Document, serde_json::Value),
+}
+
+struct PreparedLive {
+    request: automation::LiveRequest,
+    revision: String,
+    result: Result<LiveResult, String>,
 }
 impl PowerTools {
     pub(super) fn comfortable(&self) -> bool {
@@ -155,7 +170,7 @@ impl PixelCraft {
                     .prefix("Custom "),
             );
         });
-        ui.small("Nearest-neighbor scaling for PNG, BMP and sprite sheets.");
+        ui.small("Nearest-neighbor scaling for PNG, BMP, sprite sheets, GIF and MP4.");
     }
     pub(super) fn density_options(&mut self, ui: &mut egui::Ui) {
         let before = self.power.preferences.comfortable;
@@ -251,7 +266,38 @@ impl PixelCraft {
         self.power.preferences.recent.clone()
     }
     pub(super) fn open_recent(&mut self, p: PathBuf) {
-        match formats::load(&p) {
+        if self.open_job.is_some() {
+            self.status = "A file is already opening".into();
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.status = format!(
+            "Opening {}",
+            p.file_name().unwrap_or_default().to_string_lossy()
+        );
+        self.open_job = Some(rx);
+        std::thread::spawn(move || {
+            let result = formats::load(&p);
+            let _ = tx.send((p, result));
+        });
+    }
+
+    pub(super) fn poll_open_document(&mut self) {
+        if self.start.is_some() || self.script_job.is_some() {
+            return;
+        }
+        let Some(job) = &self.open_job else { return };
+        let (p, result) = match job.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.open_job = None;
+                self.status = "File loading worker stopped unexpectedly".into();
+                return;
+            }
+        };
+        self.open_job = None;
+        match result {
             Ok(d) => {
                 self.add_recent(p.clone());
                 let editable = matches!(
@@ -259,8 +305,16 @@ impl PixelCraft {
                     Some("pixel" | "ase" | "aseprite")
                 );
                 self.open_document(d, editable.then_some(p));
+                if std::mem::take(&mut self.play_after_open) {
+                    self.playing = true;
+                    self.last_tick = Instant::now();
+                }
+                self.status = "Opened sprite".into();
             }
-            Err(e) => self.status = format!("Could not open: {e}"),
+            Err(e) => {
+                self.play_after_open = false;
+                self.status = format!("Could not open: {e}");
+            }
         }
     }
     pub(super) fn draw_selection_mask(&self, painter: &egui::Painter, board: Rect, view: Rect) {
@@ -467,7 +521,7 @@ if ui.pc_button("Add folder…").clicked()&& let Some(dir)=rfd::FileDialog::new(
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
 if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}
 if let Some(k)=remove{self.custom_shortcuts.remove(&k);self.save_shortcut_bindings();}});
- ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));match LiveBridge::start(config){Ok(b)=>{self.power.bridge=Some(b);self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{self.power.bridge=None;self.status="Live editor access disabled".into();}}
+ ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
 if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
  });});
         self.power.open = open;
@@ -673,7 +727,39 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         if self.power.bridge.is_none() {
             return;
         }
-        ctx.request_repaint_after(Duration::from_millis(50));
+        self.sync_live_revision();
+        if let Some(worker) = &self.power.bridge_work {
+            match worker.try_recv() {
+                Ok(result) => {
+                    self.power.bridge_work = None;
+                    self.finish_live_request(result);
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.power.bridge_work = None,
+            }
+        }
+        while let Some(mut request) = self
+            .power
+            .bridge
+            .as_ref()
+            .and_then(|b| b.requests.try_recv().ok())
+        {
+            if let Some((snapshot, revision, frame)) = self.begin_live_request(&mut request) {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.power.bridge_work = Some(rx);
+                let wake = ctx.clone();
+                std::thread::spawn(move || {
+                    let prepared = Self::prepare_live_request(snapshot, revision, frame, request);
+                    let _ = tx.send(prepared);
+                    wake.request_repaint();
+                });
+                break;
+            }
+        }
+    }
+
+    fn sync_live_revision(&mut self) {
         if self.power.bridge_snapshot.as_ref() != Some(&self.doc)
             || self.power.bridge_tab != self.active_tab
         {
@@ -681,117 +767,203 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             self.power.bridge_tab = self.active_tab;
             self.power.bridge_generation += 1;
         }
-        loop {
-            let request = self
-                .power
-                .bridge
-                .as_ref()
-                .and_then(|b| b.requests.try_recv().ok());
-            let Some(request) = request else {
-                break;
-            };
-            self.process_live_request(request);
-        }
     }
-    fn process_live_request(&mut self, request: automation::LiveRequest) {
-        if Instant::now() >= request.deadline {
-            let _ = request
-                .response
-                .send(Err("Live request expired; no changes applied".into()));
-            return;
-        }
-        let revision = format!(
-            "{}:{}:{}",
-            self.power.bridge_session,
-            self.power.bridge_generation,
-            automation::document_revision(&self.doc)
+
+    fn live_revision(&self) -> String {
+        format!(
+            "{}:{}",
+            self.power.bridge_session, self.power.bridge_generation
+        )
+    }
+
+    fn live_busy(&self) -> bool {
+        self.start.is_some()
+            || self.script_job.is_some()
+            || self.extension_session.is_some()
+            || self.power.reference_drag.is_some()
+    }
+
+    fn begin_live_request(
+        &mut self,
+        request: &mut automation::LiveRequest,
+    ) -> Option<(Document, String, usize)> {
+        let revision = self.live_revision();
+        let op = request.operation.as_str();
+        let editing = matches!(
+            op,
+            "live-edit" | "live-commands" | "live-create" | "live-undo" | "live-redo"
         );
+        let saving = matches!(op, "live-save" | "live-save-as");
+        let error = if Instant::now() >= request.deadline {
+            Some("Live request expired; no changes applied")
+        } else if (editing || saving) && self.live_busy() {
+            Some("Editor is busy; finish the active operation first")
+        } else if saving && self.save_job.is_some() {
+            Some("A save is already running")
+        } else if op == "live-save" && self.path.is_none() {
+            Some("The sprite is untitled. Use live-save-as with an output path.")
+        } else if (editing
+            || saving
+            || op == "live-export"
+            || request.arguments.get("revision").is_some())
+            && request.arguments["revision"] != revision
+        {
+            Some("Stale revision; inspect the open sprite again")
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            let _ = request.response.send(Err(error.into()));
+            return None;
+        }
+        if matches!(op, "live-inspect" | "live-undo" | "live-redo") {
+            if op == "live-undo" {
+                self.undo();
+            }
+            if op == "live-redo" {
+                self.redo();
+            }
+            self.sync_live_revision();
+            let mut info = automation::inspect_revision(&self.doc, &self.live_revision());
+            info["path"] = serde_json::json!(self.path);
+            let _ = request.response.send(Ok(info));
+            return None;
+        }
+        if op == "live-save" {
+            request.arguments["output"] = serde_json::json!(self.path);
+        }
+        Some((self.doc.clone(), revision, self.frame))
+    }
+
+    fn prepare_live_request(
+        doc: Document,
+        revision: String,
+        frame: usize,
+        request: automation::LiveRequest,
+    ) -> PreparedLive {
+        let args = &request.arguments;
         let result = (|| {
             if Instant::now() >= request.deadline {
                 return Err("Live request expired; no changes applied".into());
             }
-            match request.operation.as_str() {
-                "live-inspect" => {
-                    let mut v = automation::inspect(&self.doc);
-                    v["revision"] = serde_json::json!(revision);
-                    Ok(v)
-                }
+            let frame = if let Some(value) = args.get("frame") {
+                value
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or("Invalid frame")?
+            } else {
+                frame
+            };
+            let next = match request.operation.as_str() {
                 "live-render" => {
-                    let f = request.arguments["frame"]
-                        .as_u64()
-                        .unwrap_or(self.frame as u64) as usize;
-                    if f >= self.doc.durations.len() {
-                        return Err("Invalid frame".into());
-                    }
-                    let mut value = automation::render_document(&self.doc, f)?;
-                    value["revision"] = serde_json::json!(revision);
-                    Ok(value)
+                    return automation::render_preview(&doc, frame, args, &revision, 4_194_304)
+                        .map(LiveResult::Read);
                 }
-                "live-edit" | "live-commands" | "live-create" | "live-undo" => {
-                    if self.start.is_some()
-                        || self.script_job.is_some()
-                        || self.extension_session.is_some()
-                        || self.power.reference_drag.is_some()
+                "live-export" => {
+                    return automation::prepare_live_export(&doc, frame, args, &revision)
+                        .map(LiveResult::Export);
+                }
+                "live-save" | "live-save-as" => {
+                    let output = args["output"]
+                        .as_str()
+                        .filter(|p| !p.is_empty())
+                        .ok_or("Missing output path")?;
+                    let prepared = automation::prepare_live_save(
+                        &doc,
+                        PathBuf::from(output),
+                        &revision,
+                        request.operation == "live-save",
+                    )?;
+                    return Ok(LiveResult::Save(prepared, doc));
+                }
+                "live-commands" => {
+                    automation::apply_command_batch_until(&doc, args, Some(request.deadline))?
+                }
+                "live-edit" => automation::apply_pixel_batch(&doc, args)?,
+                "live-create" => {
+                    let w = args["width"].as_u64().unwrap_or(0);
+                    let h = args["height"].as_u64().unwrap_or(0);
+                    if w == 0
+                        || h == 0
+                        || w > MAX_DIMENSION as u64
+                        || h > MAX_DIMENSION as u64
+                        || w * h > MAX_PIXELS as u64
                     {
-                        return Err("Editor is busy; finish the active operation first".into());
+                        return Err("Invalid canvas dimensions".into());
                     }
-                    if request.arguments["revision"] != revision {
-                        return Err("Stale revision; inspect the open sprite again".into());
-                    }
-                    if request.operation == "live-undo" {
-                        self.undo();
-                    } else {
-                        let mut args = request.arguments.clone();
-                        args["revision"] =
-                            serde_json::json!(automation::document_revision(&self.doc));
-                        let next = if request.operation == "live-create" {
-                            let w = args["width"].as_u64().unwrap_or(0) as usize;
-                            let h = args["height"].as_u64().unwrap_or(0) as usize;
-                            if w == 0
-                                || h == 0
-                                || w > MAX_DIMENSION
-                                || h > MAX_DIMENSION
-                                || w.saturating_mul(h) > MAX_PIXELS
-                            {
-                                return Err("Invalid canvas dimensions".into());
-                            }
-                            Document::new(w, h)
-                        } else if request.operation == "live-commands" {
-                            automation::apply_commands(&self.doc, &args)?
-                        } else {
-                            automation::apply_edits(&self.doc, &args)?
-                        };
-                        if Instant::now() >= request.deadline {
-                            return Err("Live request expired; no changes applied".into());
-                        }
-                        if request.operation == "live-create" {
-                            let previous = self.doc.clone();
-                            self.open_document(next, None);
-                            self.push_undo(previous);
-                            self.status =
-                                "Assistant created an untitled sprite — Ctrl+Z to undo".into();
-                        } else if next != self.doc {
-                            self.remember();
-                            self.doc = next;
-                            self.clamp();
-                            self.status = "Assistant edited the sprite — Ctrl+Z to undo".into();
-                        }
-                    }
-                    self.power.bridge_generation += 1;
-                    self.power.bridge_snapshot = Some(self.doc.clone());
-                    let mut v = automation::inspect(&self.doc);
-                    v["revision"] = serde_json::json!(format!(
-                        "{}:{}:{}",
-                        self.power.bridge_session,
-                        self.power.bridge_generation,
-                        automation::document_revision(&self.doc)
-                    ));
-                    Ok(v)
+                    Document::new(w as usize, h as usize)
                 }
-                _ => Err("Unknown live operation".into()),
-            }
+                _ => return Err("Unknown live operation".into()),
+            };
+            let bounds = if request.operation == "live-create" {
+                serde_json::json!([])
+            } else {
+                automation::changed_cel_bounds(&doc, &next)
+            };
+            Ok(LiveResult::Edit(next, bounds))
         })();
-        let _ = request.response.send(result);
+        PreparedLive {
+            request,
+            revision,
+            result,
+        }
+    }
+
+    fn finish_live_request(&mut self, prepared: PreparedLive) {
+        let result = prepared.result.and_then(|result| {
+            if Instant::now() >= prepared.request.deadline {
+                return Err("Live request expired; no changes applied".into());
+            }
+            let (next, bounds) = match result {
+                LiveResult::Read(value) => return Ok(value),
+                LiveResult::Export(export) => return export.write(),
+                LiveResult::Save(save, snapshot) => {
+                    if prepared.revision != self.live_revision()
+                        || self.live_busy()
+                        || self.save_job.is_some()
+                    {
+                        return Err(
+                            "The active sprite changed while saving. Inspect it and retry.".into(),
+                        );
+                    }
+                    let path = save.output.clone();
+                    if prepared.request.operation == "live-save"
+                        && self.path.as_ref() != Some(&path)
+                    {
+                        return Err("The current project path changed while saving".into());
+                    }
+                    let result = save.write()?;
+                    self.saved = snapshot;
+                    self.add_recent(path.clone());
+                    self.path = Some(path);
+                    self.status = "Saved sprite through MCP".into();
+                    return Ok(result);
+                }
+                LiveResult::Edit(next, bounds) => (next, bounds),
+            };
+            if prepared.revision != self.live_revision() {
+                return Err("Stale revision; inspect the open sprite again".into());
+            }
+            if self.live_busy() {
+                return Err("Editor is busy; finish the active operation first".into());
+            }
+            if prepared.request.operation == "live-create" {
+                let previous = self.doc.clone();
+                self.open_document(next, None);
+                self.push_undo(previous);
+                self.status = "Assistant created an untitled sprite — Ctrl+Z to undo".into();
+            } else if next != self.doc {
+                self.remember();
+                self.doc = next;
+                self.clamp();
+                self.status = "Assistant edited the sprite — Ctrl+Z to undo".into();
+            }
+            self.sync_live_revision();
+            let mut value = automation::inspect_revision(&self.doc, &self.live_revision());
+            value["changed_cels"] = bounds;
+            Ok(value)
+        });
+        let _ = prepared.request.response.send(result);
     }
 }
 
@@ -876,7 +1048,7 @@ mod bridge_tests {
         expired: bool,
     ) -> Result<serde_json::Value, String> {
         let (tx, rx) = std::sync::mpsc::channel();
-        a.process_live_request(LiveRequest {
+        let mut request = LiveRequest {
             deadline: if expired {
                 Instant::now() - Duration::from_secs(1)
             } else {
@@ -885,9 +1057,107 @@ mod bridge_tests {
             operation: operation.into(),
             arguments,
             response: tx,
-        });
+        };
+        a.sync_live_revision();
+        if let Some((doc, revision, frame)) = a.begin_live_request(&mut request) {
+            let prepared = PixelCraft::prepare_live_request(doc, revision, frame, request);
+            a.finish_live_request(prepared);
+        }
         rx.recv().unwrap()
     }
+    #[test]
+    fn live_saves_bind_path_and_preserve_previous_file_on_collision() {
+        use serde_json::json;
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(2, 2), None);
+        let folder =
+            std::env::temp_dir().join(format!("pixelcraft-live-save-{}", std::process::id()));
+        std::fs::create_dir(&folder).unwrap();
+        let output = folder.join("saved.pixel");
+        let revision = |app: &mut PixelCraft| {
+            request(app, "live-inspect", json!({}), false).unwrap()["revision"].clone()
+        };
+        let rev = revision(&mut a);
+        assert!(request(&mut a, "live-save", json!({"revision":rev}), false).is_err());
+        assert!(
+            request(
+                &mut a,
+                "live-save-as",
+                json!({"revision":"stale","output":output}),
+                false
+            )
+            .is_err()
+        );
+        request(
+            &mut a,
+            "live-save-as",
+            json!({"revision":rev,"output":output}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(a.path.as_ref(), Some(&output));
+        assert!(!a.dirty());
+        a.doc.set_pixel(0, 0, 0, [10, 20, 30, 255]);
+        let rev = revision(&mut a);
+        assert!(
+            request(
+                &mut a,
+                "live-save-as",
+                json!({"revision":rev,"output":output}),
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(formats::load(&output).unwrap().layers[0].cels[0][0], CLEAR);
+        request(&mut a, "live-save", json!({"revision":rev}), false).unwrap();
+        assert_eq!(
+            formats::load(&output).unwrap().layers[0].cels[0][0],
+            [10, 20, 30, 255]
+        );
+        assert!(!a.dirty());
+        std::fs::remove_file(output).unwrap();
+        std::fs::remove_dir(folder).unwrap();
+    }
+
+    #[test]
+    fn live_gif_exports_scaled_frames_with_original_timing() {
+        use image::AnimationDecoder;
+        use serde_json::json;
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        let mut doc = Document::new(2, 1);
+        doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+        doc.add_frame(0, true);
+        doc.set_pixel(0, 1, 0, [0, 255, 0, 255]);
+        doc.durations = vec![90, 120];
+        a.replace(doc, None);
+        let rev = request(&mut a, "live-inspect", json!({}), false).unwrap()["revision"].clone();
+        let output =
+            std::env::temp_dir().join(format!("pixelcraft-live-scaled-{}.gif", std::process::id()));
+        let result = request(
+            &mut a,
+            "live-export",
+            json!({"revision":rev,"output":output,"scale":4}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result["width"], 8);
+        let file = std::fs::File::open(&output).unwrap();
+        let frames = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(file))
+            .unwrap()
+            .into_frames()
+            .collect_frames()
+            .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0].buffer().dimensions(), (8, 4));
+        assert_eq!(frames[0].delay().numer_denom_ms(), (90, 1));
+        assert_eq!(frames[1].delay().numer_denom_ms(), (120, 1));
+        assert_eq!(frames[0].buffer().get_pixel(3, 3).0, [255, 0, 0, 255]);
+        assert_eq!(frames[1].buffer().get_pixel(3, 3).0, [0, 255, 0, 255]);
+        std::fs::remove_file(output).unwrap();
+    }
+
     #[test]
     fn live_structural_commands_and_create_are_single_undo_steps() {
         let ctx = egui::Context::default();
@@ -947,6 +1217,169 @@ mod bridge_tests {
         assert_eq!(before, a.doc);
         assert!(request(&mut a, "live-edit", args, false).is_err());
         assert!(a.power.bridge.is_none());
+    }
+
+    #[test]
+    fn prepared_paint_never_overwrites_a_newer_manual_edit() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(2, 1), None);
+        let info = request(&mut app, "live-inspect", serde_json::json!({}), false).unwrap();
+        let (response, receiver) = std::sync::mpsc::channel();
+        let mut edit = LiveRequest {
+            operation: "live-commands".into(),
+            arguments: serde_json::json!({"revision":info["revision"],"commands":[
+                {"op":"blit","layer":0,"frame":0,"x":0,"y":0,"width":1,"height":1,"data":"/////w=="}
+            ]}),
+            deadline: Instant::now() + Duration::from_secs(2),
+            response,
+        };
+        let (snapshot, revision, frame) = app.begin_live_request(&mut edit).unwrap();
+        let prepared = PixelCraft::prepare_live_request(snapshot, revision, frame, edit);
+        assert!(prepared.result.is_ok());
+        app.remember();
+        app.doc.set_pixel(0, 0, 1, [50, 60, 70, 255]);
+        app.sync_live_revision();
+        app.finish_live_request(prepared);
+        assert!(
+            receiver
+                .recv()
+                .unwrap()
+                .unwrap_err()
+                .contains("Stale revision")
+        );
+        assert_eq!(&app.doc.layers[0].cels[0][..], &[[0; 4], [50, 60, 70, 255]]);
+        assert_eq!(app.undo.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "Requires a local TCP listener"]
+    fn layered_paint_workflow_over_the_live_mcp_bridge() {
+        use base64::Engine;
+        use serde_json::{Value, json};
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let root = std::env::temp_dir().join(format!("pixelcraft-layered-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let config = root.join("bridge.json");
+        app.power.bridge = Some(LiveBridge::start(config.clone()).unwrap());
+        let mut call = |name: &str, args: Value| {
+            let config = config.clone();
+            let request =
+                json!({"id":1,"method":"tools/call","params":{"name":name,"arguments":args}});
+            let start = Instant::now();
+            let client =
+                std::thread::spawn(move || automation::rpc(&request, Some(&config)).unwrap());
+            while !client.is_finished() {
+                assert!(start.elapsed() < Duration::from_secs(12));
+                app.poll_bridge(&ctx);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let response = client.join().unwrap();
+            assert_ne!(response["result"]["isError"], true, "{response}");
+            (response["result"]["content"].clone(), start.elapsed())
+        };
+        fn metadata(content: &Value) -> Value {
+            serde_json::from_str(
+                content.as_array().unwrap().last().unwrap()["text"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+        let (info, _) = call("live-inspect", json!({}));
+        let (created, _) = call(
+            "live-create",
+            json!({"revision":metadata(&info)["revision"],"width":480,"height":270}),
+        );
+        let names = [
+            "Sky",
+            "Mountains",
+            "Lake",
+            "Shore",
+            "Meadow",
+            "Temple",
+            "Trunks",
+            "Crimson Leaves",
+            "Gold Leaves",
+            "Reflections",
+            "Sunlight",
+            "Flowers",
+        ];
+        let mut commands = vec![json!({"op":"set-layer","layer":0,"name":names[0]})];
+        commands.extend(
+            names[1..]
+                .iter()
+                .map(|name| json!({"op":"add-layer","name":name})),
+        );
+        let (setup, _) = call(
+            "live-commands",
+            json!({"revision":metadata(&created)["revision"],"commands":commands}),
+        );
+        let mut info = metadata(&setup);
+        assert_eq!(info["layers"].as_array().unwrap().len(), 12);
+        let mut paint_times = Vec::new();
+        let mut render_times = Vec::new();
+        for pass in 0..6 {
+            let color = [20 + pass as u8 * 30, 72, 91, 255];
+            let patch = base64::engine::general_purpose::STANDARD.encode(color.repeat(256 * 256));
+            let (paint, elapsed) = call(
+                "live-commands",
+                json!({"revision":info["revision"],"commands":[
+                    {"op":"blit","layer":2*pass,"frame":0,"x":pass*41,"y":0,"width":256,"height":256,"data":patch},
+                    {"op":"stroke","layer":2*pass+1,"frame":0,"points":[[40,20+pass*20],[450,20+pass*20]],"color":[255,172,81,255],"size":2,"spacing":3}
+                ]}),
+            );
+            info = metadata(&paint);
+            assert_eq!(info["changed_cels"].as_array().unwrap().len(), 2);
+            paint_times.push(elapsed.as_millis());
+            let (preview, elapsed) = call(
+                "live-render",
+                json!({"revision":info["revision"],"frame":0}),
+            );
+            assert_eq!(metadata(&preview)["revision"], info["revision"]);
+            assert_eq!(preview[0]["type"], "image");
+            render_times.push(elapsed.as_millis());
+        }
+        let (undo, _) = call("live-undo", json!({"revision":info["revision"]}));
+        let (redo, _) = call("live-redo", json!({"revision":metadata(&undo)["revision"]}));
+        let revision = metadata(&redo)["revision"].clone();
+        let (preview, _) = call("live-render", json!({"revision":revision}));
+        let native = base64::engine::general_purpose::STANDARD
+            .decode(preview[0]["data"].as_str().unwrap())
+            .unwrap();
+        let native = image::load_from_memory(&native).unwrap().into_rgba8();
+        let output = root.join("scene.png");
+        call(
+            "live-export",
+            json!({"revision":revision,"output":output,"scale":4}),
+        );
+        let export = image::open(&output).unwrap().into_rgba8();
+        assert_eq!(export.dimensions(), (1920, 1080));
+        assert!(
+            export
+                .enumerate_pixels()
+                .all(|(x, y, p)| p == native.get_pixel(x / 4, y / 4))
+        );
+        let project = root.join("scene.pixel");
+        call(
+            "live-save-as",
+            json!({"revision":revision,"output":project}),
+        );
+        call("live-save", json!({"revision":revision}));
+        let reopened = formats::load(&project).unwrap();
+        assert_eq!(reopened.layers.len(), 12);
+        assert_eq!(
+            reopened.composite(0).as_slice().as_flattened(),
+            native.as_raw()
+        );
+        eprintln!(
+            "TCP MCP paint round trips (ms): {paint_times:?}; preview round trips (ms): {render_times:?}"
+        );
+        drop(app);
+        std::fs::remove_file(output).unwrap();
+        std::fs::remove_file(project).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }
 

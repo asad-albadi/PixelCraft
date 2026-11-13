@@ -10,6 +10,33 @@ pub const MIN_BRUSH_SIZE: i32 = 1;
 pub const MAX_BRUSH_SIZE: i32 = 64;
 pub const MAX_DIMENSION: usize = 16384;
 pub const MAX_PIXELS: usize = 64_000_000;
+pub(crate) fn line_pixels<E>(
+    a: (i32, i32),
+    b: (i32, i32),
+    mut visit: impl FnMut((i32, i32)) -> Result<(), E>,
+) -> Result<(), E> {
+    let (mut x, mut y) = a;
+    let dx = (b.0 - x).abs();
+    let sx = if x < b.0 { 1 } else { -1 };
+    let dy = -(b.1 - y).abs();
+    let sy = if y < b.1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        visit((x, y))?;
+        if (x, y) == b {
+            return Ok(());
+        }
+        let e = err * 2;
+        if e >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Pixels(pub Arc<Vec<Pixel>>);
@@ -980,27 +1007,10 @@ impl Document {
         }
     }
     pub fn line(&mut self, l: usize, f: usize, a: (i32, i32), b: (i32, i32), c: Pixel, size: i32) {
-        let (mut x, mut y) = a;
-        let dx = (b.0 - x).abs();
-        let sx = if x < b.0 { 1 } else { -1 };
-        let dy = -(b.1 - y).abs();
-        let sy = if y < b.1 { 1 } else { -1 };
-        let mut err = dx + dy;
-        loop {
+        let _: Result<(), std::convert::Infallible> = line_pixels(a, b, |(x, y)| {
             self.stamp(l, f, x, y, c, size);
-            if (x, y) == b {
-                break;
-            }
-            let e = err * 2;
-            if e >= dy {
-                err += dy;
-                x += sx;
-            }
-            if e <= dx {
-                err += dx;
-                y += sy;
-            }
-        }
+            Ok(())
+        });
     }
     #[expect(
         clippy::too_many_arguments,
@@ -1181,13 +1191,26 @@ impl Document {
                 self.composite_into(f, Some(i), depth + 1, out);
                 continue;
             }
-            let pixels = if l.group {
-                self.composite_group(f, Some(i), depth + 1)
-            } else {
-                self.layer_pixels(i, f)
-            };
             let opacity = ((l.opacity as u16 * l.cel_meta[f].opacity as u16 + 127) / 255) as u8;
-            for (d, s) in out.iter_mut().zip(pixels) {
+            let rendered;
+            let pixels: &[Pixel] = if l.group {
+                rendered = self.composite_group(f, Some(i), depth + 1);
+                &rendered
+            } else if l.tileset.is_some() {
+                rendered = self.layer_pixels(i, f);
+                &rendered
+            } else {
+                &l.cels[f]
+            };
+            for (d, &s) in out.iter_mut().zip(pixels) {
+                if opacity == 255 && s[3] == 255 && l.blend == BlendMode::Normal {
+                    *d = s;
+                    continue;
+                }
+                // Preserve transparent RGB in the same cases as the native blender.
+                if s[3] == 0 && d[3] != 0 {
+                    continue;
+                }
                 *d = blend(*d, s, opacity, l.blend);
             }
         }

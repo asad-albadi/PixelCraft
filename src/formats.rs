@@ -1,7 +1,7 @@
 use crate::model::*;
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use std::{
-    io::{Read, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
 const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x01";
@@ -108,8 +108,10 @@ fn read_pixels(
 pub fn encode_project(d: &Document) -> Result<Vec<u8>, String> {
     d.validate()?;
     let mut out = PROJECT_MAGIC.to_vec();
-    let mut z = ZlibEncoder::new(vec![], Compression::default());
-    serde_json::to_writer(&mut z, d).map_err(|e| e.to_string())?;
+    let mut z = ZlibEncoder::new(vec![], Compression::fast());
+    let mut buffered = BufWriter::with_capacity(64 * 1024, &mut z);
+    serde_json::to_writer(&mut buffered, d).map_err(|e| e.to_string())?;
+    buffered.into_inner().map_err(|e| e.to_string())?;
     out.extend(z.finish().map_err(|e| e.to_string())?);
     Ok(out)
 }
@@ -117,8 +119,25 @@ pub fn decode_project(b: &[u8]) -> Result<Document, String> {
     let b = b
         .strip_prefix(PROJECT_MAGIC)
         .ok_or("Invalid PixelCraft project version")?;
-    let d: Document = serde_json::from_reader(ZlibDecoder::new(b).take(MAX_PROJECT_BYTES))
+    // Parse common projects from a byte slice. Keep the streaming path for
+    // large projects so decoding does not also retain the whole JSON payload.
+    const SLICE_LIMIT: usize = 96 * 1024 * 1024;
+    let mut decoder = ZlibDecoder::new(b);
+    let mut prefix = Vec::new();
+    (&mut decoder)
+        .take(SLICE_LIMIT as u64 + 1)
+        .read_to_end(&mut prefix)
         .map_err(|e| e.to_string())?;
+    let d: Document = if prefix.len() <= SLICE_LIMIT {
+        serde_json::from_slice(&prefix)
+    } else {
+        let remaining = MAX_PROJECT_BYTES - prefix.len() as u64;
+        serde_json::from_reader(BufReader::with_capacity(
+            64 * 1024,
+            std::io::Cursor::new(prefix).chain(decoder.take(remaining)),
+        ))
+    }
+    .map_err(|e| e.to_string())?;
     d.validate()?;
     Ok(d)
 }
@@ -1122,7 +1141,10 @@ pub fn export_raster_scaled(
     Ok(())
 }
 pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
-    export_gif_with_repeat(path, d, 0)
+    export_gif_scaled(path, d, 1)
+}
+pub fn export_gif_scaled(path: &Path, d: &Document, scale: usize) -> Result<(), String> {
+    encode_gif(path, d, 0, 0..d.durations.len(), scale)
 }
 pub fn export_gif_with_repeat(path: &Path, d: &Document, repeat: u16) -> Result<(), String> {
     export_gif_frames(path, d, repeat, 0..d.durations.len())
@@ -1134,7 +1156,18 @@ pub fn export_gif_frames(
     repeat: u16,
     frames: impl IntoIterator<Item = usize>,
 ) -> Result<(), String> {
+    encode_gif(path, d, repeat, frames, 1)
+}
+
+fn encode_gif(
+    path: &Path,
+    d: &Document,
+    repeat: u16,
+    frames: impl IntoIterator<Item = usize>,
+    scale: usize,
+) -> Result<(), String> {
     d.validate()?;
+    animation_dimensions(d, scale)?;
     let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
     let mut enc = image::codecs::gif::GifEncoder::new(file);
     enc.set_repeat(if repeat == 0 {
@@ -1150,6 +1183,7 @@ pub fn export_gif_frames(
         let bytes = d.composite(f).into_iter().flatten().collect();
         let im = image::RgbaImage::from_raw(d.width as u32, d.height as u32, bytes)
             .ok_or("Invalid canvas")?;
+        let im = crate::workflows::scale_image(&im, scale)?;
         enc.encode_frame(image::Frame::from_parts(
             im,
             0,
@@ -1159,6 +1193,118 @@ pub fn export_gif_frames(
         .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+pub(crate) fn animation_dimensions(d: &Document, scale: usize) -> Result<(usize, usize), String> {
+    let w = d.width.saturating_mul(scale);
+    let h = d.height.saturating_mul(scale);
+    if w == 0 || h == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION || w * h > MAX_PIXELS {
+        return Err("Scaled animation exceeds image limits".into());
+    }
+    Ok((w, h))
+}
+
+/// Stream one composited frame at a time and distribute rounding across the timeline.
+pub fn export_mp4(path: &Path, d: &Document, scale: usize) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    d.validate()?;
+    let (width, height) = animation_dimensions(d, scale)?;
+    let size = format!("{width}x{height}");
+    let mut command = Command::new("ffmpeg");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "rgb24",
+            "-video_size",
+            &size,
+            "-framerate",
+            "60",
+            "-i",
+            "pipe:0",
+            "-an",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "16",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            "-f",
+            "mp4",
+        ])
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("MP4 export requires FFmpeg on PATH with libx264: {e}"))?;
+    let errors = child.stderr.take().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut errors = BufReader::new(errors);
+        let mut message = Vec::new();
+        let _ = (&mut errors).take(8192).read_to_end(&mut message);
+        let _ = std::io::copy(&mut errors, &mut std::io::sink());
+        String::from_utf8_lossy(&message).trim().to_owned()
+    });
+    let mut input = child.stdin.take().unwrap();
+    let written = (|| -> Result<(), String> {
+        let mut elapsed = 0u64;
+        let mut emitted = 0u64;
+        for (f, &duration) in d.durations.iter().enumerate() {
+            elapsed += u64::from(duration);
+            let end = (elapsed * 60).div_ceil(1000);
+            if end == emitted {
+                continue;
+            }
+            let rgba = image::RgbaImage::from_raw(
+                d.width as u32,
+                d.height as u32,
+                crate::color::display_pixels(d, f)?
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+            )
+            .ok_or("Invalid canvas")?;
+            let rgba = crate::workflows::scale_image(&rgba, scale)?;
+            let rgb: Vec<_> = rgba
+                .pixels()
+                .flat_map(|p| {
+                    let alpha = u16::from(p[3]);
+                    [p[0], p[1], p[2]]
+                        .map(|channel| ((u16::from(channel) * alpha + 127) / 255) as u8)
+                })
+                .collect();
+            for _ in emitted..end {
+                input.write_all(&rgb).map_err(|e| e.to_string())?;
+            }
+            emitted = end;
+        }
+        Ok(())
+    })();
+    drop(input);
+    let status = child.wait().map_err(|e| e.to_string())?;
+    let stderr = drain.join().unwrap_or_default();
+    if !status.success() {
+        return Err(format!("FFmpeg could not encode MP4 ({status}): {stderr}"));
+    }
+    written
 }
 type PngRecord = ([u8; 4], Vec<u8>);
 fn png_records(bytes: &[u8]) -> Result<Vec<PngRecord>, String> {

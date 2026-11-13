@@ -751,6 +751,7 @@ impl PixelCraft {
                         ("png", "Export PNG…"),
                         ("sheet", "Sprite sheet…"),
                         ("gif", "Animation GIF…"),
+                        ("mp4", "Video MP4…"),
                     ] {
                         if ui.pc_command_button(command, label).clicked() {
                             self.action(command);

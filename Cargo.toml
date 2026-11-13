@@ -12,6 +12,7 @@ sha2 = "0.10.9"
 image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg"] }
 rfd = "0.17.2"
 flate2 = "1.1.10"
+base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 libloading = "0.8.8"
