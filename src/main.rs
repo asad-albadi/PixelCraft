@@ -253,6 +253,7 @@ struct PixelCraft {
     play_after_open: bool,
     export_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
     animation_export: Option<&'static str>,
+    sequence_name: String,
     save_job: Option<(
         usize,
         std::sync::mpsc::Receiver<(PathBuf, Document, Result<(), String>)>,
@@ -396,6 +397,7 @@ impl PixelCraft {
             play_after_open: false,
             export_job: None,
             animation_export: None,
+            sequence_name: String::new(),
             save_job: None,
             frame_texture_order: Default::default(),
             onion_texture: None,
@@ -1397,11 +1399,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "bmp" => "bmp",
             _ => "png",
         };
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Export", &[ext])
-            .set_file_name(format!("sprite.{ext}"))
-            .save_file()
-        {
+        let sequence = kind == "png-sequence";
+        let dialog = rfd::FileDialog::new();
+        let chosen = if sequence {
+            dialog
+                .pick_folder()
+                .map(|folder| folder.join(self.sequence_name.trim()))
+        } else {
+            dialog
+                .add_filter("Export", &[ext])
+                .set_file_name(format!("sprite.{ext}"))
+                .save_file()
+        };
+        if let Some(path) = chosen {
             if matches!(kind, "gif" | "mp4")
                 && !path
                     .extension()
@@ -1411,32 +1421,45 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.status = format!("Export failed: choose a .{ext} filename");
                 return;
             }
-            let (tx, rx) = std::sync::mpsc::channel();
-            let doc = self.doc.clone();
-            let frame = self.frame;
-            let scale = self.studio.sheet.scale;
-            let gif = kind == "gif";
-            let video = kind == "mp4";
-            let sheet = kind == "sheet";
-            self.status = format!(
-                "Exporting {}",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            );
-            self.export_job = Some(rx);
-            std::thread::spawn(move || {
-                let result = if gif || video {
-                    pixelcraft::automation::write_animation_export(
-                        if gif { "gif" } else { "mp4" },
-                        &path,
-                        &doc,
-                        scale,
-                    )
-                } else {
-                    formats::export_raster_scaled(&path, &doc, frame, sheet, scale)
-                };
-                let _ = tx.send((path, result));
-            });
+            self.start_export(kind, path);
         }
+    }
+    fn start_export(&mut self, kind: &str, path: PathBuf) {
+        let sequence = kind == "png-sequence";
+        let (tx, rx) = std::sync::mpsc::channel();
+        let doc = self.doc.clone();
+        let frame = self.frame;
+        let scale = self.studio.sheet.scale;
+        let gif = kind == "gif";
+        let video = kind == "mp4";
+        let sheet = kind == "sheet";
+        self.status = format!(
+            "Exporting {}",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
+        self.export_job = Some(rx);
+        std::thread::spawn(move || {
+            let result = if sequence {
+                pixelcraft::automation::prepare_png_sequence(
+                    &doc,
+                    path.clone(),
+                    &serde_json::json!({"scale":scale}),
+                    "",
+                )
+                .and_then(|export| export.write())
+                .map(|_| ())
+            } else if gif || video {
+                pixelcraft::automation::write_animation_export(
+                    if gif { "gif" } else { "mp4" },
+                    &path,
+                    &doc,
+                    scale,
+                )
+            } else {
+                formats::export_raster_scaled(&path, &doc, frame, sheet, scale)
+            };
+            let _ = tx.send((path, result));
+        });
     }
     fn poll_export(&mut self) {
         let Some(job) = &self.export_job else { return };
@@ -1602,6 +1625,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.save(true);
             }
             "png" | "bmp" | "sheet" => self.export(s),
+            "png-sequence" => {
+                self.sequence_name = self
+                    .path
+                    .as_deref()
+                    .and_then(|p| p.file_stem())
+                    .map_or_else(
+                        || "sprite-frames".into(),
+                        |stem| format!("{}-frames", stem.to_string_lossy()),
+                    );
+                self.animation_export = Some("png-sequence");
+            }
             "gif" => self.animation_export = Some("gif"),
             "mp4" => self.animation_export = Some("mp4"),
             "undo" => self.undo(),
@@ -1974,6 +2008,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Save as…", "saveas"),
                         ("Export PNG…", "png"),
                         ("Export sprite sheet…", "sheet"),
+                        ("Export PNG sequence…", "png-sequence"),
                         ("Export animation GIF…", "gif"),
                         ("Export video MP4…", "mp4"),
                         ("Export Tiled map…", "tiledexport"),
@@ -3106,10 +3141,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn dialogs(&mut self, ctx: &egui::Context) {
         if let Some(kind) = self.animation_export {
             let mut accept = false;
-            let title = if kind == "gif" {
-                "Export animated GIF"
-            } else {
-                "Export MP4 video"
+            let title = match kind {
+                "png-sequence" => "Export PNG sequence",
+                "gif" => "Export animated GIF",
+                _ => "Export MP4 video",
             };
             if fluent::modal_dialog(ctx, title, |ui| {
                 self.export_scale_ui(ui);

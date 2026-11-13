@@ -58,6 +58,7 @@ pub fn icon_name(action: &str) -> &str {
         "flipy" | "selectionflipy" => "flip-vertical",
         "png" | "demo" => "image",
         "mp4" => "gif",
+        "png-sequence" => "export",
         "sequence" => "import",
         "tiles" | "tiledexport" => "tilemap",
         "workflow" => "settings",

@@ -110,7 +110,11 @@ fn large_project_opens_through_editor_document_flow() {
 fn animation_exports_open_scale_dialogs() {
     let ctx = egui::Context::default();
     let mut app = PixelCraft::with_context(&ctx, None);
-    for (action, title) in [("gif", "Export animated GIF"), ("mp4", "Export MP4 video")] {
+    for (action, title) in [
+        ("png-sequence", "Export PNG sequence"),
+        ("gif", "Export animated GIF"),
+        ("mp4", "Export MP4 video"),
+    ] {
         app.action(action);
         assert_eq!(app.animation_export, Some(action));
         let mut rendered = false;

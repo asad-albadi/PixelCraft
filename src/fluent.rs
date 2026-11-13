@@ -750,6 +750,7 @@ impl PixelCraft {
                     for (command, label) in [
                         ("png", "Export PNG…"),
                         ("sheet", "Sprite sheet…"),
+                        ("png-sequence", "PNG sequence…"),
                         ("gif", "Animation GIF…"),
                         ("mp4", "Video MP4…"),
                     ] {

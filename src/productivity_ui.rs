@@ -1121,6 +1121,71 @@ mod bridge_tests {
     }
 
     #[test]
+    fn editor_png_sequence_export_uses_the_document_snapshot_and_scale() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let mut doc = Document::new(2, 1);
+        doc.add_frame(0, false);
+        doc.set_pixel(0, 1, 0, [0, 255, 0, 255]);
+        app.replace(doc, None);
+        app.action("png-sequence");
+        assert_eq!(app.animation_export, Some("png-sequence"));
+        app.studio.sheet.scale = 4;
+        let output =
+            std::env::temp_dir().join(format!("pixelcraft-editor-sequence-{}", std::process::id()));
+        app.start_export("png-sequence", output.clone());
+        app.doc.set_pixel(0, 1, 0, [255, 0, 0, 255]);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.export_job.is_some() && Instant::now() < deadline {
+            app.poll_export();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(app.status.starts_with("Exported "), "{}", app.status);
+        let png = image::open(output.join("frame-0002.png"))
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(png.dimensions(), (8, 4));
+        assert_eq!(png.get_pixel(3, 3).0, [0, 255, 0, 255]);
+        std::fs::remove_file(output.join("frame-0001.png")).unwrap();
+        std::fs::remove_file(output.join("frame-0002.png")).unwrap();
+        std::fs::remove_dir(output).unwrap();
+    }
+
+    #[test]
+    fn live_png_sequence_exports_timeline_order_and_selected_layers() {
+        use serde_json::json;
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let mut doc = Document::new(2, 1);
+        doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+        doc.add_frame(0, true);
+        doc.set_pixel(0, 1, 0, [0, 255, 0, 255]);
+        doc.add_layer();
+        doc.set_pixel(1, 0, 0, [0, 0, 255, 255]);
+        app.replace(doc, None);
+        let revision =
+            request(&mut app, "live-inspect", json!({}), false).unwrap()["revision"].clone();
+        let output =
+            std::env::temp_dir().join(format!("pixelcraft-live-sequence-{}", std::process::id()));
+        let args = json!({"revision":revision,"output":output,"format":"png-sequence","scale":4,"layers":[0]});
+        let result = request(&mut app, "live-export", args.clone(), false).unwrap();
+        assert_eq!(result["frames"], 2);
+        for (name, color) in [
+            ("frame-0001.png", [255, 0, 0, 255]),
+            ("frame-0002.png", [0, 255, 0, 255]),
+        ] {
+            let png = image::open(output.join(name)).unwrap().into_rgba8();
+            assert_eq!(png.dimensions(), (8, 4));
+            assert_eq!(png.get_pixel(3, 3).0, color);
+            assert_eq!(png.get_pixel(4, 3).0, CLEAR);
+        }
+        assert!(request(&mut app, "live-export", args, false).is_err());
+        std::fs::remove_file(output.join("frame-0001.png")).unwrap();
+        std::fs::remove_file(output.join("frame-0002.png")).unwrap();
+        std::fs::remove_dir(output).unwrap();
+    }
+
+    #[test]
     fn live_gif_exports_scaled_frames_with_original_timing() {
         use image::AnimationDecoder;
         use serde_json::json;
@@ -1130,6 +1195,8 @@ mod bridge_tests {
         doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
         doc.add_frame(0, true);
         doc.set_pixel(0, 1, 0, [0, 255, 0, 255]);
+        doc.add_layer();
+        doc.set_pixel(1, 0, 0, [0, 0, 255, 255]);
         doc.durations = vec![90, 120];
         a.replace(doc, None);
         let rev = request(&mut a, "live-inspect", json!({}), false).unwrap()["revision"].clone();
@@ -1138,7 +1205,7 @@ mod bridge_tests {
         let result = request(
             &mut a,
             "live-export",
-            json!({"revision":rev,"output":output,"scale":4}),
+            json!({"revision":rev,"output":output,"scale":4,"layers":[0]}),
             false,
         )
         .unwrap();
@@ -1361,6 +1428,16 @@ mod bridge_tests {
                 .enumerate_pixels()
                 .all(|(x, y, p)| p == native.get_pixel(x / 4, y / 4))
         );
+        let sequence = root.join("sequence");
+        let (result, _) = call(
+            "live-export",
+            json!({"revision":revision,"output":sequence,"format":"png-sequence","scale":4}),
+        );
+        assert_eq!(metadata(&result)["frames"], 1);
+        let first = sequence.join("frame-0001.png");
+        assert_eq!(image::open(&first).unwrap().into_rgba8(), export);
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_dir(sequence).unwrap();
         let project = root.join("scene.pixel");
         call(
             "live-save-as",

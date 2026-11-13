@@ -439,13 +439,34 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                     }
                     let kind = v["format"].as_str().unwrap_or_else(|| extension(&out));
                     match kind {
-                        "gif" | "mp4" => write_animation_export(kind, &out, &d, export_scale(v)?)?,
+                        "png-sequence" => {
+                            return prepare_png_sequence(&d, out, v, &document_revision(&d))?
+                                .write();
+                        }
+                        "gif" | "mp4" => {
+                            let filtered = filter_export_layers(&d, v)?;
+                            write_animation_export(kind, &out, &filtered, export_scale(v)?)?;
+                        }
                         "sheet" => interchange::export_sheet(
                             &out,
                             &d,
                             &options::<SheetOptions>(&v["options"])?,
                         )?,
                         "pixel" | "ase" | "aseprite" => formats::save(&out, &d)?,
+                        "png" if v.get("layers").is_some() || v.get("region").is_some() => {
+                            let frame = v
+                                .get("frame")
+                                .map(|_| number(v, "frame"))
+                                .transpose()?
+                                .unwrap_or(0);
+                            let (image, mut metadata) =
+                                preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
+                            image
+                                .save_with_format(&out, image::ImageFormat::Png)
+                                .map_err(|e| e.to_string())?;
+                            metadata["output"] = json!(out);
+                            return Ok(metadata);
+                        }
                         "png" | "bmp" => {
                             let f = v["frame"].as_u64().unwrap_or(0) as usize;
                             if f >= d.durations.len() {
@@ -523,7 +544,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers.\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers.\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});
@@ -602,16 +623,16 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
             }
             Ok(json!({"tools":names.iter().map(|name| {
                     let details = match *name {
-                        "live-commands" | "commands" => "Atomic edits with the current revision. Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode); polygon (layer,frame,points,color,alternate); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
+                        "live-commands" | "commands" => "Atomic edits with the current revision. Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
-                        "live-export" => "Export a revision-matched sprite to a new PNG, GIF or MP4 file. Use integer scale for nearest-neighbor enlargement. Frame, layers and region apply to PNG only.",
+                        "live-export" => "Export a revision-matched sprite to a new PNG, GIF or MP4 file, or set format to png-sequence and output to a new directory. Integer scale uses nearest-neighbor. Layers apply to all formats; region applies to PNG and PNG sequences; frame applies to single PNG only.",
                         "live-save" => "Save the revision-matched sprite to its current project path. Use live-save-as for untitled sprites.",
                         "live-save-as" => "Save the revision-matched sprite to a new .pixel or .aseprite path and make it the current project path.",
                         _ => CLI_HELP,
                     };
                     let mut tool = json!({"name":name,"description":format!("PixelCraft {name}. {details}"),
                     "inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}});
-                if matches!(*name, "render" | "live-render" | "live-export") {
+                if matches!(*name, "render" | "live-render" | "export" | "live-export") {
                     let props = &mut tool["inputSchema"]["properties"];
                     props["layers"] = json!({"type":"array","items":{"type":"integer","minimum":0}});
                     props["region"] = json!({"type":"object","required":["x","y","width","height"],
@@ -990,12 +1011,12 @@ pub struct PreparedExport {
     temporary: PathBuf,
     metadata: Value,
     replace: bool,
+    sequence: Vec<String>,
 }
 
 impl Drop for PreparedExport {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.temporary);
-        let _ = std::fs::remove_dir(&self.staging);
+        let _ = std::fs::remove_dir_all(&self.staging);
     }
 }
 
@@ -1009,6 +1030,11 @@ fn prepare_output(
         return Err("Output already exists. Choose a new path.".into());
     }
     let parent = output.parent().ok_or("Invalid output path")?;
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
     let filename = output.file_name().ok_or("Invalid output filename")?;
     let staging = loop {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1026,6 +1052,7 @@ fn prepare_output(
         temporary,
         metadata: Value::Null,
         replace,
+        sequence: vec![],
     };
     prepared.metadata = encode(&prepared.temporary)?;
     Ok(prepared)
@@ -1046,6 +1073,44 @@ pub fn prepare_live_save(
     })
 }
 
+pub fn prepare_png_sequence(
+    doc: &Document,
+    output: PathBuf,
+    args: &Value,
+    revision: &str,
+) -> Result<PreparedExport, String> {
+    if args.get("frame").is_some() {
+        return Err("PNG sequence export uses all timeline frames".into());
+    }
+    let names: Vec<_> = (1..=doc.durations.len())
+        .map(|index| format!("frame-{index:04}.png"))
+        .collect();
+    let filtered = filter_export_layers(doc, args)?;
+    let mut prepared = prepare_output(output, false, |temporary| {
+        std::fs::create_dir(temporary).map_err(|e| e.to_string())?;
+        let mut metadata = Value::Null;
+        for (frame, name) in names.iter().enumerate() {
+            let (image, frame_metadata) =
+                preview_composite(&filtered, frame, args, revision, MAX_PIXELS)?;
+            image
+                .save_with_format(temporary.join(name), image::ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            if frame == 0 {
+                metadata = frame_metadata;
+            }
+        }
+        metadata
+            .as_object_mut()
+            .ok_or("No frames to export")?
+            .remove("frame");
+        metadata["format"] = json!("png-sequence");
+        metadata["frames"] = json!(names.len());
+        Ok(metadata)
+    })?;
+    prepared.sequence = names;
+    Ok(prepared)
+}
+
 pub fn prepare_live_export(
     d: &Document,
     f: usize,
@@ -1053,6 +1118,9 @@ pub fn prepare_live_export(
     revision: &str,
 ) -> Result<PreparedExport, String> {
     let output = path(args, "output")?;
+    if args["format"] == "png-sequence" {
+        return prepare_png_sequence(d, output, args, revision);
+    }
     let kind = extension(&output).to_ascii_lowercase();
     if args.get("format").is_some_and(|v| v != kind.as_str()) {
         return Err("Export format must match the output extension".into());
@@ -1066,15 +1134,16 @@ pub fn prepare_live_export(
             Ok(metadata)
         }
         "gif" | "mp4" => {
-            if ["frame", "layers", "region"]
+            if ["frame", "region"]
                 .iter()
                 .any(|key| args.get(key).is_some())
             {
-                return Err("Animation exports use all frames and visible layers".into());
+                return Err("GIF and MP4 export all frames and do not support cropping".into());
             }
             let scale = export_scale(args)?;
             let (width, height) = formats::animation_dimensions(d, scale)?;
-            export_animation(&kind, temporary, d, scale)?;
+            let filtered = filter_export_layers(d, args)?;
+            export_animation(&kind, temporary, &filtered, scale)?;
             let (width, height) = if kind == "mp4" {
                 (width.next_multiple_of(2), height.next_multiple_of(2))
             } else {
@@ -1084,18 +1153,33 @@ pub fn prepare_live_export(
                 json!({"revision":revision,"format":kind,"width":width,"height":height,"scale":scale,"frames":d.durations.len()}),
             )
         }
-        _ => Err("Choose a .png, .gif or .mp4 output path".into()),
+        _ => Err("Choose a .png, .gif or .mp4 path, or set format to png-sequence".into()),
     })
 }
 
 impl PreparedExport {
     pub fn write(mut self) -> Result<Value, String> {
-        if self.replace {
-            std::fs::rename(&self.temporary, &self.output)
+        if !self.sequence.is_empty() {
+            std::fs::create_dir(&self.output).map_err(|e| e.to_string())?;
+            for (index, name) in self.sequence.iter().enumerate() {
+                if let Err(error) =
+                    std::fs::rename(self.temporary.join(name), self.output.join(name))
+                {
+                    for written in &self.sequence[..index] {
+                        let _ = std::fs::remove_file(self.output.join(written));
+                    }
+                    let _ = std::fs::remove_dir(&self.output);
+                    return Err(error.to_string());
+                }
+            }
         } else {
-            std::fs::hard_link(&self.temporary, &self.output)
+            if self.replace {
+                std::fs::rename(&self.temporary, &self.output)
+            } else {
+                std::fs::hard_link(&self.temporary, &self.output)
+            }
+            .map_err(|e| e.to_string())?;
         }
-        .map_err(|e| e.to_string())?;
         self.metadata["output"] = json!(self.output);
         Ok(std::mem::take(&mut self.metadata))
     }
@@ -1133,18 +1217,11 @@ pub fn changed_cel_bounds(before: &Document, after: &Document) -> Value {
     json!(changes)
 }
 
-fn preview_image(
-    d: &Document,
-    f: usize,
+fn filter_export_layers<'a>(
+    d: &'a Document,
     args: &Value,
-    revision: &str,
-    limit: usize,
-) -> Result<(image::RgbaImage, Value), String> {
-    if f >= d.durations.len() {
-        return Err("Invalid frame".into());
-    }
-    let mut filtered;
-    let sprite = if let Some(indices) = args.get("layers") {
+) -> Result<std::borrow::Cow<'a, Document>, String> {
+    if let Some(indices) = args.get("layers") {
         let indices: Vec<usize> =
             serde_json::from_value(indices.clone()).map_err(|_| "Invalid layer list")?;
         if indices.is_empty()
@@ -1154,7 +1231,7 @@ fn preview_image(
             return Err("Choose at least one valid layer".into());
         }
         let selected: std::collections::HashSet<_> = indices.into_iter().collect();
-        filtered = d.clone();
+        let mut filtered = d.clone();
         for layer in &mut filtered.layers {
             layer.visible = false;
         }
@@ -1175,10 +1252,33 @@ fn preview_image(
                 ancestor = d.layers[i].parent;
             }
         }
-        &filtered
+        Ok(std::borrow::Cow::Owned(filtered))
     } else {
-        d
-    };
+        Ok(std::borrow::Cow::Borrowed(d))
+    }
+}
+
+fn preview_image(
+    d: &Document,
+    f: usize,
+    args: &Value,
+    revision: &str,
+    limit: usize,
+) -> Result<(image::RgbaImage, Value), String> {
+    let sprite = filter_export_layers(d, args)?;
+    preview_composite(&sprite, f, args, revision, limit)
+}
+
+fn preview_composite(
+    sprite: &Document,
+    f: usize,
+    args: &Value,
+    revision: &str,
+    limit: usize,
+) -> Result<(image::RgbaImage, Value), String> {
+    if f >= sprite.durations.len() {
+        return Err("Invalid frame".into());
+    }
     let (x, y, w, h) = if let Some(region) = args.get("region") {
         (
             number(region, "x")?,
@@ -1187,12 +1287,12 @@ fn preview_image(
             number(region, "height")?,
         )
     } else {
-        (0, 0, d.width, d.height)
+        (0, 0, sprite.width, sprite.height)
     };
     if w == 0
         || h == 0
-        || x.checked_add(w).is_none_or(|v| v > d.width)
-        || y.checked_add(h).is_none_or(|v| v > d.height)
+        || x.checked_add(w).is_none_or(|v| v > sprite.width)
+        || y.checked_add(h).is_none_or(|v| v > sprite.height)
     {
         return Err("Render region must be inside the canvas".into());
     }
@@ -1214,7 +1314,7 @@ fn preview_image(
     let pixels = crate::color::display_pixels(sprite, f).unwrap_or_else(|_| sprite.composite(f));
     let cropped = (y..y + h)
         .flat_map(|row| {
-            pixels[row * d.width + x..row * d.width + x + w]
+            pixels[row * sprite.width + x..row * sprite.width + x + w]
                 .iter()
                 .flatten()
                 .copied()
@@ -1238,7 +1338,7 @@ fn preview_image(
         })
         .collect();
     let metadata = json!({"revision":revision,"frame":f,"layers":layers,"scale":scale,
-        "canvas_width":d.width,"canvas_height":d.height,"width":image.width(),"height":image.height(),
+        "canvas_width":sprite.width,"canvas_height":sprite.height,"width":image.width(),"height":image.height(),
         "region":{"x":x,"y":y,"width":w,"height":h}});
     Ok((image, metadata))
 }
