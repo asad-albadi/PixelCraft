@@ -1382,7 +1382,10 @@ pub fn decode_ase_with_resolver(
                 continue;
             }
             let tile_id = (v & mask) >> mask.trailing_zeros().min(31);
-            let tile_id = tile_id + u32::from(legacy_tilesets[ti]);
+            let tile_id = tile_id
+                .checked_add(u32::from(legacy_tilesets[ti]))
+                .filter(|&id| id <= 0x1fff_ffff && id as usize <= t.tiles.len())
+                .ok_or("Invalid tile reference")?;
             tiles[i] = tile_id
                 | if v & mx != 0 { 0x80000000 } else { 0 }
                 | if v & my != 0 { 0x40000000 } else { 0 }

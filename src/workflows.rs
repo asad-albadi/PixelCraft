@@ -171,53 +171,105 @@ pub fn transform(
 }
 pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
     let [x, y, w, h] = b;
-    if w < 1 || h < 1 || x < 0 || y < 0 || x + w > d.width as i32 || y + h > d.height as i32 {
+    if w < 1
+        || h < 1
+        || x < 0
+        || y < 0
+        || x.checked_add(w).is_none_or(|right| right > d.width as i32)
+        || y.checked_add(h)
+            .is_none_or(|bottom| bottom > d.height as i32)
+    {
         return Err("Crop must be inside canvas".into());
     }
     if d.layers.iter().any(|l| l.tileset.is_some()) {
         return Err("Rasterize tile layers before cropping".into());
     }
-    let old = d.clone();
-    for (li, l) in d.layers.iter_mut().enumerate() {
-        if let Some(old_mask) = &old.layers[li].mask {
-            let mut mask = Pixels::empty((w * h) as usize);
-            for cy in 0..h {
-                for cx in 0..w {
-                    let source = (y + cy) as usize * old.width + (x + cx) as usize;
-                    mask.set((cy * w + cx) as usize, old_mask[source]);
-                }
-            }
-            l.mask = Some(mask);
-        }
-        for f in 0..d.durations.len() {
-            let mut p = vec![];
-            let mut idx = vec![];
-            for cy in y..y + h {
-                for cx in x..x + w {
-                    let i = cy as usize * old.width + cx as usize;
-                    p.push(old.layers[li].cels[f][i]);
-                    if let Some(indices) = &old.layers[li].cel_meta[f].indices {
-                        idx.push(indices[i]);
+    let mut cropped = d.clone();
+    let (x, y, w, h) = (x as usize, y as usize, w as usize, h as usize);
+    let mut rasters = std::collections::HashMap::new();
+    let mut palette_indices = std::collections::HashMap::new();
+    let mut crop_raster = |source: &Pixels| {
+        let Some(id) = source.backing_id() else {
+            return Pixels::empty(w * h);
+        };
+        rasters
+            .entry(id)
+            .or_insert_with(|| {
+                if let Pixels::Dense(pixels) = source {
+                    let mut cropped = Vec::with_capacity(w * h);
+                    for row in y..y + h {
+                        let start = row * d.width + x;
+                        cropped.extend_from_slice(&pixels[start..start + w]);
                     }
+                    if cropped.iter().all(|pixel| *pixel == CLEAR) {
+                        Pixels::empty(w * h)
+                    } else {
+                        cropped.into()
+                    }
+                } else {
+                    let mut cropped = Pixels::empty(w * h);
+                    source.visit_nonclear(|index, color| {
+                        let (col, row) = (index % d.width, index / d.width);
+                        if (x..x + w).contains(&col) && (y..y + h).contains(&row) {
+                            cropped.set((row - y) * w + col - x, color);
+                        }
+                    });
+                    cropped
                 }
+            })
+            .clone()
+    };
+    for l in &mut cropped.layers {
+        // Cropping each placement clips a different part of the shared image
+        // when its origin differs. Keep links only among matching origins.
+        let mut link_groups = std::collections::HashMap::new();
+        let mut link_counts = Vec::new();
+        for meta in &mut l.cel_meta {
+            if let Some(link) = meta.artwork_link {
+                let origin = meta.bounds.map_or([0, 0], |b| [b[0], b[1]]);
+                let group = *link_groups.entry((link, origin)).or_insert_with(|| {
+                    let group = link_counts.len();
+                    link_counts.push(0);
+                    group
+                });
+                link_counts[group] += 1;
+                meta.artwork_link = Some(group);
             }
-            l.cels[f] = if p.iter().all(|pixel| *pixel == CLEAR) {
-                Pixels::empty(p.len())
-            } else {
-                p.into()
-            };
-            l.cel_meta[f].indices = if idx.is_empty() {
-                None
-            } else {
-                Some(std::sync::Arc::new(idx))
-            };
-            l.cel_meta[f].outside.clear();
-            l.cel_meta[f].bounds = None;
+        }
+        for meta in &mut l.cel_meta {
+            if meta
+                .artwork_link
+                .is_some_and(|group| link_counts[group] < 2)
+            {
+                meta.artwork_link = None;
+            }
+        }
+
+        l.mask = l.mask.as_ref().map(&mut crop_raster);
+        for (pixels, meta) in l.cels.iter_mut().zip(&mut l.cel_meta) {
+            *pixels = crop_raster(pixels);
+            if let Some(indices) = &mut meta.indices {
+                *indices = palette_indices
+                    .entry(std::sync::Arc::as_ptr(indices))
+                    .or_insert_with(|| {
+                        let mut cropped = Vec::with_capacity(w * h);
+                        for row in y..y + h {
+                            let start = row * d.width + x;
+                            cropped.extend_from_slice(&indices[start..start + w]);
+                        }
+                        std::sync::Arc::new(cropped)
+                    })
+                    .clone();
+            }
+            meta.outside.clear();
+            meta.bounds = None;
         }
     }
-    d.width = w as usize;
-    d.height = h as usize;
-    d.validate()
+    cropped.width = w;
+    cropped.height = h;
+    cropped.validate()?;
+    *d = cropped;
+    Ok(())
 }
 pub fn ramp(a: Pixel, b: Pixel, n: usize) -> Vec<Pixel> {
     let n = n.clamp(2, 256);

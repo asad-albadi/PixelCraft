@@ -229,7 +229,7 @@ pub fn apply_command_batch_until(
         return Err("Too many commands".into());
     }
     let mut out = d.clone();
-    let mut paint_budget = 4_000_000;
+    let mut paint_budget = 4_000_000usize;
     for c in commands {
         if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
             return Err("Live request expired; no changes applied".into());
@@ -336,6 +336,9 @@ pub fn apply_command_batch_until(
                     {
                         return Err("Layer mask must be within the canvas".into());
                     }
+                    paint_budget = paint_budget
+                        .checked_sub(w * h)
+                        .ok_or("Paint batch exceeds its work limit")?;
                     let mut mask = Pixels::empty(out.width * out.height);
                     for row in y..y + h {
                         for col in x..x + w {
@@ -1137,6 +1140,11 @@ impl LiveBridge {
                                     Err(e) => json!({"error":e}),
                                 };
                                 if let Ok(mut bytes) = serde_json::to_vec(&response) {
+                                    if bytes.len() >= MAX_LIVE_RESPONSE_BYTES {
+                                        bytes = format!(
+                                            "{{\"error\":\"{LIVE_RESPONSE_LIMIT_ERROR}\"}}"
+                                        ).into_bytes();
+                                    }
                                     bytes.push(b'\n');
                                     let _ =
                                         write_live_bytes(&mut stream, &bytes, deadline, &stopping);
@@ -1295,6 +1303,30 @@ fn wait_live_response_with_peer(
         }
     }
 }
+const MAX_LIVE_RESPONSE_BYTES: usize = 8_000_000;
+const LIVE_RESPONSE_LIMIT_ERROR: &str =
+    "Result exceeds the live response limit; request a smaller crop or scale";
+
+pub fn check_live_response_size(value: &Value) -> Result<(), String> {
+    struct ResponseBudget(usize);
+    impl Write for ResponseBudget {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_sub(bytes.len())
+                .ok_or_else(|| std::io::Error::other(LIVE_RESPONSE_LIMIT_ERROR))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let overhead = b"{\"result\":}\n".len();
+    serde_json::to_writer(ResponseBudget(MAX_LIVE_RESPONSE_BYTES - overhead), value)
+        .map_err(|error| error.to_string())
+}
+
 fn live_call(config: &Path, op: &str, args: &Value) -> Result<Value, String> {
     let v: Value = serde_json::from_slice(&std::fs::read(config).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -1321,7 +1353,7 @@ fn live_call(config: &Path, op: &str, args: &Value) -> Result<Value, String> {
     .map_err(|e| e.to_string())?;
     let mut line = String::new();
     std::io::BufReader::new(stream)
-        .take(8_000_000)
+        .take(MAX_LIVE_RESPONSE_BYTES as u64)
         .read_line(&mut line)
         .map_err(|e| e.to_string())?;
     let result: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;

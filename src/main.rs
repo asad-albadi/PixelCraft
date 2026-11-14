@@ -2709,7 +2709,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
     fn edit_timeline(&mut self, edit: impl FnOnce(&mut Document) -> Result<(), String>) -> bool {
         let mut next = self.doc.clone();
-        match edit(&mut next) {
+        match edit(&mut next).and_then(|()| next.validate()) {
             Ok(()) if next != self.doc || !next.same_editor_targets(&self.doc) => {
                 self.remember();
                 self.doc = next;

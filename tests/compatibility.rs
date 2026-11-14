@@ -283,3 +283,33 @@ fn linked_tilemaps_roundtrip_and_share_later_edits() {
     reopened.paint_tile(1, 1, 0, 0, 0).unwrap();
     assert_eq!(reopened.layers[1].tile_cels[0][0], 0);
 }
+#[test]
+fn linked_tilemap_uses_source_grid_and_target_origin() {
+    let mut doc = Document::new(4, 4);
+    let color = [12, 80, 36, 255];
+    doc.tilesets.push(Tileset {
+        name: "Tiles".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![vec![color; 4].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.paint_tile(1, 0, 0, 1, 1).unwrap();
+    doc.add_frame(0, false);
+    doc.layers[1].cel_meta[1].tilemap = Some(TilemapGeometry {
+        x: 1,
+        y: 0,
+        columns: 4,
+        rows: 1,
+    });
+    doc.link_cel(1, 1, 0).unwrap();
+
+    let geometry = doc.layers[1].cel_meta[1].tilemap.as_ref().unwrap();
+    assert_eq!(
+        (geometry.x, geometry.y, geometry.columns, geometry.rows),
+        (1, 0, 2, 2)
+    );
+    assert_eq!(doc.composite(1)[9], color);
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.composite(1), doc.composite(1));
+}

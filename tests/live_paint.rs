@@ -320,3 +320,21 @@ fn export_commit_rejects_late_cancellation() {
     assert!(cancelled.cancel());
     assert!(cancelled.begin_commit().is_err());
 }
+
+#[test]
+fn repeated_masks_share_the_raster_work_budget() {
+    let doc = Document::new(2001, 1000);
+    let mask = json!({"op":"set-layer-mask","layer":0,
+        "region":{"x":0,"y":0,"width":2001,"height":1000}});
+    let once = json!({"revision":document_revision(&doc),"commands":[mask]});
+    let masked = apply_commands(&doc, &once).unwrap();
+    assert_eq!(masked.layers[0].mask.as_ref().unwrap()[2_000_999][3], 255);
+
+    let repeated = json!({"revision":document_revision(&doc),"commands":[
+        mask, {"op":"set-layer-mask","layer":0}, mask
+    ]});
+    let error = apply_commands(&doc, &repeated)
+        .expect_err("The repeated mask must exceed the cumulative raster work budget");
+    assert!(error.contains("work limit"), "{error}");
+    assert!(doc.layers[0].mask.is_none());
+}

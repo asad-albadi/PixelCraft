@@ -995,6 +995,19 @@ impl Document {
         if self.palette.is_empty() || self.palette.len() > 256 {
             return Err("Palette must contain 1–256 colors".into());
         }
+        let group_buffers: Vec<_> = self
+            .layers
+            .iter()
+            .map(|layer| {
+                layer.group
+                    && (self.compose_groups
+                        || layer.mask.is_some()
+                        || layer.cel_meta.iter().any(|cel| {
+                            cel.keyframe
+                                .is_some_and(|key| key != CelKeyframe::default())
+                        }))
+            })
+            .collect();
         for (i, l) in self.layers.iter().enumerate() {
             if l.mask
                 .as_ref()
@@ -1065,14 +1078,25 @@ impl Document {
             {
                 return Err("Invalid cel dimensions".into());
             }
+            // Keep scratch allocations bounded independently of sparse backing.
+            let mut buffers = 1 + usize::from(group_buffers[i] || l.tileset.is_some());
             let mut p = l.parent;
             let mut depth = 0;
             while let Some(j) = p {
                 if j >= self.layers.len() || j == i || !self.layers[j].group || depth >= 128 {
                     return Err("Invalid layer group hierarchy".into());
                 }
+                buffers += usize::from(group_buffers[j]);
                 p = self.layers[j].parent;
                 depth += 1;
+            }
+            if self
+                .width
+                .saturating_mul(self.height)
+                .saturating_mul(buffers)
+                > MAX_DOCUMENT_PIXELS
+            {
+                return Err("Layer hierarchy exceeds the compositing workspace budget".into());
             }
             if let Some(t) = l.tileset {
                 let t = self.tilesets.get(t).ok_or("Missing tileset")?;
@@ -1551,19 +1575,19 @@ impl Document {
         meta.keyframe = target.keyframe;
         let source_pixels = layer.cels[source].clone();
         let mut raster = source_pixels.clone();
-        if layer.tileset.is_some() {
-            let tile_count = layer.tile_cels[source].len();
-            let geometry = meta.tilemap.clone().or_else(|| {
-                target
-                    .tilemap
-                    .clone()
-                    .filter(|g| g.columns.saturating_mul(g.rows) == tile_count)
-            });
-            meta.tilemap = geometry.map(|mut geometry| {
+        if let Some(tileset) = layer.tileset {
+            let set = &self.tilesets[tileset];
+            if meta.tilemap.is_some() || (tx, ty) != (0, 0) {
+                let mut geometry = meta.tilemap.take().unwrap_or_else(|| TilemapGeometry {
+                    x: 0,
+                    y: 0,
+                    columns: self.width.div_ceil(set.width),
+                    rows: self.height.div_ceil(set.height),
+                });
                 geometry.x = tx;
                 geometry.y = ty;
-                geometry
-            });
+                meta.tilemap = Some(geometry);
+            }
         } else if (sx, sy) != (tx, ty) || palette.is_some() {
             raster = Pixels::empty(self.width * self.height);
             let mut outside = Vec::new();
@@ -1676,8 +1700,24 @@ impl Document {
                 .filter(|meta| meta.artwork_link == link)
                 .all(|meta| origin(meta) == (sx, sy));
         let shared = if same_grid {
-            self.layers[l].cels[f].set(i, color);
-            Some(self.layers[l].cels[f].clone())
+            let layer = &mut self.layers[l];
+            if layer.cels[f][i] != color {
+                let backing = layer.cels[f].backing_id();
+                if backing.is_some() {
+                    // Release the linked placements before the write, so only
+                    // snapshots or independent cels trigger copy-on-write.
+                    for (frame, (pixels, meta)) in
+                        layer.cels.iter_mut().zip(&layer.cel_meta).enumerate()
+                    {
+                        if frame != f && meta.artwork_link == link && pixels.backing_id() == backing
+                        {
+                            *pixels = Pixels::empty(pixels.len());
+                        }
+                    }
+                }
+                layer.cels[f].set(i, color);
+            }
+            Some(layer.cels[f].clone())
         } else {
             None
         };
@@ -1772,6 +1812,10 @@ impl Document {
         self.draw_pixel(l, f, i, color, n);
     }
     pub fn editable(&self, l: usize) -> bool {
+        self.layer_unlocked(l) && !self.layers[l].group
+    }
+
+    fn layer_unlocked(&self, l: usize) -> bool {
         let mut p = Some(l);
         let mut n = 0;
         while let Some(i) = p {
@@ -1784,7 +1828,7 @@ impl Document {
             p = layer.parent;
             n += 1;
         }
-        !self.layers[l].group
+        true
     }
     pub fn stamp(&mut self, l: usize, f: usize, x: i32, y: i32, c: Pixel, size: i32) {
         if !self.editable(l) || self.layers[l].tileset.is_some() {
@@ -1973,8 +2017,7 @@ impl Document {
         frame: usize,
         key: Option<CelKeyframe>,
     ) -> Result<(), String> {
-        if layer >= self.layers.len() || self.layers[layer].locked || frame >= self.durations.len()
-        {
+        if !self.layer_unlocked(layer) || frame >= self.durations.len() {
             return Err("Choose an unlocked layer and valid frame".into());
         }
         if key.is_some_and(|key| {
@@ -2030,15 +2073,14 @@ impl Document {
     }
 
     pub fn set_layer_mask(&mut self, layer: usize, mask: Option<Pixels>) -> Result<(), String> {
-        let target = self.layers.get_mut(layer).ok_or("Unknown layer")?;
-        if target.locked
+        if !self.layer_unlocked(layer)
             || mask
                 .as_ref()
                 .is_some_and(|p| p.len() != self.width * self.height)
         {
             return Err("Choose an unlocked layer and canvas-sized mask".into());
         }
-        target.mask = mask;
+        self.layers[layer].mask = mask;
         Ok(())
     }
 

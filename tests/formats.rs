@@ -143,3 +143,46 @@ fn workspace_reader_streams_legacy_and_shared_cel_documents() {
         );
     }
 }
+
+#[test]
+fn ase_rejects_legacy_tile_ids_that_alias_transform_bits() {
+    use std::io::Write;
+    let mut doc = Document::new(1, 1);
+    doc.tilesets.push(Tileset {
+        name: "Tile".into(),
+        width: 1,
+        height: 1,
+        tiles: vec![vec![[255, 0, 0, 255]].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0][0] = 1;
+    let bytes = encode_ase(&doc).unwrap();
+    let mut rebuilt = bytes[..144].to_vec();
+    let mut cursor = 144;
+    while cursor < bytes.len() {
+        let size = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
+        let mut chunk = bytes[cursor..cursor + size].to_vec();
+        let kind = u16::from_le_bytes(chunk[4..6].try_into().unwrap());
+        if kind == 0x2023 {
+            chunk[10..14].copy_from_slice(&2u32.to_le_bytes());
+        } else if kind == 0x2005 {
+            chunk[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+            chunk[32..44].fill(0);
+            chunk.truncate(54);
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            // A non-empty word using all bits as an ID and no flip masks.
+
+            encoder.write_all(&0x2000_0000u32.to_le_bytes()).unwrap();
+            chunk.extend(encoder.finish().unwrap());
+            let new_size = chunk.len() as u32;
+            chunk[..4].copy_from_slice(&new_size.to_le_bytes());
+        }
+        rebuilt.extend(chunk);
+        cursor += size;
+    }
+    let size = rebuilt.len() as u32;
+    rebuilt[..4].copy_from_slice(&size.to_le_bytes());
+    rebuilt[128..132].copy_from_slice(&(size - 128).to_le_bytes());
+    assert!(decode_ase(&rebuilt).is_err());
+}

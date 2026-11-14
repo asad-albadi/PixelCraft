@@ -395,3 +395,50 @@ fn translated_off_canvas_edits_invalidate_the_composited_frame() {
     assert_ne!(before.composite(0), doc.composite(0));
     assert!(!before.same_frame_pixels(&doc, 0));
 }
+
+#[test]
+fn locked_ancestor_blocks_cel_keyframes_and_layer_masks() {
+    let mut doc = Document::new(2, 2);
+    let group = doc.add_group("Locked scene").unwrap();
+    doc.layers[0].parent = Some(group);
+    doc.layers[group].locked = true;
+    assert!(
+        doc.set_cel_keyframe(0, 0, Some(CelKeyframe::default()))
+            .is_err()
+    );
+    assert!(doc.set_layer_mask(0, Some(Pixels::empty(4))).is_err());
+    assert!(doc.layers[0].cel_meta[0].keyframe.is_none());
+    assert!(doc.layers[0].mask.is_none());
+}
+
+#[test]
+fn group_compositing_cannot_exceed_the_workspace_budget() {
+    let mut doc = Document::new(8000, 8000);
+    let outer = doc.add_group("Outer").unwrap();
+    let inner = doc.add_group("Inner").unwrap();
+    doc.layers[inner].parent = Some(outer);
+    doc.layers[0].parent = Some(inner);
+    assert!(
+        doc.validate()
+            .unwrap_err()
+            .contains("compositing workspace")
+    );
+}
+#[test]
+fn changing_dense_linked_cels_reuses_their_private_backing() {
+    let mut doc = Document::new(64, 64);
+    doc.layers[0].cels[0] = vec![[12, 34, 56, 255]; 64 * 64].into();
+    doc.add_frame(0, false);
+    doc.link_cel(0, 1, 0).unwrap();
+    let snapshot = doc.clone();
+
+    doc.set_pixel(0, 0, 0, [90, 80, 70, 255]);
+    let backing = doc.layers[0].cels[0].backing_id();
+    assert_ne!(backing, snapshot.layers[0].cels[0].backing_id());
+    assert_eq!(backing, doc.layers[0].cels[1].backing_id());
+
+    doc.set_pixel(0, 0, 1, [70, 90, 80, 255]);
+    assert_eq!(doc.layers[0].cels[0].backing_id(), backing);
+    assert_eq!(doc.layers[0].cels[1][1], [70, 90, 80, 255]);
+    assert_eq!(snapshot.layers[0].cels[1][1], [12, 34, 56, 255]);
+}
