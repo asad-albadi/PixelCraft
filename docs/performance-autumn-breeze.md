@@ -78,3 +78,9 @@ PresentMon 2.6.0 captured seven seconds per case after a five-second startup del
 | Layered Moonlit Sanctuary | 127.27 / 133.29 ms | 127.28 / 127.33 ms | Not a 60 fps input |
 
 For each binary, open the fixture with `pixelcraft.exe --open PATH --play`. Run `PresentMon --process_id PID --delay 5 --timed 7 --terminate_after_timed --v1_metrics --output_file capture.csv` and summarize positive `msBetweenDisplayChange` values for displayed presents. These are display presents, including repeated sprite content. They do not count skipped sprite frames or measure input latency or VRAM. Neither Windows build reproduced the previously observed long Linux stall in this run. Dense peak process working set was 867 MiB on the original PR build and 565 MiB on the follow-up.
+
+### Final Windows playback on the original projects
+
+Two 12-second PresentMon 2.6.0 captures used the same optimized build, with a seven-second warmup. Each original 24-frame project uses 150 ms frame durations. Autumn Breeze recorded a 127.31 ms p95 display interval, a 133.38 ms maximum, and a 698.7 MiB peak process working set. Moonlit Sanctuary recorded a 127.34 ms p95 display interval, a 134.01 ms maximum, and a 735.0 MiB peak process working set. Neither capture recorded a display interval above 150 ms.
+
+Display presents can repeat sprite content, so these numbers describe window presentation gaps. A separate native save-and-reopen check matched all 24 rendered frames, layer order, and timing for each project. The source hashes stayed the same.

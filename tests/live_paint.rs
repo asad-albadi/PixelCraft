@@ -338,3 +338,32 @@ fn repeated_masks_share_the_raster_work_budget() {
     assert!(error.contains("work limit"), "{error}");
     assert!(doc.layers[0].mask.is_none());
 }
+
+#[test]
+fn oversized_save_reply_leaves_destination_untouched() {
+    use pixelcraft::automation::prepare_live_save;
+
+    let root = std::env::temp_dir().join(format!("pixelcraft-save-reply-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let output = root.join("sprite.pixel");
+    std::fs::write(&output, b"previous file").unwrap();
+
+    let mut doc = Document::new(1, 1);
+    doc.layers[0].name = "\"".repeat(4_000_000);
+    for replace in [false, true] {
+        let path = if replace {
+            output.clone()
+        } else {
+            root.join("new.pixel")
+        };
+        let error = match prepare_live_save(&doc, path, "test:1", replace) {
+            Ok(_) => panic!("Oversized save reply must fail before staging"),
+            Err(error) => error,
+        };
+        assert!(error.contains("live response limit"), "{error}");
+    }
+    assert_eq!(std::fs::read(&output).unwrap(), b"previous file");
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    std::fs::remove_file(output).unwrap();
+    std::fs::remove_dir(root).unwrap();
+}

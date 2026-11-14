@@ -842,17 +842,37 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             return None;
         }
         if matches!(op, "live-inspect" | "live-undo" | "live-redo") {
-            if op == "live-undo" {
-                self.undo();
-            }
-            if op == "live-redo" {
-                self.redo();
-            }
-            self.sync_live_revision();
-            let mut info = automation::inspect_revision(&self.doc, &self.live_revision());
+            let destination = match op {
+                "live-undo" => self.undo.last(),
+                "live-redo" => self.redo.last(),
+                _ => None,
+            };
+            let doc = destination.map_or(&self.doc, |entry| &entry.doc);
+            let reply_revision = if op == "live-inspect" {
+                revision
+            } else {
+                format!("{}:{}", self.power.bridge_session, u64::MAX)
+            };
+            let mut info = automation::inspect_revision(doc, &reply_revision);
             info["path"] = serde_json::json!(self.path);
             info["session_id"] = serde_json::json!(self.power.bridge_session);
-            let _ = request.response.send(Ok(info));
+            let result = automation::check_live_response_size(&info).and_then(|()| {
+                if request.export_progress.is_cancelled() {
+                    return Err("Live request cancelled; no changes applied".into());
+                }
+                if Instant::now() >= request.deadline {
+                    return Err("Live request expired; no changes applied".into());
+                }
+                match op {
+                    "live-undo" => self.undo(),
+                    "live-redo" => self.redo(),
+                    _ => {}
+                }
+                self.sync_live_revision();
+                info["revision"] = serde_json::json!(self.live_revision());
+                Ok(info)
+            });
+            let _ = request.response.send(result);
             return None;
         }
         if op == "live-save" {
@@ -1374,6 +1394,40 @@ mod bridge_tests {
         assert_eq!(before, a.doc);
         assert!(request(&mut a, "live-edit", args, false).is_err());
         assert!(a.power.bridge.is_none());
+    }
+
+    #[test]
+    fn oversized_history_replies_leave_the_document_and_history_intact() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let mut large = Document::new(1, 1);
+        large.layers[0].name = "\"".repeat(4_000_000);
+        app.replace(large, None);
+        app.remember();
+        app.doc.layers[0].name = "Small".into();
+        app.sync_live_revision();
+        let revision = app.live_revision();
+        let args = serde_json::json!({"revision":revision});
+        let result = request(&mut app, "live-undo", args, false);
+        assert!(matches!(result, Err(error) if error.contains("live response limit")));
+        assert_eq!(app.live_revision(), revision);
+        assert_eq!(app.doc.layers[0].name, "Small");
+        assert_eq!(app.undo.len(), 1);
+        assert!(app.redo.is_empty());
+
+        app.undo();
+        app.redo();
+        app.remember();
+        app.doc.layers[0].name = "\"".repeat(4_000_000);
+        app.undo();
+        app.sync_live_revision();
+        let revision = app.live_revision();
+        let args = serde_json::json!({"revision":revision});
+        let result = request(&mut app, "live-redo", args, false);
+        assert!(matches!(result, Err(error) if error.contains("live response limit")));
+        assert_eq!(app.live_revision(), revision);
+        assert_eq!(app.doc.layers[0].name, "Small");
+        assert_eq!(app.redo.len(), 1);
     }
 
     #[test]

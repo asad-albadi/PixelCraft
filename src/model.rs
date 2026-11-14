@@ -36,6 +36,122 @@ pub(crate) fn line_pixels<E>(
         }
     }
 }
+thread_local! {
+    static PROJECT_DECODE_BUDGET: std::cell::Cell<Option<ProjectDecodeBudget>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+struct ProjectDecodeBudget {
+    bytes: usize,
+    cel_slots: [usize; 3],
+}
+
+/// Keep the native wire representation while accounting for allocations across
+/// the entire document, before any shared raster references are restored.
+pub(crate) fn with_project_decode_budget<T>(bytes: usize, decode: impl FnOnce() -> T) -> T {
+    struct ResetBudget;
+    impl Drop for ResetBudget {
+        fn drop(&mut self) {
+            PROJECT_DECODE_BUDGET.set(None);
+        }
+    }
+    if PROJECT_DECODE_BUDGET.get().is_some() {
+        return decode();
+    }
+    PROJECT_DECODE_BUDGET.set(Some(ProjectDecodeBudget {
+        bytes,
+        cel_slots: [MAX_CEL_SLOTS; 3],
+    }));
+    let _reset = ResetBudget;
+    decode()
+}
+
+fn charge_project_bytes<E: serde::de::Error>(bytes: usize) -> Result<(), E> {
+    if let Some(mut limit) = PROJECT_DECODE_BUDGET.get() {
+        limit.bytes = limit
+            .bytes
+            .checked_sub(bytes)
+            .ok_or_else(|| E::custom("Project exceeds its raster allocation budget"))?;
+        PROJECT_DECODE_BUDGET.set(Some(limit));
+    }
+    Ok(())
+}
+
+fn charge_cel_slot<E: serde::de::Error, const KIND: usize>() -> Result<(), E> {
+    if let Some(mut limit) = PROJECT_DECODE_BUDGET.get() {
+        limit.cel_slots[KIND] = limit.cel_slots[KIND]
+            .checked_sub(1)
+            .ok_or_else(|| E::custom("Project exceeds its cel slot limit"))?;
+        PROJECT_DECODE_BUDGET.set(Some(limit));
+    }
+    Ok(())
+}
+
+// Use incremental visitors for the arrays that can dominate a project allocation.
+// A separate slot counter covers vectors of empty cels, which have no raster backing.
+struct BudgetedVec<T, const KIND: usize>(Vec<T>);
+
+impl<'de, T: Deserialize<'de>, const KIND: usize> Deserialize<'de> for BudgetedVec<T, KIND> {
+    fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
+        struct Entries<T, const KIND: usize>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>, const KIND: usize> serde::de::Visitor<'de> for Entries<T, KIND> {
+            type Value = BudgetedVec<T, KIND>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a project array")
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut values = Vec::new();
+                while let Some(value) = seq.next_element()? {
+                    if KIND < 3 {
+                        if values.len() == u16::MAX as usize {
+                            return Err(serde::de::Error::custom("Layer exceeds its frame limit"));
+                        }
+                        charge_cel_slot::<A::Error, KIND>()?;
+                    } else {
+                        charge_project_bytes(std::mem::size_of::<T>())?;
+                    }
+                    values.push(value);
+                }
+                Ok(BudgetedVec(values))
+            }
+        }
+        decoder.deserialize_seq(Entries::<T, KIND>(std::marker::PhantomData))
+    }
+}
+
+fn decode_raster_slots<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Vec<Pixels>, D::Error> {
+    BudgetedVec::<Pixels, 0>::deserialize(decoder).map(|values| values.0)
+}
+fn decode_metadata_slots<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Vec<CelMeta>, D::Error> {
+    BudgetedVec::<CelMeta, 1>::deserialize(decoder).map(|values| values.0)
+}
+fn decode_tile_slots<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Vec<Vec<u32>>, D::Error> {
+    BudgetedVec::<BudgetedVec<u32, 3>, 2>::deserialize(decoder)
+        .map(|slots| slots.0.into_iter().map(|values| values.0).collect())
+}
+fn decode_outside_pixels<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Vec<OutsidePixel>, D::Error> {
+    BudgetedVec::<OutsidePixel, 3>::deserialize(decoder).map(|values| values.0)
+}
+fn decode_indices<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<Arc<Vec<u8>>>, D::Error> {
+    Option::<BudgetedVec<u8, 3>>::deserialize(decoder)
+        .map(|value| value.map(|values| Arc::new(values.0)))
+}
+
 const PIXEL_BLOCK: usize = 16;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,6 +183,7 @@ impl<'de> Deserialize<'de> for Pixels {
                     if pixels.len() == MAX_PIXELS {
                         return Err(A::Error::custom("Raster exceeds pixel limit"));
                     }
+                    charge_project_bytes(std::mem::size_of::<Pixel>())?;
                     pixels.push(pixel);
                 }
                 Ok(pixels.into())
@@ -77,6 +194,7 @@ impl<'de> Deserialize<'de> for Pixels {
                 struct Compact {
                     clear_pixels: Option<usize>,
                     len: Option<usize>,
+                    #[serde(default, deserialize_with = "decode_sparse_blocks")]
                     blocks: Option<std::collections::BTreeMap<usize, [Pixel; PIXEL_BLOCK]>>,
                 }
                 let compact = Compact::deserialize(MapAccessDeserializer::new(map))?;
@@ -85,7 +203,7 @@ impl<'de> Deserialize<'de> for Pixels {
                     (None, Some(len), Some(blocks))
                         if len <= MAX_PIXELS
                             && blocks.keys().all(|key| *key < len.div_ceil(PIXEL_BLOCK))
-                            && blocks.len() * PIXEL_BLOCK <= len =>
+                            && blocks.len() <= len.div_ceil(PIXEL_BLOCK) =>
                     {
                         Ok(Pixels::Sparse(Arc::new(SparsePixels { len, blocks })))
                     }
@@ -96,6 +214,51 @@ impl<'de> Deserialize<'de> for Pixels {
         decoder.deserialize_any(PixelVisitor)
     }
 }
+fn decode_sparse_blocks<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<std::collections::BTreeMap<usize, [Pixel; PIXEL_BLOCK]>>, D::Error> {
+    struct Blocks;
+    impl<'de> serde::de::Visitor<'de> for Blocks {
+        type Value = Option<std::collections::BTreeMap<usize, [Pixel; PIXEL_BLOCK]>>;
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D: serde::Deserializer<'de>>(
+            self,
+            decoder: D,
+        ) -> Result<Self::Value, D::Error> {
+            decoder.deserialize_map(self)
+        }
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a sparse raster block map")
+        }
+
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            use serde::de::Error;
+            let mut blocks = std::collections::BTreeMap::new();
+            while let Some((key, pixels)) = map.next_entry::<usize, [Pixel; PIXEL_BLOCK]>()? {
+                if key >= MAX_PIXELS.div_ceil(PIXEL_BLOCK) {
+                    return Err(A::Error::custom("Invalid sparse raster block index"));
+                }
+                if let std::collections::btree_map::Entry::Vacant(slot) = blocks.entry(key) {
+                    charge_project_bytes((PIXEL_BLOCK + 8) * std::mem::size_of::<Pixel>())?;
+                    slot.insert(pixels);
+                } else {
+                    return Err(A::Error::custom("Duplicate sparse raster block"));
+                }
+            }
+            Ok(Some(blocks))
+        }
+    }
+    decoder.deserialize_option(Blocks)
+}
+
 impl Pixels {
     pub fn empty(len: usize) -> Self {
         Self::Empty { clear_pixels: len }
@@ -424,8 +587,9 @@ pub struct CelMeta {
     pub editor_id: EditorId,
     pub opacity: u8,
     pub z_index: i16,
+    #[serde(deserialize_with = "decode_outside_pixels")]
     pub outside: Vec<OutsidePixel>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "decode_indices")]
     pub indices: Option<Arc<Vec<u8>>>,
     #[serde(default)]
     pub tilemap: Option<TilemapGeometry>,
@@ -614,12 +778,15 @@ pub struct Layer {
     pub visible: bool,
     pub locked: bool,
     pub opacity: u8,
+    #[serde(deserialize_with = "decode_raster_slots")]
     pub cels: Vec<Pixels>,
     pub group: bool,
     pub parent: Option<usize>,
     pub blend: BlendMode,
+    #[serde(deserialize_with = "decode_metadata_slots")]
     pub cel_meta: Vec<CelMeta>,
     pub tileset: Option<usize>,
+    #[serde(deserialize_with = "decode_tile_slots")]
     pub tile_cels: Vec<Vec<u32>>,
     #[serde(default)]
     pub background: bool,

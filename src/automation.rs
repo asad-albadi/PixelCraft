@@ -1484,9 +1484,12 @@ pub fn prepare_live_save(
     if !matches!(extension(&output), "pixel" | "ase" | "aseprite") {
         return Err("Choose a .pixel, .ase or .aseprite project path".into());
     }
+    let mut metadata = inspect_revision(d, revision);
+    metadata["output"] = json!(output);
+    check_live_response_size(&metadata)?;
     prepare_output(output, replace, |temporary| {
         formats::save(temporary, d)?;
-        Ok(inspect_revision(d, revision))
+        Ok(metadata)
     })
 }
 

@@ -196,7 +196,7 @@ impl ProjectV2 {
 /// Workspace recovery embeds the same shared-raster representation used
 /// by native files while retaining support for earlier dense workspace data.
 pub mod recovery_document {
-    use super::{Document, ProjectV2};
+    use super::{Document, MAX_DOCUMENT_PIXELS, Pixel, ProjectV2, with_project_decode_budget};
     use serde::{Deserialize, Serialize};
 
     pub fn serialize<S: serde::Serializer>(
@@ -286,7 +286,9 @@ pub mod recovery_document {
                 self.map.next_value_seed(seed)
             }
         }
-        decoder.deserialize_map(Recovery)
+        with_project_decode_budget(MAX_DOCUMENT_PIXELS * size_of::<Pixel>(), || {
+            decoder.deserialize_map(Recovery)
+        })
     }
 }
 
@@ -301,17 +303,29 @@ pub fn encode_project(d: &Document) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 pub fn decode_project(b: &[u8]) -> Result<Document, String> {
-    let (b, legacy) = if let Some(data) = b.strip_prefix(PROJECT_MAGIC) {
-        (data, false)
-    } else if let Some(data) = b.strip_prefix(PROJECT_MAGIC_V1) {
-        (data, true)
-    } else {
-        return Err("Invalid PixelCraft project version".into());
+    decode_project_reader(b)
+}
+
+fn decode_project_reader(mut input: impl Read) -> Result<Document, String> {
+    let mut magic = [0; PROJECT_MAGIC.len()];
+    input
+        .read_exact(&mut magic)
+        .map_err(|error| error.to_string())?;
+    let legacy = match magic.as_slice() {
+        PROJECT_MAGIC => false,
+        PROJECT_MAGIC_V1 => true,
+        _ => return Err("Invalid PixelCraft project version".into()),
     };
+    with_project_decode_budget(MAX_DOCUMENT_PIXELS * size_of::<Pixel>(), || {
+        decode_project_payload(input, legacy)
+    })
+}
+
+fn decode_project_payload(input: impl Read, legacy: bool) -> Result<Document, String> {
     // Parse common projects from a byte slice. Keep the streaming path for
     // large projects so decoding does not also retain the whole JSON payload.
     const SLICE_LIMIT: usize = 96 * 1024 * 1024;
-    let mut decoder = ZlibDecoder::new(b);
+    let mut decoder = ZlibDecoder::new(input);
     let mut prefix = Vec::new();
     (&mut decoder)
         .take(SLICE_LIMIT as u64 + 1)
@@ -341,6 +355,7 @@ pub fn decode_project(b: &[u8]) -> Result<Document, String> {
     d.validate()?;
     Ok(d)
 }
+
 fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &str) {
     for m in d
         .metadata
@@ -1462,7 +1477,8 @@ pub fn load(path: &Path) -> Result<Document, String> {
         .unwrap_or("")
         .to_lowercase();
     if ext == "pixel" {
-        return decode_project(&std::fs::read(path).map_err(|e| e.to_string())?);
+        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        return decode_project_reader(file);
     }
     if ext == "ase" || ext == "aseprite" {
         return load_ase_path(path, &mut Vec::new());
@@ -1910,4 +1926,90 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
         }
     }
     std::fs::write(path, out).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod project_budget_tests {
+    use super::*;
+
+    fn project_json(json: serde_json::Value, magic: &[u8]) -> Vec<u8> {
+        let mut output = magic.to_vec();
+        output.extend(compress(&serde_json::to_vec(&json).unwrap()).unwrap());
+        output
+    }
+
+    #[test]
+    fn rejects_dense_rasters_cumulatively_during_native_decode() {
+        let mut doc = Document::new(2, 2);
+        doc.add_frame(0, false);
+        doc.layers[0].cels[0] = vec![[1, 2, 3, 255]; 4].into();
+        doc.layers[0].cels[1] = vec![[4, 5, 6, 255]; 4].into();
+        let legacy = project_json(serde_json::to_value(&doc).unwrap(), PROJECT_MAGIC_V1);
+        let native = encode_project(&doc).unwrap();
+        for bytes in [legacy, native] {
+            let parsed = with_project_decode_budget(4 * 7, || decode_project(&bytes));
+            let error = parsed.expect_err("Both dense allocations must be charged");
+            assert!(error.contains("raster allocation budget"), "{error}");
+            assert_eq!(decode_project(&bytes).unwrap(), doc);
+        }
+    }
+
+    #[test]
+    fn shared_and_empty_rasters_fit_the_native_decode_budget() {
+        let mut doc = Document::new(32, 32);
+        doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
+        doc.add_frame(0, true);
+        doc.add_frame(1, false);
+        let bytes = encode_project(&doc).unwrap();
+        let budget = doc.layers[0].cels[0].allocation_pixels() * 4;
+        let decoded = with_project_decode_budget(budget, || decode_project(&bytes)).unwrap();
+        assert_eq!(decoded, doc);
+        assert!(decoded.layers[0].cels[0].shares_storage(&decoded.layers[0].cels[1]));
+        let error = with_project_decode_budget(budget - 1, || decode_project(&bytes))
+            .expect_err("A sparse block must pay for backing and map overhead");
+        assert!(error.contains("raster allocation budget"), "{error}");
+    }
+
+    #[test]
+    fn charges_index_and_tile_arrays_during_native_decode() {
+        let mut indexed = Document::new(2, 2);
+        indexed.layers[0].cel_meta[0].indices = Some(vec![0; 4].into());
+        let bytes = encode_project(&indexed).unwrap();
+        let error = with_project_decode_budget(3, || decode_project(&bytes))
+            .expect_err("Index bytes must be counted");
+        assert!(error.contains("raster allocation budget"), "{error}");
+        assert_eq!(decode_project(&bytes).unwrap(), indexed);
+
+        let mut tilemap = Document::new(2, 2);
+        tilemap.tilesets.push(Tileset {
+            name: "Empty".into(),
+            width: 1,
+            height: 1,
+            tiles: Vec::new(),
+        });
+        tilemap.add_tile_layer(0).unwrap();
+        let bytes = encode_project(&tilemap).unwrap();
+        let error = with_project_decode_budget(15, || decode_project(&bytes))
+            .expect_err("Tile placements must be counted");
+        assert!(error.contains("raster allocation budget"), "{error}");
+        assert_eq!(decode_project(&bytes).unwrap(), tilemap);
+    }
+
+    #[test]
+    fn native_decode_accepts_null_blocks_and_partial_sparse_blocks() {
+        let mut doc = Document::new(3, 1);
+        doc.add_frame(0, false);
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["layers"][0]["cels"][0] = serde_json::json!({"clear_pixels":3,"blocks":null});
+        let mut pixels = [[0; 4]; 16];
+        pixels[2] = [1, 2, 3, 255];
+        value["layers"][0]["cels"][1] = serde_json::json!({"len":3,"blocks":{"0":pixels}});
+        let decoded = decode_project(&project_json(value, PROJECT_MAGIC_V1)).unwrap();
+        assert_eq!(decoded.composite(0), doc.composite(0));
+        assert_eq!(decoded.composite(1)[2], [1, 2, 3, 255]);
+        assert_eq!(
+            decode_project(&encode_project(&decoded).unwrap()).unwrap(),
+            decoded
+        );
+    }
 }
