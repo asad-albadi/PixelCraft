@@ -193,7 +193,18 @@ rawset(app,'events',appEvents)
 rawset(app,'preferences',preferences)
 rawset(app,'apiVersion',24)
 getmetatable(app).__index=function(t,k)
- if k=='editor' then return {sprite=sprite,frame=frameHandles[activeFrame],zoom=(_pw_options or {}).zoom or 1,scroll=Point(),mousePos=Point()} elseif k=='site' then return {sprite=sprite,layer=layerHandles[activeLayer],frame=frameHandles[activeFrame],cel=cel(activeLayer,activeFrame)} elseif k=='range' then return {sprite=sprite,layers={layerHandles[activeLayer]},frames={frameHandles[activeFrame]},cels={cel(activeLayer,activeFrame)},isEmpty=false} elseif k=='tool' then return tool elseif k=='fs' then return {
+ if k=='editor' then return {sprite=sprite,frame=frameHandles[activeFrame],zoom=(_pw_options or {}).zoom or 1,scroll=Point(),mousePos=Point()} elseif k=='site' then return {sprite=sprite,layer=layerHandles[activeLayer],frame=frameHandles[activeFrame],cel=cel(activeLayer,activeFrame)} elseif k=='range' then local range=(_pw_options or {}).timelineRange
+ local result={sprite=sprite,layers={},frames={},cels={},isEmpty=false}
+ local firstLayer,lastLayer,firstFrame,lastFrame=activeLayer,activeLayer,activeFrame,activeFrame
+ if range then
+  firstLayer=math.min(#layerHandles,range.first_layer+1);lastLayer=math.min(#layerHandles,range.last_layer+1)
+  firstFrame=math.min(#frameHandles,range.first_frame+1);lastFrame=math.min(#frameHandles,range.last_frame+1)
+ end
+ for l=firstLayer,lastLayer do result.layers[#result.layers+1]=layerHandles[l]
+  for f=firstFrame,lastFrame do result.cels[#result.cels+1]=cel(l,f) end
+ end
+ for f=firstFrame,lastFrame do result.frames[#result.frames+1]=frameHandles[f] end
+ return result elseif k=='tool' then return tool elseif k=='fs' then return {
  joinPath=function(...)return table.concat({...},'/'):gsub('/+','/')end,
  fileName=function(p)return p:match('[^/\\]+$') or p end,
  filePath=function(p)return p:match('^(.*)[/\\]') or '' end,
@@ -238,7 +249,7 @@ function spriteMethods:close()host{op='close'}end
 app.command.SaveFile=function()assert(filename~='','Sprite has no filename');sprite:saveAs(filename)end
 app.command.SaveFileAs=function(p)assert(p and p.filename,'SaveFileAs requires filename');sprite:saveAs(p.filename)end
 app.command.SaveFileCopyAs=function(p)sprite:saveCopyAs(p.filename)end
-rawset(app,'open',function(path) local loaded=host{op='open',path=path};doc=loaded.document;filename=path;activeFrame=1;activeLayer=1;rebuildHandles();appEvents:_emit('sitechange');return sprite end)
+rawset(app,'open',function(path) local loaded=host{op='open',path=path};doc=expandDocumentPixels(loaded.document);filename=path;activeFrame=1;activeLayer=1;rebuildHandles();appEvents:_emit('sitechange');return sprite end)
 local timers,dialogs={},{}
 function Timer(t)
  assert(type(t)=='table' and type(t.ontick)=='function','Timer needs ontick');local timer={interval=t.interval or 0.1,isRunning=false,_callback=t.ontick,_next=0}
@@ -287,7 +298,7 @@ _pw_loop=function()
   if #visible==0 and not running and not appEvents:_hasHandlers() and not spriteEvents:_hasHandlers() then break end
   local response=host{op='pump',dialogs=visible,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
   if response.editor then
-   local editor=response.editor;doc=editor.document;activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer;rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')
+   local editor=response.editor;doc=expandDocumentPixels(editor.document);activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer;rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')
   end
   if response.cancelled then break end
   if response.dialog then dispatch(dialogs[response.dialog],response) end

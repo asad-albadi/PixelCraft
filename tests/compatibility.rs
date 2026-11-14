@@ -210,3 +210,76 @@ fn linked_indexed_cel_uses_destination_frames_palette() {
     b[..4].copy_from_slice(&len.to_le_bytes());
     assert_eq!(decode_ase(&b).unwrap().composite(1), vec![[0, 255, 0, 255]]);
 }
+
+#[test]
+fn edited_slice_keys_roundtrip_through_ase_and_sheet_metadata() {
+    let mut doc = Document::new(8, 8);
+    doc.add_frame(0, false);
+    let slice = SpriteSlice {
+        name: "Hand".into(),
+        keys: vec![
+            SliceKey {
+                frame: 0,
+                bounds: [1, 2, 3, 4],
+                center: None,
+                pivot: Some([1, 2]),
+            },
+            SliceKey {
+                frame: 1,
+                bounds: [-1, 2, 3, 4],
+                center: None,
+                pivot: Some([2, -1]),
+            },
+        ],
+    };
+    doc.slices.push(slice.clone());
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.slices, vec![slice]);
+    let (_, sheet) = pixelcraft::workflows::pack_sheet(&doc, &Default::default()).unwrap();
+    assert_eq!(
+        sheet["meta"]["slices"][0]["keys"][1]["pivot"],
+        serde_json::json!([2, -1])
+    );
+}
+
+#[test]
+fn tile_variants_preserve_neighboring_placements_and_transform_flags() {
+    let mut doc = Document::new(4, 2);
+    let original = [45, 80, 125, 255];
+    let edited = [125, 80, 45, 255];
+    doc.tilesets.push(Tileset {
+        name: "Shared".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![vec![original; 4].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.paint_tile(1, 0, 0, 0, 1).unwrap();
+    doc.paint_tile(1, 0, 1, 0, 0x80000001).unwrap();
+    doc.edit_tile_pixel(1, 0, (1, 0), (0, 0), edited, true)
+        .unwrap();
+    assert_eq!(doc.layers[1].tile_cels[0], vec![1, 0x80000002]);
+    assert_eq!(doc.composite(0)[0], original);
+    assert_eq!(doc.composite(0)[2], edited);
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.composite(0), doc.composite(0));
+}
+
+#[test]
+fn linked_tilemaps_roundtrip_and_share_later_edits() {
+    let mut doc = Document::new(4, 2);
+    doc.tilesets.push(Tileset {
+        name: "Tiles".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![vec![[12, 80, 36, 255]; 4].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.paint_tile(1, 0, 0, 0, 0x40000001).unwrap();
+    doc.add_frame(0, false);
+    doc.link_cel(1, 1, 0).unwrap();
+    let mut reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.layers[1].tile_cels, doc.layers[1].tile_cels);
+    reopened.paint_tile(1, 1, 0, 0, 0).unwrap();
+    assert_eq!(reopened.layers[1].tile_cels[0][0], 0);
+}

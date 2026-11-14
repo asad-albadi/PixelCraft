@@ -199,3 +199,23 @@ fn transforms_retain_duplicate_indexed_palette_slots() {
     transform(&mut d, 0, 0, [0, 0, 2, 1], None, Transform::FlipX).unwrap();
     assert_eq!(d.layers[0].cel_meta[0].indices.as_ref().unwrap()[1], 2);
 }
+
+#[test]
+fn free_rotation_keeps_indexed_slot_and_rotates_about_off_center_pivot() {
+    let mut doc = Document::new(5, 5);
+    let ink = [110, 95, 80, 255];
+    doc.palette = vec![CLEAR, ink, ink];
+    doc.set_color_mode(ColorMode::Indexed);
+    doc.drawing_index = Some(2);
+    doc.set_pixel(0, 0, 1, ink);
+    let mut mask = vec![false; 25];
+    mask[1] = true;
+    let t = Transform::RotateAround {
+        degrees: 90.,
+        pivot: [0.5, 0.5],
+    };
+    transform(&mut doc, 0, 0, [0, 0, 2, 1], Some(&mask), t).unwrap();
+    assert_eq!(doc.composite(0)[5], ink);
+    assert_eq!(doc.layers[0].cel_meta[0].indices.as_ref().unwrap()[5], 2);
+    assert!(transform_mask(&doc, [0, 0, 2, 1], &mask, t)[5]);
+}

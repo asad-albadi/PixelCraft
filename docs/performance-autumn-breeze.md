@@ -14,3 +14,49 @@ The reproducer is a 480×270 project with 24 frames and 15 layers. It stores 46,
 - The real project opened through the editor test harness and built frames at 2.8 ms p95 and 3.0 ms maximum in the optimized build. This measures CPU-side UI work, without GPU presentation.
 - A 1,024×1,024, 15-layer, four-frame fixture near the 64-million-pixel limit passed 20 frame switches with interleaved edits and restored its original state after four undos. Its CPU frame build took 46.2 ms p95 and 60.9 ms maximum. It remains above a 16.7 ms budget for 60 Hz.
 - Startup recovery, close-confirmation saves and first-time compositing of large frames still have synchronous work. Sustained native-window latency and GPU memory were not measured.
+
+
+## Sparse timeline follow-up
+
+On CachyOS x86-64 with an AMD Ryzen 7 PRO 4750U, optimized CLI builds created and reopened a 512×256, 120-frame timeline with a single painted pixel in its last frame. The released v0.6.0 AppImage was extracted and run through its AppRun entry point for comparison with the sparse-storage branch. The table records one run per build. Timings include process startup and revision inspection where applicable.
+
+| Build | Create and save | Peak RAM while saving | Open and inspect | Peak RAM while opening | Native file |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| v0.6.0 AppImage | 545 ms | 27,420 KiB | 1,415 ms | 173,064 KiB | 1,382,785 bytes |
+| Sparse-storage branch | 7 ms | 11,164 KiB | 4 ms | 11,164 KiB | 1,754 bytes |
+
+The frame-cache regression verifies reuse of an unaffected texture and refresh of both frames sharing edited artwork. The prefetch test checks uploaded pixels after replacing an obsolete result. These data are CPU-side measurements. Native input-to-present latency, missed display deadlines and peak VRAM still require a presentation benchmark.
+
+## Hardware presentation and playback recovery
+
+The native Linux Wayland benchmark used Hyprland, Mesa Vulkan on the integrated AMD Radeon GPU, and hardware timestamps from the compositor's presentation feedback. These are actual window presentations, which can include repeated animation frames. A presentation gap over 16.7 ms is a missed **presentation interval budget**, not a count of skipped sprite frames. The synthetic fixtures target 60 animation frames per second with a repeating 17/16/17 ms duration. Each result is one six-second capture after four seconds of warmup.
+
+| Same input in both builds | Build | Presentation gap p95 / max | Gaps over 16.7 ms | Peak RSS | Sampled DRM VRAM |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 512×256, 120 frames, 112 empty | v0.6.0 | 13.89 / 27.78 ms | 2 / 712 | 86.5 MiB | 23.1 MiB |
+| Same sparse fixture | Branch | 13.89 / 13.90 ms | 0 / 675 | 76.0 MiB | 23.1 MiB |
+| 1024×768, 12 translucent layers, 8 frames | v0.6.0 | 27.78 / 41.67 ms | 143 / 323 | 755.0 MiB | 23.1 MiB |
+| Same dense fixture | Branch | 13.89 / 145.84 ms | 16 / 505 | 683.8 MiB | 23.1 MiB |
+| Published Moonlit Sanctuary GIF, 24 flattened frames | v0.6.0 | 130.03 / 170.03 ms | — | 328.6 MiB | 15.0 MiB |
+| Same GIF | Branch | 90.02 / 120.02 ms | — | 296.4 MiB | 15.0 MiB |
+
+The dense fixture saw fewer late presentations but still had an individual stall. The GIF has its own slower animation timing and is not a 60 fps workload. The synthetic fixtures were measured on a 144 Hz output and the GIF on a 100 Hz output; comparisons use the same output within each input. Per-process DRM accounting also reported about 202 MiB of GPU-accessible system memory. Window presentation times do not measure input latency or prove every scheduled animation frame appeared.
+
+Reproduce on a visible Wayland window with Mesa's Vulkan driver and per-process DRM accounting:
+
+```sh
+python3 checks/playback-presentation.py target/release/pixelcraft /tmp/dense-60.aseprite --create-fixture dense
+python3 checks/playback-presentation.py /path/to/extracted-v0.6.0/AppRun /tmp/dense-60.aseprite --seconds 6 --warmup 4
+python3 checks/playback-presentation.py target/release/pixelcraft /tmp/dense-60.aseprite --seconds 6 --warmup 4
+```
+
+The locally packaged Linux editor saved a native project and exported nine PNG frames while playback was active. After a separate, unsaved edit, it completed its periodic backup. The process was killed and restarted, and the recovered document matched the exact unsaved test pixel. The AppImage exposed the same 30 MCP tool schemas as the development executable; its preview PNG matched the applied edit. The original layered Autumn Breeze and Moonlit Sanctuary projects were excluded from this Linux run.
+
+For an independent file I/O comparison, the same two synthetic ASE inputs were reopened and re-saved as ASE by Aseprite 1.3.18.6-dev and PixelCraft on the same machine. These single-process totals include startup, decoding and encoding. They are separate from the native storage and presentation benchmarks.
+
+| Input | Aseprite time / peak RSS | PixelCraft time / peak RSS |
+| --- | ---: | ---: |
+| Sparse 120-frame ASE | 58 ms / 24.0 MiB | 47 ms / 12.8 MiB |
+| Dense 8-frame ASE | 1.78 s / 309.1 MiB | 8.99 s / 600.9 MiB |
+
+The dense ASE save remains significantly more expensive in PixelCraft. Use the native format while editing; export ASE when you need interchange.

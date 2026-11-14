@@ -883,3 +883,45 @@ fn reference_sampling_composites_transparency_and_stack_order() {
     d.references[0].floating = true;
     assert_eq!(sample_canvas(&d, 0, 0, 0, true), CLEAR);
 }
+
+#[test]
+#[ignore = "Requires loopback network access"]
+fn live_export_can_report_progress_and_cancel_on_a_second_connection() {
+    use std::io::{BufRead, Write};
+    use std::time::Duration;
+    let config = std::env::temp_dir().join(format!(
+        "pixelcraft-cancel-bridge-{}.json",
+        std::process::id()
+    ));
+    let bridge = LiveBridge::start(config.clone()).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    let request = |operation: &str| {
+        let mut stream = std::net::TcpStream::connect(v["address"].as_str().unwrap()).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        writeln!(stream, "{}", serde_json::json!({"token":v["token"],"operation":operation,"arguments":{"job_id":"scene"}})).unwrap();
+        std::io::BufReader::new(stream)
+    };
+    let mut export = request("live-export");
+    let job = bridge
+        .requests
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    job.export_progress.update(3, 24).unwrap();
+    let response = |operation| {
+        let mut result = String::new();
+        request(operation).read_line(&mut result).unwrap();
+        serde_json::from_str::<serde_json::Value>(&result).unwrap()
+    };
+    assert_eq!(
+        response("live-export-progress")["result"]["completed_frames"],
+        3
+    );
+    assert_eq!(response("live-cancel-export")["result"]["cancelled"], true);
+    assert!(job.export_progress.is_cancelled());
+    job.response.send(Err("Export cancelled".into())).unwrap();
+    let mut response = String::new();
+    export.read_line(&mut response).unwrap();
+    assert!(response.contains("Export cancelled"));
+}

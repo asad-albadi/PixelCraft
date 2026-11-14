@@ -192,7 +192,19 @@ fn near_limit_document_survives_edits_and_playback() {
     for f in 0..3 {
         doc.add_frame(f, true);
     }
+    for (l, layer) in doc.layers.iter_mut().enumerate() {
+        for (f, cel) in layer.cels.iter_mut().enumerate() {
+            cel.fill([l as u8, f as u8, 1, 255]);
+        }
+    }
     assert_eq!(doc.stored_pixels(), 62_914_560);
+    // Put three of the dense frames on shared backing so the complete
+    // four-step history fits the editor's independently enforced undo budget.
+    for layer in &mut doc.layers {
+        for frame in 1..4 {
+            layer.cels[frame] = layer.cels[0].clone();
+        }
+    }
     app.replace(doc, None);
     let mut elapsed = Vec::new();
     for step in 0..20 {
@@ -1645,4 +1657,50 @@ fn modal_header_drags_and_backdrop_blocks_editor_clicks() {
     assert!(app.help);
     discard_frame(&mut app, &ctx, size, 1., vec![release]);
     assert!(!app.help);
+}
+
+#[test]
+fn frame_cache_retains_unaffected_frames_and_refreshes_linked_cels() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(8, 8);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.link_cel(0, 1, 0).unwrap();
+    app.replace(doc, None);
+    let linked = app.frame_texture(&ctx, 1);
+    let unaffected = app.frame_texture(&ctx, 2);
+    app.doc.set_pixel(0, 0, 0, [40, 90, 120, 255]);
+    let edited = app.frame_texture(&ctx, 0);
+    assert_eq!(app.frame_texture(&ctx, 2).id(), unaffected.id());
+    assert_ne!(app.frame_texture(&ctx, 1).id(), linked.id());
+    assert_eq!(app.frame_texture(&ctx, 0).id(), edited.id());
+    assert_eq!(app.doc.composite(1)[0], [40, 90, 120, 255]);
+}
+
+#[test]
+fn playback_prefetch_rejects_frames_from_an_obsolete_snapshot() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(32, 32);
+    doc.add_frame(0, false);
+    app.replace(doc, None);
+    app.playing = true;
+    let _ = app.frame_texture(&ctx, 0);
+    assert!(app.frame_prefetch.is_some());
+    app.doc.set_pixel(0, 1, 0, [190, 90, 20, 255]);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let _ = app.frame_texture(&ctx, 0);
+        if app.frame_textures[1].is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Next frame was not prefetched");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let texture = app.frame_textures[1].as_ref().unwrap().id();
+    let mut updates = ctx.tex_manager().write().take_delta();
+    let egui::ImageData::Color(image) = &updates.set[&texture][0].image;
+    assert_eq!(image.pixels[0], Color32::from_rgb(190, 90, 20));
+    updates.clear();
 }

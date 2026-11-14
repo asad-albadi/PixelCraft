@@ -26,11 +26,14 @@ pub fn document_revision(d: &Document) -> String {
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     let mut add_pixels = |slot: &mut Pixels| {
         let digest = cached
-            .entry(std::sync::Arc::as_ptr(&slot.0))
+            .entry((slot.backing_id(), slot.len()))
             .or_insert_with(|| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 slot.len().hash(&mut h);
-                h.write(slot.as_slice().as_flattened());
+                slot.visit_nonclear(|index, pixel| {
+                    index.hash(&mut h);
+                    pixel.hash(&mut h);
+                });
                 h.finish()
             });
         digest.hash(&mut hash);
@@ -55,11 +58,116 @@ pub fn document_revision(d: &Document) -> String {
     format!("{:016x}", writer.0.finish())
 }
 pub fn inspect(d: &Document) -> Value {
-    inspect_revision(d, &document_revision(d))
+    let mut result = inspect_revision(d, &document_revision(d));
+    if let Some(info) = result.as_object_mut() {
+        info.remove("document_id");
+        info.remove("capabilities");
+        if let Some(layers) = info["layers"].as_array_mut() {
+            for layer in layers {
+                if let Some(layer) = layer.as_object_mut() {
+                    layer.remove("id");
+                }
+            }
+        }
+    }
+    result
 }
 pub fn inspect_revision(d: &Document, revision: &str) -> Value {
-    json!({"revision":revision,"width":d.width,"height":d.height,"frames":d.durations,"layers":d.layers.iter().enumerate().map(|(i,l)|json!({"index":i,"name":l.name,"locked":l.locked,"group":l.group,"visible":l.visible,"parent":l.parent})).collect::<Vec<_>>(),"tags":d.tags,"palette":d.palette,"references":d.references.iter().map(|r|json!({"name":r.name,"x":r.x,"y":r.y,"scale":r.scale,"opacity":r.opacity})).collect::<Vec<_>>()})
+    let layers: Vec<_> = d.layers.iter().enumerate().map(|(i, layer)| {
+        json!({"index":i,"id":layer.editor_id.to_string(),"name":layer.name,"locked":layer.locked,
+            "group":layer.group,"visible":layer.visible,"parent":layer.parent})
+    }).collect();
+    json!({"revision":revision,"document_id":d.editor_id.to_string(),
+        "capabilities":{"stable_targets":true,"command_preview":1},
+        "width":d.width,"height":d.height,"frames":d.durations,"layers":layers,
+        "tags":d.tags,"slices":d.slices,"palette":d.palette,"references":d.references.iter()
+            .map(|r|json!({"name":r.name,"x":r.x,"y":r.y,"scale":r.scale,"opacity":r.opacity}))
+            .collect::<Vec<_>>()})
 }
+pub fn inspect_cel_page(doc: &Document, args: &Value) -> Result<Value, String> {
+    let layer = resolve_layer(doc, args)?;
+    let offset = args
+        .get("frame")
+        .map(|_| number(args, "frame"))
+        .transpose()?
+        .unwrap_or(0);
+    let count = args
+        .get("count")
+        .map(|_| number(args, "count"))
+        .transpose()?
+        .unwrap_or(100);
+    if offset >= doc.durations.len() || !(1..=512).contains(&count) {
+        return Err("Choose a valid start frame and 1–512 cel targets".into());
+    }
+    let entry = &doc.layers[layer];
+    Ok(
+        json!({"document_id":doc.editor_id.to_string(),"layer_id":entry.editor_id.to_string(),
+        "cels":entry.cel_meta.iter().enumerate().skip(offset).take(count).map(|(frame, cel)| {
+            json!({"frame":frame,"id":cel.editor_id.to_string(),"artwork_link":cel.artwork_link})
+        }).collect::<Vec<_>>() }),
+    )
+}
+
+pub fn verify_document_target(d: &Document, args: &Value) -> Result<(), String> {
+    if let Some(id) = args.get("document_id")
+        && id.as_str() != Some(&d.editor_id.to_string())
+    {
+        return Err("The requested document is no longer active. Inspect it again.".into());
+    }
+    Ok(())
+}
+
+fn resolve_layer(doc: &Document, args: &Value) -> Result<usize, String> {
+    if let Some(id) = args.get("layer_id") {
+        return doc
+            .layers
+            .iter()
+            .position(|l| id.as_str() == Some(&l.editor_id.to_string()))
+            .ok_or_else(|| "Target layer no longer exists. Inspect the sprite again.".into());
+    }
+    number(args, "layer").and_then(|layer| {
+        (layer < doc.layers.len())
+            .then_some(layer)
+            .ok_or_else(|| "Invalid layer".into())
+    })
+}
+
+fn resolve_cel(doc: &Document, args: &Value) -> Result<(usize, usize), String> {
+    let layer = resolve_layer(doc, args)?;
+    if let Some(id) = args.get("cel_id") {
+        let frame = doc.layers[layer]
+            .cel_meta
+            .iter()
+            .position(|meta| id.as_str() == Some(&meta.editor_id.to_string()))
+            .ok_or("Target cel no longer exists. Inspect the sprite again.")?;
+        return Ok((layer, frame));
+    }
+    let frame = number(args, "frame")?;
+    if frame >= doc.durations.len() {
+        return Err("Invalid frame".into());
+    }
+    Ok((layer, frame))
+}
+
+pub fn preview_commands(
+    doc: &Document,
+    frame: usize,
+    args: &Value,
+    revision: &str,
+    deadline: Option<std::time::Instant>,
+) -> Result<Value, String> {
+    if args["revision"] != revision {
+        return Err("Stale revision; inspect the sprite again".into());
+    }
+    let prospective = apply_command_batch_until(doc, args, deadline)?;
+    let prospective_frame = frame.min(prospective.durations.len() - 1);
+    let mut result = render_preview(&prospective, prospective_frame, args, revision, 4_194_304)?;
+    result["changed_cels"] = changed_cel_bounds(doc, &prospective);
+    result["visual_change"] = json!(!prospective.same_frame_pixels(doc, prospective_frame));
+    result["preview"] = json!(true);
+    Ok(result)
+}
+
 pub fn apply_edits(d: &Document, v: &Value) -> Result<Document, String> {
     if v["revision"].as_str() != Some(&document_revision(d)) {
         return Err("Stale revision; inspect the document again".into());
@@ -67,14 +175,14 @@ pub fn apply_edits(d: &Document, v: &Value) -> Result<Document, String> {
     apply_pixel_batch(d, v)
 }
 pub fn apply_pixel_batch(d: &Document, v: &Value) -> Result<Document, String> {
+    verify_document_target(d, v)?;
     let edits = v["edits"].as_array().ok_or("Expected edits array")?;
     if edits.len() > 1_000_000 {
         return Err("Too many edits".into());
     }
     let mut out = d.clone();
     for e in edits {
-        let l = number(e, "layer")?;
-        let f = number(e, "frame")?;
+        let (l, f) = resolve_cel(&out, e)?;
         let x = e["x"]
             .as_i64()
             .and_then(|n| i32::try_from(n).ok())
@@ -115,6 +223,7 @@ pub fn apply_command_batch_until(
     v: &Value,
     deadline: Option<std::time::Instant>,
 ) -> Result<Document, String> {
+    verify_document_target(d, v)?;
     let commands = v["commands"].as_array().ok_or("Expected commands array")?;
     if commands.len() > 1024 {
         return Err("Too many commands".into());
@@ -125,21 +234,16 @@ pub fn apply_command_batch_until(
         if deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
             return Err("Live request expired; no changes applied".into());
         }
-        let layer = || {
-            let l = number(c, "layer")?;
-            if l >= out.layers.len() {
-                Err("Invalid layer".to_string())
-            } else {
-                Ok(l)
-            }
-        };
+        let layer = || resolve_layer(&out, c);
         let frame = || {
-            let f = number(c, "frame")?;
-            if f >= out.durations.len() {
-                Err("Invalid frame".to_string())
-            } else {
-                Ok(f)
+            if c.get("cel_id").is_some() {
+                return resolve_cel(&out, c).map(|(_, frame)| frame);
             }
+            let frame = number(c, "frame")?;
+            if frame >= out.durations.len() {
+                return Err("Invalid frame".into());
+            }
+            Ok(frame)
         };
         match c["op"].as_str().ok_or("Missing command op")? {
             "add-layer" => {
@@ -174,10 +278,75 @@ pub fn apply_command_batch_until(
                 if let Some(b) = c["locked"].as_bool() {
                     target.locked = b;
                 }
+                if let Some(exclude) = c["exclude_from_onion"].as_bool() {
+                    target.exclude_from_onion = exclude;
+                }
+                if let Some(link_duplicates) = c["link_duplicates"].as_bool() {
+                    target.link_duplicates = link_duplicates;
+                }
                 if let Some(a) = c.get("opacity") {
                     target.opacity =
                         serde_json::from_value(a.clone()).map_err(|_| "Invalid opacity")?;
                 }
+            }
+            "edit-tile-pixel" => {
+                let color =
+                    serde_json::from_value(c["color"].clone()).map_err(|_| "Invalid RGBA color")?;
+                out.edit_tile_pixel(
+                    layer()?,
+                    frame()?,
+                    (number(c, "x")?, number(c, "y")?),
+                    (number(c, "pixel_x")?, number(c, "pixel_y")?),
+                    color,
+                    c["variant"].as_bool().unwrap_or(false),
+                )?;
+            }
+            "set-slice" => {
+                let slice: SpriteSlice =
+                    serde_json::from_value(c["slice"].clone()).map_err(|_| "Invalid slice")?;
+                if let Some(existing) = out
+                    .slices
+                    .iter_mut()
+                    .find(|existing| existing.name == slice.name)
+                {
+                    *existing = slice;
+                } else {
+                    out.slices.push(slice);
+                }
+            }
+            "set-cel-keyframe" => {
+                let keyframe = serde_json::from_value(c["keyframe"].clone())
+                    .map_err(|_| "Invalid keyframe")?;
+                out.set_cel_keyframe(layer()?, frame()?, keyframe)?;
+            }
+            "set-adjustment" => {
+                let adjustment = serde_json::from_value(c["adjustment"].clone())
+                    .map_err(|_| "Invalid adjustment parameters")?;
+                out.set_adjustment(layer()?, adjustment)?;
+            }
+            "set-layer-mask" => {
+                let layer = layer()?;
+                let mask = if let Some(region) = c.get("region") {
+                    let (x, y) = (number(region, "x")?, number(region, "y")?);
+                    let (w, h) = (number(region, "width")?, number(region, "height")?);
+                    if w == 0
+                        || h == 0
+                        || x.saturating_add(w) > out.width
+                        || y.saturating_add(h) > out.height
+                    {
+                        return Err("Layer mask must be within the canvas".into());
+                    }
+                    let mut mask = Pixels::empty(out.width * out.height);
+                    for row in y..y + h {
+                        for col in x..x + w {
+                            mask.set(row * out.width + col, [0, 0, 0, 255]);
+                        }
+                    }
+                    Some(mask)
+                } else {
+                    None
+                };
+                out.set_layer_mask(layer, mask)?;
             }
             "move-layer" => {
                 let l = layer()?;
@@ -213,6 +382,33 @@ pub fn apply_command_batch_until(
                 }
                 out.remove_frame(f);
             }
+            op @ ("move-cel-range"
+            | "duplicate-cel-range"
+            | "clear-cel-range"
+            | "set-range-duration"
+            | "link-cel-range"
+            | "unlink-cel-range") => {
+                let range = serde_json::from_value::<CelRange>(c["range"].clone())
+                    .map_err(|_| "Invalid cel range")?;
+                match op {
+                    "clear-cel-range" => out.clear_cel_range(range)?,
+                    "set-range-duration" => out.set_range_duration(
+                        range,
+                        u16::try_from(number(c, "duration")?).map_err(|_| "Invalid duration")?,
+                    )?,
+                    "link-cel-range" | "unlink-cel-range" => {
+                        out.set_range_linked(range, op == "link-cel-range")?
+                    }
+                    _ => out.move_cel_range(
+                        range,
+                        number(c, "to_layer")?,
+                        number(c, "to_frame")?,
+                        op == "duplicate-cel-range",
+                    )?,
+                }
+            }
+            "link-cel" => out.link_cel(layer()?, frame()?, number(c, "source_frame")?)?,
+            "unlink-cel" => out.unlink_cel(layer()?, frame()?)?,
             "set-frame" => {
                 let f = frame()?;
                 let duration = number(c, "duration")?;
@@ -452,6 +648,9 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                             &d,
                             &options::<SheetOptions>(&v["options"])?,
                         )?,
+                        "ase" | "aseprite" if d.needs_baked_ase() && op == "export" => {
+                            formats::export_baked_ase(&out, &d)?;
+                        }
                         "pixel" | "ase" | "aseprite" => formats::save(&out, &d)?,
                         "png" if v.get("layers").is_some() || v.get("region").is_some() => {
                             let frame = v
@@ -576,27 +775,53 @@ pub fn run_cli(args: &[String]) -> Result<Value, String> {
 }
 pub fn serve_mcp(live: Option<&Path>) -> Result<(), String> {
     let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout().lock();
-    for line in stdin.lock().lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        if line.trim().is_empty() {
-            continue;
-        }
-        let request: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(e) => {
-                writeln!(stdout,"{}",json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":e.to_string()}})).map_err(|e|e.to_string())?;
+    std::thread::scope(|scope| {
+        let stdout = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
+        let send = move |response: &Value| -> Result<(), String> {
+            let mut stdout = stdout.lock().map_err(|e| e.to_string())?;
+            writeln!(stdout, "{response}").map_err(|e| e.to_string())?;
+            stdout.flush().map_err(|e| e.to_string())
+        };
+        let mut exports = Vec::<std::thread::ScopedJoinHandle<'_, ()>>::new();
+        for line in stdin.lock().lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            if line.trim().is_empty() {
                 continue;
             }
-        };
-        let Some(response) = rpc(&request, live) else {
-            continue;
-        };
-        writeln!(stdout, "{response}").map_err(|e| e.to_string())?;
-        stdout.flush().map_err(|e| e.to_string())?;
-    }
-    Ok(())
+            let request: Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(error) => {
+                    send(
+                        &json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":error.to_string()}}),
+                    )?;
+                    continue;
+                }
+            };
+            if live.is_some()
+                && request["method"] == "tools/call"
+                && request["params"]["name"] == "live-export"
+            {
+                exports.retain(|job| !job.is_finished());
+                if exports.len() >= 8 {
+                    send(
+                        &json!({"jsonrpc":"2.0","id":request["id"],"result":{"isError":true,"content":[{"type":"text","text":"Too many concurrent exports"}]}}),
+                    )?;
+                    continue;
+                }
+                let send = send.clone();
+                exports.push(scope.spawn(move || {
+                    if let Some(response) = rpc(&request, live) {
+                        let _ = send(&response);
+                    }
+                }));
+            } else if let Some(response) = rpc(&request, live) {
+                send(&response)?;
+            }
+        }
+        Ok(())
+    })
 }
+
 pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
     r.get("id")?;
     let method = r["method"].as_str().unwrap_or("");
@@ -610,12 +835,16 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
             if live.is_some() {
                 names.extend([
                     "live-inspect",
+                    "live-cel-targets",
                     "live-render",
                     "live-export",
+                    "live-export-progress",
+                    "live-cancel-export",
                     "live-save",
                     "live-save-as",
                     "live-edit",
                     "live-commands",
+                    "live-preview-commands",
                     "live-create",
                     "live-undo",
                     "live-redo",
@@ -624,22 +853,36 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
             Ok(json!({"tools":names.iter().map(|name| {
                     let details = match *name {
                         "live-commands" | "commands" => "Atomic edits with the current revision. Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
+                        "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
                         "live-export" => "Export a revision-matched sprite to a new PNG, GIF or MP4 file, or set format to png-sequence and output to a new directory. Integer scale uses nearest-neighbor. Layers apply to all formats; region applies to PNG and PNG sequences; frame applies to single PNG only.",
+                        "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
+                        "live-export-progress" => "Report the completed and total frames of a running live export by job_id.",
+                        "live-cancel-export" => "Request cancellation of a running live export by job_id.",
                         "live-save" => "Save the revision-matched sprite to its current project path. Use live-save-as for untitled sprites.",
                         "live-save-as" => "Save the revision-matched sprite to a new .pixel or .aseprite path and make it the current project path.",
                         _ => CLI_HELP,
                     };
                     let mut tool = json!({"name":name,"description":format!("PixelCraft {name}. {details}"),
-                    "inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}});
-                if matches!(*name, "render" | "live-render" | "export" | "live-export") {
+                    "inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"document_id":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}});
+                if matches!(*name, "render" | "live-render" | "export" | "live-export" | "live-preview-commands") {
                     let props = &mut tool["inputSchema"]["properties"];
                     props["layers"] = json!({"type":"array","items":{"type":"integer","minimum":0}});
                     props["region"] = json!({"type":"object","required":["x","y","width","height"],
                         "properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},
                         "additionalProperties":false});
                 }
-                if *name == "save" {
+                if *name == "live-cel-targets" {
+                    tool["inputSchema"]["properties"]["layer"] = json!({"type":"integer","minimum":0});
+                    tool["inputSchema"]["properties"]["layer_id"] = json!({"type":"string"});
+                    tool["inputSchema"]["properties"]["count"] = json!({"type":"integer","minimum":1,"maximum":512});
+                }
+                if matches!(*name, "live-export" | "live-export-progress" | "live-cancel-export") {
+                    tool["inputSchema"]["properties"]["job_id"] = json!({"type":"string","minLength":1,"maxLength":80});
+                }
+                if matches!(*name, "live-export-progress" | "live-cancel-export") {
+                    tool["inputSchema"]["required"] = json!(["job_id"]);
+                } else if *name == "save" {
                     tool["inputSchema"]["required"] = json!(["input","revision"]);
                 } else if *name == "save-as" {
                     tool["inputSchema"]["required"] = json!(["input","output","revision"]);
@@ -677,11 +920,75 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
     })
 }
 
+#[derive(Clone, Default)]
+pub struct LiveExportProgress {
+    phase: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    done: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    total: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl LiveExportProgress {
+    pub fn cancel(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.phase.compare_exchange(0, 1, Relaxed, Relaxed).is_ok() || self.is_cancelled()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.phase.load(std::sync::atomic::Ordering::Relaxed) == 1
+    }
+
+    pub fn begin_commit(&self) -> Result<(), String> {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.phase
+            .compare_exchange(0, 2, Relaxed, Relaxed)
+            .map(|_| ())
+            .map_err(|_| "Export cancelled; no output published".into())
+    }
+
+    pub fn update(&self, done: usize, total: usize) -> Result<(), String> {
+        self.total
+            .store(total, std::sync::atomic::Ordering::Relaxed);
+        self.done.store(done, std::sync::atomic::Ordering::Relaxed);
+        if self.is_cancelled() {
+            return Err("Export cancelled".into());
+        }
+        Ok(())
+    }
+
+    pub fn counts(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (self.done.load(Relaxed), self.total.load(Relaxed))
+    }
+}
+
+type ActiveExports = std::sync::Mutex<std::collections::HashMap<String, LiveExportProgress>>;
+
+struct ActiveExport<'a> {
+    jobs: &'a ActiveExports,
+    id: Option<String>,
+}
+
+impl Drop for ActiveExport<'_> {
+    fn drop(&mut self) {
+        if let Some(id) = &self.id {
+            self.jobs.lock().unwrap().remove(id);
+        }
+    }
+}
+
+fn export_job_id(args: &Value) -> Result<&str, String> {
+    args["job_id"]
+        .as_str()
+        .filter(|id| !id.is_empty() && id.len() <= 80)
+        .ok_or_else(|| "Expected an export job_id of 1–80 characters".into())
+}
+
 pub struct LiveRequest {
     pub deadline: std::time::Instant,
     pub operation: String,
     pub arguments: Value,
     pub response: mpsc::Sender<Result<Value, String>>,
+    pub export_progress: LiveExportProgress,
 }
 pub struct LiveBridge {
     pub requests: mpsc::Receiver<LiveRequest>,
@@ -737,9 +1044,24 @@ impl LiveBridge {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopping = stop.clone();
         let thread = std::thread::spawn(move || {
+            let jobs = std::sync::Arc::new(ActiveExports::default());
+            let wake = std::sync::Arc::new(std::sync::Mutex::new(wake));
+            let mut connections = Vec::<std::thread::JoinHandle<()>>::new();
             while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        connections.retain(|connection| !connection.is_finished());
+                        if connections.len() >= 16 {
+                            continue;
+                        }
+                        let (stopping, jobs, wake, tx, token) = (
+                            stopping.clone(),
+                            jobs.clone(),
+                            wake.clone(),
+                            tx.clone(),
+                            token.clone(),
+                        );
+                        connections.push(std::thread::spawn(move || {
                         let started = std::time::Instant::now();
                         let mut deadline = started + std::time::Duration::from_secs(10);
                         // Short individual waits allow revocation to interrupt an active read.
@@ -755,20 +1077,50 @@ impl LiveBridge {
                             if v["token"] != token {
                                 return Err("Invalid bridge token".into());
                             }
-                            if long_file_operation(v["operation"].as_str().unwrap_or("")) {
+                            let operation = v["operation"].as_str().unwrap_or("");
+                            let arguments = &v["arguments"];
+                            if matches!(operation, "live-export-progress" | "live-cancel-export") {
+                                let id = export_job_id(arguments)?;
+                                let job = jobs.lock().unwrap().get(id).cloned().ok_or("Export is not running")?;
+                                if operation == "live-cancel-export" {
+                                    let accepted = job.cancel();
+                                    return Ok(json!({"job_id":id,"cancelled":accepted}));
+                                }
+                                let (done, total) = job.counts();
+                                return Ok(json!({"job_id":id,"completed_frames":done,"total_frames":total,"cancelled":job.is_cancelled()}));
+                            }
+                            if long_file_operation(operation) {
                                 deadline = started + std::time::Duration::from_secs(300);
                             }
                             check_live_request(deadline, &stopping)?;
                             let (res_tx, res_rx) = mpsc::channel();
+                            let export_progress = LiveExportProgress::default();
+                            let job_id = if operation == "live-export" && arguments.get("job_id").is_some() {
+                                let id = export_job_id(arguments)?.to_owned();
+                                let mut jobs = jobs.lock().unwrap();
+                                if jobs.contains_key(&id) {
+                                    return Err("An export with this job_id is already running".into());
+                                }
+                                jobs.insert(id.clone(), export_progress.clone());
+                                Some(id)
+                            } else {
+                                None
+                            };
+                            let _active_export = ActiveExport { jobs: &jobs, id: job_id };
                             tx.send(LiveRequest {
                                 deadline,
-                                operation: v["operation"].as_str().unwrap_or("").into(),
-                                arguments: v["arguments"].clone(),
+                                operation: operation.into(),
+                                arguments: arguments.clone(),
                                 response: res_tx,
+                                export_progress: export_progress.clone(),
                             })
                             .map_err(|e| e.to_string())?;
-                            wake();
-                            wait_live_response(&res_rx, deadline, &stopping)
+                            wake.lock().unwrap()();
+                            let result = wait_live_response_with_peer(&res_rx, deadline, &stopping, Some(&stream));
+                            if result.is_err() {
+                                export_progress.cancel();
+                            }
+                            result
                         })();
                         if !stopping.load(std::sync::atomic::Ordering::Relaxed) {
                             let remaining =
@@ -789,12 +1141,16 @@ impl LiveBridge {
                             }
                         }
                         let _ = stream.shutdown(std::net::Shutdown::Both);
+                        }));
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(20))
                     }
                     Err(_) => break,
                 }
+            }
+            for connection in connections {
+                let _ = connection.join();
             }
         });
         Ok(Self {
@@ -892,13 +1248,39 @@ fn write_live_bytes(
     }
     check_live_request(deadline, stop)
 }
+#[cfg(test)]
 fn wait_live_response(
     receiver: &mpsc::Receiver<Result<Value, String>>,
     deadline: std::time::Instant,
     stop: &std::sync::atomic::AtomicBool,
 ) -> Result<Value, String> {
+    wait_live_response_with_peer(receiver, deadline, stop, None)
+}
+
+fn wait_live_response_with_peer(
+    receiver: &mpsc::Receiver<Result<Value, String>>,
+    deadline: std::time::Instant,
+    stop: &std::sync::atomic::AtomicBool,
+    peer: Option<&TcpStream>,
+) -> Result<Value, String> {
     loop {
         check_live_request(deadline, stop)?;
+        if let Some(peer) = peer {
+            let mut next = [0];
+            match peer.peek(&mut next) {
+                Ok(0) => return Err("Live client disconnected".into()),
+                Ok(_) => return Err("Expected one request per bridge connection".into()),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::Interrupted
+                    ) => {}
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         match receiver.recv_timeout(remaining.min(std::time::Duration::from_millis(20))) {
             Ok(result) => {
@@ -1079,6 +1461,16 @@ pub fn prepare_png_sequence(
     args: &Value,
     revision: &str,
 ) -> Result<PreparedExport, String> {
+    prepare_png_sequence_progress(doc, output, args, revision, |_, _| Ok(()))
+}
+
+fn prepare_png_sequence_progress(
+    doc: &Document,
+    output: PathBuf,
+    args: &Value,
+    revision: &str,
+    mut progress: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<PreparedExport, String> {
     if args.get("frame").is_some() {
         return Err("PNG sequence export uses all timeline frames".into());
     }
@@ -1090,6 +1482,7 @@ pub fn prepare_png_sequence(
         std::fs::create_dir(temporary).map_err(|e| e.to_string())?;
         let mut metadata = Value::Null;
         for (frame, name) in names.iter().enumerate() {
+            progress(frame, names.len())?;
             let (image, frame_metadata) =
                 preview_composite(&filtered, frame, args, revision, MAX_PIXELS)?;
             image
@@ -1099,6 +1492,7 @@ pub fn prepare_png_sequence(
                 metadata = frame_metadata;
             }
         }
+        progress(names.len(), names.len())?;
         metadata
             .as_object_mut()
             .ok_or("No frames to export")?
@@ -1117,9 +1511,19 @@ pub fn prepare_live_export(
     args: &Value,
     revision: &str,
 ) -> Result<PreparedExport, String> {
+    prepare_live_export_with_progress(d, f, args, revision, |_, _| Ok(()))
+}
+
+pub fn prepare_live_export_with_progress(
+    d: &Document,
+    f: usize,
+    args: &Value,
+    revision: &str,
+    mut progress: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<PreparedExport, String> {
     let output = path(args, "output")?;
     if args["format"] == "png-sequence" {
-        return prepare_png_sequence(d, output, args, revision);
+        return prepare_png_sequence_progress(d, output, args, revision, progress);
     }
     let kind = extension(&output).to_ascii_lowercase();
     if args.get("format").is_some_and(|v| v != kind.as_str()) {
@@ -1127,10 +1531,12 @@ pub fn prepare_live_export(
     }
     prepare_output(output, false, |temporary| match kind.as_str() {
         "png" => {
+            progress(0, 1)?;
             let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
             image
                 .save_with_format(temporary, image::ImageFormat::Png)
                 .map_err(|e| e.to_string())?;
+            progress(1, 1)?;
             Ok(metadata)
         }
         "gif" | "mp4" => {
@@ -1143,7 +1549,12 @@ pub fn prepare_live_export(
             let scale = export_scale(args)?;
             let (width, height) = formats::animation_dimensions(d, scale)?;
             let filtered = filter_export_layers(d, args)?;
-            export_animation(&kind, temporary, &filtered, scale)?;
+            if kind == "mp4" {
+                formats::export_mp4_progress(temporary, &filtered, scale, &mut progress)?;
+            } else {
+                formats::export_gif_progress(temporary, &filtered, scale, &mut progress)?;
+            }
+            progress(d.durations.len(), d.durations.len())?;
             let (width, height) = if kind == "mp4" {
                 (width.next_multiple_of(2), height.next_multiple_of(2))
             } else {
@@ -1198,16 +1609,25 @@ pub fn changed_cel_bounds(before: &Document, after: &Document) -> Value {
                 continue;
             }
             let (mut x, mut y, mut right, mut bottom) = (after.width, after.height, 0, 0);
-            for (i, pixel) in pixels.iter().enumerate() {
-                if *pixel == old.map_or(CLEAR, |old| old[i]) {
-                    continue;
-                }
+            let mut include = |i| {
                 let px = i % after.width;
                 let py = i / after.width;
                 x = x.min(px);
                 y = y.min(py);
                 right = right.max(px + 1);
                 bottom = bottom.max(py + 1);
+            };
+            pixels.visit_nonclear(|i, pixel| {
+                if pixel != old.map_or(CLEAR, |old| old[i]) {
+                    include(i);
+                }
+            });
+            if let Some(old) = old {
+                old.visit_nonclear(|i, _| {
+                    if pixels[i] == CLEAR {
+                        include(i);
+                    }
+                });
             }
             if right > x && bottom > y {
                 changes.push(json!({"layer":layer,"frame":frame,"x":x,"y":y,"width":right-x,"height":bottom-y}));

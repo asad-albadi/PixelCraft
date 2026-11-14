@@ -25,7 +25,7 @@ fn copied_gray_color_retains_signed_storage_and_independent_mutation() {
     )
     .unwrap();
     assert_eq!(
-        &*edited.layers[0].cels[0],
+        &edited.layers[0].cels[0].to_vec(),
         &[[255, 255, 255, 2], [80, 80, 80, 2]]
     );
 }

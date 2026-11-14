@@ -290,6 +290,14 @@ impl Default for OnionOptions {
 }
 pub fn onion_pixels(d: &Document, f: usize, o: &OnionOptions) -> Vec<Pixel> {
     let mut out = vec![CLEAR; d.width * d.height];
+    let mut onion = std::borrow::Cow::Borrowed(d);
+    if d.layers.iter().any(|layer| layer.exclude_from_onion) {
+        for layer in &mut onion.to_mut().layers {
+            if layer.exclude_from_onion {
+                layer.visible = false;
+            }
+        }
+    }
     for distance in (1..=8).rev() {
         for (frame, count, tint, opacity) in [
             (
@@ -309,7 +317,7 @@ pub fn onion_pixels(d: &Document, f: usize, o: &OnionOptions) -> Vec<Pixel> {
                 continue;
             }
             if let Some(frame) = frame {
-                for (p, s) in out.iter_mut().zip(d.composite(frame)) {
+                for (p, s) in out.iter_mut().zip(onion.composite(frame)) {
                     let alpha = (s[3] as u32 * opacity as u32 / 255 / distance as u32) as u8;
                     *p = over(*p, [tint[0], tint[1], tint[2], alpha], 255);
                 }

@@ -7,7 +7,7 @@ fn grayscale_conversion_uses_native_luma_truncation_and_preserves_alpha() {
     d.layers[0].cels[0] = vec![[200, 100, 50, 173], [1, 2, 3, 0], [0, 1, 0, 255]].into();
     d.set_color_mode(ColorMode::Grayscale);
     assert_eq!(
-        &d.layers[0].cels[0][..],
+        &d.layers[0].cels[0].to_vec()[..],
         &[[117, 117, 117, 173], [1, 1, 1, 0], [0, 0, 0, 255]]
     );
 }

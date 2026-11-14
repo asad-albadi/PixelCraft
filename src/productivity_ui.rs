@@ -56,6 +56,7 @@ pub(super) struct PowerTools {
     bridge_tab: usize,
     bridge_session: String,
     bridge_work: Option<std::sync::mpsc::Receiver<PreparedLive>>,
+    pub bridge_export: Option<automation::LiveExportProgress>,
     pub shade_seen: std::collections::HashSet<usize>,
     ramp_from: usize,
     ramp_to: usize,
@@ -92,6 +93,7 @@ impl Default for PowerTools {
             bridge_tab: 0,
             bridge_session: format!("{}-{:?}", std::process::id(), std::time::SystemTime::now()),
             bridge_work: None,
+            bridge_export: None,
             shade_seen: Default::default(),
             ramp_from: 0,
             ramp_to: 1,
@@ -452,7 +454,7 @@ impl PixelCraft {
             paint_brush(&mut self.doc, self.layer, self.frame, p, color, size, &o);
             for (i, (a, b)) in before
                 .iter()
-                .zip(&self.doc.layers[self.layer].cels[self.frame])
+                .zip(self.doc.layers[self.layer].cels[self.frame].iter())
                 .enumerate()
             {
                 if a != b {
@@ -521,7 +523,7 @@ if ui.pc_button("Add folder…").clicked()&& let Some(dir)=rfd::FileDialog::new(
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
 if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}
 if let Some(k)=remove{self.custom_shortcuts.remove(&k);self.save_shortcut_bindings();}});
- ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
+ ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{if let Some(progress)=self.power.bridge_export.take(){progress.cancel();}self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
 if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
  });});
         self.power.open = open;
@@ -620,7 +622,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             } else {
                 let t = ui.ctx().load_texture(
                     format!("reference-{i}"),
-                    color_image(&r.pixels, r.width, r.height),
+                    color_image(&r.pixels.to_vec(), r.width, r.height),
                     egui::TextureOptions::LINEAR,
                 );
                 self.power
@@ -732,11 +734,15 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             match worker.try_recv() {
                 Ok(result) => {
                     self.power.bridge_work = None;
+                    self.power.bridge_export = None;
                     self.finish_live_request(result);
                     ctx.request_repaint();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.power.bridge_work = None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.power.bridge_work = None;
+                    self.power.bridge_export = None;
+                }
             }
         }
         while let Some(mut request) = self
@@ -747,6 +753,9 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         {
             if let Some((snapshot, revision, frame)) = self.begin_live_request(&mut request) {
                 let (tx, rx) = std::sync::mpsc::channel();
+                if request.operation == "live-export" {
+                    self.power.bridge_export = Some(request.export_progress.clone());
+                }
                 self.power.bridge_work = Some(rx);
                 let wake = ctx.clone();
                 std::thread::spawn(move || {
@@ -760,8 +769,9 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     }
 
     fn sync_live_revision(&mut self) {
-        if self.power.bridge_snapshot.as_ref() != Some(&self.doc)
-            || self.power.bridge_tab != self.active_tab
+        if self.power.bridge_snapshot.as_ref().is_none_or(|snapshot| {
+            snapshot != &self.doc || !snapshot.same_editor_targets(&self.doc)
+        }) || self.power.bridge_tab != self.active_tab
         {
             self.power.bridge_snapshot = Some(self.doc.clone());
             self.power.bridge_tab = self.active_tab;
@@ -794,7 +804,13 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             "live-edit" | "live-commands" | "live-create" | "live-undo" | "live-redo"
         );
         let saving = matches!(op, "live-save" | "live-save-as");
-        let error = if Instant::now() >= request.deadline {
+        if let Err(error) = automation::verify_document_target(&self.doc, &request.arguments) {
+            let _ = request.response.send(Err(error));
+            return None;
+        }
+        let error = if request.export_progress.is_cancelled() {
+            Some("Live request cancelled; no changes applied")
+        } else if Instant::now() >= request.deadline {
             Some("Live request expired; no changes applied")
         } else if (editing || saving) && self.live_busy() {
             Some("Editor is busy; finish the active operation first")
@@ -804,7 +820,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             Some("The sprite is untitled. Use live-save-as with an output path.")
         } else if (editing
             || saving
-            || op == "live-export"
+            || matches!(op, "live-export" | "live-preview-commands")
             || request.arguments.get("revision").is_some())
             && request.arguments["revision"] != revision
         {
@@ -814,6 +830,15 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         };
         if let Some(error) = error {
             let _ = request.response.send(Err(error.into()));
+            return None;
+        }
+        if op == "live-cel-targets" {
+            let result =
+                automation::inspect_cel_page(&self.doc, &request.arguments).map(|mut result| {
+                    result["revision"] = serde_json::json!(revision);
+                    result
+                });
+            let _ = request.response.send(result);
             return None;
         }
         if matches!(op, "live-inspect" | "live-undo" | "live-redo") {
@@ -826,6 +851,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             self.sync_live_revision();
             let mut info = automation::inspect_revision(&self.doc, &self.live_revision());
             info["path"] = serde_json::json!(self.path);
+            info["session_id"] = serde_json::json!(self.power.bridge_session);
             let _ = request.response.send(Ok(info));
             return None;
         }
@@ -860,8 +886,19 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         .map(LiveResult::Read);
                 }
                 "live-export" => {
-                    return automation::prepare_live_export(&doc, frame, args, &revision)
-                        .map(LiveResult::Export);
+                    return automation::prepare_live_export_with_progress(
+                        &doc,
+                        frame,
+                        args,
+                        &revision,
+                        |done, total| {
+                            if Instant::now() >= request.deadline {
+                                return Err("Live request expired; no output published".into());
+                            }
+                            request.export_progress.update(done, total)
+                        },
+                    )
+                    .map(LiveResult::Export);
                 }
                 "live-save" | "live-save-as" => {
                     let output = args["output"]
@@ -875,6 +912,16 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         request.operation == "live-save",
                     )?;
                     return Ok(LiveResult::Save(prepared, doc));
+                }
+                "live-preview-commands" => {
+                    return automation::preview_commands(
+                        &doc,
+                        frame,
+                        args,
+                        &revision,
+                        Some(request.deadline),
+                    )
+                    .map(LiveResult::Read);
                 }
                 "live-commands" => {
                     automation::apply_command_batch_until(&doc, args, Some(request.deadline))?
@@ -911,12 +958,25 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
 
     fn finish_live_request(&mut self, prepared: PreparedLive) {
         let result = prepared.result.and_then(|result| {
+            if prepared.request.export_progress.is_cancelled() {
+                return Err("Live request cancelled; no changes applied".into());
+            }
             if Instant::now() >= prepared.request.deadline {
                 return Err("Live request expired; no changes applied".into());
             }
             let (next, bounds) = match result {
-                LiveResult::Read(value) => return Ok(value),
-                LiveResult::Export(export) => return export.write(),
+                LiveResult::Read(value) => {
+                    if prepared.request.operation == "live-preview-commands"
+                        && prepared.revision != self.live_revision()
+                    {
+                        return Err("Stale revision; inspect the open sprite again".into());
+                    }
+                    return Ok(value);
+                }
+                LiveResult::Export(export) => {
+                    prepared.request.export_progress.begin_commit()?;
+                    return export.write();
+                }
                 LiveResult::Save(save, snapshot) => {
                     if prepared.revision != self.live_revision()
                         || self.live_busy()
@@ -952,7 +1012,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 self.open_document(next, None);
                 self.push_undo(previous);
                 self.status = "Assistant created an untitled sprite — Ctrl+Z to undo".into();
-            } else if next != self.doc {
+            } else if next != self.doc || !next.same_editor_targets(&self.doc) {
                 self.remember();
                 self.doc = next;
                 self.clamp();
@@ -1057,6 +1117,7 @@ mod bridge_tests {
             operation: operation.into(),
             arguments,
             response: tx,
+            export_progress: Default::default(),
         };
         a.sync_live_revision();
         if let Some((doc, revision, frame)) = a.begin_live_request(&mut request) {
@@ -1300,6 +1361,7 @@ mod bridge_tests {
             ]}),
             deadline: Instant::now() + Duration::from_secs(2),
             response,
+            export_progress: Default::default(),
         };
         let (snapshot, revision, frame) = app.begin_live_request(&mut edit).unwrap();
         let prepared = PixelCraft::prepare_live_request(snapshot, revision, frame, edit);
@@ -1315,7 +1377,10 @@ mod bridge_tests {
                 .unwrap_err()
                 .contains("Stale revision")
         );
-        assert_eq!(&app.doc.layers[0].cels[0][..], &[[0; 4], [50, 60, 70, 255]]);
+        assert_eq!(
+            &app.doc.layers[0].cels[0].to_vec()[..],
+            &[[0; 4], [50, 60, 70, 255]]
+        );
         assert_eq!(app.undo.len(), 1);
     }
 

@@ -8,6 +8,7 @@ pub enum Transform {
     Move(i32, i32),
     Resize(usize, usize),
     Rotate,
+    RotateAround { degrees: f64, pivot: [f64; 2] },
     FlipX,
     FlipY,
 }
@@ -29,6 +30,55 @@ pub fn inside_polygon(points: &[(i32, i32)], x: i32, y: i32) -> bool {
     }
     hit
 }
+fn rotation_bounds(
+    bounds: [i32; 4],
+    degrees: f64,
+    pivot: [f64; 2],
+) -> Option<([i32; 4], [f64; 2])> {
+    if !degrees.is_finite()
+        || pivot
+            .iter()
+            .any(|v| !v.is_finite() || v.abs() > (MAX_DIMENSION * 2) as f64)
+    {
+        return None;
+    }
+    let [x, y, w, h] = bounds;
+    let (sin, cos) = degrees.rem_euclid(360.).to_radians().sin_cos();
+    let snap = |value: f64| {
+        if (value - value.round()).abs() < 1e-9 {
+            value.round()
+        } else {
+            value
+        }
+    };
+    let [sin, cos] = [snap(sin), snap(cos)];
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for [x, y] in [[x, y], [x + w, y], [x, y + h], [x + w, y + h]] {
+        let (x, y) = (f64::from(x) - pivot[0], f64::from(y) - pivot[1]);
+        let result = [pivot[0] + x * cos - y * sin, pivot[1] + x * sin + y * cos];
+        for axis in 0..2 {
+            min[axis] = min[axis].min(result[axis]);
+            max[axis] = max[axis].max(result[axis]);
+        }
+    }
+    let origin = min.map(|v| snap(v).floor() as i32);
+    let end = max.map(|v| snap(v).ceil() as i32);
+    Some((
+        [origin[0], origin[1], end[0] - origin[0], end[1] - origin[1]],
+        [sin, cos],
+    ))
+}
+
+fn rotated_source(position: [i32; 2], pivot: [f64; 2], [sin, cos]: [f64; 2]) -> (i32, i32) {
+    let x = f64::from(position[0]) + 0.5 - pivot[0];
+    let y = f64::from(position[1]) + 0.5 - pivot[1];
+    (
+        (pivot[0] + x * cos + y * sin).floor() as i32,
+        (pivot[1] - x * sin + y * cos).floor() as i32,
+    )
+}
+
 pub fn transform(
     d: &mut Document,
     l: usize,
@@ -50,7 +100,14 @@ pub fn transform(
     {
         return Err("Empty selection".into());
     }
+    let mut rotation = None;
     let (nw, nh, dx, dy) = match t {
+        Transform::RotateAround { degrees, pivot } => {
+            let ([nx, ny, nw, nh], basis) =
+                rotation_bounds(b, degrees, pivot).ok_or("Invalid rotation angle or pivot")?;
+            rotation = Some((pivot, basis));
+            (nw as usize, nh as usize, nx - x, ny - y)
+        }
         Transform::Move(dx, dy) => (w as usize, h as usize, dx, dy),
         Transform::Resize(w, h) => (w, h, 0, 0),
         Transform::Rotate => (h as usize, w as usize, 0, 0),
@@ -74,6 +131,15 @@ pub fn transform(
     for oy in 0..nh {
         for ox in 0..nw {
             let (sx, sy) = match t {
+                Transform::RotateAround { .. } => {
+                    let (pivot, basis) = rotation.unwrap();
+                    let (sx, sy) =
+                        rotated_source([x + dx + ox as i32, y + dy + oy as i32], pivot, basis);
+                    if !(x..x + w).contains(&sx) || !(y..y + h).contains(&sy) {
+                        continue;
+                    }
+                    (sx - x, sy - y)
+                }
                 Transform::Rotate => (oy as i32, h - 1 - ox as i32),
                 Transform::FlipX => (w - 1 - ox as i32, oy as i32),
                 Transform::FlipY => (ox as i32, h - 1 - oy as i32),
@@ -113,6 +179,16 @@ pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
     }
     let old = d.clone();
     for (li, l) in d.layers.iter_mut().enumerate() {
+        if let Some(old_mask) = &old.layers[li].mask {
+            let mut mask = Pixels::empty((w * h) as usize);
+            for cy in 0..h {
+                for cx in 0..w {
+                    let source = (y + cy) as usize * old.width + (x + cx) as usize;
+                    mask.set((cy * w + cx) as usize, old_mask[source]);
+                }
+            }
+            l.mask = Some(mask);
+        }
         for f in 0..d.durations.len() {
             let mut p = vec![];
             let mut idx = vec![];
@@ -125,7 +201,11 @@ pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
                     }
                 }
             }
-            l.cels[f] = p.into();
+            l.cels[f] = if p.iter().all(|pixel| *pixel == CLEAR) {
+                Pixels::empty(p.len())
+            } else {
+                p.into()
+            };
             l.cel_meta[f].indices = if idx.is_empty() {
                 None
             } else {
@@ -256,9 +336,41 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
             }
         }
     }
+    let slices: Vec<_> = d
+        .slices
+        .iter()
+        .filter_map(|slice| {
+            let mut keys = Vec::new();
+            let mut previous = None;
+            for (frame, (source, _, _)) in sprites.iter().enumerate() {
+                let Some(key) = slice.key_at(*source) else {
+                    continue;
+                };
+                if previous == Some(key.frame) {
+                    continue;
+                }
+                let signed_scale = scale as i32;
+                keys.push(SliceKey {
+                    frame,
+                    bounds: key.bounds.map(|value| value.saturating_mul(signed_scale)),
+                    center: key
+                        .center
+                        .map(|rect| rect.map(|value| value.saturating_mul(signed_scale))),
+                    pivot: key
+                        .pivot
+                        .map(|point| point.map(|value| value.saturating_mul(signed_scale))),
+                });
+                previous = Some(key.frame);
+            }
+            (!keys.is_empty()).then(|| SpriteSlice {
+                name: slice.name.clone(),
+                keys,
+            })
+        })
+        .collect();
     Ok((
         im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags}}),
+        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices}}),
     ))
 }
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
@@ -337,6 +449,9 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
             });
         }
     }
+    if let Some(slices) = meta["meta"].get("slices") {
+        d.slices = serde_json::from_value(slices.clone()).map_err(|_| "Invalid slice metadata")?;
+    }
     d.validate()?;
     Ok(d)
 }
@@ -344,6 +459,23 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
 /// Transform a selection mask with the same nearest-neighbor mapping as its pixels.
 pub fn transform_mask(d: &Document, b: [i32; 4], mask: &[bool], t: Transform) -> Vec<bool> {
     let [x, y, w, h] = b;
+    if let Transform::RotateAround { degrees, pivot } = t {
+        let mut out = vec![false; d.width * d.height];
+        if let Some(([nx, ny, nw, nh], basis)) = rotation_bounds(b, degrees, pivot) {
+            for dy in ny.max(0)..(ny + nh).min(d.height as i32) {
+                for dx in nx.max(0)..(nx + nw).min(d.width as i32) {
+                    let (sx, sy) = rotated_source([dx, dy], pivot, basis);
+                    if (x..x + w).contains(&sx)
+                        && (y..y + h).contains(&sy)
+                        && let Some(source) = d.index(sx, sy)
+                    {
+                        out[dy as usize * d.width + dx as usize] = mask.get(source) == Some(&true);
+                    }
+                }
+            }
+        }
+        return out;
+    }
     let (nw, nh, dx, dy) = match t {
         Transform::Move(dx, dy) => (w, h, dx, dy),
         Transform::Rotate => (h, w, 0, 0),

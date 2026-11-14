@@ -19,7 +19,8 @@ fn malformed_or_unsupported_files_return_errors_without_panics() {
     for n in 0..128 {
         assert!(decode_ase(&vec![0; n]).is_err());
     }
-    let d = Document::new(2, 2);
+    let mut d = Document::new(2, 2);
+    d.set_pixel(0, 0, 0, [1, 2, 3, 255]);
     let mut b = encode_ase(&d).unwrap();
     b[12] = 8;
     assert!(decode_ase(&b).is_err());
@@ -108,4 +109,37 @@ fn full_hd_animation_can_add_layers_past_the_old_document_limit() {
     d.add_layer();
     assert_eq!(d.layers.len(), 2);
     d.validate().unwrap();
+}
+
+#[test]
+fn large_blank_ase_timeline_roundtrips_without_full_canvas_cels() {
+    let mut doc = Document::new(4096, 4096);
+    for frame in 0..8 {
+        doc.add_frame(frame, false);
+    }
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.durations.len(), 9);
+    assert_eq!(reopened.stored_pixels(), 0);
+}
+
+#[test]
+fn workspace_reader_streams_legacy_and_shared_cel_documents() {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct WorkspaceDocument(#[serde(with = "pixelcraft::formats::recovery_document")] Document);
+
+    let mut doc = Document::new(4, 4);
+    doc.stamp(0, 0, 0, 0, [188, 40, 24, 255], 1);
+    doc.add_frame(0, true);
+    doc.link_cel(0, 1, 0).unwrap();
+
+    let legacy = serde_json::to_vec(&doc).unwrap();
+    let shared = serde_json::to_vec(&WorkspaceDocument(doc.clone())).unwrap();
+    for bytes in [legacy, shared] {
+        let WorkspaceDocument(restored) = serde_json::from_reader(bytes.as_slice()).unwrap();
+        assert_eq!(restored, doc);
+        assert_eq!(
+            restored.layers[0].cels[0].backing_id(),
+            restored.layers[0].cels[1].backing_id()
+        );
+    }
 }

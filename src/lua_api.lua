@@ -45,7 +45,31 @@ local function unpackColor(c)
  if type(c)=='table' then return {byte(c.r or c.red or c[1]),byte(c.g or c.green or c[2]),byte(c.b or c.blue or c[3]),byte(c.a or c.alpha or c[4] or 255)} end
  c=math.tointeger(c or 0) or 0;return {c&255,(c>>8)&255,(c>>16)&255,(c>>24)&255}
 end
-local doc=_pw_document
+local function expandDocumentPixels(document)
+ local function expand(pixels)
+  if pixels.clear_pixels or pixels.blocks then
+   local dense={}
+   for i=1,pixels.clear_pixels or pixels.len do dense[i]={0,0,0,0} end
+   for index,block in pairs(pixels.blocks or {}) do
+    local offset=tonumber(index)*16
+    for i,pixel in ipairs(block) do
+     if offset+i<=pixels.len then dense[offset+i]=pixel end
+    end
+   end
+   return dense
+  end
+  return pixels
+ end
+ for _,layer in ipairs(document.layers) do
+  for f,pixels in ipairs(layer.cels) do layer.cels[f]=expand(pixels) end
+ end
+ for _,tileset in ipairs(document.tilesets or {}) do
+  for i,pixels in ipairs(tileset.tiles) do tileset.tiles[i]=expand(pixels) end
+ end
+ for _,reference in ipairs(document.references or {}) do reference.pixels=expand(reference.pixels) end
+ return document
+end
+local doc=expandDocumentPixels(_pw_document)
 local colorChannels={r=1,red=1,g=2,green=2,b=3,blue=3,a=4,alpha=4}
 local function hsvToRgb(h,s,v)
  h=(h%360)/60;s=math.max(0,math.min(1,s));v=math.max(0,math.min(1,v))
@@ -351,14 +375,26 @@ local function celImage(l,fi)
  end end
  local im=image(p,b[3],b[4])
  im._put=function(x,y,color)
-  local px,py=x+b[1],y+b[2]
-  if px>=0 and py>=0 and px<doc.width and py<doc.height then l.cels[fi][py*doc.width+px+1]=copy(color)
-  else for _,o in ipairs(m.outside)do if o.x==px and o.y==py then o.color=copy(color);return end end;m.outside[#m.outside+1]={x=px,y=py,color=copy(color)} end
+  local link=m.artwork_link
+  for frame,target in ipairs(l.cel_meta) do
+   if frame==fi or (link and target.artwork_link==link) then
+    local bounds=target.bounds or {0,0,doc.width,doc.height}
+    local px,py=x+bounds[1],y+bounds[2]
+    if px>=0 and py>=0 and px<doc.width and py<doc.height then l.cels[frame][py*doc.width+px+1]=copy(color)
+    else
+     local found=false
+     for _,o in ipairs(target.outside)do
+      if o.x==px and o.y==py then o.color=copy(color);found=true;break end
+     end
+     if not found then target.outside[#target.outside+1]={x=px,y=py,color=copy(color)} end
+    end
+   end
+  end
  end
  return im
 end
 local function putCelImage(l,fi,im,pos)
- local m=l.cel_meta[fi];m.outside={};m.indices=nil
+ local m=l.cel_meta[fi];m.outside={};m.indices=nil;m.artwork_link=nil
  local pixels={} for i=1,doc.width*doc.height do pixels[i]={0,0,0,0}end;l.cels[fi]=pixels
  m.bounds=(pos.x==0 and pos.y==0 and im.width==doc.width and im.height==doc.height) and nil or {pos.x,pos.y,im.width,im.height}
  for y=0,im.height-1 do for x=0,im.width-1 do local px,py=pos.x+x,pos.y+y;local color=copy(im._pixels[y*im.width+x+1])
@@ -405,7 +441,7 @@ function spriteMethods:newFrame(f)
  table.insert(doc.durations,f+1,doc.durations[f])
  for _,l in ipairs(doc.layers) do
   table.insert(l.cels,f+1,copy(l.cels[f]))
-  table.insert(l.cel_meta,f+1,copy(l.cel_meta[f]))
+  local meta=copy(l.cel_meta[f]);meta.artwork_link=nil;table.insert(l.cel_meta,f+1,meta)
   table.insert(l.tile_cels,f+1,copy(l.tile_cels[f]))
  end
  -- Keep PixelCraft's parallel document data aligned with the inserted frame.

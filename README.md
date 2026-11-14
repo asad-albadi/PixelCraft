@@ -129,11 +129,23 @@ Use **Sprite → Properties, layers, tiles & ranges** (also available beside the
 - RGB, grayscale with alpha, and indexed modes with editable 1–256-color palettes. Drawing is constrained to the selected mode; indexed palette slots retain their identity even when colors match. Use the active color chip to choose a drawing color, or select a used artwork swatch to reuse it. Imported animated palettes are retained.
 - Groups and nested group membership, all 19 ASE blend modes, separate layer/cel opacity and cel stacking order. Parent visibility and locks apply to children. Groups composite separately. Layer removal and reordering retain membership.
 - Importing PNG tilesheets using a chosen tile size, capturing a selection as a tile, and creating tile layers. Select a tile ID in Properties and use Pencil/Eraser to place/remove whole tiles. Tile references, tilesets and flip flags are preserved.
-- Named frame tags/ranges, editable endpoints and forward/reverse/ping-pong playback. Frame insertion/deletion adjusts ranges. Select **Use for playback** to loop one range. The timeline shows frame previews; previews are generated for the first 256 frames to limit memory.
+- Named frame tags/ranges, editable endpoints and forward/reverse/ping-pong playback. Frame insertion/deletion adjusts ranges. Select **Use for playback** to loop one range. The timeline shows thumbnails for frames already rendered or prefetched within the texture cache.
 
 The context bar offers round, square, diamond, horizontal and vertical brushes. Ellipses use a symmetric integer rasterizer, including small and degenerate bounds. Pixel-exact agreement with every original editor brush mask is not claimed.
 
 Canvases support up to 16384 pixels per side and 64 million pixels per canvas and 128 million stored pixels across layers and frames. Dimensions and project structures are validated. Cel pixels and indexed buffers use copy-on-write sharing across frame copies and undo snapshots. Undo retains up to 64 steps with a 192 MB allocation budget; a single oversized step is retained. Unchanged frame textures are cached and the checkerboard is clipped to the viewport.
+
+### Timeline and scene editing
+
+- Shift-click a timeline cel, or use Shift and the arrow keys with a cel focused, to select a rectangle. **Layer & frame actions → Selected cels** clears, links, unlinks, changes timing, or previews a move or duplicate at the chosen destination. Operations use one Undo step.
+- **Layer & frame actions → Link cel to frame** shares artwork within one layer. **Link duplicated cels** makes frame duplication link artwork on that layer. Unlink a cel before editing it independently.
+- **Position and opacity keyframe** animates offsets and opacity. Position snaps to whole pixels. Linear keys interpolate using frame durations, including the loop boundary. Enable **Hold until next keyframe** to step between values.
+- **Drawing & selection studio** has free-angle rotation with a draggable preview pivot, masks from selection, levels, hue/saturation and palette remapping. An adjustment applies to the layers composited below it in its group. Use an empty image layer for an adjustment and its visibility control to toggle the effect.
+- **Sprite Properties → Slices and pivots** edits frame-keyed game asset bounds and pivots. Tile painting modes in the same window support shared tile edits and placement variants. Variants reuse an identical tile when present and retain the placement's flip flags.
+
+Native projects save compact empty cels and sparse raster blocks. Copy-on-write buffers are written once per shared raster, and older dense native projects remain readable. Frame textures survive unrelated edits. During playback, PixelCraft prepares one upcoming frame in the background, with a 16 MiB prefetch limit per image and a 64 MiB texture-cache budget.
+
+Save masks, adjustments and keyframes in `.pixel`. **File → Export baked ASE copy** flattens those effects into each frame and retains frame timing, tags, slices and the color profile. Keep the native project for editing.
 
 ## Projects and interchange
 
@@ -252,6 +264,12 @@ Configure an MCP client to launch the executable with `--mcp`. The newline-delim
 Live access starts **disabled** and is never restored from preferences. Enable **Workflow tools → Assistants & headless tools → Allow assistants to access this live editor**. The editor displays an MCP command with `--live BRIDGE_CONFIG`. That instance adds `live-inspect`, `live-render`, `live-edit` and `live-undo`. The bridge listens on loopback with a random token in a private file, which is removed when access is disabled or the editor closes. Disable the checkbox to revoke access.
 
 Live inspection returns a session/document revision. Supply that exact revision to edit or undo; user edits, undo/redo and document changes invalidate it. Assistant changes are one regular undo step. Active gestures and scripts block edits, and expired requests are discarded rather than applied after a stalled editor resumes. Reference overlays are excluded from assistant artwork rendering too.
+
+Live inspection reports the session, document and layer IDs. Use `live-cel-targets` with a layer ID, start frame and count to look up cel IDs. Commands accept `layer_id` and `cel_id` alongside the existing index-based API. IDs are scoped to the open document. Refresh them after reopening a file or after structural script edits.
+
+Send an identical command batch to `live-preview-commands` and `live-commands` with the same `revision` and optional `document_id`. Preview returns PNG and changed RGBA cel bounds, without adding an Undo step. If the revision or target changes, inspect again before applying.
+
+Pass a unique `job_id` to `live-export`. While the request is running, call `live-export-progress` or `live-cancel-export` with that same ID. The editor also shows progress and a Cancel export button. Cancellation is cooperative between frames and is rejected once publication starts. Revocation, expiry, or a disconnected bridge client discards staged work that has yet to publish.
 
 #### Live pixel painting
 
