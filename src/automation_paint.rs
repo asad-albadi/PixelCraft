@@ -220,10 +220,7 @@ fn rgba(data: &str, encoding: Encoding, count: usize) -> Result<Vec<Pixel>, Stri
     if raw.len() != bytes {
         return Err("Raster byte count must equal width × height × 4".into());
     }
-    Ok(raw
-        .chunks_exact(4)
-        .map(|p| [p[0], p[1], p[2], p[3]])
-        .collect())
+    Ok(raw.as_chunks::<4>().0.to_vec())
 }
 
 pub(crate) fn paint(
@@ -654,8 +651,7 @@ fn paint_stroke(
         };
         paint_brush_with_ink(
             doc,
-            layer,
-            frame,
+            (layer, frame),
             (x, y),
             color,
             size,

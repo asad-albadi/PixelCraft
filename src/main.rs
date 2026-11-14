@@ -199,6 +199,11 @@ fn same_color_artwork(a: &Document, b: &Document) -> bool {
 // GlobalPref::ColorBar 0x366d20: factory colors, shared across documents.
 const DEFAULT_FG: Pixel = [255, 255, 255, 255];
 const DEFAULT_BG: Pixel = [0, 0, 0, 255];
+struct SaveJob {
+    tab: usize,
+    finished: std::sync::mpsc::Receiver<(PathBuf, Document, Result<(), String>)>,
+}
+
 struct PixelCraft {
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
@@ -254,10 +259,7 @@ struct PixelCraft {
     export_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
     animation_export: Option<&'static str>,
     sequence_name: String,
-    save_job: Option<(
-        usize,
-        std::sync::mpsc::Receiver<(PathBuf, Document, Result<(), String>)>,
-    )>,
+    save_job: Option<SaveJob>,
     frame_texture_order: std::collections::VecDeque<usize>,
     onion_texture: Option<egui::TextureHandle>,
     properties_open: bool,
@@ -1327,7 +1329,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn queue_save(&mut self, path: PathBuf, saving: Document) {
         let (tx, rx) = std::sync::mpsc::channel();
-        self.save_job = Some((self.active_tab, rx));
+        self.save_job = Some(SaveJob {
+            tab: self.active_tab,
+            finished: rx,
+        });
         self.status = format!(
             "Saving {}",
             path.file_name().unwrap_or_default().to_string_lossy()
@@ -1338,11 +1343,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         });
     }
     fn poll_save(&mut self) {
-        let Some((tab, job)) = &self.save_job else {
+        let Some(job) = &self.save_job else {
             return;
         };
-        let tab = *tab;
-        let result = job.try_recv();
+        let tab = job.tab;
+        let result = job.finished.try_recv();
         if matches!(result, Err(std::sync::mpsc::TryRecvError::Empty)) {
             return;
         }

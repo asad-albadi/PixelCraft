@@ -99,13 +99,12 @@ pub fn paint_brush(
     size: i32,
     o: &BrushOptions,
 ) {
-    paint_brush_with_ink(d, l, f, p, color, size, o, |_, _, source| source);
+    paint_brush_with_ink(d, (l, f), p, color, size, o, |_, _, source| source);
 }
 
 pub(crate) fn paint_brush_with_ink(
     d: &mut Document,
-    l: usize,
-    f: usize,
+    (l, f): (usize, usize),
     p: (i32, i32),
     color: Pixel,
     size: i32,
