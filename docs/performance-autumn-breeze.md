@@ -66,3 +66,15 @@ The dense ASE save remains significantly more expensive in PixelCraft. Use the n
 On Windows, optimized builds before and after the follow-up re-saved the same 1024×768, 12-layer, 8-frame dense ASE fixture. Three alternating CLI runs included process startup, import, encoding and disk write. Median time fell from 4.480 s to 0.731 s. All six outputs matched the input byte for byte. The encoder kept its existing compression level. The decoder reuses dense, canvas-aligned backing, and the encoder passes full-canvas RGBA bytes straight to zlib.
 
 Playback now holds the displayed frame when the next frame misses prefetch and resumes with the first ready successor. The regression test forces this condition and checks the successor's full duration. Baked ASE export also uses the existing background export worker. Windows GPU presentation and the original Linux Wayland benchmark were outside this follow-up measurement.
+
+### Windows display capture
+
+PresentMon 2.6.0 captured seven seconds per case after a five-second startup delay on the same Ryzen 9 9950X Windows desktop. Each capture tracked the visible editor's process ID. The dense and sparse inputs use the same 60 fps fixtures as the Linux comparison. The original layered Moonlit Sanctuary has 150 ms frame durations.
+
+| Input | Original PR build p95 / max | Playback follow-up p95 / max | Display gaps over 16.7 ms, original / follow-up |
+| --- | ---: | ---: | ---: |
+| Dense | 6.12 / 6.20 ms | 6.11 / 12.12 ms | 0 / 0 |
+| Sparse | 6.12 / 6.35 ms | 6.11 / 12.12 ms | 0 / 0 |
+| Layered Moonlit Sanctuary | 127.27 / 133.29 ms | 127.28 / 127.33 ms | Not a 60 fps input |
+
+For each binary, open the fixture with `pixelcraft.exe --open PATH --play`. Run `PresentMon --process_id PID --delay 5 --timed 7 --terminate_after_timed --v1_metrics --output_file capture.csv` and summarize positive `msBetweenDisplayChange` values for displayed presents. These are display presents, including repeated sprite content. They do not count skipped sprite frames or measure input latency or VRAM. Neither Windows build reproduced the previously observed long Linux stall in this run. Dense peak process working set was 867 MiB on the original PR build and 565 MiB on the follow-up.

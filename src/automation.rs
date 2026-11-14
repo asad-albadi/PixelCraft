@@ -865,12 +865,15 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
                     };
                     let mut tool = json!({"name":name,"description":format!("PixelCraft {name}. {details}"),
                     "inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"document_id":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}});
-                if matches!(*name, "render" | "live-render" | "export" | "live-export" | "live-preview-commands") {
+                if matches!(*name, "render" | "live-render" | "export" | "live-export" | "live-preview-commands" | "live-commands" | "live-edit") {
                     let props = &mut tool["inputSchema"]["properties"];
                     props["layers"] = json!({"type":"array","items":{"type":"integer","minimum":0}});
                     props["region"] = json!({"type":"object","required":["x","y","width","height"],
                         "properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},
                         "additionalProperties":false});
+                }
+                if matches!(*name, "live-commands" | "live-edit") {
+                    tool["inputSchema"]["properties"]["return_preview"] = json!({"type":"boolean"});
                 }
                 if *name == "live-cel-targets" {
                     tool["inputSchema"]["properties"]["layer"] = json!({"type":"integer","minimum":0});

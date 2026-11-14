@@ -108,7 +108,7 @@ enum LiveResult {
     Read(serde_json::Value),
     Export(automation::PreparedExport),
     Save(automation::PreparedExport, Document),
-    Edit(Document, serde_json::Value),
+    Edit(Document, serde_json::Value, Option<serde_json::Value>),
 }
 
 struct PreparedLive {
@@ -947,7 +947,20 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             } else {
                 automation::changed_cel_bounds(&doc, &next)
             };
-            Ok(LiveResult::Edit(next, bounds))
+            let preview = if matches!(request.operation.as_str(), "live-commands" | "live-edit")
+                && args["return_preview"] == true
+            {
+                Some(automation::render_preview(
+                    &next,
+                    frame.min(next.durations.len() - 1),
+                    args,
+                    &revision,
+                    4_194_304,
+                )?)
+            } else {
+                None
+            };
+            Ok(LiveResult::Edit(next, bounds, preview))
         })();
         PreparedLive {
             request,
@@ -964,7 +977,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             if Instant::now() >= prepared.request.deadline {
                 return Err("Live request expired; no changes applied".into());
             }
-            let (next, bounds) = match result {
+            let (next, bounds, preview) = match result {
                 LiveResult::Read(value) => {
                     if prepared.request.operation == "live-preview-commands"
                         && prepared.revision != self.live_revision()
@@ -999,7 +1012,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     self.status = "Saved sprite through MCP".into();
                     return Ok(result);
                 }
-                LiveResult::Edit(next, bounds) => (next, bounds),
+                LiveResult::Edit(next, bounds, preview) => (next, bounds, preview),
             };
             if prepared.revision != self.live_revision() {
                 return Err("Stale revision; inspect the open sprite again".into());
@@ -1019,8 +1032,18 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 self.status = "Assistant edited the sprite — Ctrl+Z to undo".into();
             }
             self.sync_live_revision();
-            let mut value = automation::inspect_revision(&self.doc, &self.live_revision());
+            let revision = self.live_revision();
+            let mut value = automation::inspect_revision(&self.doc, &revision);
             value["changed_cels"] = bounds;
+            if let Some(mut preview) = preview {
+                let fields = preview
+                    .as_object_mut()
+                    .expect("Render metadata is an object");
+                value["mimeType"] = fields.remove("mimeType").unwrap();
+                value["data"] = fields.remove("data").unwrap();
+                preview["revision"] = serde_json::json!(revision);
+                value["preview"] = preview;
+            }
             Ok(value)
         });
         let _ = prepared.request.response.send(result);
@@ -1457,12 +1480,17 @@ mod bridge_tests {
             let patch = base64::engine::general_purpose::STANDARD.encode(color.repeat(256 * 256));
             let (paint, elapsed) = call(
                 "live-commands",
-                json!({"revision":info["revision"],"commands":[
+                json!({"revision":info["revision"],"return_preview":true,
+                    "region":{"x":0,"y":0,"width":128,"height":128},"commands":[
                     {"op":"blit","layer":2*pass,"frame":0,"x":pass*41,"y":0,"width":256,"height":256,"data":patch},
                     {"op":"stroke","layer":2*pass+1,"frame":0,"points":[[40,20+pass*20],[450,20+pass*20]],"color":[255,172,81,255],"size":2,"spacing":3}
                 ]}),
             );
+            assert_eq!(paint[0]["type"], "image");
             info = metadata(&paint);
+            assert_eq!(info["preview"]["width"], 128);
+            assert_eq!(info["preview"]["height"], 128);
+            assert_eq!(info["preview"]["revision"], info["revision"]);
             assert_eq!(info["changed_cels"].as_array().unwrap().len(), 2);
             paint_times.push(elapsed.as_millis());
             let (preview, elapsed) = call(
