@@ -70,7 +70,7 @@ fn middle_color_updates_the_foreground_through_the_editor_host() {
 }
 
 #[test]
-fn tile_index_overlay_package_registers_and_reports_the_missing_sprite_api() {
+fn tile_index_overlay_draws_number_and_contrast_layers() {
     let doc = Document::new(16, 16);
     let session = Session::new(&doc).unwrap();
     let manager = Manager::at(session.directory.clone()).unwrap();
@@ -95,13 +95,29 @@ fn tile_index_overlay_package_registers_and_reports_the_missing_sprite_api() {
         None,
         json!({}),
         Box::new(|request| {
+            if matches!(
+                request["op"].as_str(),
+                Some("refresh" | "alert" | "preferences")
+            ) {
+                return Ok(json!({}));
+            }
             assert_eq!(request["op"], "dialog");
             assert_eq!(request["dialog"]["title"], "Index Overlay Options");
-            Ok(json!({"widget":"ok","data":{"ok":true}}))
+            Ok(json!({"widget":"ok","data":{
+                "ok":true,"tilewidth":16,"tileheight":16,"includeContrastLayer":true,
+                "indexColor":{"r":255,"g":255,"b":255,"a":255},
+                "tileContrastColor":{"r":0,"g":0,"b":0,"a":150}
+            }}))
         }),
     );
     fs::remove_dir_all(session.directory).unwrap();
 
-    let error = result.unwrap_err();
-    assert!(error.contains("global 'Sprite'"), "{error}");
+    let edited = result.unwrap();
+    assert_eq!(edited.layers.len(), 3);
+    assert_eq!(edited.layers[0], doc.layers[0]);
+    assert_eq!(edited.layers[1].name, "Contrast Background");
+    assert_eq!(edited.layers[1].cels[0][0], [0, 0, 0, 150]);
+    assert_eq!(edited.layers[2].name, "Tile Index Overlay");
+    assert_eq!(edited.layers[2].cels[0][0], [0; 4]);
+    assert!(edited.layers[2].cels[0].contains(&[255; 4]));
 }

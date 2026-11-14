@@ -8,7 +8,7 @@ PixelCraft's editor host. No Aseprite install or network connection is needed.
 | --- | --- | --- |
 | `gasparoken/duplicateLastFrame.lua` | [Gaspar Capello, MIT](https://github.com/Gasparoken/asepriteScripts/blob/2dcb73d45be1b8d5e32cc5550e2d60c2124954c4/duplicateLastFrame.lua) | Copies the final frame's artwork across two layers, including a positioned cel. |
 | `christopherwk210/middle-color.lua` | [Chris Anselmo's script collection, MIT](https://github.com/christopherwk210/aseprite-scripts/blob/a0bd40c9aa5f1604a314c1bc1ec89e1d73ef943c/image/middle-color.lua) | Averages the foreground and background colors and reports the new foreground to the editor. |
-| `pixeltica/TileIndexOverlay_v1.aseprite-extension` | [Pixeltica, MIT, release 1.0.0](https://github.com/Pixeltica/AsepriteExtensions/releases/tag/1.0.0), [commit 5ece3a5](https://github.com/Pixeltica/AsepriteExtensions/tree/5ece3a5f87d460b3304c87f1c21c4dd7abaad2fb/TileIndexOverlay) | Installs, registers its command and opens its options dialogue. Execution stops when it tries to create a temporary `Sprite`, which PixelCraft's Lua runtime does not provide. |
+| `pixeltica/TileIndexOverlay_v1.aseprite-extension` | [Pixeltica, MIT, release 1.0.0](https://github.com/Pixeltica/AsepriteExtensions/releases/tag/1.0.0), [commit 5ece3a5](https://github.com/Pixeltica/AsepriteExtensions/tree/5ece3a5f87d460b3304c87f1c21c4dd7abaad2fb/TileIndexOverlay) | Installs, opens its options dialog, and draws the numbered overlay and contrast layers using a detached RGB scratch sprite. |
 
 Each directory contains its upstream license. The extension archive is the exact
 published asset, including its original manifest and shortcut contribution.

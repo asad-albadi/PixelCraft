@@ -322,14 +322,18 @@ AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}
 -- the preference Color into fresh Lua userdata on every read.
 local scriptColors=_pw_colors
 local imageMethods={}
-local function image(p,w,h) return setmetatable({_pixels=p,width=w,height=h,colorMode=doc.color_mode,bytesPerPixel=doc.color_mode=='Rgba' and 4 or doc.color_mode=='Grayscale' and 2 or 1,spec={width=w,height=h,colorMode=doc.color_mode,transparentColor=doc.transparent_index}},{__index=imageMethods}) end
+local function image(p,w,h,mode)
+ mode=mode or doc.color_mode
+ return setmetatable({_pixels=p,width=w,height=h,colorMode=mode,bytesPerPixel=mode=='Rgba' and 4 or mode=='Grayscale' and 2 or 1,spec={width=w,height=h,colorMode=mode,transparentColor=doc.transparent_index}},{__index=imageMethods})
+end
 function Image(w,h,mode)
- if type(w)=='table' and w._pixels then return image(copy(w._pixels),w.width,w.height) end
+ if type(w)=='table' and w._pixels then return image(copy(w._pixels),w.width,w.height,w.colorMode) end
  if type(w)=='table' then h=w.height;w=w.width end
  assert(type(w)=='number' and type(h)=='number' and w>0 and h>0 and w*h<=16000000,'Image dimensions exceed budget')
- local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h)
+ local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h,mode)
 end
 function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 and y>=0 and x<self.width and y<self.height then local value=unpackColor(c);self._pixels[y*self.width+x+1]=value;if self._put then self._put(x,y,value)end end end
+imageMethods.putPixel=imageMethods.drawPixel
 function imageMethods:getPixel(x,y) if x<0 or y<0 or x>=self.width or y>=self.height then return 0 end return rgba(table.unpack(self._pixels[y*self.width+x+1])) end
 function imageMethods:clear(c) for y=0,self.height-1 do for x=0,self.width-1 do self:drawPixel(x,y,c or 0)end end end
 function imageMethods:clone() return Image(self) end
@@ -476,9 +480,36 @@ end
 function spriteMethods:newTag(a,b) a=frameNumber(a);b=frameNumber(b);assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range');local t={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}};table.insert(doc.tags,t);return setmetatable({},{__index=function(_,k)if k=='name' then return t.name elseif k=='fromFrame' then return frameHandles[t.from+1] elseif k=='toFrame' then return frameHandles[t.to+1] elseif k=='aniDir' then return t.direction end end,__newindex=function(_,k,v)if k=='name' then t.name=tostring(v) elseif k=='aniDir' then t.direction=v elseif k=='fromFrame' then t.from=frameNumber(v)-1 elseif k=='toFrame' then t.to=frameNumber(v)-1 else error('Unsupported tag field: '..k) end end}) end
 setmetatable(sprite,{__index=function(_,k)if spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
 rebuildHandles()
+-- Detached scratch sprites let a script compose an image without changing the
+-- editor document. They are not tabs and do not participate in document undo.
+function Sprite(w,h,mode)
+ mode=mode or ColorMode.RGB
+ assert(mode==ColorMode.RGB,'Detached sprites must use RGB mode')
+ local layer,frame={name='Layer 1'},{frameNumber=1,duration=0.1}
+ local scratch={width=w,height=h,colorMode=mode,layers={layer},frames={frame}}
+ local cells={}
+ local closed=false
+ function scratch:newCel(target,at,im,pos)
+  assert(not closed and target==layer and frameNumber(at)==1,'Invalid detached sprite cel')
+  local cell={layer=layer,frame=frame,image=im and im:clone() or Image(w,h,mode),position=pos or Point(),opacity=255}
+  cells[1]=cell
+  return cell
+ end
+ function layer:cel(at)
+  assert(not closed,'Detached sprite is closed')
+  return cells[frameNumber(at)]
+ end
+ function scratch:close()
+  closed=true
+  cells={}
+ end
+ -- Validate the initial canvas and provide its first cel.
+ scratch:newCel(layer,frame)
+ return scratch
+end
 local activeLayer,activeFrame=_pw_layer+1,_pw_frame+1
 local commands={}
-app=setmetatable({apiVersion=1,version='PixelCraft 0.3',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
+app=setmetatable({apiVersion=1,version='PixelCraft 0.3',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeSprite' then assert(v==sprite,'Only the editor sprite can be made active') elseif k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
 -- NewFrameCommand::onExecute (0x45cfa0) passes active index+1 to
 -- addFrame/addEmptyFrame. Sprite methods without arguments instead append.
 rawset(app,'command',setmetatable({NewLayer=function()app.activeLayer=sprite:newLayer()end,NewFrame=function()

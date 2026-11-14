@@ -648,8 +648,6 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             {
                 continue;
             }
-            let effective_palette = d.editing_palette(li, f);
-            let palette = effective_palette.as_slice();
             let (mut x, mut y, mut w, mut h) = (0i32, 0i32, d.width, d.height);
             if l.tileset.is_none() {
                 if let Some(bounds) = m.bounds {
@@ -658,25 +656,27 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                     w = bounds[2] as usize;
                     h = bounds[3] as usize;
                 }
-                let mut maxx = x + w as i32;
-                let mut maxy = y + h as i32;
-                l.cels[f].visit_nonclear(|i, _| {
-                    let (cx, cy) = ((i % d.width) as i32, (i / d.width) as i32);
-                    x = x.min(cx);
-                    y = y.min(cy);
-                    maxx = maxx.max(cx + 1);
-                    maxy = maxy.max(cy + 1);
-                });
-                for p in &m.outside {
-                    x = x.min(p.x);
-                    y = y.min(p.y);
+                if m.bounds.is_some() || !m.outside.is_empty() {
+                    let mut maxx = x + w as i32;
+                    let mut maxy = y + h as i32;
+                    l.cels[f].visit_nonclear(|i, _| {
+                        let (cx, cy) = ((i % d.width) as i32, (i / d.width) as i32);
+                        x = x.min(cx);
+                        y = y.min(cy);
+                        maxx = maxx.max(cx + 1);
+                        maxy = maxy.max(cy + 1);
+                    });
+                    for p in &m.outside {
+                        x = x.min(p.x);
+                        y = y.min(p.y);
+                    }
+                    for p in &m.outside {
+                        maxx = maxx.max(p.x + 1);
+                        maxy = maxy.max(p.y + 1);
+                    }
+                    w = (maxx - x) as usize;
+                    h = (maxy - y) as usize;
                 }
-                for p in &m.outside {
-                    maxx = maxx.max(p.x + 1);
-                    maxy = maxy.max(p.y + 1);
-                }
-                w = (maxx - x) as usize;
-                h = (maxy - y) as usize;
                 if x < i16::MIN as i32
                     || y < i16::MIN as i32
                     || w > 65535
@@ -739,25 +739,44 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             } else {
                 word(&mut c, w as u16);
                 word(&mut c, h as u16);
-                let mut p = vec![CLEAR; w * h];
-                for cy in 0..d.height {
-                    for cx in 0..d.width {
-                        if (cx as i32) >= x
-                            && (cy as i32) >= y
-                            && (cx as i32) < x + w as i32
-                            && (cy as i32) < y + h as i32
-                        {
-                            p[(cy as i32 - y) as usize * w + (cx as i32 - x) as usize] =
-                                l.cels[f][cy * d.width + cx];
-                        }
-                    }
+                if d.color_mode == ColorMode::Rgba
+                    && (x, y, w, h) == (0, 0, d.width, d.height)
+                    && m.outside.is_empty()
+                    && let Pixels::Dense(pixels) = &l.cels[f]
+                {
+                    c.extend(compress(pixels.as_slice().as_flattened())?);
+                    chunks.push(chunk(0x2005, c));
+                    append_metadata(&mut chunks, d, f, &format!("cel:{li}"));
+                    continue;
                 }
+
+                let mut p = vec![CLEAR; w * h];
+                l.cels[f].visit_nonclear(|index, pixel| {
+                    let cx = (index % d.width) as i32;
+                    let cy = (index / d.width) as i32;
+                    p[(cy - y) as usize * w + (cx - x) as usize] = pixel;
+                });
                 for o in &m.outside {
                     p[(o.y - y) as usize * w + (o.x - x) as usize] = o.color;
                 }
                 let encoded = if d.color_mode == ColorMode::Indexed {
-                    let mut indices: Vec<u8> =
-                        p.iter().map(|p| nearest(*p, palette) as u8).collect();
+                    let effective_palette = d.editing_palette(li, f);
+                    let palette = effective_palette.as_slice();
+                    // Reuse index matches for repeated colors without growing with the image.
+                    let mut indices_by_color = std::collections::HashMap::new();
+                    let mut indices: Vec<u8> = p
+                        .iter()
+                        .map(|&pixel| {
+                            if let Some(&index) = indices_by_color.get(&pixel) {
+                                return index;
+                            }
+                            let index = nearest(pixel, palette) as u8;
+                            if indices_by_color.len() < 4096 {
+                                indices_by_color.insert(pixel, index);
+                            }
+                            index
+                        })
+                        .collect();
                     if let Some(stored) = &m.indices {
                         for cy in 0..d.height {
                             for cx in 0..d.width {
@@ -778,7 +797,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                     }
                     indices
                 } else {
-                    pixels_bytes(&p, d.color_mode, palette)
+                    pixels_bytes(&p, d.color_mode, &[])
                 };
                 c.extend(compress(&encoded)?);
             }
@@ -1121,6 +1140,25 @@ pub fn decode_ase_with_resolver(
                     };
                     if x != 0 || y != 0 || cw != w || ch != h {
                         d.layers[li].cel_meta[f].bounds = Some([x, y, cw as i32, ch as i32]);
+                    }
+                    // Dense, canvas-aligned data can keep its decoded backing.
+                    // Sparse cels still go through the placement path below.
+                    if depth != 8
+                        && (x, y, cw, ch) == (0, 0, w, h)
+                        && pixels
+                            .iter()
+                            .filter(|&&pixel| pixel != CLEAR)
+                            .take(w * h / 2 + 1)
+                            .count()
+                            > w * h / 2
+                    {
+                        projected_pixels = projected_pixels.saturating_add(w * h);
+                        if projected_pixels > MAX_DOCUMENT_PIXELS {
+                            return Err("Placed cel data exceeds the project pixel budget".into());
+                        }
+                        d.layers[li].cels[f] = Pixels::Dense(pixels.clone());
+                        raw[li][f] = Some((cw, ch, pixels, indices));
+                        continue;
                     }
                     let indexed_palette = (depth == 8).then(|| d.editing_palette(li, f));
                     if indices.is_some() {

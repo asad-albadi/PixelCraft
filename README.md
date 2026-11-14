@@ -143,7 +143,7 @@ Canvases support up to 16384 pixels per side and 64 million pixels per canvas an
 - **Drawing & selection studio** has free-angle rotation with a draggable preview pivot, masks from selection, levels, hue/saturation and palette remapping. An adjustment applies to the layers composited below it in its group. Use an empty image layer for an adjustment and its visibility control to toggle the effect.
 - **Sprite Properties → Slices and pivots** edits frame-keyed game asset bounds and pivots. Tile painting modes in the same window support shared tile edits and placement variants. Variants reuse an identical tile when present and retain the placement's flip flags.
 
-Native projects save compact empty cels and sparse raster blocks. Copy-on-write buffers are written once per shared raster, and older dense native projects remain readable. Frame textures survive unrelated edits. During playback, PixelCraft prepares one upcoming frame in the background, with a 16 MiB prefetch limit per image and a 64 MiB texture-cache budget.
+Native projects save compact empty cels and sparse raster blocks. Copy-on-write buffers are written once per shared raster, and older dense native projects remain readable. Frame textures survive unrelated edits. During playback, PixelCraft prepares one upcoming frame in the background. If the next frame misses its deadline, the editor holds the current frame until the new one is ready. The texture cache targets 64 MiB and reserves space for the current and upcoming frames.
 
 Save masks, adjustments and keyframes in `.pixel`. **File → Export baked ASE copy** flattens those effects into each frame and retains frame timing, tags, slices and the color profile. Keep the native project for editing.
 

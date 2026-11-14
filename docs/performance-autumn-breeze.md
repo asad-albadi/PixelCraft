@@ -60,3 +60,9 @@ For an independent file I/O comparison, the same two synthetic ASE inputs were r
 | Dense 8-frame ASE | 1.78 s / 309.1 MiB | 8.99 s / 600.9 MiB |
 
 The dense ASE save remains significantly more expensive in PixelCraft. Use the native format while editing; export ASE when you need interchange.
+
+## Windows follow-up
+
+On Windows, optimized builds before and after the follow-up re-saved the same 1024×768, 12-layer, 8-frame dense ASE fixture. Three alternating CLI runs included process startup, import, encoding and disk write. Median time fell from 4.480 s to 0.731 s. All six outputs matched the input byte for byte. The encoder kept its existing compression level. The decoder reuses dense, canvas-aligned backing, and the encoder passes full-canvas RGBA bytes straight to zlib.
+
+Playback now holds the displayed frame when the next frame misses prefetch and resumes with the first ready successor. The regression test forces this condition and checks the successor's full duration. Baked ASE export also uses the existing background export worker. Windows GPU presentation and the original Linux Wayland benchmark were outside this follow-up measurement.

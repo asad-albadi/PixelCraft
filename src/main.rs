@@ -243,6 +243,7 @@ struct PixelCraft {
     filled: bool,
     playing: bool,
     last_tick: Instant,
+    playback_waiting_for_frame: bool,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
@@ -389,6 +390,7 @@ impl PixelCraft {
             filled: false,
             playing: false,
             last_tick: Instant::now(),
+            playback_waiting_for_frame: false,
             undo: vec![],
             redo: vec![],
             selection: None,
@@ -580,6 +582,34 @@ impl PixelCraft {
         self.doc != self.saved
     }
     fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
+        self.refresh_frame_cache(ctx);
+        if self.frame_textures[f].is_none() {
+            let (image, error) = Self::compose_frame_image(&self.doc, f);
+            self.store_frame_texture(ctx, f, image, error);
+        }
+        let texture = self.frame_textures[f].as_ref().unwrap().clone();
+        let frame = self.next_playback_frame().0;
+        if self.playing && self.frame_prefetch.is_none() && self.frame_textures[frame].is_none() {
+            let snapshot = self.doc.clone();
+            let worker_doc = snapshot.clone();
+            let wake = ctx.clone();
+            let (send, result) = std::sync::mpsc::sync_channel(1);
+            self.frame_prefetch = Some(FramePrefetch {
+                frame,
+                snapshot,
+                result,
+            });
+            std::thread::spawn(move || {
+                let image = Self::compose_frame_image(&worker_doc, frame);
+                if send.send(image).is_ok() {
+                    wake.request_repaint();
+                }
+            });
+        }
+        texture
+    }
+
+    fn refresh_frame_cache(&mut self, ctx: &egui::Context) {
         if self.render_snapshot.as_ref() != Some(&self.doc) {
             self.frame_textures.resize(self.doc.durations.len(), None);
             for (frame, texture) in self.frame_textures.iter_mut().enumerate() {
@@ -614,35 +644,6 @@ impl PixelCraft {
             self.render_snapshot = Some(self.doc.clone());
         }
         self.poll_frame_prefetch(ctx);
-        if self.frame_textures[f].is_none() {
-            let (image, error) = Self::compose_frame_image(&self.doc, f);
-            self.store_frame_texture(ctx, f, image, error);
-        }
-        let texture = self.frame_textures[f].as_ref().unwrap().clone();
-        let frame = self.next_playback_frame().0;
-        let frame_bytes = self.doc.width * self.doc.height * 4;
-        if self.playing
-            && self.frame_prefetch.is_none()
-            && self.frame_textures[frame].is_none()
-            && frame_bytes <= 16 * 1024 * 1024
-        {
-            let snapshot = self.doc.clone();
-            let worker_doc = snapshot.clone();
-            let wake = ctx.clone();
-            let (send, result) = std::sync::mpsc::sync_channel(1);
-            self.frame_prefetch = Some(FramePrefetch {
-                frame,
-                snapshot,
-                result,
-            });
-            std::thread::spawn(move || {
-                let image = Self::compose_frame_image(&worker_doc, frame);
-                if send.send(image).is_ok() {
-                    wake.request_repaint();
-                }
-            });
-        }
-        texture
     }
 
     fn compose_frame_image(doc: &Document, frame: usize) -> (egui::ColorImage, Option<String>) {
@@ -687,10 +688,14 @@ impl PixelCraft {
         error: Option<String>,
     ) {
         let frame_bytes = self.doc.width * self.doc.height * 4;
-        let capacity = (64 * 1024 * 1024 / frame_bytes).max(1);
-        if self.frame_texture_order.len() >= capacity
-            && let Some(old) = self.frame_texture_order.pop_front()
-        {
+        let capacity = (64 * 1024 * 1024 / frame_bytes).max(if self.playing { 2 } else { 1 });
+        while self.frame_texture_order.len() >= capacity {
+            let oldest = self
+                .frame_texture_order
+                .iter()
+                .position(|&cached| !self.playing || cached != self.frame)
+                .expect("Playback reserves room for the current and upcoming frames");
+            let old = self.frame_texture_order.remove(oldest).unwrap();
             self.frame_textures[old] = None;
         }
         if let Some(error) = error {
@@ -774,11 +779,22 @@ impl PixelCraft {
             |app: &Self| Duration::from_millis(u64::from(app.doc.durations[app.frame].max(1)));
         let mut elapsed = now.saturating_duration_since(self.last_tick);
         // A long suspension should not make the editor replay a backlog.
-        if elapsed > Duration::from_secs(1) {
+        if elapsed > Duration::from_secs(1) && !self.playback_waiting_for_frame {
             self.last_tick = now;
             return duration(self);
         }
         while elapsed >= duration(self) {
+            let next = self.next_playback_frame().0;
+            if self.playing && self.frame_textures.get(next).is_none_or(Option::is_none) {
+                self.playback_waiting_for_frame = true;
+                // The prefetch worker wakes the editor as soon as its result is ready.
+                return Duration::from_millis(16);
+            }
+            if std::mem::take(&mut self.playback_waiting_for_frame) {
+                self.advance_playback();
+                self.last_tick = now;
+                return duration(self);
+            }
             let step = duration(self);
             self.last_tick += step;
             elapsed -= step;
@@ -1344,6 +1360,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .floor()
             .clamp(1., 16.);
         self.playing = false;
+        self.playback_waiting_for_frame = false;
     }
     fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
         self.cancel_gesture();
@@ -1398,6 +1415,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.extension_session = None;
         self.render_snapshot = None;
         self.playing = false;
+        self.playback_waiting_for_frame = false;
         self.hover = None;
         self.status = "Switched sprite".into();
     }
@@ -1471,15 +1489,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn export_baked_ase(&mut self) {
+        if self.export_job.is_some() {
+            self.status = "An export is already running".into();
+            return;
+        }
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("ASE sprite", &["aseprite"])
             .set_file_name("Baked artwork.aseprite")
             .save_file()
         {
-            self.status = match formats::export_baked_ase(&path, &self.doc) {
-                Ok(()) => "Exported baked ASE copy".into(),
-                Err(error) => format!("Export failed: {error}"),
-            };
+            self.start_export("baked-ase", path);
         }
     }
 
@@ -1668,6 +1687,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let gif = kind == "gif";
         let video = kind == "mp4";
         let sheet = kind == "sheet";
+        let baked_ase = kind == "baked-ase";
         self.status = format!(
             "Exporting {}",
             path.file_name().unwrap_or_default().to_string_lossy()
@@ -1690,6 +1710,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     &doc,
                     scale,
                 )
+            } else if baked_ase {
+                formats::export_baked_ase(&path, &doc)
             } else {
                 formats::export_raster_scaled(&path, &doc, frame, sheet, scale)
             };
@@ -1904,13 +1926,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.status = "Layer limit reached for this canvas size".into()
                 }
             }
-            "deletelayer" => {
-                if self.doc.layers.len() > 1 {
-                    self.remember();
-                    self.doc.remove_layer(self.layer);
-                    self.clamp();
-                }
+            "deletelayer" if self.doc.layers.len() > 1 => {
+                self.remember();
+                self.doc.remove_layer(self.layer);
+                self.clamp();
             }
+            "deletelayer" => {}
             "up" | "down" => {
                 let to = if s == "up" {
                     (self.layer + 1).min(self.doc.layers.len() - 1)
@@ -1934,15 +1955,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.status = "Frame limit reached for this canvas size".into()
                 }
             }
-            "deleteframe" => {
-                if self.doc.durations.len() > 1 {
-                    self.remember();
-                    self.doc.remove_frame(self.frame);
-                    self.clamp();
-                }
+            "deleteframe" if self.doc.durations.len() > 1 => {
+                self.remember();
+                self.doc.remove_frame(self.frame);
+                self.clamp();
             }
+            "deleteframe" => {}
             "play" => {
                 self.playing = !self.playing;
+                self.playback_waiting_for_frame = false;
                 self.last_tick = Instant::now();
             }
             "prev" => {
@@ -2094,6 +2115,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.extension_session = Some(session);
         self.script_job = Some(rx);
         self.playing = false;
+        self.playback_waiting_for_frame = false;
         self.status = "Running embedded Lua…".into();
         Ok(())
     }
@@ -2682,6 +2704,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.frame = frame;
         self.timeline_destination = None;
         self.playing = false;
+        self.playback_waiting_for_frame = false;
     }
 
     fn edit_timeline(&mut self, edit: impl FnOnce(&mut Document) -> Result<(), String>) -> bool {
@@ -3417,6 +3440,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && self.tool != Tool::Hand
         {
             self.playing = false;
+            self.playback_waiting_for_frame = false;
             let p = self.hover.unwrap();
             self.stroke_color = self.fg;
             if ctx.input(|i| i.modifiers.alt) || self.tool == Tool::Picker {
@@ -3992,6 +4016,7 @@ impl PixelCraft {
             self.shortcuts(&ctx)
         }
         if self.playing {
+            self.refresh_frame_cache(&ctx);
             ctx.request_repaint_after(self.update_playback_clock(Instant::now()));
         }
         if self.dialog_open() && (!self.rotation_preview_active() || self.pending.is_some()) {

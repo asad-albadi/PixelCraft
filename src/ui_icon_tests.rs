@@ -1367,6 +1367,7 @@ fn preview_zoom_frame_sync_and_controls_across_sizes_and_scales() {
                         (image.width() * ctx.pixels_per_point() - 320. * zoom as f32).abs() < 0.01
                     );
                 }
+                let _ = app.frame_texture(&ctx, app.next_playback_frame().0);
                 app.playing = true;
                 app.last_tick =
                     Instant::now() - Duration::from_millis(u64::from(app.doc.durations[app.frame]));
@@ -1703,4 +1704,35 @@ fn playback_prefetch_rejects_frames_from_an_obsolete_snapshot() {
     let egui::ImageData::Color(image) = &updates.set[&texture][0].image;
     assert_eq!(image.pixels[0], Color32::from_rgb(190, 90, 20));
     updates.clear();
+}
+
+#[test]
+fn playback_waits_for_a_cache_miss_without_skipping_the_frame() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(32, 32);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.durations.fill(17);
+    app.replace(doc, None);
+    let _ = app.frame_texture(&ctx, 0);
+    app.playing = true;
+    let start = Instant::now();
+    app.last_tick = start;
+
+    app.update_playback_clock(start + Duration::from_millis(40));
+    assert_eq!(
+        app.frame, 0,
+        "Hold the last frame while its successor renders"
+    );
+
+    let (image, error) = PixelCraft::compose_frame_image(&app.doc, 1);
+    app.store_frame_texture(&ctx, 1, image, error);
+    app.update_playback_clock(start + Duration::from_millis(80));
+    assert_eq!(app.frame, 1, "Present the first ready successor");
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(81)),
+        Duration::from_millis(16)
+    );
+    assert_eq!(app.frame, 1);
 }

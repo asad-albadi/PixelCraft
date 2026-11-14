@@ -284,10 +284,8 @@ impl Manager {
                 .chain(&c.dithering_matrices)
             {
                 let p = safe_path(&contribution.path)?;
-                if !package_dir.join(&p).is_file()
-                    && !(package_dir.join(&p).is_dir()
-                        && package_dir.join(&p).join("theme.xml").is_file())
-                {
+                let path = package_dir.join(&p);
+                if !(path.is_file() || path.is_dir() && path.join("theme.xml").is_file()) {
                     return Err(format!("Missing extension asset: {}", contribution.path));
                 }
                 count += 1;
