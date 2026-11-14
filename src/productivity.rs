@@ -99,6 +99,18 @@ pub fn paint_brush(
     size: i32,
     o: &BrushOptions,
 ) {
+    paint_brush_with_ink(d, (l, f), p, color, size, o, |_, _, source| source);
+}
+
+pub(crate) fn paint_brush_with_ink(
+    d: &mut Document,
+    (l, f): (usize, usize),
+    p: (i32, i32),
+    color: Pixel,
+    size: i32,
+    o: &BrushOptions,
+    mut ink: impl FnMut(usize, Pixel, Pixel) -> Pixel,
+) {
     if !d.editable(l) || d.layers[l].tileset.is_some() {
         return;
     }
@@ -196,7 +208,11 @@ pub fn paint_brush(
         if o.mode != BrushMode::Selection {
             c = d.snapped_color(f, c);
         }
-        d.set_pixel(l, f, i, c);
+        let previous = d.layers[l].cels[f][i];
+        let next = ink(i, previous, c);
+        if next != previous || d.color_mode == ColorMode::Indexed {
+            d.set_pixel(l, f, i, next);
+        }
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

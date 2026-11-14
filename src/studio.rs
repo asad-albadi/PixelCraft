@@ -31,6 +31,7 @@ pub(super) struct Studio {
     recovery_root: PathBuf,
     last_save: Instant,
     last_session: Option<Workspace>,
+    recovery_job: Option<std::thread::JoinHandle<(Workspace, Result<(), String>)>>,
     pub recovery_status: String,
 }
 impl Default for Studio {
@@ -60,6 +61,7 @@ impl Default for Studio {
             recovery_root: extensions::config_directory(),
             last_save: Instant::now(),
             last_session: None,
+            recovery_job: None,
             recovery_status: "Autosave every 15 seconds".into(),
         }
     }
@@ -129,8 +131,25 @@ impl PixelCraft {
             color: self.active_color,
         }
     }
-    pub(super) fn autosave(&mut self, force: bool) {
+    pub(super) fn autosave(&mut self, force: bool, ctx: &egui::Context) {
+        if self
+            .studio
+            .recovery_job
+            .as_ref()
+            .is_some_and(|job| force || job.is_finished())
+        {
+            let job = self.studio.recovery_job.take().unwrap();
+            match job.join() {
+                Ok((state, result)) => self.record_recovery(state, result),
+                Err(_) => {
+                    self.studio.recovery_status = "Autosave worker stopped unexpectedly".into()
+                }
+            }
+        }
         if self.shot.is_some() || !self.studio.recovery_enabled || !self.power.autosave_enabled() {
+            return;
+        }
+        if self.studio.recovery_job.is_some() {
             return;
         }
         if !force && self.studio.last_save.elapsed() < Duration::from_secs(15) {
@@ -141,23 +160,20 @@ impl PixelCraft {
         if self.studio.last_session.as_ref() == Some(&state) {
             return;
         }
-        let result = (|| {
-            let root = self.studio.recovery_root.clone();
-            std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
-            serde_json::to_writer(&mut z, &state).map_err(|e| e.to_string())?;
-            z.flush().map_err(|e| e.to_string())?;
-            let bytes = z.finish().map_err(|e| e.to_string())?;
-            let file = root.join("workspace.recovery");
-            let tmp = root.join("workspace.recovery.tmp");
-            std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-            if file.exists() {
-                std::fs::copy(&file, root.join("workspace.recovery.previous"))
-                    .map_err(|e| e.to_string())?;
-            }
-            std::fs::rename(tmp, file).map_err(|e| e.to_string())?;
-            Ok::<_, String>(())
-        })();
+        let root = self.studio.recovery_root.clone();
+        if force {
+            let result = write_recovery(&root, &state);
+            self.record_recovery(state, result);
+        } else {
+            let ctx = ctx.clone();
+            self.studio.recovery_job = Some(std::thread::spawn(move || {
+                let result = write_recovery(&root, &state);
+                ctx.request_repaint();
+                (state, result)
+            }));
+        }
+    }
+    fn record_recovery(&mut self, state: Workspace, result: Result<(), String>) {
         match result {
             Ok(()) => {
                 self.studio.last_session = Some(state);
@@ -179,15 +195,10 @@ impl PixelCraft {
             }
             let result = (|| {
                 let data = std::fs::read(path).map_err(|e| e.to_string())?;
-                let mut bytes = vec![];
-                flate2::read::ZlibDecoder::new(&data[..])
-                    .take(1_500_000_001)
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| e.to_string())?;
-                if bytes.len() > 1_500_000_000 {
-                    return Err("Recovery exceeds memory limit".into());
-                }
-                let state: Workspace = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                let decoded = flate2::read::ZlibDecoder::new(&data[..]).take(1_500_000_000);
+                let buffered = std::io::BufReader::with_capacity(64 * 1024, decoded);
+                let state: Workspace =
+                    serde_json::from_reader(buffered).map_err(|e| e.to_string())?;
                 if state.version != 1
                     || state.tabs.is_empty()
                     || state.active >= state.tabs.len()
@@ -705,11 +716,60 @@ if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::File
     }
 }
 
+fn write_recovery(root: &std::path::Path, state: &Workspace) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    let mut buffered = std::io::BufWriter::with_capacity(64 * 1024, &mut z);
+    serde_json::to_writer(&mut buffered, state).map_err(|e| e.to_string())?;
+    buffered.flush().map_err(|e| e.to_string())?;
+    drop(buffered);
+    let bytes = z.finish().map_err(|e| e.to_string())?;
+    let file = root.join("workspace.recovery");
+    let tmp = root.join("workspace.recovery.tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    if file.exists() {
+        std::fs::copy(&file, root.join("workspace.recovery.previous"))
+            .map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(tmp, file).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     fn app() -> PixelCraft {
         PixelCraft::with_context(&egui::Context::default(), None)
+    }
+    #[test]
+    fn periodic_recovery_does_not_block_the_editor() {
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-background-recovery-{}",
+            std::process::id()
+        ));
+        let mut a = app();
+        a.replace(Document::new(768, 384), None);
+        for _ in 0..7 {
+            a.doc.add_layer();
+        }
+        for frame in 0..5 {
+            a.doc.add_frame(frame, true);
+        }
+        a.studio.recovery_enabled = true;
+        a.studio.recovery_root = root.clone();
+        a.studio.last_save = Instant::now() - Duration::from_secs(16);
+        let start = Instant::now();
+        let ctx = egui::Context::default();
+        a.autosave(false, &ctx);
+        let elapsed = start.elapsed();
+        eprintln!("Periodic recovery UI time: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "recovery blocked the UI for {elapsed:?}"
+        );
+        a.autosave(true, &ctx);
+        assert!(root.join("workspace.recovery").exists());
+        std::fs::remove_file(root.join("workspace.recovery")).unwrap();
+        std::fs::remove_dir(&root).unwrap();
     }
     #[test]
     fn recovery_restores_dirty_tabs_saved_baselines_and_active_view() {
@@ -723,7 +783,7 @@ mod tests {
         a.named_colors.push(("Grass".into(), [1, 2, 3, 255]));
         a.zoom = 7.;
         a.pan = Vec2::new(10., 20.);
-        a.autosave(true);
+        a.autosave(true, &egui::Context::default());
         assert!(root.join("workspace.recovery").exists());
         let mut b = app();
         b.studio.recovery_enabled = true;
@@ -740,7 +800,7 @@ mod tests {
         assert_eq!(b.doc.layers[1].cels[0][0], [11, 22, 33, 255]);
         assert_eq!(b.named_colors[1].0, "Grass");
         a.doc.set_pixel(0, 0, 1, [1, 1, 1, 255]);
-        a.autosave(true);
+        a.autosave(true, &egui::Context::default());
         std::fs::write(root.join("workspace.recovery"), b"corrupt").unwrap();
         b.restore_workspace();
         assert_eq!(b.active_tab, 1);

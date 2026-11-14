@@ -60,15 +60,43 @@ fn large_project_opens_through_editor_document_flow() {
     let path = PathBuf::from(std::env::var_os("PIXELCRAFT_TEST_IMAGE").unwrap());
     let ctx = egui::Context::default();
     let mut app = PixelCraft::with_context(&ctx, None);
-    let document = formats::load(&path).unwrap();
-    app.open_document(document, Some(path));
+    let start = Instant::now();
+    app.open_recent(path.clone());
+    assert!(start.elapsed() < Duration::from_millis(250));
+    assert_eq!(app.tabs.len(), 1, "Open should queue the decode");
+    let limit = Instant::now() + Duration::from_secs(120);
+    while app.open_job.is_some() {
+        assert!(Instant::now() < limit, "Background project open timed out");
+        let mut out = frame(&mut app, &ctx, Vec2::new(1920., 1080.), 1., vec![]);
+        out.textures_delta.clear();
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert_eq!(app.tabs.len(), 2);
+    if path.extension().and_then(|s| s.to_str()) == Some("pixel") {
+        assert_eq!(app.path.as_ref(), Some(&path));
+    }
     for _ in 0..3 {
         let mut out = frame(&mut app, &ctx, Vec2::new(1920., 1080.), 1., vec![]);
         let shape_count = out.shapes.len();
         out.textures_delta.clear();
         assert!(shape_count < 20_000, "Editor built {shape_count} shapes");
     }
+    let mut timings = Vec::new();
+    for _ in 0..2 {
+        for index in 0..app.doc.durations.len().min(60) {
+            app.frame = index;
+            let started = Instant::now();
+            let mut out = frame(&mut app, &ctx, Vec2::new(1920., 1080.), 1., vec![]);
+            timings.push(started.elapsed().as_secs_f64() * 1000.);
+            out.textures_delta.clear();
+        }
+    }
+    timings.sort_by(f64::total_cmp);
+    println!(
+        "Editor frame build p95 {:.1}ms, max {:.1}ms",
+        timings[((timings.len() * 95).div_ceil(100) - 1).min(timings.len() - 1)],
+        timings.last().unwrap()
+    );
     println!(
         "Opened {}x{} project with {} colors across {} tabs",
         app.doc.width,
@@ -76,6 +104,153 @@ fn large_project_opens_through_editor_document_flow() {
         app.used_colors.len(),
         app.tabs.len()
     );
+}
+
+#[test]
+fn animation_exports_open_scale_dialogs() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    for (action, title) in [
+        ("png-sequence", "Export PNG sequence"),
+        ("gif", "Export animated GIF"),
+        ("mp4", "Export MP4 video"),
+    ] {
+        app.action(action);
+        assert_eq!(app.animation_export, Some(action));
+        let mut rendered = false;
+        for _ in 0..3 {
+            let mut output = frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., vec![]);
+            rendered |= output.shapes.iter().any(|shape| match &shape.shape {
+                egui::Shape::Text(text) => text.galley.text() == title,
+                _ => false,
+            });
+            output.textures_delta.clear();
+        }
+        assert!(rendered, "Missing dialog title {title}");
+    }
+}
+
+#[test]
+fn timeline_does_not_composite_unvisited_frames() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut document = Document::new(64, 64);
+    for frame in 0..23 {
+        document.add_frame(frame, true);
+    }
+    app.replace(document, None);
+    frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., vec![])
+        .textures_delta
+        .clear();
+    assert_eq!(app.frame_textures.iter().filter(|t| t.is_some()).count(), 1);
+    app.frame = 12;
+    frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., vec![])
+        .textures_delta
+        .clear();
+    assert!(app.frame_textures[12].is_some());
+    assert_eq!(app.frame_textures.iter().filter(|t| t.is_some()).count(), 2);
+}
+
+#[test]
+fn playback_preserves_frame_deadlines_after_late_repaints() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(8, 8);
+    for frame in 0..3 {
+        doc.add_frame(frame, true);
+    }
+    doc.durations.fill(90);
+    app.replace(doc, None);
+    let start = Instant::now();
+    app.last_tick = start;
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(100)),
+        Duration::from_millis(80)
+    );
+    assert_eq!(app.frame, 1);
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(271)),
+        Duration::from_millis(89)
+    );
+    assert_eq!(app.frame, 3);
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(360)),
+        Duration::from_millis(90)
+    );
+    assert_eq!(app.frame, 0);
+}
+
+#[test]
+#[ignore = "Large document stress test; run with the optimized build"]
+fn near_limit_document_survives_edits_and_playback() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(1024, 1024);
+    for _ in 0..14 {
+        doc.add_layer();
+    }
+    for f in 0..3 {
+        doc.add_frame(f, true);
+    }
+    assert_eq!(doc.stored_pixels(), 62_914_560);
+    app.replace(doc, None);
+    let mut elapsed = Vec::new();
+    for step in 0..20 {
+        app.frame = step % 4;
+        if step % 5 == 0 {
+            app.remember();
+            app.doc
+                .set_pixel(step % 15, app.frame, step, [22, 140, 90, 255]);
+        }
+        let start = Instant::now();
+        let mut out = frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., vec![]);
+        elapsed.push(start.elapsed().as_secs_f64() * 1000.);
+        out.textures_delta.clear();
+    }
+    elapsed.sort_by(f64::total_cmp);
+    println!(
+        "Near-limit frame build p95 {:.1}ms, max {:.1}ms",
+        elapsed[18], elapsed[19]
+    );
+    assert!(
+        elapsed[19] < 500.,
+        "Large-project frame took {:.1}ms",
+        elapsed[19]
+    );
+    assert!(app.dirty());
+    for _ in 0..4 {
+        app.undo();
+    }
+    assert!(!app.dirty());
+}
+
+#[test]
+fn background_save_updates_only_the_originating_tab_and_keeps_new_edits_dirty() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.replace(Document::new(8, 8), None);
+    app.doc.set_pixel(0, 0, 0, [100, 30, 20, 255]);
+    let snapshot = app.doc.clone();
+    let path = std::env::temp_dir().join(format!(
+        "pixelcraft-background-save-{}.pixel",
+        std::process::id()
+    ));
+    app.queue_save(path.clone(), snapshot.clone());
+    app.doc.set_pixel(0, 0, 1, [80, 60, 40, 255]);
+    app.open_document(Document::new(4, 4), None);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.save_job.is_some() {
+        assert!(Instant::now() < deadline);
+        app.poll_save();
+        std::thread::yield_now();
+    }
+    assert!(app.path.is_none());
+    app.switch_tab(0);
+    assert_eq!(app.path.as_ref(), Some(&path));
+    assert_eq!(app.saved, snapshot);
+    assert!(app.dirty());
+    assert_eq!(formats::load(&path).unwrap(), snapshot);
+    std::fs::remove_file(path).unwrap();
 }
 
 fn input(size: Vec2, scale: f32, events: Vec<egui::Event>) -> egui::RawInput {
@@ -1181,7 +1356,8 @@ fn preview_zoom_frame_sync_and_controls_across_sizes_and_scales() {
                     );
                 }
                 app.playing = true;
-                app.last_tick = Instant::now() - Duration::from_secs(1);
+                app.last_tick =
+                    Instant::now() - Duration::from_millis(u64::from(app.doc.durations[app.frame]));
                 let previous = app.frame;
                 discard_frame(&mut app, &ctx, size, scale, vec![]);
                 assert_ne!(previous, app.frame);

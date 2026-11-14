@@ -98,3 +98,14 @@ fn import_preserves_cel_opacity() {
         assert_eq!(read.layers[0].cel_meta[0].opacity, opacity);
     }
 }
+
+#[test]
+fn full_hd_animation_can_add_layers_past_the_old_document_limit() {
+    let mut d = Document::new(1920, 1080);
+    for frame in 0..15 {
+        d.add_frame(frame, true);
+    }
+    d.add_layer();
+    assert_eq!(d.layers.len(), 2);
+    d.validate().unwrap();
+}

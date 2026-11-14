@@ -133,7 +133,7 @@ Use **Sprite → Properties, layers, tiles & ranges** (also available beside the
 
 The context bar offers round, square, diamond, horizontal and vertical brushes. Ellipses use a symmetric integer rasterizer, including small and degenerate bounds. Pixel-exact agreement with every original editor brush mask is not claimed.
 
-Canvases support up to 16384 pixels per side and 64 million stored canvas pixels across layers/frames. Dimensions and project structures are validated. Cel pixels and indexed buffers use copy-on-write sharing across frame copies and undo snapshots. Undo retains up to 64 steps with a 192 MB allocation budget; a single oversized step is retained. Unchanged frame textures are cached and the checkerboard is clipped to the viewport.
+Canvases support up to 16384 pixels per side and 64 million pixels per canvas and 128 million stored pixels across layers and frames. Dimensions and project structures are validated. Cel pixels and indexed buffers use copy-on-write sharing across frame copies and undo snapshots. Undo retains up to 64 steps with a 192 MB allocation budget; a single oversized step is retained. Unchanged frame textures are cached and the checkerboard is clipped to the viewport.
 
 ## Projects and interchange
 
@@ -252,6 +252,34 @@ Configure an MCP client to launch the executable with `--mcp`. The newline-delim
 Live access starts **disabled** and is never restored from preferences. Enable **Workflow tools → Assistants & headless tools → Allow assistants to access this live editor**. The editor displays an MCP command with `--live BRIDGE_CONFIG`. That instance adds `live-inspect`, `live-render`, `live-edit` and `live-undo`. The bridge listens on loopback with a random token in a private file, which is removed when access is disabled or the editor closes. Disable the checkbox to revoke access.
 
 Live inspection returns a session/document revision. Supply that exact revision to edit or undo; user edits, undo/redo and document changes invalidate it. Assistant changes are one regular undo step. Active gestures and scripts block edits, and expired requests are discarded rather than applied after a stalled editor resumes. Reference overlays are excluded from assistant artwork rendering too.
+
+#### Live pixel painting
+
+Use `live-save` with the revision from `live-inspect` to write the active sprite to its current project path. Use `live-save-as` with `revision` and a new `output` path to name an untitled sprite or save a new copy. The editor adopts the new path after the file is saved. File MCP also supports `save` and `save-as` with an explicit `input` and its file revision.
+
+In the **File** menu, choose **Export animation GIF…** or **Export video MP4…** and select a scale. Both use integer nearest-neighbor scaling. The same options are available through `live-export` with `revision`, `output`, and optional `scale`. The file MCP `export` tool takes `input` instead of a live revision. The extension selects PNG, GIF, or MP4 for live export. For example, a 480×270 sprite exported with `scale:4` produces 1920×1080.
+
+For individual PNG frames, use **File → Export PNG sequence…**, choose an integer scale, and name a new folder under the destination. PixelCraft writes `frame-0001.png`, `frame-0002.png`, and so on in timeline order. PNGs retain transparency. Use `live-export` with `{"revision":"…","format":"png-sequence","output":"C:/path/new-folder","scale":4}`, or use file MCP `export` with `input` in place of `revision`. `output` must be a new directory under an existing parent. Pass `layers` to filter PNG, PNG sequence, GIF, or MP4 exports. PNG sequences also accept a `region` crop.
+
+
+GIF keeps the timeline delays at GIF's centisecond precision. MP4 writes H.264 at 60 fps, rounds frame boundaries to video ticks, composites transparency onto black, and pads odd dimensions by one pixel for compatibility. Install FFmpeg with `libx264` and make it available on the editor or MCP process's PATH for video export.
+
+Use `live-inspect` to get the active sprite revision and zero-based layer indices. Send an ordered `live-commands` batch with that revision. Batches are atomic and are visible in the editor as each batch commits. Use the revision returned by the batch for the next edit or preview. `changed_cels` describes the bounding rectangles of changed RGBA pixels in the resulting cel slots. Layer or frame structure and property changes are reflected in the returned sprite metadata.
+
+Bulk paint targets an unlocked RGBA image layer and an explicit zero-based frame:
+
+| Command | Arguments and behavior |
+| --- | --- |
+| `blit` | `x,y,width,height,data`. Data is straight RGBA8, row-major, encoded with `base64` (default) or `base64-zlib`. Destination clips to the canvas. `mode` is `source-over` (default), `replace` (transparent pixels clear), `multiply`, or `screen`. Patch dimensions are 1–1024 pixels on each axis. |
+| `stroke` | `points:[[x,y],...]`, `color:[r,g,b,a]`, optional `size`, `end_size` for a taper, `brush_shape`, and integer `spacing` in raster steps. Set `placements:true` for explicit dab positions. Add `scatter`, `seed`, and `ramp` for reproducible palette variation. Use `alternate` for checker dithering, `shade:true` for palette stepping, or a `stamp:{width,height,data,encoding}` bitmap. Brush dabs default to `replace`, bitmap stamps default to `source-over`, and both accept `mode` and `opacity` (0–255). Supply `pressure:[0,...,255]` with one value per point to control a non-bitmap brush’s size, interpolated along the path. `mask:{x,y,width,height,data}` clips dabs to a packed selection. With no `points`, the brush places dabs at selected grid positions using `spacing` on both axes. |
+| `polygon` | `points` and `color`, with optional `alternate` for checker dithering. Add `dither_level` (0–16) for a canvas-aligned 4×4 ordered pattern. Uses the editor's pixel-center fill rule. Add `edge_noise` (0–16 pixels) and `seed` to break up the inner edge reproducibly. |
+| `clear-region` | `x,y,width,height`. Clears the clipped rectangle. Supply `mask` and/or `skip_transparent:true` to restrict clearing. |
+| `copy-region`, `move-region` | Source `x,y,width,height` and destination `to_x,to_y`. Use `from_layer` and `from_frame` for a different source cel, and optionally `flip_x`, `flip_y`, `skip_transparent`, `opacity` (0–255 multiplier), or exact RGBA `colors:[[from,to],...]` mappings. The destination is clipped. A move clears the source rectangle before writing the saved source pixels. |
+| `recolor-region` | `x,y,width,height`, `colors`, and optional `opacity` and `skip_transparent`. |
+
+Bitmap stamps accept integer `scale` (1–16, up to 256×256 after scaling). Clear, copy, move, and recolor accept an optional base64 `mask` packed in row-major order with bit 0 first in each byte. Stroke masks use the same encoding in their `data` field. Each live request is limited to a 4 MB bridge message. Bulk operations also share a decoded work limit, so split large passes into a few meaningful batches.
+
+Use `live-render` with `revision`, `frame`, optional `layers:[...]`, `region:{x,y,width,height}`, and integer `scale` to inspect the exact committed snapshot. It returns a PNG and render metadata. For a 480×270 canvas, call `live-export` with that revision, a new PNG `output` path, and `scale:4` for a 1920×1080 export. The export uses nearest-neighbor scaling. `live-undo` and `live-redo` accept the current revision and use the regular editor history.
 
 `cargo test --offline` covers shared operations, masks, stamp transparency, shade replay, tag timing/direction, atlas reconstruction, revision guards, undo and expiry. `python3 checks/productivity-headless.py` checks the executable CLI and MCP with display variables removed. The separate loopback authentication test is ignored in the restricted build sandbox; run `cargo test --test productivity live_bridge_authentication -- --ignored` in a normal desktop environment to exercise the socket transport.
 
