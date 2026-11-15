@@ -1720,6 +1720,12 @@ fn playback_waits_for_a_cache_miss_without_skipping_the_frame() {
     let start = Instant::now();
     app.last_tick = start;
 
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(16)),
+        Duration::from_millis(1),
+        "An unready cel before its deadline is not a cache miss yet"
+    );
+    assert!(!app.playback_waiting_for_frame);
     app.update_playback_clock(start + Duration::from_millis(40));
     assert_eq!(
         app.frame, 0,
@@ -1735,4 +1741,32 @@ fn playback_waits_for_a_cache_miss_without_skipping_the_frame() {
         Duration::from_millis(16)
     );
     assert_eq!(app.frame, 1);
+}
+
+#[test]
+fn cached_fast_playback_keeps_frame_order_across_repaint_jitter() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(4, 4);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.durations = vec![17, 16, 17];
+    app.replace(doc, None);
+    for f in 0..3 {
+        let _ = app.frame_texture(&ctx, f);
+    }
+    app.playing = true;
+    let start = Instant::now();
+    let repaint_schedules = [
+        [16, 33, 50, 66, 83, 100, 116, 133, 150],
+        [34, 50, 67, 84, 100, 117, 134, 150, 167],
+    ];
+    for schedule in repaint_schedules {
+        app.frame = 0;
+        app.last_tick = start;
+        for (redraw, millis) in schedule.into_iter().enumerate() {
+            app.update_playback_clock(start + Duration::from_millis(millis));
+            assert_eq!(app.frame, (redraw + 1) % 3, "redraw at {millis} ms");
+        }
+    }
 }

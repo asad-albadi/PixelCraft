@@ -777,30 +777,57 @@ impl PixelCraft {
     fn update_playback_clock(&mut self, now: Instant) -> Duration {
         let duration =
             |app: &Self| Duration::from_millis(u64::from(app.doc.durations[app.frame].max(1)));
-        let mut elapsed = now.saturating_duration_since(self.last_tick);
-        // A long suspension should not make the editor replay a backlog.
-        if elapsed > Duration::from_secs(1) && !self.playback_waiting_for_frame {
+        // Repaint delivery varies by a few milliseconds around a refresh. For
+        // short cels, a small margin avoids a hold followed by a skipped cel.
+        const FAST_FRAME: Duration = Duration::from_millis(20);
+        const REPAINT_JITTER: Duration = Duration::from_millis(3);
+
+        if now.saturating_duration_since(self.last_tick) > Duration::from_secs(1)
+            && !self.playback_waiting_for_frame
+        {
             self.last_tick = now;
             return duration(self);
         }
-        while elapsed >= duration(self) {
+        let mut previous_duration = None;
+        loop {
+            let step = duration(self);
+            let deadline = self.last_tick + step;
+            let fast = self.playing && step <= FAST_FRAME;
+            // Sample a nearby deadline, but keep the authored clock phase.
+            let early_margin =
+                if previous_duration.is_none() && fast && !self.playback_waiting_for_frame {
+                    REPAINT_JITTER.min(step / 4)
+                } else {
+                    Duration::ZERO
+                };
+            if deadline.saturating_duration_since(now) > early_margin {
+                return deadline - now;
+            }
+            if fast
+                && previous_duration.is_some_and(|previous| previous <= FAST_FRAME)
+                && now.saturating_duration_since(deadline) <= REPAINT_JITTER
+            {
+                // The current redraw already has a new cel to show. Give it
+                // this refresh when its successor is only marginally overdue.
+                return Duration::ZERO;
+            }
             let next = self.next_playback_frame().0;
             if self.playing && self.frame_textures.get(next).is_none_or(Option::is_none) {
+                if now < deadline {
+                    return deadline - now;
+                }
                 self.playback_waiting_for_frame = true;
                 // The prefetch worker wakes the editor as soon as its result is ready.
                 return Duration::from_millis(16);
             }
+            self.advance_playback();
             if std::mem::take(&mut self.playback_waiting_for_frame) {
-                self.advance_playback();
                 self.last_tick = now;
                 return duration(self);
             }
-            let step = duration(self);
-            self.last_tick += step;
-            elapsed -= step;
-            self.advance_playback();
+            self.last_tick = deadline;
+            previous_duration = Some(step);
         }
-        duration(self) - elapsed
     }
     fn advance_playback(&mut self) {
         (self.frame, self.playback_reverse) = self.next_playback_frame();

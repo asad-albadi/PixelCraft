@@ -84,3 +84,11 @@ For each binary, open the fixture with `pixelcraft.exe --open PATH --play`. Run 
 Two 12-second PresentMon 2.6.0 captures used the same optimized build, with a seven-second warmup. Each original 24-frame project uses 150 ms frame durations. Autumn Breeze recorded a 127.31 ms p95 display interval, a 133.38 ms maximum, and a 698.7 MiB peak process working set. Moonlit Sanctuary recorded a 127.34 ms p95 display interval, a 134.01 ms maximum, and a 735.0 MiB peak process working set. Neither capture recorded a display interval above 150 ms.
 
 Display presents can repeat sprite content, so these numbers describe window presentation gaps. A separate native save-and-reopen check matched all 24 rendered frames, layer order, and timing for each project. The source hashes stayed the same.
+
+### Linux 60 fps pacing follow-up
+
+Near a display deadline, a few milliseconds of redraw jitter could repeat a short cel and then skip it on the next redraw. The playback clock now allows a small timing margin for short cels and avoids skipping a ready cel when its successor is only marginally overdue. Larger delays still catch up. The editor still waits for unfinished frames, and saved frame durations and exports keep their authored timing.
+
+On the Ryzen 7 PRO 4750U with Mesa Vulkan and the 60.01 Hz Wayland output, two six-second captures per fixture used the release build after a four-second warmup. The longest dense presentation gap was 16.67 ms in both runs. The sparse maxima were 33.33 ms and 16.67 ms, with two intervals above 16.7 ms in the first run and zero in the second. The 95th percentile was 16.66 ms in all four runs.
+
+A separate, roughly eight-second recording sampled the dense canvas itself. The previous capture measured 39.9 visible color changes per second and a maximum hold of 50 ms. The new release build measured 59.1 changes per second and a maximum hold of 34 ms. These are individual captures after warmup. First-loop cache fills can still delay a frame. This follow-up used the synthetic fixtures.
