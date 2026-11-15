@@ -1186,19 +1186,28 @@ impl Document {
             .map_or(frame as u32, |ids| ids.frames[frame])
     }
 
+    pub(crate) fn next_frame_export_id(&self) -> u64 {
+        self.frame_export_ids
+            .0
+            .as_ref()
+            .map_or(self.durations.len() as u64, |ids| ids.next)
+    }
+
+    /// A persistent allocation reservation can change without changing the artwork.
+    pub fn differs_from_saved(&self, saved: &Self) -> bool {
+        self != saved || self.next_frame_export_id() != saved.next_frame_export_id()
+    }
+
+    pub(crate) fn set_sheet_frame_export_ids(&mut self, frames: Vec<u32>, next: u64) {
+        self.frame_export_ids = FrameExportIds(Some(FrameExportIdState { frames, next }));
+    }
+
     /// History restores the frames but keeps IDs allocated by abandoned edits reserved.
     pub fn retain_frame_export_id_counter(&mut self, previous: &Self) {
-        if self.editor_id.0 != previous.editor_id.0 {
-            return;
-        }
-        let next = |doc: &Self| {
-            doc.frame_export_ids
-                .0
-                .as_ref()
-                .map_or(doc.durations.len() as u64, |ids| ids.next)
-        };
-        if next(previous) > next(self) {
-            self.explicit_frame_export_ids().next = next(previous);
+        if self.editor_id.0 == previous.editor_id.0
+            && previous.next_frame_export_id() > self.next_frame_export_id()
+        {
+            self.explicit_frame_export_ids().next = previous.next_frame_export_id();
         }
     }
 

@@ -2,7 +2,8 @@ use crate::{model::*, workflows::*};
 use image::AnimationDecoder;
 use serde_json::{Value, json};
 use std::{
-    io::BufReader,
+    fs::{self, File},
+    io::{BufRead, BufReader, ErrorKind, Read},
     path::{Path, PathBuf},
 };
 
@@ -128,14 +129,24 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
             }
         }
     }
-    im.save(path).map_err(|e| e.to_string())?;
-    write_json(&path.with_extension("json"), &meta)?;
-    if o.preset == "Godot" {
+    let json_path = path.with_extension("json");
+    companion_exists(&json_path)?;
+    let sidecar = if o.preset == "Godot" {
         let resource = path.with_extension("tres");
-        let previous = std::fs::read_to_string(&resource).ok();
-        let uid = previous
-            .as_deref()
-            .and_then(|text| text.lines().next())
+        let mut header = String::new();
+        if companion_exists(&resource)? {
+            const MAX_HEADER_BYTES: usize = 4096;
+            let source = File::open(&resource).map_err(|e| e.to_string())?;
+            BufReader::new(source.take(MAX_HEADER_BYTES as u64 + 1))
+                .read_line(&mut header)
+                .map_err(|e| e.to_string())?;
+            if header.len() > MAX_HEADER_BYTES {
+                return Err("Previous Godot resource header exceeds 4 KiB".into());
+            }
+        }
+        let uid = header
+            .lines()
+            .next()
             .and_then(|header| header.strip_prefix("[gd_resource "))
             .and_then(|header| header.split_once(" uid=\"uid://"))
             .and_then(|(_, rest)| rest.split_once('"'))
@@ -147,15 +158,52 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
                         .bytes()
                         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
             });
-        std::fs::write(resource, godot(&meta, &name, uid)?).map_err(|e| e.to_string())?;
-    }
-    if o.preset == "Unity" {
-        let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-        let previous = std::fs::read_to_string(&meta_path).unwrap_or_default();
-        let output = unity(&meta, &path.to_string_lossy(), im.height(), &previous);
-        std::fs::write(meta_path, output).map_err(|e| e.to_string())?;
+        Some((resource, godot(&meta, &name, uid)?))
+    } else if o.preset == "Unity" {
+        const MAX_UNITY_META_BYTES: usize = 64 * 1024 * 1024;
+        let mut meta_name = path.as_os_str().to_owned();
+        meta_name.push(".meta");
+        let meta_path = PathBuf::from(meta_name);
+        let mut previous = String::new();
+        if companion_exists(&meta_path)? {
+            let source = File::open(&meta_path).map_err(|e| e.to_string())?;
+            let too_large = || "Previous Unity metadata exceeds 64 MiB".to_string();
+            if source.metadata().map_err(|e| e.to_string())?.len() > MAX_UNITY_META_BYTES as u64 {
+                return Err(too_large());
+            }
+            source
+                .take(MAX_UNITY_META_BYTES as u64 + 1)
+                .read_to_string(&mut previous)
+                .map_err(|e| e.to_string())?;
+            if previous.len() > MAX_UNITY_META_BYTES {
+                return Err(too_large());
+            }
+        }
+        Some((
+            meta_path,
+            unity(&meta, &path.to_string_lossy(), im.height(), &previous)?,
+        ))
+    } else {
+        None
+    };
+    im.save(path).map_err(|e| e.to_string())?;
+    write_json(&json_path, &meta)?;
+    if let Some((companion, contents)) = sidecar {
+        fs::write(companion, contents).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn companion_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(format!(
+            "Sprite-sheet companion is not a regular file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Could not inspect {}: {error}", path.display())),
+    }
 }
 pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     std::fs::write(
@@ -165,7 +213,31 @@ pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 fn godot(meta: &Value, name: &str, uid: Option<&str>) -> Result<String, String> {
+    use std::fmt::Write;
+
     let frames = meta["frames"].as_array().unwrap();
+    let default =
+        vec![json!({"name":"default","from":0,"to":frames.len()-1,"direction":"forward"})];
+    let tags = meta["meta"]["frameTags"]
+        .as_array()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&default);
+    let mut remaining = 1_000_000u64;
+    for tag in tags {
+        let span = tag["to"].as_u64().unwrap() - tag["from"].as_u64().unwrap() + 1;
+        let turn = if tag["direction"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("pingpong"))
+        {
+            span.saturating_sub(2)
+        } else {
+            0
+        };
+        let entries = (span + turn) * tag["repeat"].as_u64().unwrap_or(0).max(1);
+        remaining = remaining
+            .checked_sub(entries)
+            .ok_or("Godot animations exceed one million entries in total")?;
+    }
     let quoted = serde_json::to_string(&format!("res://{name}")).unwrap();
     let uid = uid.map_or_else(String::new, |uid| format!(" uid=\"uid://{uid}\""));
     let mut s = format!(
@@ -187,15 +259,10 @@ fn godot(meta: &Value, name: &str, uid: Option<&str>) -> Result<String, String> 
             f["sourceSize"]["h"].as_i64().unwrap() - r["h"].as_i64().unwrap()
         );
     }
-    let default =
-        vec![json!({"name":"default","from":0,"to":frames.len()-1,"direction":"forward"})];
-    let tags = meta["meta"]["frameTags"]
-        .as_array()
-        .filter(|v| !v.is_empty())
-        .unwrap_or(&default);
-    let mut animations = vec![];
+    s.push_str("\n[resource]\nanimations = [");
     let mut names = std::collections::HashSet::new();
-    for t in tags {
+    let mut next_suffix = std::collections::HashMap::new();
+    for (index, t) in tags.iter().enumerate() {
         let mut order: Vec<usize> =
             (t["from"].as_u64().unwrap() as usize..=t["to"].as_u64().unwrap() as usize).collect();
         let direction = t["direction"].as_str().unwrap_or("forward");
@@ -207,44 +274,52 @@ fn godot(meta: &Value, name: &str, uid: Option<&str>) -> Result<String, String> 
             order.extend(back)
         }
         let repeat = t["repeat"].as_u64().unwrap_or(0);
-        if order.len().saturating_mul(repeat.max(1) as usize) > 1_000_000 {
-            return Err("Godot finite animation exceeds one million entries".into());
-        }
-        if repeat > 0 {
-            // SpriteFrames has a boolean loop flag: finite repeats are expanded.
-            let cycle = order.clone();
-            for _ in 1..repeat {
-                order.extend_from_slice(&cycle);
-            }
-        }
         let base = t["name"]
             .as_str()
             .filter(|s| !s.is_empty())
             .unwrap_or("Animation");
         let mut name = base.to_string();
-        let mut suffix = 2;
-        while !names.insert(name.clone()) {
-            name = format!("{base}_{suffix}");
-            suffix += 1;
+        if !names.insert(name.clone()) {
+            let suffix = next_suffix.entry(base).or_insert(2);
+            loop {
+                name = format!("{base}_{suffix}");
+                *suffix += 1;
+                if names.insert(name.clone()) {
+                    break;
+                }
+            }
         }
-        let fs: Vec<String> = order
+        if index > 0 {
+            s.push_str(",\n");
+        }
+        s.push_str("{\"frames\": [");
+        // SpriteFrames has a boolean loop flag: finite repeats are expanded.
+        for (entry, &frame) in order
             .iter()
-            .map(|i| {
-                format!(
-                    "{{\"duration\": {}, \"texture\": SubResource(\"Atlas_{}\")}}",
-                    frames[*i]["duration"].as_f64().unwrap() / 1000.,
-                    frames[*i]["frameId"]
-                )
-            })
-            .collect();
-        animations.push(format!(
-            "{{\"frames\": [{}], \"loop\": {}, \"name\": &{}, \"speed\": 1.0}}",
-            fs.join(", "),
+            .cycle()
+            .take(order.len() * repeat.max(1) as usize)
+            .enumerate()
+        {
+            if entry > 0 {
+                s.push_str(", ");
+            }
+            write!(
+                s,
+                "{{\"duration\": {}, \"texture\": SubResource(\"Atlas_{}\")}}",
+                frames[frame]["duration"].as_f64().unwrap() / 1000.,
+                frames[frame]["frameId"]
+            )
+            .unwrap();
+        }
+        write!(
+            s,
+            "], \"loop\": {}, \"name\": &{}, \"speed\": 1.0}}",
             repeat == 0,
             serde_json::to_string(&name).unwrap()
-        ));
+        )
+        .unwrap();
     }
-    s += &format!("\n[resource]\nanimations = [{}]\n", animations.join(",\n"));
+    s.push_str("]\n");
     Ok(s)
 }
 #[derive(Default)]
@@ -257,7 +332,9 @@ fn unity_guid(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn unity_sprite_ids(previous: &str) -> std::collections::HashMap<&str, UnitySpriteIdentity<'_>> {
+fn unity_sprite_ids(
+    previous: &str,
+) -> Result<std::collections::HashMap<&str, UnitySpriteIdentity<'_>>, String> {
     let mut sprites = std::collections::HashMap::<_, UnitySpriteIdentity<'_>>::new();
     let mut current = None;
     let mut in_sprites = false;
@@ -301,11 +378,14 @@ fn unity_sprite_ids(previous: &str) -> std::collections::HashMap<&str, UnitySpri
                 .or_default()
                 .file_id = Some(id);
         }
+        if sprites.len() > u16::MAX as usize {
+            return Err("Previous Unity metadata exceeds the sprite count limit".into());
+        }
     }
-    sprites
+    Ok(sprites)
 }
 
-fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> String {
+fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> Result<String, String> {
     use sha2::{Digest, Sha256};
 
     let generated_guid = || {
@@ -320,7 +400,7 @@ fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> String {
         .find_map(|line| line.strip_prefix("guid: ").map(str::trim))
         .filter(|value| unity_guid(value))
         .map_or_else(generated_guid, str::to_owned);
-    let previous = unity_sprite_ids(previous);
+    let previous = unity_sprite_ids(previous)?;
     let frames = meta["frames"].as_array().unwrap();
     let mut reserved_ids: std::collections::HashSet<_> =
         previous.values().filter_map(|id| id.file_id).collect();
@@ -380,7 +460,7 @@ fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> String {
     for (name, id, _) in ids {
         s += &format!("      {name}: {id}\n");
     }
-    s
+    Ok(s)
 }
 pub fn load_ora(path: &Path) -> Result<Document, String> {
     let root = std::env::temp_dir().join(format!(

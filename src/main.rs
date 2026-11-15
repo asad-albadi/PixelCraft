@@ -579,7 +579,7 @@ impl PixelCraft {
         }
     }
     fn dirty(&self) -> bool {
-        self.doc != self.saved
+        self.doc.differs_from_saved(&self.saved)
     }
     fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
         self.refresh_frame_cache(ctx);
@@ -1500,11 +1500,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn finish_pending(&mut self, ctx: &egui::Context, pending: Pending) {
         if matches!(pending, Pending::Close) {
-            if let Some(index) = self
-                .tabs
-                .iter()
-                .position(|tab| tab.as_ref().is_some_and(|tab| tab.doc != tab.saved))
-            {
+            if let Some(index) = self.tabs.iter().position(|tab| {
+                tab.as_ref()
+                    .is_some_and(|tab| tab.doc.differs_from_saved(&tab.saved))
+            }) {
                 self.switch_tab(index);
                 self.pending = Some(Pending::Close);
             } else {
@@ -4028,10 +4027,10 @@ impl PixelCraft {
             self.status = "Wait for the current save before closing PixelCraft".into();
         } else if ctx.input(|i| i.viewport().close_requested())
             && !self.dirty()
-            && let Some(i) = self
-                .tabs
-                .iter()
-                .position(|t| t.as_ref().is_some_and(|t| t.doc != t.saved))
+            && let Some(i) = self.tabs.iter().position(|t| {
+                t.as_ref()
+                    .is_some_and(|t| t.doc.differs_from_saved(&t.saved))
+            })
         {
             self.switch_tab(i);
         }
@@ -4070,7 +4069,7 @@ impl PixelCraft {
                                 (&self.path, self.dirty())
                             } else {
                                 let tab = self.tabs[i].as_ref().unwrap();
-                                (&tab.path, tab.doc != tab.saved)
+                                (&tab.path, tab.doc.differs_from_saved(&tab.saved))
                             };
                             let name = path
                                 .as_ref()
@@ -4969,7 +4968,7 @@ mod tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc, Document::new(8, 8));
-        assert!(!a.dirty());
+        assert!(a.dirty(), "Undo keeps the added frame's export ID reserved");
         a.redo();
         assert_eq!(a.doc.layers[0].cels[0][35], [200, 30, 60, 255]);
         a.action("layer");
@@ -5165,7 +5164,12 @@ mod tests {
         a.doc.add_frame(0, false);
         let issued = a.doc.frame_export_id(1);
         a.undo();
+        assert!(a.dirty(), "The persistent export ID counter must be saved");
         assert_eq!(a.doc.durations.len(), 1);
+        let mut reopened =
+            formats::decode_project(&formats::encode_project(&a.doc).unwrap()).unwrap();
+        reopened.add_frame(0, false);
+        assert_ne!(reopened.frame_export_id(1), issued);
         a.redo();
         assert_eq!(a.doc.frame_export_id(1), issued);
         a.undo();

@@ -54,6 +54,9 @@ namespace PixelCraft.Checks
         [Serializable]
         private sealed class Metadata
         {
+            public string app;
+            public string version;
+            public string image;
             public Tag[] frameTags;
             public Box size;
         }
@@ -168,7 +171,34 @@ namespace PixelCraft.Checks
                 ValidatePreserved("AnimationClip", baseline.clips, clipIds);
             }
             ValidateRedrawFromController(controller, sheet, first, inserted);
+            if (first)
+                CheckMismatchedRectangle(sheet, clips, byName);
             Debug.Log($"PC_SHEET {phase} passed");
+        }
+
+        private static void CheckMismatchedRectangle(
+            Sheet sheet, Dictionary<string, AnimationClip> clips, Dictionary<string, Sprite> sprites)
+        {
+            var original = File.ReadAllText(JsonPath);
+            sheet.frames[0].frame.x++;
+            File.WriteAllText(JsonPath, JsonUtility.ToJson(sheet));
+            try
+            {
+                PixelCraft.Editor.SpriteSheetImporter.Import(JsonPath);
+                throw new InvalidOperationException("Unity accepted a same-named sprite with the wrong rectangle");
+            }
+            catch (InvalidDataException error)
+            {
+                Require(error.Message.Contains("does not match the sheet rectangle"), "Unexpected rejection: " + error.Message);
+            }
+            finally
+            {
+                File.WriteAllText(JsonPath, original);
+                sheet.frames[0].frame.x--;
+            }
+            foreach (var entry in clips)
+                ValidateClip(entry.Value, sheet, sprites, entry.Key);
+            Debug.Log("PC_SHEET mismatched sprite rectangle rejected");
         }
 
         private static void CheckDirect(string phase, ImportAssetOptions options)

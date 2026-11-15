@@ -43,6 +43,88 @@ fn scaled_sheet_has_matching_coordinates_and_alpha() {
     );
 }
 #[test]
+fn sprite_sheet_preflights_sparse_frames_and_scaled_atlas_bounds() {
+    let mut doc = Document::new(8_000, 8_000);
+    for frame in 0..2 {
+        doc.add_frame(frame, false);
+    }
+    assert_eq!(doc.stored_pixels(), 0);
+    let error = pack_sheet(&doc, &SheetOptions::default()).expect_err("reject oversized sheet");
+    assert!(error.contains("Sprite sheet exceeds image limits"));
+    let error = pack_sheet(
+        &doc,
+        &SheetOptions {
+            trim: true,
+            ..Default::default()
+        },
+    )
+    .expect_err("reject unbounded trim scan");
+    assert!(error.contains("pixel work limit"));
+
+    let doc = Document::new(1, 1);
+    let error = pack_sheet(
+        &doc,
+        &SheetOptions {
+            scale: MAX_DIMENSION,
+            ..Default::default()
+        },
+    )
+    .expect_err("reject oversized scaled image");
+    assert!(error.contains("Scaled export exceeds image limits"));
+}
+
+#[test]
+fn tagged_sheet_clips_overlapping_tags_and_carries_forward_slice_keys() {
+    let mut doc = Document::new(2, 2);
+    for frame in 0..5 {
+        doc.add_frame(frame, false);
+    }
+    for (name, from, to) in [("selected", 2, 4), ("overlap", 0, 3), ("outside", 5, 5)] {
+        doc.tags.push(FrameTag {
+            name: name.into(),
+            from,
+            to,
+            direction: 0,
+            repeat: 0,
+            color: [0; 3],
+        });
+    }
+    doc.slices.push(SpriteSlice {
+        name: "held".into(),
+        keys: [0, 1, 4, 5]
+            .into_iter()
+            .map(|frame| SliceKey {
+                frame,
+                bounds: [frame as i32, 0, 1, 1],
+                center: None,
+                pivot: None,
+            })
+            .collect(),
+    });
+    let (_, meta) = pack_sheet(
+        &doc,
+        &SheetOptions {
+            tag: Some(0),
+            scale: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let restored = &meta["meta"];
+    let tags = restored["frameTags"].as_array().unwrap();
+    assert_eq!(tags.len(), 2);
+    assert_eq!((&tags[0]["from"], &tags[0]["to"]), (&json!(0), &json!(2)));
+    assert_eq!((&tags[1]["from"], &tags[1]["to"]), (&json!(0), &json!(1)));
+    let slices: Vec<SpriteSlice> = serde_json::from_value(restored["slices"].clone()).unwrap();
+    let keys = &slices[0].keys;
+    assert_eq!(
+        keys.iter()
+            .map(|key| (key.frame, key.bounds))
+            .collect::<Vec<_>>(),
+        vec![(0, [2, 0, 2, 2]), (2, [8, 0, 2, 2])]
+    );
+}
+#[test]
 fn assistant_commands_are_atomic_and_revision_guarded() {
     let d = Document::new(3, 3);
     let args = json!({"revision":automation::document_revision(&d),"commands":[{"op":"add-layer","name":"Ink"},{"op":"shape","layer":1,"frame":0,"kind":"rectangle","x":0,"y":0,"x2":2,"y2":2,"filled":true,"color":[9,8,7,128]}]});
@@ -109,6 +191,76 @@ fn godot_finite_repeats_and_unique_names() {
     }
     assert_eq!(tres.matches("\"duration\"").count(), 8);
     std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn oversized_godot_header_leaves_existing_exports_untouched() {
+    let root =
+        std::env::temp_dir().join(format!("pixelcraft-godot-sidecar-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let png = root.join("sheet.png");
+    let json = root.join("sheet.json");
+    let tres = root.join("sheet.tres");
+    std::fs::write(&png, b"previous PNG").unwrap();
+    std::fs::write(&json, b"previous JSON").unwrap();
+    let header = format!("[gd_resource {}]\n", "x".repeat(8192));
+    std::fs::write(&tres, &header).unwrap();
+    let result = pixelcraft::interchange::export_sheet(
+        &png,
+        &Document::new(1, 1),
+        &SheetOptions {
+            preset: "Godot".into(),
+            ..Default::default()
+        },
+    );
+    let png_bytes = std::fs::read(&png).unwrap();
+    let json_bytes = std::fs::read(&json).unwrap();
+    let tres_bytes = std::fs::read(&tres).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(
+        result
+            .expect_err("reject oversized header")
+            .contains("header")
+    );
+    assert_eq!(png_bytes, b"previous PNG");
+    assert_eq!(json_bytes, b"previous JSON");
+    assert_eq!(tres_bytes, header.as_bytes());
+}
+
+#[test]
+fn godot_limits_expanded_keys_across_tags_before_writing() {
+    let root = std::env::temp_dir().join(format!("pixelcraft-godot-budget-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let png = root.join("sheet.png");
+    let mut doc = Document::new(1, 1);
+    for frame in 0..7 {
+        doc.add_frame(frame, false);
+    }
+    for name in ["one", "two"] {
+        doc.tags.push(FrameTag {
+            name: name.into(),
+            from: 0,
+            to: 7,
+            direction: 0,
+            repeat: 62_501,
+            color: [0; 3],
+        });
+    }
+    let result = pixelcraft::interchange::export_sheet(
+        &png,
+        &doc,
+        &SheetOptions {
+            preset: "Godot".into(),
+            ..Default::default()
+        },
+    );
+    let wrote_files = std::fs::read_dir(&root).unwrap().next().is_some();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(
+        result
+            .expect_err("reject total key count")
+            .contains("million")
+    );
+    assert!(!wrote_files);
 }
 #[test]
 fn updater_rejects_corruption_and_wrong_filename() {

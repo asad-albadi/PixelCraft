@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 
 import unreal
+import pixelcraft_flipbooks
 
 PROJECT = Path(unreal.Paths.project_dir()).resolve()
 SOURCE = PROJECT / "SourceSheet" / "hero.paper2dsprites"
@@ -30,7 +31,28 @@ UPDATED = {
 }
 
 
+def check_source_limits():
+    def source(frames, tags):
+        return json.dumps({
+            "frames": frames, "meta": {"app": "PixelCraft", "version": "1", "frameTags": tags},
+        }).encode("utf-8")
+
+    for payload, message in [
+        (source([{}], [{}] * 1025), "1024 animation tags"),
+        (source([{}] * 65536, []), "1 to 65535 frames"),
+        (source([{}], {}), "1024 animation tags"),
+    ]:
+        try:
+            pixelcraft_flipbooks._parse_source(payload)
+        except ValueError as error:
+            assert message in str(error), error
+        else:
+            raise AssertionError("Accepted unbounded or malformed sheet metadata")
+    assert pixelcraft_flipbooks._parse_source(source([{}], [{}] * 1024)) is not None
+
+
 def first_import():
+    check_source_limits()
     task = unreal.AssetImportTask()
     task.set_editor_properties({
         "filename": str(SOURCE), "destination_path": DEST, "automated": True,

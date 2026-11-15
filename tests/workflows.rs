@@ -357,3 +357,24 @@ fn unity_reexport_keeps_sprite_ids_after_redraw_and_frame_insertion() {
     assert_eq!((after, after_meta), read());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn pixelcraft_sheet_reconstruction_preserves_frame_names_and_retired_ids() {
+    let mut doc = Document::new(8, 8);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.add_frame(0, false);
+    doc.add_frame(0, false);
+    doc.remove_frame(1);
+
+    let (sheet, metadata) = pack_sheet(&doc, &SheetOptions::default()).unwrap();
+    let mut reconstructed = unpack_sheet(&sheet, &metadata).unwrap();
+    assert_eq!(
+        (0..reconstructed.durations.len())
+            .map(|frame| reconstructed.frame_export_id(frame))
+            .collect::<Vec<_>>(),
+        [0, 3, 1, 2],
+    );
+    reconstructed.add_frame(3, false);
+    assert_eq!(reconstructed.frame_export_id(4), 5);
+}

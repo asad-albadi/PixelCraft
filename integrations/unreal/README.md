@@ -48,6 +48,7 @@ Flipbook keys use one timing tick per millisecond and preserve the order,
 direction, and positive repeat counts exported by PixelCraft. A tag set to
 loop indefinitely imports as one cycle. Set **Looping** on the
 **PaperFlipbookComponent** to choose whether that cycle loops in your game.
+The integration accepts up to 65,535 frames and 1,024 animation tags per sheet.
 
 For a sheet that was already imported before installing the script, reimport
 it or run the following in the Unreal Python console after selecting one

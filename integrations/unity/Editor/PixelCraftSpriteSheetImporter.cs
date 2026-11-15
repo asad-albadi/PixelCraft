@@ -15,17 +15,26 @@ namespace PixelCraft.Editor
     {
         private const string Menu = "Assets/PixelCraft/Import or Update Animation Clips";
         private const int KeyBudget = 1_000_000;
+        private const int ClipBudget = 1024;
         private const long MaxClipMilliseconds = 8_000_000;
         private static readonly EditorCurveBinding SpriteCurve =
             EditorCurveBinding.PPtrCurve("", typeof(SpriteRenderer), "m_Sprite");
 
         [Serializable] private sealed class Sheet { public Frame[] frames; public Metadata meta; }
-        [Serializable] private sealed class Frame { public string filename; public int duration; }
+        [Serializable] private sealed class Frame
+        {
+            public string filename;
+            public int duration;
+            public Box frame;
+            public bool rotated;
+        }
+        [Serializable] private sealed class Box { public int x, y, w, h; }
         [Serializable] private sealed class Metadata
         {
             public string app;
             public string version;
             public string image;
+            public Box size;
             public Tag[] frameTags;
         }
         [Serializable] private sealed class Tag
@@ -43,7 +52,7 @@ namespace PixelCraft.Editor
             public string Path;
             public bool Loop;
             public AnimationClip Existing;
-            public ObjectReferenceKeyframe[] Keys;
+            public (float Time, int Frame)[] Keys;
         }
 
         [MenuItem(Menu, true)]
@@ -71,10 +80,14 @@ namespace PixelCraft.Editor
         public static void Import(string jsonAssetPath)
         {
             RequireSheetPath(jsonAssetPath);
-            var input = new FileInfo(jsonAssetPath);
-            if (!input.Exists || input.Length > 64L * 1024 * 1024)
-                throw new InvalidDataException("The sheet JSON is missing or exceeds 64 MiB.");
-            var sheet = JsonUtility.FromJson<Sheet>(File.ReadAllText(jsonAssetPath));
+            Sheet sheet;
+            using (var input = File.Open(jsonAssetPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var reader = new StreamReader(input))
+            {
+                if (input.Length > 64L * 1024 * 1024)
+                    throw new InvalidDataException("The sheet JSON exceeds 64 MiB.");
+                sheet = JsonUtility.FromJson<Sheet>(reader.ReadToEnd());
+            }
             if (sheet?.meta?.app != "PixelCraft" || sheet.meta.version != "1" ||
                 sheet.frames == null || sheet.frames.Length == 0 || sheet.frames.Length > 65535)
                 throw new InvalidDataException("Select a PixelCraft sprite-sheet JSON export.");
@@ -92,14 +105,12 @@ namespace PixelCraft.Editor
             var tags = sheet.meta.frameTags;
             if (tags == null || tags.Length == 0)
                 tags = new[] { new Tag { name = "default", to = sheet.frames.Length - 1, direction = "forward" } };
+            if (tags.Length > ClipBudget)
+                throw new InvalidDataException($"A sheet can import at most {ClipBudget} animation clips.");
 
-            // Read the new texture before resolving the Sprite subassets. The matching
-            // .meta file carries the existing texture GUID and local file IDs.
-            AssetDatabase.ImportAsset(imagePath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
-            var textureGuid = AssetDatabase.AssetPathToGUID(imagePath);
-            var sprites = AssetDatabase.LoadAllAssetsAtPath(imagePath).OfType<Sprite>()
-                .ToDictionary(sprite => sprite.name, StringComparer.Ordinal);
-            var spriteFrames = new Sprite[sheet.frames.Length];
+            var size = sheet.meta.size;
+            if (size == null || size.w <= 0 || size.h <= 0)
+                throw new InvalidDataException("The sheet must declare a positive atlas size.");
             var frameNames = new HashSet<string>(StringComparer.Ordinal);
             for (var i = 0; i < sheet.frames.Length; i++)
             {
@@ -107,13 +118,13 @@ namespace PixelCraft.Editor
                 if (frame == null || string.IsNullOrEmpty(frame.filename) ||
                     frame.duration < 1 || frame.duration > 65535 || !frameNames.Add(frame.filename))
                     throw new InvalidDataException($"Invalid frame name or duration at index {i}.");
-                if (!sprites.TryGetValue(frame.filename, out spriteFrames[i]))
-                    throw new InvalidDataException(
-                        $"Sprite '{frame.filename}' is missing in Unity. Copy the .png.meta from PixelCraft's Unity preset.");
+                var box = frame.frame;
+                if (frame.rotated || box == null || box.x < 0 || box.y < 0 || box.w <= 0 || box.h <= 0 ||
+                    box.x + (long)box.w > size.w || box.y + (long)box.h > size.h)
+                    throw new InvalidDataException($"Invalid atlas rectangle for sprite '{frame.filename}'.");
             }
 
             var folder = $"{parent}/{Path.GetFileNameWithoutExtension(jsonAssetPath)}.PixelCraftClips";
-            var ownership = "PixelCraftSheet_" + textureGuid;
             var tagNames = new HashSet<string>(StringComparer.Ordinal);
             var updates = new List<ClipUpdate>();
             var remainingKeys = KeyBudget;
@@ -122,29 +133,54 @@ namespace PixelCraft.Editor
                 if (tag == null || string.IsNullOrWhiteSpace(tag.name) || !tagNames.Add(tag.name))
                     throw new InvalidDataException("Give every animation tag a unique, non-empty name.");
                 var path = $"{folder}/{ClipFileName(tag.name)}.anim";
-                var existing = AssetDatabase.LoadMainAssetAtPath(path);
-                if ((existing != null && (!(existing is AnimationClip) || !AssetDatabase.GetLabels(existing).Contains(ownership))) ||
-                    (existing == null && File.Exists(path)))
-                    throw new IOException($"An unrelated asset occupies '{path}'. Move it before importing.");
                 updates.Add(new ClipUpdate
                 {
                     Name = tag.name,
                     Path = path,
-                    Existing = existing as AnimationClip,
                     Loop = tag.repeat == 0,
-                    Keys = CreateKeys(tag, sheet.frames, spriteFrames, ref remainingKeys),
+                    Keys = CreateKeys(tag, sheet.frames, ref remainingKeys),
                 });
             }
 
-            // Validate every destination and curve before modifying any clip.
+            // Validate the JSON before forcing a texture reimport. The matching .meta
+            // carries the existing texture GUID and sprite local file IDs.
+            AssetDatabase.ImportAsset(imagePath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(imagePath);
+            var sprites = AssetDatabase.LoadAllAssetsAtPath(imagePath).OfType<Sprite>()
+                .ToDictionary(sprite => sprite.name, StringComparer.Ordinal);
+            if (texture == null || texture.width != size.w || texture.height != size.h || sprites.Count != sheet.frames.Length)
+                throw new InvalidDataException("The Unity atlas does not match the sheet. Copy the PNG and its matching .meta.");
+            var spriteFrames = new Sprite[sheet.frames.Length];
+            for (var i = 0; i < sheet.frames.Length; i++)
+            {
+                var frame = sheet.frames[i];
+                var box = frame.frame;
+                if (!sprites.TryGetValue(frame.filename, out var sprite) ||
+                    sprite.rect != new Rect(box.x, size.h - box.y - box.h, box.w, box.h))
+                    throw new InvalidDataException($"Unity sprite '{frame.filename}' does not match the sheet rectangle.");
+                spriteFrames[i] = sprite;
+            }
+
+            var ownership = "PixelCraftSheet_" + AssetDatabase.AssetPathToGUID(imagePath);
+            foreach (var update in updates)
+            {
+                var existing = AssetDatabase.LoadMainAssetAtPath(update.Path);
+                if ((existing != null && (!(existing is AnimationClip) || !AssetDatabase.GetLabels(existing).Contains(ownership))) ||
+                    (existing == null && File.Exists(update.Path)))
+                    throw new IOException($"An unrelated asset occupies '{update.Path}'. Move it before importing.");
+                update.Existing = existing as AnimationClip;
+            }
+
             if (!AssetDatabase.IsValidFolder(folder) &&
-                string.IsNullOrEmpty(AssetDatabase.CreateFolder(parent, Path.GetFileName(folder))))
+                (File.Exists(folder) || AssetDatabase.GUIDToAssetPath(AssetDatabase.CreateFolder(parent, Path.GetFileName(folder))) != folder))
                 throw new IOException($"Could not create '{folder}'.");
             foreach (var update in updates)
             {
                 var clip = update.Existing ?? new AnimationClip { name = update.Name };
                 clip.frameRate = 1000;
-                AnimationUtility.SetObjectReferenceCurve(clip, SpriteCurve, update.Keys);
+                var curve = Array.ConvertAll(update.Keys, key =>
+                    new ObjectReferenceKeyframe { time = key.Time, value = spriteFrames[key.Frame] });
+                AnimationUtility.SetObjectReferenceCurve(clip, SpriteCurve, curve);
                 var settings = AnimationUtility.GetAnimationClipSettings(clip);
                 settings.loopTime = update.Loop;
                 AnimationUtility.SetAnimationClipSettings(clip, settings);
@@ -160,8 +196,7 @@ namespace PixelCraft.Editor
             Debug.Log($"PixelCraft imported {updates.Count} animation clip(s) into '{folder}'.");
         }
 
-        private static ObjectReferenceKeyframe[] CreateKeys(
-            Tag tag, Frame[] frames, Sprite[] sprites, ref int remainingKeys)
+        private static (float Time, int Frame)[] CreateKeys(Tag tag, Frame[] frames, ref int remainingKeys)
         {
             if (tag.from < 0 || tag.to < tag.from || tag.to >= frames.Length ||
                 tag.repeat < 0 || tag.repeat > 65535)
@@ -187,20 +222,20 @@ namespace PixelCraft.Editor
                 throw new InvalidDataException($"Animation tag '{tag.name}' exceeds the clip time or key limit.");
             remainingKeys -= (int)keyCount;
 
-            var keys = new ObjectReferenceKeyframe[(int)keyCount];
+            var keys = new (float Time, int Frame)[(int)keyCount];
             var index = 0;
             long milliseconds = 0;
             for (var repeat = 0; repeat < repeats; repeat++)
             {
                 foreach (var frame in cycle)
                 {
-                    keys[index++] = new ObjectReferenceKeyframe { time = milliseconds / 1000f, value = sprites[frame] };
+                    keys[index++] = (milliseconds / 1000f, frame);
                     milliseconds += frames[frame].duration;
                 }
             }
             // Unity adds one sampling interval to the last object-reference key.
             if (finalDuration > 1)
-                keys[index] = new ObjectReferenceKeyframe { time = (milliseconds - 1) / 1000f, value = keys[index - 1].value };
+                keys[index] = ((milliseconds - 1) / 1000f, keys[index - 1].Frame);
             return keys;
         }
 

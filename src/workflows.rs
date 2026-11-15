@@ -315,56 +315,44 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
     } else {
         0..=d.durations.len() - 1
     };
-    let count = range.clone().count();
+    let (first_frame, last_frame) = (*range.start(), *range.end());
+    let count = last_frame - first_frame + 1;
     let cols = o.columns.clamp(1, count);
     let pad = o.padding.min(256);
-    let mut sprites = vec![];
-    for f in range {
-        let p = d.composite(f);
-        let mut b = [0, 0, d.width, d.height];
-        if o.trim {
-            let mut xs = vec![];
-            let mut ys = vec![];
-            for (i, c) in p.iter().enumerate() {
-                if c[3] > 0 {
-                    xs.push(i % d.width);
-                    ys.push(i / d.width);
-                }
-            }
-            if let (Some(x0), Some(x1), Some(y0), Some(y1)) = (
-                xs.iter().min(),
-                xs.iter().max(),
-                ys.iter().min(),
-                ys.iter().max(),
-            ) {
-                b = [*x0, *y0, x1 - x0 + 1, y1 - y0 + 1]
-            } else {
-                b = [0, 0, 1, 1]
-            }
-        }
-        sprites.push((f, p, b));
+    if o.trim && count.saturating_mul(d.width * d.height) > MAX_DOCUMENT_PIXELS {
+        return Err("Trimming this sprite sheet exceeds the pixel work limit; use a tag".into());
     }
-    let mut placements = vec![];
+    let mut sprites = Vec::with_capacity(count);
     let (mut x, mut y, mut row, mut width) = (pad, pad, 0, 0);
-    for (i, (_, _, b)) in sprites.iter().enumerate() {
+    for (i, frame) in range.enumerate() {
         if i > 0 && i % cols == 0 {
             x = pad;
             y += row + pad;
             row = 0;
         }
-        placements.push((x, y));
+        let b = if o.trim {
+            visible_bounds(&d.composite(frame), d.width, d.height)
+        } else {
+            [0, 0, d.width, d.height]
+        };
+        sprites.push((frame, (x, y), b));
         width = width.max(x + b[2] + pad);
         x += b[2] + pad;
         row = row.max(b[3]);
+        let height = y + row + pad;
+        if width > MAX_DIMENSION
+            || height > MAX_DIMENSION
+            || width.saturating_mul(height) > MAX_PIXELS
+        {
+            return Err("Sprite sheet exceeds image limits; use more rows or a tag".into());
+        }
+        scaled_image_dimensions(width, height, o.scale)?;
     }
     let height = y + row + pad;
-    if width > MAX_DIMENSION || height > MAX_DIMENSION || width.saturating_mul(height) > MAX_PIXELS
-    {
-        return Err("Sprite sheet exceeds image limits; use more rows or a tag".into());
-    }
     let mut im = RgbaImage::new(width as u32, height as u32);
     let mut frames = vec![];
-    for ((f, p, b), (x, y)) in sprites.iter().zip(placements) {
+    for &(f, (x, y), b) in &sprites {
+        let p = d.composite(f);
         for cy in 0..b[3] {
             for cx in 0..b[2] {
                 im.put_pixel(
@@ -374,12 +362,37 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
                 );
             }
         }
-        let id = d.frame_export_id(*f);
-        frames.push(json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[*f],"sourceFrame":f}));
+        let id = d.frame_export_id(f);
+        frames.push(json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[f],"sourceFrame":f}));
     }
-    let tags:Vec<Value>=d.tags.iter().filter_map(|t|{let from=sprites.iter().position(|s|s.0>=t.from)?;let to=sprites.iter().rposition(|s|s.0<=t.to)?;if from>to{return None}Some(json!({"name":t.name,"from":from,"to":to,"repeat":t.repeat,"direction":match t.direction{1=>"reverse",2=>"pingpong",3=>"pingpong_reverse",_=>"forward"}}))}).collect();
+    let tags: Vec<Value> = d
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let from = tag.from.max(first_frame);
+            let to = tag.to.min(last_frame);
+            (from <= to).then(|| {
+                json!({
+                    "name": tag.name,
+                    "from": from - first_frame,
+                    "to": to - first_frame,
+                    "repeat": tag.repeat,
+                    "direction": match tag.direction {
+                        1 => "reverse",
+                        2 => "pingpong",
+                        3 => "pingpong_reverse",
+                        _ => "forward",
+                    },
+                })
+            })
+        })
+        .collect();
     let scale = o.scale;
-    let im = scale_image(&im, scale)?;
+    let im = if scale == 1 {
+        im
+    } else {
+        scale_image(&im, scale)?
+    };
     for frame in &mut frames {
         for key in ["frame", "spriteSourceSize", "sourceSize"] {
             for value in frame[key].as_object_mut().unwrap().values_mut() {
@@ -393,28 +406,22 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
         .slices
         .iter()
         .filter_map(|slice| {
-            let mut keys = Vec::new();
-            let mut previous = None;
-            for (frame, (source, _, _)) in sprites.iter().enumerate() {
-                let Some(key) = slice.key_at(*source) else {
-                    continue;
-                };
-                if previous == Some(key.frame) {
-                    continue;
-                }
-                let signed_scale = scale as i32;
-                keys.push(SliceKey {
-                    frame,
-                    bounds: key.bounds.map(|value| value.saturating_mul(signed_scale)),
-                    center: key
-                        .center
-                        .map(|rect| rect.map(|value| value.saturating_mul(signed_scale))),
-                    pivot: key
-                        .pivot
-                        .map(|point| point.map(|value| value.saturating_mul(signed_scale))),
-                });
-                previous = Some(key.frame);
-            }
+            // The final key at or before the range start remains active in the export.
+            let start = slice
+                .keys
+                .partition_point(|key| key.frame <= first_frame)
+                .saturating_sub(1);
+            let scale_value = |value: i32| value.saturating_mul(scale as i32);
+            let keys: Vec<_> = slice.keys[start..]
+                .iter()
+                .take_while(|key| key.frame <= last_frame)
+                .map(|key| SliceKey {
+                    frame: key.frame.saturating_sub(first_frame),
+                    bounds: key.bounds.map(scale_value),
+                    center: key.center.map(|rect| rect.map(scale_value)),
+                    pivot: key.pivot.map(|point| point.map(scale_value)),
+                })
+                .collect();
             (!keys.is_empty()).then(|| SpriteSlice {
                 name: slice.name.clone(),
                 keys,
@@ -423,8 +430,24 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
         .collect();
     Ok((
         im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices}}),
+        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices,"nextFrameId":d.next_frame_export_id()}}),
     ))
+}
+
+fn visible_bounds(pixels: &[Pixel], width: usize, height: usize) -> [usize; 4] {
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for (index, _) in pixels.iter().enumerate().filter(|(_, pixel)| pixel[3] > 0) {
+        let (x, y) = (index % width, index / width);
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x + 1);
+        bottom = bottom.max(y + 1);
+    }
+    if left < right && top < bottom {
+        [left, top, right - left, bottom - top]
+    } else {
+        [0, 0, 1, 1]
+    }
 }
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
     let frames: Vec<&Value> = if let Some(a) = meta["frames"].as_array() {
@@ -481,6 +504,25 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
                     im.get_pixel((x + cx) as u32, (y + cy) as u32).0;
             }
         }
+    }
+    if meta["meta"]["app"] == "PixelCraft"
+        && frames.iter().any(|frame| frame.get("frameId").is_some())
+    {
+        let ids: Vec<_> = frames
+            .iter()
+            .map(|frame| {
+                frame["frameId"]
+                    .as_u64()
+                    .and_then(|id| u32::try_from(id).ok())
+                    .ok_or("Invalid frame export ID")
+            })
+            .collect::<Result<_, _>>()?;
+        let next = meta["meta"]
+            .get("nextFrameId")
+            .map(|value| value.as_u64().ok_or("Invalid next frame export ID"))
+            .transpose()?
+            .unwrap_or_else(|| u64::from(*ids.iter().max().unwrap()) + 1);
+        d.set_sheet_frame_export_ids(ids, next);
     }
     if let Some(tags) = meta["meta"]["frameTags"].as_array() {
         for t in tags {
@@ -559,15 +601,7 @@ pub fn transform_mask(d: &Document, b: [i32; 4], mask: &[bool], t: Transform) ->
 
 /// Integer nearest-neighbor scaling, bounded before allocation.
 pub fn scale_image(im: &RgbaImage, scale: usize) -> Result<RgbaImage, String> {
-    let w = (im.width() as usize)
-        .checked_mul(scale)
-        .ok_or("Export too large")?;
-    let h = (im.height() as usize)
-        .checked_mul(scale)
-        .ok_or("Export too large")?;
-    if scale == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION || w.saturating_mul(h) > MAX_PIXELS {
-        return Err("Scaled export exceeds image limits".into());
-    }
+    let (w, h) = scaled_image_dimensions(im.width() as usize, im.height() as usize, scale)?;
     if scale == 1 {
         return Ok(im.clone());
     }
@@ -577,6 +611,19 @@ pub fn scale_image(im: &RgbaImage, scale: usize) -> Result<RgbaImage, String> {
         h as u32,
         image::imageops::FilterType::Nearest,
     ))
+}
+
+fn scaled_image_dimensions(
+    width: usize,
+    height: usize,
+    scale: usize,
+) -> Result<(usize, usize), String> {
+    let w = width.checked_mul(scale).ok_or("Export too large")?;
+    let h = height.checked_mul(scale).ok_or("Export too large")?;
+    if scale == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION || w.saturating_mul(h) > MAX_PIXELS {
+        return Err("Scaled export exceeds image limits".into());
+    }
+    Ok((w, h))
 }
 /// Render a one-pixel outline or offset shadow from a stable source. Both the
 /// effect source and its destination are clipped to the active selection.

@@ -9,6 +9,8 @@ import unreal
 
 SHEET_TAG = "PixelCraftSheet"
 NAME_TAG = "PixelCraftTag"
+MAX_FRAMES = 65_535
+MAX_TAGS = 1024
 MAX_KEYS = 1_000_000
 MAX_DURATION = 2_147_483_647
 SIMPLE_NAME = re.compile(r"[a-z0-9]+(?:_[a-z0-9]+)*")
@@ -37,13 +39,25 @@ def _read_source(sheet):
         payload = file.read(64 * 1024 * 1024 + 1)
     if len(payload) > 64 * 1024 * 1024:
         raise ValueError("Paper2D source exceeds 64 MiB")
+    return _parse_source(payload)
+
+
+def _parse_source(payload):
     data = json.loads(payload)
+    if not isinstance(data, dict):
+        return None
     meta = data.get("meta", {})
-    if meta.get("app") != "PixelCraft":
+    if not isinstance(meta, dict) or meta.get("app") != "PixelCraft":
         return None
     if meta.get("version") != "1":
         raise ValueError("Unsupported PixelCraft sprite sheet version")
-    return data["frames"], meta.get("frameTags", [])
+    frames = data.get("frames")
+    tags = meta.get("frameTags", [])
+    if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_FRAMES:
+        raise ValueError(f"A PixelCraft sheet must contain 1 to {MAX_FRAMES} frames")
+    if not isinstance(tags, list) or len(tags) > MAX_TAGS:
+        raise ValueError(f"A PixelCraft sheet supports up to {MAX_TAGS} animation tags")
+    return frames, tags
 
 
 def _sprite_frames(sheet, frames):
