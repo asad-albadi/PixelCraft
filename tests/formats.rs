@@ -19,7 +19,8 @@ fn malformed_or_unsupported_files_return_errors_without_panics() {
     for n in 0..128 {
         assert!(decode_ase(&vec![0; n]).is_err());
     }
-    let d = Document::new(2, 2);
+    let mut d = Document::new(2, 2);
+    d.set_pixel(0, 0, 0, [1, 2, 3, 255]);
     let mut b = encode_ase(&d).unwrap();
     b[12] = 8;
     assert!(decode_ase(&b).is_err());
@@ -108,4 +109,80 @@ fn full_hd_animation_can_add_layers_past_the_old_document_limit() {
     d.add_layer();
     assert_eq!(d.layers.len(), 2);
     d.validate().unwrap();
+}
+
+#[test]
+fn large_blank_ase_timeline_roundtrips_without_full_canvas_cels() {
+    let mut doc = Document::new(4096, 4096);
+    for frame in 0..8 {
+        doc.add_frame(frame, false);
+    }
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.durations.len(), 9);
+    assert_eq!(reopened.stored_pixels(), 0);
+}
+
+#[test]
+fn workspace_reader_streams_legacy_and_shared_cel_documents() {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct WorkspaceDocument(#[serde(with = "pixelcraft::formats::recovery_document")] Document);
+
+    let mut doc = Document::new(4, 4);
+    doc.stamp(0, 0, 0, 0, [188, 40, 24, 255], 1);
+    doc.add_frame(0, true);
+    doc.link_cel(0, 1, 0).unwrap();
+
+    let legacy = serde_json::to_vec(&doc).unwrap();
+    let shared = serde_json::to_vec(&WorkspaceDocument(doc.clone())).unwrap();
+    for bytes in [legacy, shared] {
+        let WorkspaceDocument(restored) = serde_json::from_reader(bytes.as_slice()).unwrap();
+        assert_eq!(restored, doc);
+        assert_eq!(
+            restored.layers[0].cels[0].backing_id(),
+            restored.layers[0].cels[1].backing_id()
+        );
+    }
+}
+
+#[test]
+fn ase_rejects_legacy_tile_ids_that_alias_transform_bits() {
+    use std::io::Write;
+    let mut doc = Document::new(1, 1);
+    doc.tilesets.push(Tileset {
+        name: "Tile".into(),
+        width: 1,
+        height: 1,
+        tiles: vec![vec![[255, 0, 0, 255]].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0][0] = 1;
+    let bytes = encode_ase(&doc).unwrap();
+    let mut rebuilt = bytes[..144].to_vec();
+    let mut cursor = 144;
+    while cursor < bytes.len() {
+        let size = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap()) as usize;
+        let mut chunk = bytes[cursor..cursor + size].to_vec();
+        let kind = u16::from_le_bytes(chunk[4..6].try_into().unwrap());
+        if kind == 0x2023 {
+            chunk[10..14].copy_from_slice(&2u32.to_le_bytes());
+        } else if kind == 0x2005 {
+            chunk[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
+            chunk[32..44].fill(0);
+            chunk.truncate(54);
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            // A non-empty word using all bits as an ID and no flip masks.
+
+            encoder.write_all(&0x2000_0000u32.to_le_bytes()).unwrap();
+            chunk.extend(encoder.finish().unwrap());
+            let new_size = chunk.len() as u32;
+            chunk[..4].copy_from_slice(&new_size.to_le_bytes());
+        }
+        rebuilt.extend(chunk);
+        cursor += size;
+    }
+    let size = rebuilt.len() as u32;
+    rebuilt[..4].copy_from_slice(&size.to_le_bytes());
+    rebuilt[128..132].copy_from_slice(&(size - 128).to_le_bytes());
+    assert!(decode_ase(&rebuilt).is_err());
 }

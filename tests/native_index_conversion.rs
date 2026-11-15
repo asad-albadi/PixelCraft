@@ -25,7 +25,7 @@ fn indexed_color_assignment_converts_inputs_and_replaces_gray_state() {
     )
     .unwrap();
     assert_eq!(
-        &*edited.layers[0].cels[0],
+        &edited.layers[0].cels[0].to_vec(),
         &[[70, 80, 90, 255], [10, 20, 30, 255], [40, 50, 60, 255]]
     );
 }
@@ -51,7 +51,7 @@ fn indexed_color_constructor_converts_inputs_before_exposing_index() {
     )
     .unwrap();
     assert_eq!(
-        &*edited.layers[0].cels[0],
+        &edited.layers[0].cels[0].to_vec(),
         &[
             [2, 0, 0, 255],
             [254, 0, 0, 255],

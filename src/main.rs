@@ -157,6 +157,7 @@ struct HistoryEntry {
     polygon: Vec<(i32, i32)>,
     layer: usize,
     frame: usize,
+    timeline_anchor: Option<(usize, usize)>,
 }
 struct SpriteTab {
     doc: Document,
@@ -171,6 +172,7 @@ struct SpriteTab {
     selection: Option<(i32, i32, i32, i32)>,
     palette_index: usize,
     active_tag: Option<usize>,
+    timeline_anchor: Option<(usize, usize)>,
     polygon: Vec<(i32, i32)>,
     mask: Option<Vec<bool>>,
 }
@@ -204,6 +206,12 @@ struct SaveJob {
     finished: std::sync::mpsc::Receiver<(PathBuf, Document, Result<(), String>)>,
 }
 
+struct FramePrefetch {
+    frame: usize,
+    snapshot: Document,
+    result: std::sync::mpsc::Receiver<(egui::ColorImage, Option<String>)>,
+}
+
 struct PixelCraft {
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
@@ -235,6 +243,7 @@ struct PixelCraft {
     filled: bool,
     playing: bool,
     last_tick: Instant,
+    playback_waiting_for_frame: bool,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
@@ -253,6 +262,10 @@ struct PixelCraft {
     preview_settings_path: Option<PathBuf>,
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
+    frame_prefetch: Option<FramePrefetch>,
+    timeline_anchor: Option<(usize, usize)>,
+    timeline_duration: u16,
+    timeline_destination: Option<(usize, usize)>,
     cel_occupied: Vec<Vec<bool>>,
     open_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<Document, String>)>>,
     play_after_open: bool,
@@ -266,6 +279,7 @@ struct PixelCraft {
     palette_index: usize,
     tile_size: usize,
     selected_tile: u32,
+    tile_pixel_mode: Option<bool>,
     active_tag: Option<usize>,
     tag_name: String,
     playback_reverse: bool,
@@ -376,6 +390,7 @@ impl PixelCraft {
             filled: false,
             playing: false,
             last_tick: Instant::now(),
+            playback_waiting_for_frame: false,
             undo: vec![],
             redo: vec![],
             selection: None,
@@ -394,6 +409,10 @@ impl PixelCraft {
             preview_settings_path: None,
             render_snapshot: None,
             frame_textures: vec![],
+            frame_prefetch: None,
+            timeline_anchor: None,
+            timeline_duration: DEFAULT_DURATION,
+            timeline_destination: None,
             cel_occupied: vec![],
             open_job: None,
             play_after_open: false,
@@ -407,6 +426,7 @@ impl PixelCraft {
             palette_index: 0,
             tile_size: 16,
             selected_tile: 1,
+            tile_pixel_mode: None,
             active_tag: None,
             tag_name: "Animation".into(),
             playback_reverse: false,
@@ -562,9 +582,48 @@ impl PixelCraft {
         self.doc != self.saved
     }
     fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
+        self.refresh_frame_cache(ctx);
+        if self.frame_textures[f].is_none() {
+            let (image, error) = Self::compose_frame_image(&self.doc, f);
+            self.store_frame_texture(ctx, f, image, error);
+        }
+        let texture = self.frame_textures[f].as_ref().unwrap().clone();
+        let frame = self.next_playback_frame().0;
+        if self.playing && self.frame_prefetch.is_none() && self.frame_textures[frame].is_none() {
+            let snapshot = self.doc.clone();
+            let worker_doc = snapshot.clone();
+            let wake = ctx.clone();
+            let (send, result) = std::sync::mpsc::sync_channel(1);
+            self.frame_prefetch = Some(FramePrefetch {
+                frame,
+                snapshot,
+                result,
+            });
+            std::thread::spawn(move || {
+                let image = Self::compose_frame_image(&worker_doc, frame);
+                if send.send(image).is_ok() {
+                    wake.request_repaint();
+                }
+            });
+        }
+        texture
+    }
+
+    fn refresh_frame_cache(&mut self, ctx: &egui::Context) {
         if self.render_snapshot.as_ref() != Some(&self.doc) {
-            self.frame_textures = vec![None; self.doc.durations.len()];
-            self.frame_texture_order.clear();
+            self.frame_textures.resize(self.doc.durations.len(), None);
+            for (frame, texture) in self.frame_textures.iter_mut().enumerate() {
+                if texture.is_some()
+                    && self
+                        .render_snapshot
+                        .as_ref()
+                        .is_none_or(|previous| !self.doc.same_frame_pixels(previous, frame))
+                {
+                    *texture = None;
+                }
+            }
+            self.frame_texture_order
+                .retain(|&frame| self.frame_textures.get(frame).is_some_and(Option::is_some));
             let mut occupied_pixels = std::collections::HashMap::new();
             self.cel_occupied = self
                 .doc
@@ -576,34 +635,78 @@ impl PixelCraft {
                             l.group
                                 || l.tile_cels[f].iter().any(|v| *v != 0)
                                 || *occupied_pixels
-                                    .entry(std::sync::Arc::as_ptr(&l.cels[f].0))
-                                    .or_insert_with(|| l.cels[f].iter().any(|p| p[3] > 0))
+                                    .entry(l.cels[f].backing_id())
+                                    .or_insert_with(|| l.cels[f].occupied())
                         })
                         .collect()
                 })
                 .collect();
             self.render_snapshot = Some(self.doc.clone());
         }
-        if self.frame_textures[f].is_none() {
-            let frame_bytes = self.doc.width * self.doc.height * 4;
-            let capacity = (64 * 1024 * 1024 / frame_bytes).max(1);
-            if self.frame_texture_order.len() >= capacity
-                && let Some(old) = self.frame_texture_order.pop_front()
-            {
-                self.frame_textures[old] = None;
+        self.poll_frame_prefetch(ctx);
+    }
+
+    fn compose_frame_image(doc: &Document, frame: usize) -> (egui::ColorImage, Option<String>) {
+        let pixels = doc.composite(frame);
+        let (pixels, error) = if doc.color_profile.is_empty() {
+            (pixels, None)
+        } else {
+            match pixelcraft::color::to_srgb(&doc.color_profile, &pixels) {
+                Ok(converted) => (converted, None),
+                Err(error) => (pixels, Some(error)),
             }
-            let pixels = pixelcraft::color::display_pixels(&self.doc, f).unwrap_or_else(|error| {
-                self.status = format!("Color profile: {error}; showing unconverted values");
-                self.doc.composite(f)
-            });
-            self.frame_textures[f] = Some(ctx.load_texture(
-                format!("frame-{f}"),
-                color_image(&pixels, self.doc.width, self.doc.height),
-                egui::TextureOptions::NEAREST,
-            ));
-            self.frame_texture_order.push_back(f);
+        };
+        (color_image(&pixels, doc.width, doc.height), error)
+    }
+
+    fn poll_frame_prefetch(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.frame_prefetch else {
+            return;
+        };
+        let result = job.result.try_recv();
+        if matches!(result, Err(std::sync::mpsc::TryRecvError::Empty)) {
+            return;
         }
-        self.frame_textures[f].as_ref().unwrap().clone()
+        let job = self.frame_prefetch.take().unwrap();
+        if let Ok((image, error)) = result
+            && self.playing
+            && self
+                .frame_textures
+                .get(job.frame)
+                .is_some_and(Option::is_none)
+            && self.doc.same_frame_pixels(&job.snapshot, job.frame)
+        {
+            self.store_frame_texture(ctx, job.frame, image, error);
+        }
+    }
+
+    fn store_frame_texture(
+        &mut self,
+        ctx: &egui::Context,
+        frame: usize,
+        image: egui::ColorImage,
+        error: Option<String>,
+    ) {
+        let frame_bytes = self.doc.width * self.doc.height * 4;
+        let capacity = (64 * 1024 * 1024 / frame_bytes).max(if self.playing { 2 } else { 1 });
+        while self.frame_texture_order.len() >= capacity {
+            let oldest = self
+                .frame_texture_order
+                .iter()
+                .position(|&cached| !self.playing || cached != self.frame)
+                .expect("Playback reserves room for the current and upcoming frames");
+            let old = self.frame_texture_order.remove(oldest).unwrap();
+            self.frame_textures[old] = None;
+        }
+        if let Some(error) = error {
+            self.status = format!("Color profile: {error}; showing unconverted values");
+        }
+        self.frame_textures[frame] = Some(ctx.load_texture(
+            format!("frame-{frame}"),
+            image,
+            egui::TextureOptions::NEAREST,
+        ));
+        self.frame_texture_order.push_back(frame);
     }
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
         self.doc.drawing_index = self.drawing_palette_index(color);
@@ -621,6 +724,25 @@ impl PixelCraft {
                 (p.0 - ox) as usize / t.width,
                 (p.1 - oy) as usize / t.height,
             );
+            if let Some(variant) = self.tile_pixel_mode {
+                let pixel = (
+                    (p.0 - ox) as usize % t.width,
+                    (p.1 - oy) as usize % t.height,
+                );
+                let color = if self.tool == Tool::Eraser {
+                    CLEAR
+                } else {
+                    color
+                };
+                if let Err(error) =
+                    self.doc
+                        .edit_tile_pixel(self.layer, self.frame, (x, y), pixel, color, variant)
+                {
+                    self.status = error;
+                }
+                self.doc.drawing_index = None;
+                return;
+            }
             let id = if self.tool == Tool::Eraser {
                 0
             } else {
@@ -655,50 +777,90 @@ impl PixelCraft {
     fn update_playback_clock(&mut self, now: Instant) -> Duration {
         let duration =
             |app: &Self| Duration::from_millis(u64::from(app.doc.durations[app.frame].max(1)));
-        let mut elapsed = now.saturating_duration_since(self.last_tick);
-        // A long suspension should not make the editor replay a backlog.
-        if elapsed > Duration::from_secs(1) {
+        // Repaint delivery varies by a few milliseconds around a refresh. For
+        // short cels, a small margin avoids a hold followed by a skipped cel.
+        const FAST_FRAME: Duration = Duration::from_millis(20);
+        const REPAINT_JITTER: Duration = Duration::from_millis(3);
+
+        if now.saturating_duration_since(self.last_tick) > Duration::from_secs(1)
+            && !self.playback_waiting_for_frame
+        {
             self.last_tick = now;
             return duration(self);
         }
-        while elapsed >= duration(self) {
+        let mut previous_duration = None;
+        loop {
             let step = duration(self);
-            self.last_tick += step;
-            elapsed -= step;
+            let deadline = self.last_tick + step;
+            let fast = self.playing && step <= FAST_FRAME;
+            // Sample a nearby deadline, but keep the authored clock phase.
+            let early_margin =
+                if previous_duration.is_none() && fast && !self.playback_waiting_for_frame {
+                    REPAINT_JITTER.min(step / 4)
+                } else {
+                    Duration::ZERO
+                };
+            if deadline.saturating_duration_since(now) > early_margin {
+                return deadline - now;
+            }
+            if fast
+                && previous_duration.is_some_and(|previous| previous <= FAST_FRAME)
+                && now.saturating_duration_since(deadline) <= REPAINT_JITTER
+            {
+                // The current redraw already has a new cel to show. Give it
+                // this refresh when its successor is only marginally overdue.
+                return Duration::ZERO;
+            }
+            let next = self.next_playback_frame().0;
+            if self.playing && self.frame_textures.get(next).is_none_or(Option::is_none) {
+                if now < deadline {
+                    return deadline - now;
+                }
+                self.playback_waiting_for_frame = true;
+                // The prefetch worker wakes the editor as soon as its result is ready.
+                return Duration::from_millis(16);
+            }
             self.advance_playback();
+            if std::mem::take(&mut self.playback_waiting_for_frame) {
+                self.last_tick = now;
+                return duration(self);
+            }
+            self.last_tick = deadline;
+            previous_duration = Some(step);
         }
-        duration(self) - elapsed
     }
     fn advance_playback(&mut self) {
-        if let Some(t) = self.active_tag.and_then(|i| self.doc.tags.get(i)) {
-            let reverse = match t.direction {
-                1 => true,
-                2 | 3 => self.playback_reverse,
-                _ => false,
-            };
-            if reverse {
-                if self.frame <= t.from {
-                    if t.direction >= 2 {
-                        self.playback_reverse = false;
-                        self.frame = (t.from + 1).min(t.to);
-                    } else {
-                        self.frame = t.to;
-                    }
-                } else {
-                    self.frame -= 1;
-                }
-            } else if self.frame >= t.to {
-                if t.direction >= 2 {
-                    self.playback_reverse = true;
-                    self.frame = t.to.saturating_sub(1).max(t.from);
-                } else {
-                    self.frame = t.from;
-                }
+        (self.frame, self.playback_reverse) = self.next_playback_frame();
+        self.timeline_anchor = None;
+        self.timeline_destination = None;
+    }
+
+    fn next_playback_frame(&self) -> (usize, bool) {
+        let Some(tag) = self.active_tag.and_then(|i| self.doc.tags.get(i)) else {
+            return (
+                (self.frame + 1) % self.doc.durations.len(),
+                self.playback_reverse,
+            );
+        };
+        let reverse = match tag.direction {
+            1 => true,
+            2 | 3 => self.playback_reverse,
+            _ => false,
+        };
+        if reverse {
+            if self.frame > tag.from {
+                (self.frame - 1, self.playback_reverse)
+            } else if tag.direction >= 2 {
+                ((tag.from + 1).min(tag.to), false)
             } else {
-                self.frame += 1;
+                (tag.to, self.playback_reverse)
             }
+        } else if self.frame < tag.to {
+            (self.frame + 1, self.playback_reverse)
+        } else if tag.direction >= 2 {
+            (tag.to.saturating_sub(1).max(tag.from), true)
         } else {
-            self.frame = (self.frame + 1) % self.doc.durations.len();
+            (tag.from, self.playback_reverse)
         }
     }
     fn apply_theme_asset(&mut self, ctx: &egui::Context, bytes: &[u8]) -> Result<(), String> {
@@ -890,6 +1052,90 @@ impl PixelCraft {
         self.selected_tile = 1;
         Ok(())
     }
+    fn slice_controls(&self, ui: &mut egui::Ui, doc: &mut Document) {
+        ui.collapsing("Slices and pivots", |ui| {
+            if ui.pc_button("Add slice from selection").clicked() {
+                let bounds = self.selection_bounds();
+                doc.slices.push(SpriteSlice {
+                    name: format!("Slice {}", doc.slices.len() + 1),
+                    keys: vec![SliceKey {
+                        frame: self.frame,
+                        bounds,
+                        center: None,
+                        pivot: None,
+                    }],
+                });
+            }
+            let mut remove = None;
+            for (index, slice) in doc.slices.iter_mut().enumerate() {
+                ui.push_id(index, |ui| {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.text_edit_singleline(&mut slice.name);
+                        if ui.pc_button("Remove slice").clicked() {
+                            remove = Some(index);
+                        }
+                    });
+                    let position = slice
+                        .keys
+                        .binary_search_by_key(&self.frame, |key| key.frame);
+                    if let Ok(position) = position {
+                        let key = &mut slice.keys[position];
+                        ui.horizontal(|ui| {
+                            for (axis, value) in key.bounds.iter_mut().enumerate() {
+                                let minimum = if axis < 2 { -16384 } else { 0 };
+                                ui.add(
+                                    egui::DragValue::new(value)
+                                        .range(minimum..=16384)
+                                        .prefix(["X ", "Y ", "W ", "H "][axis]),
+                                );
+                            }
+                        });
+                        let mut pivot_enabled = key.pivot.is_some();
+                        if ui.pc_checkbox(&mut pivot_enabled, "Pivot").changed() {
+                            key.pivot = pivot_enabled.then_some([0, 0]);
+                        }
+                        if let Some(pivot) = &mut key.pivot {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::DragValue::new(&mut pivot[0]).prefix("Pivot X "));
+                                ui.add(egui::DragValue::new(&mut pivot[1]).prefix("Pivot Y "));
+                            });
+                        }
+                        if ui.pc_button("Remove current slice key").clicked() {
+                            slice.keys.remove(position);
+                        }
+                    } else if let Err(position) = position
+                        && ui.pc_button("Add slice key at this frame").clicked()
+                    {
+                        let mut key = slice.key_at(self.frame).cloned().unwrap_or(SliceKey {
+                            frame: self.frame,
+                            bounds: self.selection_bounds(),
+                            center: None,
+                            pivot: None,
+                        });
+                        key.frame = self.frame;
+                        slice.keys.insert(position, key);
+                    }
+                });
+            }
+            if let Some(index) = remove {
+                doc.slices.remove(index);
+                doc.metadata
+                    .retain(|chunk| chunk.owner != format!("slice:{index}"));
+                for chunk in &mut doc.metadata {
+                    if let Some(id) = chunk
+                        .owner
+                        .strip_prefix("slice:")
+                        .and_then(|id| id.parse::<usize>().ok())
+                        && id > index
+                    {
+                        chunk.owner = format!("slice:{}", id - 1);
+                    }
+                }
+            }
+        });
+    }
+
     fn properties_dialog(&mut self, ctx: &egui::Context) {
         if !self.properties_open {
             return;
@@ -921,7 +1167,12 @@ impl PixelCraft {
             ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}
 if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             if !edited.tilesets.is_empty(){ui.horizontal(|ui|{if ui.pc_button("+ Tile layer from last tileset").clicked(){add_tile=true;}ui.add(egui::DragValue::new(&mut self.selected_tile).range(1..=edited.tilesets.last().map(|t|t.tiles.len()).unwrap_or(1).max(1) as u32).prefix("Paint tile "));});}
-            ui.small("Select a tile layer, then paint with Pencil; Eraser clears a tile. Tile 0 is empty.");
+            ui.horizontal_wrapped(|ui| {
+                ui.pc_selectable_value(&mut self.tile_pixel_mode, None, "Place tiles");
+                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(false), "Edit shared tile pixels");
+                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(true), "Edit placement variant");
+            });
+            self.slice_controls(ui, &mut edited);
             ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
             for(i,t)in edited.tags.iter_mut().enumerate(){ui.horizontal(|ui|{ui.text_edit_singleline(&mut t.name);let mut from=t.from+1;let mut to=t.to+1;ui.add(egui::DragValue::new(&mut from).range(1..=edited.durations.len()).prefix("From "));ui.add(egui::DragValue::new(&mut to).range(from..=edited.durations.len()).prefix("To "));t.from=from-1;t.to=to.max(from)-1;if ui_icons::button(ui, "trash", "Remove range", false, false).clicked(){remove_tag=Some(i);}});ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("direction",i)).selected_text(["Forward","Reverse","Ping-pong","Ping-pong reverse"][t.direction as usize]).show_ui(ui,|ui|{for (d,name)in ["Forward","Reverse","Ping-pong","Ping-pong reverse"].iter().enumerate(){ui.pc_selectable_value(&mut t.direction,d as u8,*name);}});if ui_icons::button(ui,"tag","Use for playback",self.active_tag==Some(i),false).clicked(){self.active_tag=Some(i);self.frame=if t.direction==1||t.direction==3{t.to}else{t.from};self.playback_reverse=t.direction==3;}});}
             if ui.pc_button("Use all frames for playback").clicked(){self.active_tag=None;}ui.small("Range names, endpoints and playback direction are saved in the project.");
@@ -1007,8 +1258,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         {
             for l in &d.layers {
                 for p in &l.cels {
-                    if seen.insert(std::sync::Arc::as_ptr(&p.0) as usize) {
-                        bytes = bytes.saturating_add(p.len() * 4);
+                    if p.backing_id().is_some_and(|id| seen.insert(id)) {
+                        bytes = bytes.saturating_add(p.allocation_pixels() * 4);
                     }
                 }
                 for m in &l.cel_meta {
@@ -1025,14 +1276,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             for t in &d.tilesets {
                 for p in &t.tiles {
-                    if seen.insert(std::sync::Arc::as_ptr(&p.0) as usize) {
-                        bytes = bytes.saturating_add(p.len() * 4);
+                    if p.backing_id().is_some_and(|id| seen.insert(id)) {
+                        bytes = bytes.saturating_add(p.allocation_pixels() * 4);
                     }
                 }
             }
             for r in &d.references {
-                if seen.insert(std::sync::Arc::as_ptr(&r.pixels.0) as usize) {
-                    bytes = bytes.saturating_add(r.pixels.len() * 4);
+                if r.pixels.backing_id().is_some_and(|id| seen.insert(id)) {
+                    bytes = bytes.saturating_add(r.pixels.allocation_pixels() * 4);
                 }
             }
             bytes = bytes.saturating_add(d.metadata.iter().map(|m| m.data.len()).sum::<usize>());
@@ -1067,6 +1318,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         self.layer = self.layer.min(self.doc.layers.len() - 1);
         self.frame = self.frame.min(self.doc.durations.len() - 1);
+        self.timeline_anchor = None;
+        self.timeline_destination = None;
         self.selection = None;
         self.studio.mask = None;
         self.power.reference_edit = None;
@@ -1080,6 +1333,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             polygon: self.studio.polygon.clone(),
             layer: self.layer,
             frame: self.frame,
+            timeline_anchor: self.timeline_anchor,
         }
     }
     fn restore_history(&mut self, entry: HistoryEntry) {
@@ -1088,6 +1342,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.clamp();
         self.layer = entry.layer.min(self.doc.layers.len() - 1);
         self.frame = entry.frame.min(self.doc.durations.len() - 1);
+        self.timeline_anchor = entry.timeline_anchor;
         self.selection = entry.selection;
         self.studio.mask = entry.mask;
         self.studio.polygon = entry.polygon;
@@ -1119,6 +1374,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.path = path;
         self.layer = 0;
         self.frame = 0;
+        self.timeline_anchor = None;
+        self.timeline_destination = None;
         self.undo.clear();
         self.redo.clear();
         self.selection = None;
@@ -1130,6 +1387,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .floor()
             .clamp(1., 16.);
         self.playing = false;
+        self.playback_waiting_for_frame = false;
     }
     fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
         self.cancel_gesture();
@@ -1146,6 +1404,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             selection: self.selection,
             palette_index: self.palette_index,
             active_tag: self.active_tag,
+            timeline_anchor: self.timeline_anchor,
             polygon: self.studio.polygon.clone(),
             mask: self.studio.mask.clone(),
         };
@@ -1176,11 +1435,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.power.reference_edit = None;
         std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
         std::mem::swap(&mut self.active_tag, &mut tab.active_tag);
+        std::mem::swap(&mut self.timeline_anchor, &mut tab.timeline_anchor);
+        self.timeline_destination = None;
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
         self.extension_session = None;
         self.render_snapshot = None;
         self.playing = false;
+        self.playback_waiting_for_frame = false;
         self.hover = None;
         self.status = "Switched sprite".into();
     }
@@ -1253,6 +1515,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.autosave(false, ctx);
         }
     }
+    fn export_baked_ase(&mut self) {
+        if self.export_job.is_some() {
+            self.status = "An export is already running".into();
+            return;
+        }
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("ASE sprite", &["aseprite"])
+            .set_file_name("Baked artwork.aseprite")
+            .save_file()
+        {
+            self.start_export("baked-ase", path);
+        }
+    }
+
     fn save(&mut self, as_new: bool) -> bool {
         if self.save_job.is_some() {
             self.status = "A save is already running".into();
@@ -1438,6 +1714,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let gif = kind == "gif";
         let video = kind == "mp4";
         let sheet = kind == "sheet";
+        let baked_ase = kind == "baked-ase";
         self.status = format!(
             "Exporting {}",
             path.file_name().unwrap_or_default().to_string_lossy()
@@ -1460,6 +1737,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     &doc,
                     scale,
                 )
+            } else if baked_ase {
+                formats::export_baked_ase(&path, &doc)
             } else {
                 formats::export_raster_scaled(&path, &doc, frame, sheet, scale)
             };
@@ -1626,6 +1905,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "save" => {
                 self.save(false);
             }
+            "export-baked-ase" => self.export_baked_ase(),
             "saveas" => {
                 self.save(true);
             }
@@ -1663,25 +1943,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.studio.polygon.clear();
             }
             "layer" => {
-                if self.doc.layers.len() < u16::MAX as usize
-                    && self
-                        .doc
-                        .can_grow(self.doc.width * self.doc.height * self.doc.durations.len())
-                {
+                if self.doc.can_add_layer() {
                     self.remember();
                     self.doc.add_layer();
                     self.layer = self.doc.layers.len() - 1;
+                    self.timeline_anchor = None;
+                    self.timeline_destination = None;
                 } else {
                     self.status = "Layer limit reached for this canvas size".into()
                 }
             }
-            "deletelayer" => {
-                if self.doc.layers.len() > 1 {
-                    self.remember();
-                    self.doc.remove_layer(self.layer);
-                    self.clamp();
-                }
+            "deletelayer" if self.doc.layers.len() > 1 => {
+                self.remember();
+                self.doc.remove_layer(self.layer);
+                self.clamp();
             }
+            "deletelayer" => {}
             "up" | "down" => {
                 let to = if s == "up" {
                     (self.layer + 1).min(self.doc.layers.len() - 1)
@@ -1695,27 +1972,25 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
             "frame" | "blank" => {
-                if self.doc.durations.len() < u16::MAX as usize
-                    && self
-                        .doc
-                        .can_grow(self.doc.width * self.doc.height * self.doc.layers.len())
-                {
+                if self.doc.can_add_frame(self.frame, s == "frame") {
                     self.remember();
                     self.doc.add_frame(self.frame, s == "frame");
                     self.frame += 1;
+                    self.timeline_anchor = None;
+                    self.timeline_destination = None;
                 } else {
                     self.status = "Frame limit reached for this canvas size".into()
                 }
             }
-            "deleteframe" => {
-                if self.doc.durations.len() > 1 {
-                    self.remember();
-                    self.doc.remove_frame(self.frame);
-                    self.clamp();
-                }
+            "deleteframe" if self.doc.durations.len() > 1 => {
+                self.remember();
+                self.doc.remove_frame(self.frame);
+                self.clamp();
             }
+            "deleteframe" => {}
             "play" => {
                 self.playing = !self.playing;
+                self.playback_waiting_for_frame = false;
                 self.last_tick = Instant::now();
             }
             "prev" => {
@@ -1805,7 +2080,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(serde_json::json!({}));
         let selection=self.selection.map(|(x0,y0,x1,y1)|serde_json::json!({"x":x0.min(x1),"y":y0.min(y1),"width":(x1-x0).abs()+1,"height":(y1-y0).abs()+1}));
-        let options = serde_json::json!({"selection":selection,"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let options = serde_json::json!({"selection":selection,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -1867,6 +2142,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.extension_session = Some(session);
         self.script_job = Some(rx);
         self.playing = false;
+        self.playback_waiting_for_frame = false;
         self.status = "Running embedded Lua…".into();
         Ok(())
     }
@@ -1949,6 +2225,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn action_tooltip(&self, action: &str, label: &str) -> String {
         ui_icons::tooltip(&self.custom_shortcuts, action, label)
     }
+    fn live_export_status(&mut self, ui: &mut egui::Ui) {
+        let Some(progress) = &self.power.bridge_export else {
+            return;
+        };
+        let (done, total) = progress.counts();
+        let fraction = done as f32 / total.max(1) as f32;
+        ui.add(egui::ProgressBar::new(fraction).text(format!("MCP export {done}/{total}")));
+        if ui.pc_button("Cancel export").clicked() {
+            progress.cancel();
+        }
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
             return;
@@ -2011,6 +2300,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Grid import, tag batch & atlas…", "workflow"),
                         ("Save   Ctrl+S", "save"),
                         ("Save as…", "saveas"),
+                        ("Export baked ASE copy…", "export-baked-ase"),
                         ("Export PNG…", "png"),
                         ("Export sprite sheet…", "sheet"),
                         ("Export PNG sequence…", "png-sequence"),
@@ -2329,18 +2619,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 } else {
                     let cel = &layer.cels[frame];
                     unique
-                        .entry(std::sync::Arc::as_ptr(&cel.0))
+                        .entry(cel.backing_id())
                         .and_modify(|entry: &mut (&Pixels, u64)| entry.1 += 1)
                         .or_insert((cel, 1));
                 }
             }
         }
         for (_, (cel, uses)) in unique {
-            for &pixel in cel {
+            cel.visit_nonclear(|_, pixel| {
                 if pixel[3] != 0 {
                     *counts.entry(pixel).or_default() += uses;
                 }
-            }
+            });
         }
         let mut colors: Vec<_> = counts.into_iter().collect();
         colors.sort_by_key(|&(pixel, count)| (std::cmp::Reverse(count), pixel));
@@ -2425,6 +2715,41 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
+    fn timeline_range(&self) -> CelRange {
+        let active = (self.layer, self.frame);
+        CelRange::between(self.timeline_anchor.unwrap_or(active), active)
+    }
+
+    fn timeline_select(&mut self, layer: usize, frame: usize, extend: bool) {
+        if extend {
+            self.timeline_anchor.get_or_insert((self.layer, self.frame));
+        } else {
+            self.timeline_anchor = None;
+            self.timeline_duration = self.doc.durations[frame];
+        }
+        self.layer = layer;
+        self.frame = frame;
+        self.timeline_destination = None;
+        self.playing = false;
+        self.playback_waiting_for_frame = false;
+    }
+
+    fn edit_timeline(&mut self, edit: impl FnOnce(&mut Document) -> Result<(), String>) -> bool {
+        let mut next = self.doc.clone();
+        match edit(&mut next).and_then(|()| next.validate()) {
+            Ok(()) if next != self.doc || !next.same_editor_targets(&self.doc) => {
+                self.remember();
+                self.doc = next;
+                true
+            }
+            Ok(()) => false,
+            Err(error) => {
+                self.status = error;
+                false
+            }
+        }
+    }
+
     fn timeline(&mut self, ui: &mut egui::Ui) {
         // The timeline must not composite every frame when a single cel changes.
         // Show thumbnails for frames the canvas or playback has already rendered.
@@ -2495,6 +2820,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let mut toggle = None;
         let mut lock = None;
         let mut rename = None;
+        let mut selection = None;
+        let range = self.timeline_range();
+        let destination = self.timeline_destination.map(|(layer, frame)| {
+            CelRange::between(
+                (layer, frame),
+                (
+                    layer + range.last_layer - range.first_layer,
+                    frame + range.last_frame - range.first_frame,
+                ),
+            )
+        });
         egui::ScrollArea::both()
             .id_salt("timeline_scroll")
             .max_height((ui.available_height() - 36.).max(0.))
@@ -2524,8 +2860,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                 .on_hover_text(format!("Select frame {}", f + 1))
                                 .clicked()
                             {
-                                self.frame = f;
-                                self.playing = false;
+                                selection = Some((self.layer, f, false));
                             }
                         }
                         ui.end_row();
@@ -2596,11 +2931,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     .truncate(),
                                 );
                                 if response.clicked() {
-                                    self.layer = li
+                                    selection = Some((li, self.frame, false));
                                 }
                                 if response.double_clicked() {
                                     rename = Some(l.name.clone());
-                                    self.layer = li;
+                                    selection = Some((li, self.frame, false));
                                 }
                             });
                             for f in 0..self.doc.durations.len() {
@@ -2623,13 +2958,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                         Vec2::splat(16.),
                                     )))
                                     .image_tint_follows_text_color(true)
-                                    .selected(li == self.layer && f == self.frame),
+                                    .selected(range.contains(li, f)),
                                 );
                                 response.widget_info(|| {
                                     egui::WidgetInfo::selected(
                                         egui::WidgetType::Button,
                                         ui.is_enabled(),
-                                        li == self.layer && f == self.frame,
+                                        range.contains(li, f),
                                         &description,
                                     )
                                 });
@@ -2645,17 +2980,177 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                         ),
                                     )
                                 });
+                                if destination.is_some_and(|target| target.contains(li, f)) {
+                                    ui.painter().rect_stroke(
+                                        response.rect.shrink(1.),
+                                        3.,
+                                        Stroke::new(1.5, ui.visuals().selection.stroke.color),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                if response.has_focus() {
+                                    let navigation = ui.input_mut(|input| {
+                                        let shift = egui::Modifiers::SHIFT;
+                                        let move_layer =
+                                            i32::from(input.consume_key(shift, Key::ArrowUp))
+                                                - i32::from(
+                                                    input.consume_key(shift, Key::ArrowDown),
+                                                );
+                                        let move_frame =
+                                            i32::from(input.consume_key(shift, Key::ArrowRight))
+                                                - i32::from(
+                                                    input.consume_key(shift, Key::ArrowLeft),
+                                                );
+                                        (move_layer, move_frame)
+                                    });
+                                    if navigation != (0, 0) {
+                                        let layer = self
+                                            .layer
+                                            .saturating_add_signed(navigation.0 as isize)
+                                            .min(self.doc.layers.len() - 1);
+                                        let frame = self
+                                            .frame
+                                            .saturating_add_signed(navigation.1 as isize)
+                                            .min(self.doc.durations.len() - 1);
+                                        selection = Some((layer, frame, true));
+                                    }
+                                }
                                 if response.on_hover_text(&description).clicked() {
-                                    self.layer = li;
-                                    self.frame = f;
-                                    self.playing = false;
+                                    selection =
+                                        Some((li, f, ui.input(|input| input.modifiers.shift)));
                                 }
                             }
                             ui.end_row();
                         }
                     });
             });
+        if let Some((layer, frame, extend)) = selection {
+            self.timeline_select(layer, frame, extend);
+        }
         ui.menu_button("Layer & frame actions", |ui| {
+            let range = self.timeline_range();
+            ui.menu_button("Selected cels", |ui| {
+                ui.label(format!(
+                    "Layers {}–{}, frames {}–{}",
+                    range.first_layer + 1,
+                    range.last_layer + 1,
+                    range.first_frame + 1,
+                    range.last_frame + 1
+                ));
+                if ui.pc_button("Clear cels").clicked() {
+                    self.edit_timeline(|doc| doc.clear_cel_range(range));
+                    ui.close();
+                }
+                for (name, linked) in [
+                    ("Link selected cels", true),
+                    ("Unlink selected cels", false),
+                ] {
+                    if ui.pc_button(name).clicked() {
+                        self.edit_timeline(|doc| doc.set_range_linked(range, linked));
+                        ui.close();
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.timeline_duration)
+                            .range(1..=65535)
+                            .suffix(" ms"),
+                    );
+                    if ui.pc_button("Set duration").clicked() {
+                        let duration = self.timeline_duration;
+                        self.edit_timeline(|doc| doc.set_range_duration(range, duration));
+                        ui.close();
+                    }
+                });
+                let mut target = self
+                    .timeline_destination
+                    .unwrap_or((range.first_layer, range.first_frame));
+                let layer_span = range.last_layer - range.first_layer;
+                let frame_span = range.last_frame - range.first_frame;
+                let max_layer = self.doc.layers.len() - layer_span;
+                let max_frame = self.doc.durations.len() - frame_span;
+                let (mut first_layer, mut first_frame) = (target.0 + 1, target.1 + 1);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut first_layer)
+                            .range(1..=max_layer)
+                            .prefix("To layer "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut first_frame)
+                            .range(1..=max_frame)
+                            .prefix("To frame "),
+                    );
+                });
+                target = (first_layer - 1, first_frame - 1);
+                self.timeline_destination = Some(target);
+                ui.label(format!(
+                    "Destination ends at layer {}, frame {}",
+                    first_layer + layer_span,
+                    first_frame + frame_span
+                ));
+                for (name, duplicate) in [("Move cels", false), ("Duplicate cels", true)] {
+                    if ui.pc_button(name).clicked() {
+                        if self.edit_timeline(|doc| {
+                            doc.move_cel_range(range, target.0, target.1, duplicate)
+                        }) {
+                            self.timeline_anchor = Some(target);
+                            self.layer = target.0 + layer_span;
+                            self.frame = target.1 + frame_span;
+                        }
+                        self.timeline_destination = None;
+                        ui.close();
+                    }
+                }
+                if ui.pc_button("Cancel placement").clicked() {
+                    self.timeline_destination = None;
+                    ui.close();
+                }
+            });
+            ui.menu_button("Position and opacity keyframe", |ui| {
+                let (layer, frame) = (self.layer, self.frame);
+                let mut key = self.doc.sampled_cel_key(layer, frame);
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut key.x)
+                                .range(-16384..=16384)
+                                .prefix("X "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut key.y)
+                                .range(-16384..=16384)
+                                .prefix("Y "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(egui::DragValue::new(&mut key.opacity).prefix("Opacity "))
+                        .changed();
+                });
+                changed |= ui
+                    .pc_checkbox(&mut key.hold, "Hold until next keyframe")
+                    .changed();
+                if ui.pc_button("Set keyframe at current frame").clicked() || changed {
+                    self.edit_timeline(|doc| doc.set_cel_keyframe(layer, frame, Some(key)));
+                }
+                if self.doc.layers[layer].cel_meta[frame].keyframe.is_some()
+                    && ui.pc_button("Remove keyframe").clicked()
+                {
+                    self.edit_timeline(|doc| doc.set_cel_keyframe(layer, frame, None));
+                }
+            });
+            let mut onion_included = !self.doc.layers[self.layer].exclude_from_onion;
+            if ui
+                .pc_checkbox(&mut onion_included, "Include layer in onion skin")
+                .changed()
+            {
+                self.remember();
+                self.doc.layers[self.layer].exclude_from_onion = !onion_included;
+            }
+
             if narrow {
                 let mut ms = self.doc.durations[self.frame];
                 if ui
@@ -2670,6 +3165,40 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         a = Some(command);
                         ui.close();
                     }
+                }
+            }
+            let mut link_duplicates = self.doc.layers[self.layer].link_duplicates;
+            if ui
+                .pc_checkbox(&mut link_duplicates, "Link duplicated cels")
+                .changed()
+            {
+                self.remember();
+                self.doc.layers[self.layer].link_duplicates = link_duplicates;
+            }
+            if self.doc.editable(self.layer) {
+                ui.menu_button("Link cel to frame", |ui| {
+                    for frame in 0..self.doc.durations.len() {
+                        if frame != self.frame
+                            && ui.pc_button(format!("Frame {}", frame + 1)).clicked()
+                        {
+                            self.remember();
+                            if let Err(error) = self.doc.link_cel(self.layer, self.frame, frame) {
+                                self.status = error;
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+                if self.doc.layers[self.layer].cel_meta[self.frame]
+                    .artwork_link
+                    .is_some()
+                    && ui.pc_button("Unlink cel").clicked()
+                {
+                    self.remember();
+                    if let Err(error) = self.doc.unlink_cel(self.layer, self.frame) {
+                        self.status = error;
+                    }
+                    ui.close();
                 }
             }
             ui.pc_checkbox(&mut self.onion, "Onion skin");
@@ -2741,14 +3270,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             _ => {}
         }
         if let Some(before) = before {
+            let implicit_slot = (self.doc.color_mode == ColorMode::Indexed
+                && !self.doc.layers[l].background)
+                .then_some(self.doc.transparent_index as u8);
             for i in 0..before.len() {
-                if !self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
-                    self.doc.layers[l].cels[f][i] = before[i];
-                    if let (Some(old), Some(new)) =
-                        (&old_indices, &mut self.doc.layers[l].cel_meta[f].indices)
-                    {
-                        std::sync::Arc::make_mut(new)[i] = old[i];
-                    }
+                let old_slot = old_indices.as_ref().map(|old| old[i]);
+                let current_slot = self.doc.layers[l].cel_meta[f]
+                    .indices
+                    .as_ref()
+                    .map(|p| p[i]);
+                if !self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32)
+                    && (self.doc.layers[l].cels[f][i] != before[i]
+                        || current_slot.or(implicit_slot) != old_slot.or(implicit_slot))
+                {
+                    self.doc.restore_pixel(l, f, i, before[i], old_slot);
                 }
             }
         }
@@ -2880,7 +3415,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         } else {
             self.texture = Some(self.frame_texture(&ctx, self.frame));
         }
-        if let Some(t) = &self.texture {
+        let rotation_preview = self.rotation_preview(ui, board);
+        if let Some(t) = rotation_preview.as_ref().or(self.texture.as_ref()) {
             painter.image(
                 t.id(),
                 board,
@@ -2889,6 +3425,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             );
         }
         self.draw_references(ui, board);
+        self.paint_rotation_pivot(&painter, board);
         painter.rect_stroke(
             board.expand(1.),
             0,
@@ -2930,6 +3467,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && self.tool != Tool::Hand
         {
             self.playing = false;
+            self.playback_waiting_for_frame = false;
             let p = self.hover.unwrap();
             self.stroke_color = self.fg;
             if ctx.input(|i| i.modifiers.alt) || self.tool == Tool::Picker {
@@ -3505,14 +4043,20 @@ impl PixelCraft {
             self.shortcuts(&ctx)
         }
         if self.playing {
+            self.refresh_frame_cache(&ctx);
             ctx.request_repaint_after(self.update_playback_clock(Instant::now()));
         }
-        if self.dialog_open() {
+        if self.dialog_open() && (!self.rotation_preview_active() || self.pending.is_some()) {
             ui.disable();
         }
         egui::Panel::top("menu")
             .exact_size(if comfortable { 36. } else { 32. })
             .show(ui, |ui| self.menu(ui));
+        if self.power.bridge_export.is_some() {
+            egui::Panel::top("live-export-progress").show(ui, |ui| {
+                ui.horizontal(|ui| self.live_export_status(ui));
+            });
+        }
         egui::Panel::top("document_tab")
             .exact_size(if comfortable { 44. } else { 40. })
             .show(ui, |ui| {
@@ -4613,6 +5157,52 @@ mod tests {
         assert_eq!(a.tool.name(), "Pencil");
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn timeline_rectangle_matches_mcp_and_undo_restores_selection() {
+        let mut a = app();
+        for frame in 0..4 {
+            a.doc.add_frame(frame, false);
+        }
+        a.doc.add_layer();
+        a.doc.set_pixel(0, 0, 0, [80, 120, 190, 255]);
+        a.doc.set_pixel(1, 1, 1, [49, 220, 150, 255]);
+        a.doc.tags.push(FrameTag {
+            name: "Loop".into(),
+            from: 0,
+            to: 4,
+            direction: 0,
+            repeat: 0,
+            color: [130, 150, 250],
+        });
+
+        a.timeline_select(0, 0, false);
+        a.timeline_select(1, 1, true);
+        let selection = a.timeline_range();
+        let before = a.doc.clone();
+        let duplicate = serde_json::json!({
+            "op": "duplicate-cel-range", "range": selection,
+            "to_layer": 0, "to_frame": 2
+        });
+        let moved = serde_json::json!({
+            "op": "move-cel-range", "range": selection,
+            "to_layer": 0, "to_frame": 1
+        });
+        let expected = pixelcraft::automation::apply_command_batch(
+            &before,
+            &serde_json::json!({"commands": [duplicate, moved]}),
+        )
+        .unwrap();
+
+        assert!(a.edit_timeline(|doc| doc.move_cel_range(selection, 0, 2, true)));
+        assert!(a.edit_timeline(|doc| doc.move_cel_range(selection, 0, 1, false)));
+        assert_eq!(a.doc, expected);
+        assert_eq!(a.doc.tags, before.tags);
+        a.undo();
+        a.undo();
+        assert_eq!(a.doc, before);
+        assert_eq!(a.timeline_range(), selection);
+    }
+
     #[test]
     fn range_playback_stays_inside_named_range_and_pingpongs() {
         let mut a = app();

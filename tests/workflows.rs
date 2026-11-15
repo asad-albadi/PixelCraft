@@ -199,3 +199,61 @@ fn transforms_retain_duplicate_indexed_palette_slots() {
     transform(&mut d, 0, 0, [0, 0, 2, 1], None, Transform::FlipX).unwrap();
     assert_eq!(d.layers[0].cel_meta[0].indices.as_ref().unwrap()[1], 2);
 }
+
+#[test]
+fn free_rotation_keeps_indexed_slot_and_rotates_about_off_center_pivot() {
+    let mut doc = Document::new(5, 5);
+    let ink = [110, 95, 80, 255];
+    doc.palette = vec![CLEAR, ink, ink];
+    doc.set_color_mode(ColorMode::Indexed);
+    doc.drawing_index = Some(2);
+    doc.set_pixel(0, 0, 1, ink);
+    let mut mask = vec![false; 25];
+    mask[1] = true;
+    let t = Transform::RotateAround {
+        degrees: 90.,
+        pivot: [0.5, 0.5],
+    };
+    transform(&mut doc, 0, 0, [0, 0, 2, 1], Some(&mask), t).unwrap();
+    assert_eq!(doc.composite(0)[5], ink);
+    assert_eq!(doc.layers[0].cel_meta[0].indices.as_ref().unwrap()[5], 2);
+    assert!(transform_mask(&doc, [0, 0, 2, 1], &mask, t)[5]);
+}
+#[test]
+fn cropping_offset_linked_cels_preserves_both_frames_in_ase() {
+    use pixelcraft::formats::{decode_ase, encode_ase};
+    let mut doc = Document::new(6, 1);
+    let red = [255, 0, 0, 255];
+    doc.set_pixel(0, 0, 1, red);
+    doc.layers[0].cel_meta[0].bounds = Some([1, 0, 1, 1]);
+    doc.add_frame(0, false);
+    doc.layers[0].cel_meta[1].bounds = Some([3, 0, 1, 1]);
+    doc.link_cel(0, 1, 0).unwrap();
+
+    crop(&mut doc, [1, 0, 4, 1]).unwrap();
+    assert_eq!(doc.composite(0), vec![red, CLEAR, CLEAR, CLEAR]);
+    assert_eq!(doc.composite(1), vec![CLEAR, CLEAR, red, CLEAR]);
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    assert_eq!(reopened.composite(0), doc.composite(0));
+    assert_eq!(reopened.composite(1), doc.composite(1));
+}
+#[test]
+fn cropping_shared_rasters_keeps_their_backing_shared() {
+    let mut doc = Document::new(4, 2);
+    doc.set_pixel(0, 0, 1, [255, 0, 0, 255]);
+    doc.add_frame(0, true);
+    assert!(doc.layers[0].cels[0].shares_storage(&doc.layers[0].cels[1]));
+
+    crop(&mut doc, [1, 0, 3, 2]).unwrap();
+
+    assert!(doc.layers[0].cels[0].shares_storage(&doc.layers[0].cels[1]));
+    assert_eq!(doc.layers[0].cels[1][0], [255, 0, 0, 255]);
+}
+
+#[test]
+fn crop_rejects_overflowing_coordinates() {
+    let mut doc = Document::new(2, 2);
+    let before = doc.clone();
+    assert!(crop(&mut doc, [1, 0, i32::MAX, 1]).is_err());
+    assert_eq!(doc, before);
+}

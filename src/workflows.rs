@@ -8,6 +8,7 @@ pub enum Transform {
     Move(i32, i32),
     Resize(usize, usize),
     Rotate,
+    RotateAround { degrees: f64, pivot: [f64; 2] },
     FlipX,
     FlipY,
 }
@@ -29,6 +30,55 @@ pub fn inside_polygon(points: &[(i32, i32)], x: i32, y: i32) -> bool {
     }
     hit
 }
+fn rotation_bounds(
+    bounds: [i32; 4],
+    degrees: f64,
+    pivot: [f64; 2],
+) -> Option<([i32; 4], [f64; 2])> {
+    if !degrees.is_finite()
+        || pivot
+            .iter()
+            .any(|v| !v.is_finite() || v.abs() > (MAX_DIMENSION * 2) as f64)
+    {
+        return None;
+    }
+    let [x, y, w, h] = bounds;
+    let (sin, cos) = degrees.rem_euclid(360.).to_radians().sin_cos();
+    let snap = |value: f64| {
+        if (value - value.round()).abs() < 1e-9 {
+            value.round()
+        } else {
+            value
+        }
+    };
+    let [sin, cos] = [snap(sin), snap(cos)];
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for [x, y] in [[x, y], [x + w, y], [x, y + h], [x + w, y + h]] {
+        let (x, y) = (f64::from(x) - pivot[0], f64::from(y) - pivot[1]);
+        let result = [pivot[0] + x * cos - y * sin, pivot[1] + x * sin + y * cos];
+        for axis in 0..2 {
+            min[axis] = min[axis].min(result[axis]);
+            max[axis] = max[axis].max(result[axis]);
+        }
+    }
+    let origin = min.map(|v| snap(v).floor() as i32);
+    let end = max.map(|v| snap(v).ceil() as i32);
+    Some((
+        [origin[0], origin[1], end[0] - origin[0], end[1] - origin[1]],
+        [sin, cos],
+    ))
+}
+
+fn rotated_source(position: [i32; 2], pivot: [f64; 2], [sin, cos]: [f64; 2]) -> (i32, i32) {
+    let x = f64::from(position[0]) + 0.5 - pivot[0];
+    let y = f64::from(position[1]) + 0.5 - pivot[1];
+    (
+        (pivot[0] + x * cos + y * sin).floor() as i32,
+        (pivot[1] - x * sin + y * cos).floor() as i32,
+    )
+}
+
 pub fn transform(
     d: &mut Document,
     l: usize,
@@ -50,7 +100,14 @@ pub fn transform(
     {
         return Err("Empty selection".into());
     }
+    let mut rotation = None;
     let (nw, nh, dx, dy) = match t {
+        Transform::RotateAround { degrees, pivot } => {
+            let ([nx, ny, nw, nh], basis) =
+                rotation_bounds(b, degrees, pivot).ok_or("Invalid rotation angle or pivot")?;
+            rotation = Some((pivot, basis));
+            (nw as usize, nh as usize, nx - x, ny - y)
+        }
         Transform::Move(dx, dy) => (w as usize, h as usize, dx, dy),
         Transform::Resize(w, h) => (w, h, 0, 0),
         Transform::Rotate => (h as usize, w as usize, 0, 0),
@@ -74,6 +131,15 @@ pub fn transform(
     for oy in 0..nh {
         for ox in 0..nw {
             let (sx, sy) = match t {
+                Transform::RotateAround { .. } => {
+                    let (pivot, basis) = rotation.unwrap();
+                    let (sx, sy) =
+                        rotated_source([x + dx + ox as i32, y + dy + oy as i32], pivot, basis);
+                    if !(x..x + w).contains(&sx) || !(y..y + h).contains(&sy) {
+                        continue;
+                    }
+                    (sx - x, sy - y)
+                }
                 Transform::Rotate => (oy as i32, h - 1 - ox as i32),
                 Transform::FlipX => (w - 1 - ox as i32, oy as i32),
                 Transform::FlipY => (ox as i32, h - 1 - oy as i32),
@@ -105,39 +171,105 @@ pub fn transform(
 }
 pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
     let [x, y, w, h] = b;
-    if w < 1 || h < 1 || x < 0 || y < 0 || x + w > d.width as i32 || y + h > d.height as i32 {
+    if w < 1
+        || h < 1
+        || x < 0
+        || y < 0
+        || x.checked_add(w).is_none_or(|right| right > d.width as i32)
+        || y.checked_add(h)
+            .is_none_or(|bottom| bottom > d.height as i32)
+    {
         return Err("Crop must be inside canvas".into());
     }
     if d.layers.iter().any(|l| l.tileset.is_some()) {
         return Err("Rasterize tile layers before cropping".into());
     }
-    let old = d.clone();
-    for (li, l) in d.layers.iter_mut().enumerate() {
-        for f in 0..d.durations.len() {
-            let mut p = vec![];
-            let mut idx = vec![];
-            for cy in y..y + h {
-                for cx in x..x + w {
-                    let i = cy as usize * old.width + cx as usize;
-                    p.push(old.layers[li].cels[f][i]);
-                    if let Some(indices) = &old.layers[li].cel_meta[f].indices {
-                        idx.push(indices[i]);
+    let mut cropped = d.clone();
+    let (x, y, w, h) = (x as usize, y as usize, w as usize, h as usize);
+    let mut rasters = std::collections::HashMap::new();
+    let mut palette_indices = std::collections::HashMap::new();
+    let mut crop_raster = |source: &Pixels| {
+        let Some(id) = source.backing_id() else {
+            return Pixels::empty(w * h);
+        };
+        rasters
+            .entry(id)
+            .or_insert_with(|| {
+                if let Pixels::Dense(pixels) = source {
+                    let mut cropped = Vec::with_capacity(w * h);
+                    for row in y..y + h {
+                        let start = row * d.width + x;
+                        cropped.extend_from_slice(&pixels[start..start + w]);
                     }
+                    if cropped.iter().all(|pixel| *pixel == CLEAR) {
+                        Pixels::empty(w * h)
+                    } else {
+                        cropped.into()
+                    }
+                } else {
+                    let mut cropped = Pixels::empty(w * h);
+                    source.visit_nonclear(|index, color| {
+                        let (col, row) = (index % d.width, index / d.width);
+                        if (x..x + w).contains(&col) && (y..y + h).contains(&row) {
+                            cropped.set((row - y) * w + col - x, color);
+                        }
+                    });
+                    cropped
                 }
+            })
+            .clone()
+    };
+    for l in &mut cropped.layers {
+        // Cropping each placement clips a different part of the shared image
+        // when its origin differs. Keep links only among matching origins.
+        let mut link_groups = std::collections::HashMap::new();
+        let mut link_counts = Vec::new();
+        for meta in &mut l.cel_meta {
+            if let Some(link) = meta.artwork_link {
+                let origin = meta.bounds.map_or([0, 0], |b| [b[0], b[1]]);
+                let group = *link_groups.entry((link, origin)).or_insert_with(|| {
+                    let group = link_counts.len();
+                    link_counts.push(0);
+                    group
+                });
+                link_counts[group] += 1;
+                meta.artwork_link = Some(group);
             }
-            l.cels[f] = p.into();
-            l.cel_meta[f].indices = if idx.is_empty() {
-                None
-            } else {
-                Some(std::sync::Arc::new(idx))
-            };
-            l.cel_meta[f].outside.clear();
-            l.cel_meta[f].bounds = None;
+        }
+        for meta in &mut l.cel_meta {
+            if meta
+                .artwork_link
+                .is_some_and(|group| link_counts[group] < 2)
+            {
+                meta.artwork_link = None;
+            }
+        }
+
+        l.mask = l.mask.as_ref().map(&mut crop_raster);
+        for (pixels, meta) in l.cels.iter_mut().zip(&mut l.cel_meta) {
+            *pixels = crop_raster(pixels);
+            if let Some(indices) = &mut meta.indices {
+                *indices = palette_indices
+                    .entry(std::sync::Arc::as_ptr(indices))
+                    .or_insert_with(|| {
+                        let mut cropped = Vec::with_capacity(w * h);
+                        for row in y..y + h {
+                            let start = row * d.width + x;
+                            cropped.extend_from_slice(&indices[start..start + w]);
+                        }
+                        std::sync::Arc::new(cropped)
+                    })
+                    .clone();
+            }
+            meta.outside.clear();
+            meta.bounds = None;
         }
     }
-    d.width = w as usize;
-    d.height = h as usize;
-    d.validate()
+    cropped.width = w;
+    cropped.height = h;
+    cropped.validate()?;
+    *d = cropped;
+    Ok(())
 }
 pub fn ramp(a: Pixel, b: Pixel, n: usize) -> Vec<Pixel> {
     let n = n.clamp(2, 256);
@@ -256,9 +388,41 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
             }
         }
     }
+    let slices: Vec<_> = d
+        .slices
+        .iter()
+        .filter_map(|slice| {
+            let mut keys = Vec::new();
+            let mut previous = None;
+            for (frame, (source, _, _)) in sprites.iter().enumerate() {
+                let Some(key) = slice.key_at(*source) else {
+                    continue;
+                };
+                if previous == Some(key.frame) {
+                    continue;
+                }
+                let signed_scale = scale as i32;
+                keys.push(SliceKey {
+                    frame,
+                    bounds: key.bounds.map(|value| value.saturating_mul(signed_scale)),
+                    center: key
+                        .center
+                        .map(|rect| rect.map(|value| value.saturating_mul(signed_scale))),
+                    pivot: key
+                        .pivot
+                        .map(|point| point.map(|value| value.saturating_mul(signed_scale))),
+                });
+                previous = Some(key.frame);
+            }
+            (!keys.is_empty()).then(|| SpriteSlice {
+                name: slice.name.clone(),
+                keys,
+            })
+        })
+        .collect();
     Ok((
         im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags}}),
+        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices}}),
     ))
 }
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
@@ -337,6 +501,9 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
             });
         }
     }
+    if let Some(slices) = meta["meta"].get("slices") {
+        d.slices = serde_json::from_value(slices.clone()).map_err(|_| "Invalid slice metadata")?;
+    }
     d.validate()?;
     Ok(d)
 }
@@ -344,6 +511,23 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
 /// Transform a selection mask with the same nearest-neighbor mapping as its pixels.
 pub fn transform_mask(d: &Document, b: [i32; 4], mask: &[bool], t: Transform) -> Vec<bool> {
     let [x, y, w, h] = b;
+    if let Transform::RotateAround { degrees, pivot } = t {
+        let mut out = vec![false; d.width * d.height];
+        if let Some(([nx, ny, nw, nh], basis)) = rotation_bounds(b, degrees, pivot) {
+            for dy in ny.max(0)..(ny + nh).min(d.height as i32) {
+                for dx in nx.max(0)..(nx + nw).min(d.width as i32) {
+                    let (sx, sy) = rotated_source([dx, dy], pivot, basis);
+                    if (x..x + w).contains(&sx)
+                        && (y..y + h).contains(&sy)
+                        && let Some(source) = d.index(sx, sy)
+                    {
+                        out[dy as usize * d.width + dx as usize] = mask.get(source) == Some(&true);
+                    }
+                }
+            }
+        }
+        return out;
+    }
     let (nw, nh, dx, dy) = match t {
         Transform::Move(dx, dy) => (w, h, dx, dy),
         Transform::Rotate => (h, w, 0, 0),

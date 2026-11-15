@@ -28,6 +28,10 @@ pub(super) struct Studio {
     w: usize,
     h: usize,
     ramp_steps: usize,
+    rotation_angle: f64,
+    rotation_pivot: Option<[f64; 2]>,
+    rotation_preview: bool,
+    adjustment_input: Adjustment,
     recovery_root: PathBuf,
     last_save: Instant,
     last_session: Option<Workspace>,
@@ -58,6 +62,13 @@ impl Default for Studio {
             w: 16,
             h: 16,
             ramp_steps: 5,
+            rotation_angle: 0.,
+            rotation_pivot: None,
+            rotation_preview: false,
+            adjustment_input: Adjustment::Levels {
+                black: 0,
+                white: 255,
+            },
             recovery_root: extensions::config_directory(),
             last_save: Instant::now(),
             last_session: None,
@@ -68,7 +79,9 @@ impl Default for Studio {
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct StoredTab {
+    #[serde(with = "formats::recovery_document")]
     doc: Document,
+    #[serde(with = "formats::recovery_document")]
     saved: Document,
     path: Option<PathBuf>,
     layer: usize,
@@ -240,6 +253,7 @@ impl PixelCraft {
                             mask: t.mask.clone(),
                             palette_index: 0,
                             active_tag: None,
+                            timeline_anchor: None,
                         }));
                     }
                     let t = self.tabs[active].take().unwrap();
@@ -321,6 +335,7 @@ impl PixelCraft {
                     let (x, y) = (p.0 - ox, p.1 - oy);
                     *p = match t {
                         Transform::Move(dx, dy) => (p.0 + dx, p.1 + dy),
+                        Transform::RotateAround { .. } => *p,
                         Transform::Rotate => (ox + oh - y, oy + x),
                         Transform::FlipX => (ox + ow - x, p.1),
                         Transform::FlipY => (p.0, oy + oh - y),
@@ -330,7 +345,7 @@ impl PixelCraft {
                         ),
                     };
                 }
-                if self.studio.mask.is_some() {
+                if self.studio.mask.is_some() || matches!(t, Transform::RotateAround { .. }) {
                     let mask = workflows::transform_mask(&self.doc, original_bounds, &mask, t);
                     self.studio.polygon.clear();
                     self.set_selection_mask(mask);
@@ -482,6 +497,184 @@ impl PixelCraft {
         }
         self.status = format!("Applied {kind}");
     }
+    fn rotation_controls(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Rotate around a pivot", |ui| {
+            let [x, y, w, h] = self.selection_bounds();
+            let mut pivot = self.studio.rotation_pivot.unwrap_or([
+                f64::from(x) + f64::from(w) * 0.5,
+                f64::from(y) + f64::from(h) * 0.5,
+            ]);
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut self.studio.rotation_angle)
+                        .range(-360. ..=360.)
+                        .suffix("°"),
+                );
+                ui.add(egui::DragValue::new(&mut pivot[0]).prefix("Pivot X "));
+                ui.add(egui::DragValue::new(&mut pivot[1]).prefix("Pivot Y "));
+            });
+            ui.pc_checkbox(&mut self.studio.rotation_preview, "Preview on canvas");
+            let transform = Transform::RotateAround {
+                degrees: self.studio.rotation_angle,
+                pivot,
+            };
+            if ui.pc_button("Apply rotation").clicked() {
+                self.transform_selection(transform);
+                self.studio.rotation_preview = false;
+            }
+            self.studio.rotation_pivot = Some(pivot);
+        });
+    }
+
+    pub(super) fn rotation_preview_active(&self) -> bool {
+        self.studio.open && self.studio.rotation_preview
+    }
+
+    pub(super) fn rotation_preview(
+        &mut self,
+        ui: &mut egui::Ui,
+        board: Rect,
+    ) -> Option<egui::TextureHandle> {
+        if !self.studio.open
+            || !self.studio.rotation_preview
+            || self.doc.width * self.doc.height > 4_194_304
+        {
+            return None;
+        }
+        let mut pivot = self.studio.rotation_pivot?;
+        let center = board.min + Vec2::new(pivot[0] as f32, pivot[1] as f32) * self.zoom;
+        let response = ui.interact(
+            Rect::from_center_size(center, Vec2::splat(20.)),
+            ui.id().with("rotation-pivot"),
+            Sense::drag(),
+        );
+        let delta = response.drag_delta();
+        if delta != Vec2::ZERO {
+            pivot[0] += f64::from(delta.x / self.zoom);
+            pivot[1] += f64::from(delta.y / self.zoom);
+            self.studio.rotation_pivot = Some(pivot);
+        }
+        let mut preview = self.doc.clone();
+        let bounds = self.selection_bounds();
+        let mask: Vec<_> = (0..self.doc.width * self.doc.height)
+            .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
+            .collect();
+        let transform = Transform::RotateAround {
+            degrees: self.studio.rotation_angle,
+            pivot,
+        };
+        workflows::transform(
+            &mut preview,
+            self.layer,
+            self.frame,
+            bounds,
+            Some(&mask),
+            transform,
+        )
+        .ok()?;
+        let pixels = preview.composite(self.frame);
+        Some(ui.ctx().load_texture(
+            "rotation-preview",
+            color_image(&pixels, preview.width, preview.height),
+            egui::TextureOptions::NEAREST,
+        ))
+    }
+
+    pub(super) fn paint_rotation_pivot(&self, painter: &egui::Painter, board: Rect) {
+        if self.rotation_preview_active()
+            && let Some(pivot) = self.studio.rotation_pivot
+        {
+            let center = board.min + Vec2::new(pivot[0] as f32, pivot[1] as f32) * self.zoom;
+            painter.circle_stroke(center, 7., Stroke::new(3., Color32::BLACK));
+            painter.circle_stroke(center, 7., Stroke::new(1., Color32::WHITE));
+        }
+    }
+
+    fn adjustment_controls(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Masks and adjustments", |ui| {
+            let layer = self.layer;
+            if ui.pc_button("Mask from selection").clicked() {
+                let mut mask = Pixels::empty(self.doc.width * self.doc.height);
+                for i in 0..mask.len() {
+                    if self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
+                        mask.set(i, [0, 0, 0, 255]);
+                    }
+                }
+                self.edit_timeline(|doc| doc.set_layer_mask(layer, Some(mask)));
+            }
+            if ui.pc_button("Remove layer mask").clicked() {
+                self.edit_timeline(|doc| doc.set_layer_mask(layer, None));
+            }
+            let mut adjustment = self.studio.adjustment_input.clone();
+            ui.horizontal(|ui| {
+                if ui.pc_button("Edit current adjustment").clicked()
+                    && let Some(current) = &self.doc.layers[layer].adjustment
+                {
+                    adjustment = current.clone();
+                }
+                if ui.pc_button("Levels").clicked() {
+                    adjustment = Adjustment::Levels {
+                        black: 0,
+                        white: 255,
+                    };
+                }
+                if ui.pc_button("Hue / saturation").clicked() {
+                    adjustment = Adjustment::HueSaturation {
+                        hue: 0,
+                        saturation: 0,
+                    };
+                }
+                if ui.pc_button("Palette map").clicked() {
+                    adjustment = Adjustment::Palette { colors: Vec::new() };
+                }
+            });
+            match &mut adjustment {
+                Adjustment::Levels { black, white } => {
+                    ui.add(
+                        egui::DragValue::new(black)
+                            .range(0..=white.saturating_sub(1))
+                            .prefix("Black "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(white)
+                            .range(black.saturating_add(1)..=255)
+                            .prefix("White "),
+                    );
+                }
+                Adjustment::HueSaturation { hue, saturation } => {
+                    ui.add(egui::DragValue::new(hue).range(-180..=180).prefix("Hue "));
+                    ui.add(
+                        egui::DragValue::new(saturation)
+                            .range(-100..=100)
+                            .prefix("Saturation "),
+                    );
+                }
+                Adjustment::Palette { colors } => {
+                    if colors.len() < 256 && ui.pc_button("Map alternate to active color").clicked()
+                    {
+                        if let Some((_, color)) =
+                            colors.iter_mut().find(|(source, _)| *source == self.bg)
+                        {
+                            *color = self.fg;
+                        } else {
+                            colors.push((self.bg, self.fg));
+                        }
+                    }
+                    ui.label(format!("{} color mappings", colors.len()));
+                }
+            }
+            self.studio.adjustment_input = adjustment.clone();
+            if ui.pc_button("Set layer adjustment").clicked() {
+                self.edit_timeline(|doc| doc.set_adjustment(layer, Some(adjustment)));
+            }
+            if self.doc.layers[layer].adjustment.is_some()
+                && ui.pc_button("Remove adjustment").clicked()
+            {
+                self.edit_timeline(|doc| doc.set_adjustment(layer, None));
+            }
+        });
+    }
+
     pub(super) fn studio_dialogs(&mut self, ctx: &egui::Context) {
         if self.studio.open {
             let mut open = true;
@@ -569,6 +762,8 @@ impl PixelCraft {
                         }
                     });
                     ui.separator();
+                    self.rotation_controls(ui);
+                    self.adjustment_controls(ui);
                     ui.strong("Shading & effects");
                     ui.label("Gradient uses the active and alternate colors (X swaps).");
                     ui.horizontal(|ui| {
@@ -614,7 +809,7 @@ if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::File
         }
         if self.studio.tiles_open {
             let mut open = true;
-            egui::Window::new("Tileset browser").open(&mut open).default_width(330.).show(ctx,|ui|{if ui.pc_button("Import PNG tilesheet…").clicked()&& let Err(e)=self.import_tileset(){self.status=e}ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if self.doc.tilesets.is_empty(){ui.label("Import a tilesheet to browse and paint tiles.");}let mut choose=None;egui::ScrollArea::vertical().max_height(450.).show(ui,|ui|{for(ti,t)in self.doc.tilesets.iter().enumerate(){ui.strong(&t.name);ui.horizontal_wrapped(|ui|{for(i,tile)in t.tiles.iter().enumerate(){let tex=ctx.load_texture(format!("tile-{ti}-{i}"),color_image(tile,t.width,t.height),egui::TextureOptions::NEAREST);let selected=self.doc.layers[self.layer].tileset==Some(ti)&&self.selected_tile==i as u32+1;let button=egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(Vec2::splat(32.))).selected(selected);if ui.add(button).on_hover_text(format!("Tile {}",i+1)).clicked(){choose=Some((ti,i as u32+1));}}});}});if let Some((ti,id))=choose{if self.doc.layers[self.layer].tileset!=Some(ti){if let Some(l)=self.doc.layers.iter().position(|l|l.tileset==Some(ti)){self.layer=l}else{self.remember();if self.doc.add_tile_layer(ti).is_ok(){self.layer=self.doc.layers.len()-1}}}self.selected_tile=id;self.tool=Tool::Pencil;}ui.pc_checkbox(&mut self.studio.seamless,"Seamless preview");if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked(){self.studio_action("tiledexport");}ui.small("Open .tmj / .tsj for finite orthogonal Tiled JSON maps and image tilesets.");});
+            egui::Window::new("Tileset browser").open(&mut open).default_width(330.).show(ctx,|ui|{if ui.pc_button("Import PNG tilesheet…").clicked()&& let Err(e)=self.import_tileset(){self.status=e}ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if self.doc.tilesets.is_empty(){ui.label("Import a tilesheet to browse and paint tiles.");}let mut choose=None;egui::ScrollArea::vertical().max_height(450.).show(ui,|ui|{for(ti,t)in self.doc.tilesets.iter().enumerate(){ui.strong(&t.name);ui.horizontal_wrapped(|ui|{for(i,tile)in t.tiles.iter().enumerate(){let tex=ctx.load_texture(format!("tile-{ti}-{i}"),color_image(&tile.to_vec(),t.width,t.height),egui::TextureOptions::NEAREST);let selected=self.doc.layers[self.layer].tileset==Some(ti)&&self.selected_tile==i as u32+1;let button=egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(Vec2::splat(32.))).selected(selected);if ui.add(button).on_hover_text(format!("Tile {}",i+1)).clicked(){choose=Some((ti,i as u32+1));}}});}});if let Some((ti,id))=choose{if self.doc.layers[self.layer].tileset!=Some(ti){if let Some(l)=self.doc.layers.iter().position(|l|l.tileset==Some(ti)){self.layer=l}else{self.remember();if self.doc.add_tile_layer(ti).is_ok(){self.layer=self.doc.layers.len()-1}}}self.selected_tile=id;self.tool=Tool::Pencil;}ui.pc_checkbox(&mut self.studio.seamless,"Seamless preview");if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked(){self.studio_action("tiledexport");}ui.small("Open .tmj / .tsj for finite orthogonal Tiled JSON maps and image tilesets.");});
             self.studio.tiles_open = open;
         }
         if self.studio.seamless {

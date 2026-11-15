@@ -16,7 +16,7 @@ fn raster_batch_clips_replaces_and_blends_atomically() {
     ]});
     let next = apply_commands(&doc, &args).unwrap();
     assert_eq!(
-        &next.layers[0].cels[0][..],
+        &next.layers[0].cels[0].to_vec()[..],
         &[[0, 255, 0, 255], [0, 0, 0, 0], [0, 0, 0, 0]]
     );
     args["commands"][1]["data"] = json!("AAAA");
@@ -37,7 +37,7 @@ fn native_stamp_uses_the_requested_cel_and_points() {
     )
     .unwrap();
     assert_eq!(
-        &next.layers[1].cels[0][..5],
+        &next.layers[1].cels[0].to_vec()[..5],
         &[
             [255, 120, 0, 255],
             [0; 4],
@@ -156,7 +156,7 @@ fn region_move_handles_overlap_and_keeps_source_order() {
     )
     .unwrap();
     assert_eq!(
-        &next.layers[0].cels[0][..],
+        &next.layers[0].cels[0].to_vec()[..],
         &[[0; 4], [20, 0, 0, 255], [10, 0, 0, 255], [0; 4]]
     );
 }
@@ -186,7 +186,7 @@ fn bitmap_stroke_composites_without_erasing_under_transparent_stamp_pixels() {
          "mode":"source-over","opacity":128,"stamp":{"width":2,"height":1,"data":"AAAAAP8AAP8="}}
     ]})).unwrap();
     assert_eq!(
-        &next.layers[0].cels[0][..],
+        &next.layers[0].cels[0].to_vec()[..],
         &[[0, 0, 255, 255], [128, 0, 127, 255]]
     );
 }
@@ -204,7 +204,7 @@ fn compressed_patch_requires_a_complete_stream_and_exact_decoded_length() {
          "encoding":"base64-zlib","data":STANDARD.encode(&packed)}
     ]});
     assert_eq!(
-        &apply_commands(&doc, &args).unwrap().layers[0].cels[0][..],
+        &apply_commands(&doc, &args).unwrap().layers[0].cels[0].to_vec()[..],
         &[[2, 3, 4, 255], [5, 6, 7, 255]]
     );
     args["commands"][0]["data"] = json!(STANDARD.encode(&packed[..packed.len() - 1]));
@@ -228,7 +228,7 @@ fn region_mask_follows_the_source_pixel_when_flipped() {
     )
     .unwrap();
     assert_eq!(
-        &next.layers[0].cels[0][..],
+        &next.layers[0].cels[0].to_vec()[..],
         &[[0; 4], [20, 0, 0, 255], [0; 4], [10, 0, 0, 255]]
     );
 }
@@ -247,4 +247,123 @@ fn overlapping_shade_dabs_step_once_per_stroke() {
     )
     .unwrap();
     assert_eq!(next.layers[0].cels[0][0], [20, 0, 0, 255]);
+}
+
+#[test]
+fn stable_targets_follow_reordered_layers_and_preview_matches_apply() {
+    use pixelcraft::automation::{inspect_cel_page, inspect_revision, preview_commands};
+    let mut doc = Document::new(4, 4);
+    doc.add_layer();
+    let info = inspect_revision(&doc, &document_revision(&doc));
+    let layer_id = info["layers"][0]["id"].clone();
+    let page = inspect_cel_page(&doc, &json!({"layer_id":layer_id})).unwrap();
+    let cel_id = page["cels"][0]["id"].clone();
+    assert!(layer_id.is_string() && cel_id.is_string());
+    doc.swap_layers(0, 1);
+    let args = json!({"revision":document_revision(&doc),"commands":[
+        {"op":"stroke","layer_id":layer_id,"cel_id":cel_id,"points":[[1,1]],"color":[38,85,126,255]}
+    ]});
+    let preview = preview_commands(&doc, 0, &args, &document_revision(&doc), None).unwrap();
+    let applied = apply_commands(&doc, &args).unwrap();
+    assert_eq!(doc.composite(0)[5], [0; 4]);
+    assert_eq!(applied.layers[1].cels[0][5], [38, 85, 126, 255]);
+    assert_eq!(preview["changed_cels"][0]["layer"], 1);
+    let applied_render = pixelcraft::automation::render_preview(
+        &applied,
+        0,
+        &args,
+        &document_revision(&applied),
+        4_194_304,
+    )
+    .unwrap();
+    assert_eq!(preview["data"], applied_render["data"]);
+    doc.remove_layer(1);
+    let mut stale = args;
+    stale["revision"] = json!(document_revision(&doc));
+    assert!(apply_commands(&doc, &stale).is_err());
+}
+
+#[test]
+fn export_cancellation_removes_staging_and_keeps_completed_output() {
+    use pixelcraft::automation::prepare_live_export_with_progress;
+    let mut doc = Document::new(4, 4);
+    doc.add_frame(0, true);
+    let root =
+        std::env::temp_dir().join(format!("pixelcraft-export-cancel-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let output = root.join("frames");
+    let args = json!({"output":output,"format":"png-sequence"});
+    let cancelled = prepare_live_export_with_progress(&doc, 0, &args, "test", |done, _| {
+        if done == 1 {
+            Err("Export cancelled".into())
+        } else {
+            Ok(())
+        }
+    });
+    assert!(cancelled.is_err());
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+    let completed =
+        prepare_live_export_with_progress(&doc, 0, &args, "test", |_, _| Ok(())).unwrap();
+    completed.write().unwrap();
+    assert_eq!(std::fs::read_dir(&output).unwrap().count(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn export_commit_rejects_late_cancellation() {
+    let progress = pixelcraft::automation::LiveExportProgress::default();
+    progress.begin_commit().unwrap();
+    assert!(!progress.cancel());
+    assert!(!progress.is_cancelled());
+
+    let cancelled = pixelcraft::automation::LiveExportProgress::default();
+    assert!(cancelled.cancel());
+    assert!(cancelled.begin_commit().is_err());
+}
+
+#[test]
+fn repeated_masks_share_the_raster_work_budget() {
+    let doc = Document::new(2001, 1000);
+    let mask = json!({"op":"set-layer-mask","layer":0,
+        "region":{"x":0,"y":0,"width":2001,"height":1000}});
+    let once = json!({"revision":document_revision(&doc),"commands":[mask]});
+    let masked = apply_commands(&doc, &once).unwrap();
+    assert_eq!(masked.layers[0].mask.as_ref().unwrap()[2_000_999][3], 255);
+
+    let repeated = json!({"revision":document_revision(&doc),"commands":[
+        mask, {"op":"set-layer-mask","layer":0}, mask
+    ]});
+    let error = apply_commands(&doc, &repeated)
+        .expect_err("The repeated mask must exceed the cumulative raster work budget");
+    assert!(error.contains("work limit"), "{error}");
+    assert!(doc.layers[0].mask.is_none());
+}
+
+#[test]
+fn oversized_save_reply_leaves_destination_untouched() {
+    use pixelcraft::automation::prepare_live_save;
+
+    let root = std::env::temp_dir().join(format!("pixelcraft-save-reply-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let output = root.join("sprite.pixel");
+    std::fs::write(&output, b"previous file").unwrap();
+
+    let mut doc = Document::new(1, 1);
+    doc.layers[0].name = "\"".repeat(4_000_000);
+    for replace in [false, true] {
+        let path = if replace {
+            output.clone()
+        } else {
+            root.join("new.pixel")
+        };
+        let error = match prepare_live_save(&doc, path, "test:1", replace) {
+            Ok(_) => panic!("Oversized save reply must fail before staging"),
+            Err(error) => error,
+        };
+        assert!(error.contains("live response limit"), "{error}");
+    }
+    assert_eq!(std::fs::read(&output).unwrap(), b"previous file");
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+    std::fs::remove_file(output).unwrap();
+    std::fs::remove_dir(root).unwrap();
 }

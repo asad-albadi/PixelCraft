@@ -45,7 +45,31 @@ local function unpackColor(c)
  if type(c)=='table' then return {byte(c.r or c.red or c[1]),byte(c.g or c.green or c[2]),byte(c.b or c.blue or c[3]),byte(c.a or c.alpha or c[4] or 255)} end
  c=math.tointeger(c or 0) or 0;return {c&255,(c>>8)&255,(c>>16)&255,(c>>24)&255}
 end
-local doc=_pw_document
+local function expandDocumentPixels(document)
+ local function expand(pixels)
+  if pixels.clear_pixels or pixels.blocks then
+   local dense={}
+   for i=1,pixels.clear_pixels or pixels.len do dense[i]={0,0,0,0} end
+   for index,block in pairs(pixels.blocks or {}) do
+    local offset=tonumber(index)*16
+    for i,pixel in ipairs(block) do
+     if offset+i<=pixels.len then dense[offset+i]=pixel end
+    end
+   end
+   return dense
+  end
+  return pixels
+ end
+ for _,layer in ipairs(document.layers) do
+  for f,pixels in ipairs(layer.cels) do layer.cels[f]=expand(pixels) end
+ end
+ for _,tileset in ipairs(document.tilesets or {}) do
+  for i,pixels in ipairs(tileset.tiles) do tileset.tiles[i]=expand(pixels) end
+ end
+ for _,reference in ipairs(document.references or {}) do reference.pixels=expand(reference.pixels) end
+ return document
+end
+local doc=expandDocumentPixels(_pw_document)
 local colorChannels={r=1,red=1,g=2,green=2,b=3,blue=3,a=4,alpha=4}
 local function hsvToRgb(h,s,v)
  h=(h%360)/60;s=math.max(0,math.min(1,s));v=math.max(0,math.min(1,v))
@@ -298,14 +322,18 @@ AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}
 -- the preference Color into fresh Lua userdata on every read.
 local scriptColors=_pw_colors
 local imageMethods={}
-local function image(p,w,h) return setmetatable({_pixels=p,width=w,height=h,colorMode=doc.color_mode,bytesPerPixel=doc.color_mode=='Rgba' and 4 or doc.color_mode=='Grayscale' and 2 or 1,spec={width=w,height=h,colorMode=doc.color_mode,transparentColor=doc.transparent_index}},{__index=imageMethods}) end
+local function image(p,w,h,mode)
+ mode=mode or doc.color_mode
+ return setmetatable({_pixels=p,width=w,height=h,colorMode=mode,bytesPerPixel=mode=='Rgba' and 4 or mode=='Grayscale' and 2 or 1,spec={width=w,height=h,colorMode=mode,transparentColor=doc.transparent_index}},{__index=imageMethods})
+end
 function Image(w,h,mode)
- if type(w)=='table' and w._pixels then return image(copy(w._pixels),w.width,w.height) end
+ if type(w)=='table' and w._pixels then return image(copy(w._pixels),w.width,w.height,w.colorMode) end
  if type(w)=='table' then h=w.height;w=w.width end
  assert(type(w)=='number' and type(h)=='number' and w>0 and h>0 and w*h<=16000000,'Image dimensions exceed budget')
- local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h)
+ local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h,mode)
 end
 function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 and y>=0 and x<self.width and y<self.height then local value=unpackColor(c);self._pixels[y*self.width+x+1]=value;if self._put then self._put(x,y,value)end end end
+imageMethods.putPixel=imageMethods.drawPixel
 function imageMethods:getPixel(x,y) if x<0 or y<0 or x>=self.width or y>=self.height then return 0 end return rgba(table.unpack(self._pixels[y*self.width+x+1])) end
 function imageMethods:clear(c) for y=0,self.height-1 do for x=0,self.width-1 do self:drawPixel(x,y,c or 0)end end end
 function imageMethods:clone() return Image(self) end
@@ -351,14 +379,26 @@ local function celImage(l,fi)
  end end
  local im=image(p,b[3],b[4])
  im._put=function(x,y,color)
-  local px,py=x+b[1],y+b[2]
-  if px>=0 and py>=0 and px<doc.width and py<doc.height then l.cels[fi][py*doc.width+px+1]=copy(color)
-  else for _,o in ipairs(m.outside)do if o.x==px and o.y==py then o.color=copy(color);return end end;m.outside[#m.outside+1]={x=px,y=py,color=copy(color)} end
+  local link=m.artwork_link
+  for frame,target in ipairs(l.cel_meta) do
+   if frame==fi or (link and target.artwork_link==link) then
+    local bounds=target.bounds or {0,0,doc.width,doc.height}
+    local px,py=x+bounds[1],y+bounds[2]
+    if px>=0 and py>=0 and px<doc.width and py<doc.height then l.cels[frame][py*doc.width+px+1]=copy(color)
+    else
+     local found=false
+     for _,o in ipairs(target.outside)do
+      if o.x==px and o.y==py then o.color=copy(color);found=true;break end
+     end
+     if not found then target.outside[#target.outside+1]={x=px,y=py,color=copy(color)} end
+    end
+   end
+  end
  end
  return im
 end
 local function putCelImage(l,fi,im,pos)
- local m=l.cel_meta[fi];m.outside={};m.indices=nil
+ local m=l.cel_meta[fi];m.outside={};m.indices=nil;m.artwork_link=nil
  local pixels={} for i=1,doc.width*doc.height do pixels[i]={0,0,0,0}end;l.cels[fi]=pixels
  m.bounds=(pos.x==0 and pos.y==0 and im.width==doc.width and im.height==doc.height) and nil or {pos.x,pos.y,im.width,im.height}
  for y=0,im.height-1 do for x=0,im.width-1 do local px,py=pos.x+x,pos.y+y;local color=copy(im._pixels[y*im.width+x+1])
@@ -405,7 +445,7 @@ function spriteMethods:newFrame(f)
  table.insert(doc.durations,f+1,doc.durations[f])
  for _,l in ipairs(doc.layers) do
   table.insert(l.cels,f+1,copy(l.cels[f]))
-  table.insert(l.cel_meta,f+1,copy(l.cel_meta[f]))
+  local meta=copy(l.cel_meta[f]);meta.artwork_link=nil;table.insert(l.cel_meta,f+1,meta)
   table.insert(l.tile_cels,f+1,copy(l.tile_cels[f]))
  end
  -- Keep PixelCraft's parallel document data aligned with the inserted frame.
@@ -440,9 +480,36 @@ end
 function spriteMethods:newTag(a,b) a=frameNumber(a);b=frameNumber(b);assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range');local t={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}};table.insert(doc.tags,t);return setmetatable({},{__index=function(_,k)if k=='name' then return t.name elseif k=='fromFrame' then return frameHandles[t.from+1] elseif k=='toFrame' then return frameHandles[t.to+1] elseif k=='aniDir' then return t.direction end end,__newindex=function(_,k,v)if k=='name' then t.name=tostring(v) elseif k=='aniDir' then t.direction=v elseif k=='fromFrame' then t.from=frameNumber(v)-1 elseif k=='toFrame' then t.to=frameNumber(v)-1 else error('Unsupported tag field: '..k) end end}) end
 setmetatable(sprite,{__index=function(_,k)if spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
 rebuildHandles()
+-- Detached scratch sprites let a script compose an image without changing the
+-- editor document. They are not tabs and do not participate in document undo.
+function Sprite(w,h,mode)
+ mode=mode or ColorMode.RGB
+ assert(mode==ColorMode.RGB,'Detached sprites must use RGB mode')
+ local layer,frame={name='Layer 1'},{frameNumber=1,duration=0.1}
+ local scratch={width=w,height=h,colorMode=mode,layers={layer},frames={frame}}
+ local cells={}
+ local closed=false
+ function scratch:newCel(target,at,im,pos)
+  assert(not closed and target==layer and frameNumber(at)==1,'Invalid detached sprite cel')
+  local cell={layer=layer,frame=frame,image=im and im:clone() or Image(w,h,mode),position=pos or Point(),opacity=255}
+  cells[1]=cell
+  return cell
+ end
+ function layer:cel(at)
+  assert(not closed,'Detached sprite is closed')
+  return cells[frameNumber(at)]
+ end
+ function scratch:close()
+  closed=true
+  cells={}
+ end
+ -- Validate the initial canvas and provide its first cel.
+ scratch:newCel(layer,frame)
+ return scratch
+end
 local activeLayer,activeFrame=_pw_layer+1,_pw_frame+1
 local commands={}
-app=setmetatable({apiVersion=1,version='PixelCraft 0.3',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
+app=setmetatable({apiVersion=1,version='PixelCraft 0.3',isUIAvailable=false,pixelColor={rgba=pixelRgba,rgbaR=function(c)return pixelInteger(c)&255 end,rgbaG=function(c)return(pixelInteger(c)>>8)&255 end,rgbaB=function(c)return(pixelInteger(c)>>16)&255 end,rgbaA=function(c)return(pixelInteger(c)>>24)&255 end},params={},transaction=function(a,b)return (b or a)() end,refresh=function()end,alert=function(t)print(type(t)=='table' and (t.text or t.title or '') or t)end},{__index=function(_,k)if k=='activeSprite' then return sprite elseif k=='activeLayer' then return layerHandles[activeLayer] elseif k=='activeFrame' then return frameHandles[activeFrame] elseif k=='activeCel' then return cel(activeLayer,activeFrame) elseif k=='activeImage' then return cel(activeLayer,activeFrame).image elseif k=='sprites' then return {sprite} elseif k=='fgColor' then return Color(scriptColors[1]) elseif k=='bgColor' then return Color(scriptColors[2]) else error('Unsupported app API: '..k) end end,__newindex=function(_,k,v)if k=='activeSprite' then assert(v==sprite,'Only the editor sprite can be made active') elseif k=='activeLayer' then activeLayer=assert(layerNumber(v)) elseif k=='activeFrame' then activeFrame=assert(frameNumber(v)) else error('Unsupported app assignment: '..k) end end})
 -- NewFrameCommand::onExecute (0x45cfa0) passes active index+1 to
 -- addFrame/addEmptyFrame. Sprite methods without arguments instead append.
 rawset(app,'command',setmetatable({NewLayer=function()app.activeLayer=sprite:newLayer()end,NewFrame=function()

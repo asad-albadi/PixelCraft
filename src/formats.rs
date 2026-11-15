@@ -4,7 +4,8 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
-const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x01";
+const PROJECT_MAGIC_V1: &[u8] = b"PIXEL-WORKSHOP\0\x01";
+const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x02";
 // Four 3-digit channels, commas and brackets can use 18 JSON bytes per pixel.
 const MAX_PROJECT_BYTES: u64 = MAX_DOCUMENT_PIXELS as u64 * 18 + 128 * 1024 * 1024;
 fn u16at(b: &[u8], p: usize) -> Result<u16, String> {
@@ -106,42 +107,255 @@ fn read_pixels(
         })
         .collect()
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ProjectV2 {
+    document: Document,
+    #[serde(default)]
+    shared_rasters: Vec<SharedRaster>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SharedRaster {
+    source: [usize; 2],
+    copies: Vec<[usize; 2]>,
+}
+
+impl ProjectV2 {
+    fn new(document: &Document) -> Self {
+        let mut document = document.clone();
+        let mut sources = std::collections::HashMap::new();
+        let mut shared_rasters = Vec::<SharedRaster>::new();
+        for (layer, entry) in document.layers.iter_mut().enumerate() {
+            for (frame, raster) in entry.cels.iter_mut().enumerate() {
+                let Some(id) = raster.backing_id() else {
+                    continue;
+                };
+                use std::collections::hash_map::Entry;
+                match sources.entry(id) {
+                    Entry::Vacant(slot) => {
+                        slot.insert(shared_rasters.len());
+                        shared_rasters.push(SharedRaster {
+                            source: [layer, frame],
+                            copies: Vec::new(),
+                        });
+                    }
+                    Entry::Occupied(slot) => {
+                        shared_rasters[*slot.get()].copies.push([layer, frame]);
+                        *raster = Pixels::empty(raster.len());
+                    }
+                }
+            }
+        }
+        shared_rasters.retain(|group| !group.copies.is_empty());
+        Self {
+            document,
+            shared_rasters,
+        }
+    }
+
+    fn restore(mut self) -> Result<Document, String> {
+        let invalid = || "Invalid project raster reference".to_string();
+        let targets: std::collections::HashSet<_> = self
+            .shared_rasters
+            .iter()
+            .flat_map(|group| group.copies.iter().copied())
+            .collect();
+        let mut used = std::collections::HashSet::new();
+        for group in self.shared_rasters {
+            if targets.contains(&group.source) {
+                return Err(invalid());
+            }
+            let [layer, frame] = group.source;
+            let raster = self
+                .document
+                .layers
+                .get(layer)
+                .and_then(|l| l.cels.get(frame))
+                .cloned()
+                .ok_or_else(invalid)?;
+            for [layer, frame] in group.copies {
+                if !used.insert([layer, frame]) {
+                    return Err(invalid());
+                }
+                let target = self
+                    .document
+                    .layers
+                    .get_mut(layer)
+                    .and_then(|l| l.cels.get_mut(frame))
+                    .ok_or_else(invalid)?;
+                if !matches!(target, Pixels::Empty { .. }) || target.len() != raster.len() {
+                    return Err(invalid());
+                }
+                *target = raster.clone();
+            }
+        }
+        Ok(self.document)
+    }
+}
+
+/// Workspace recovery embeds the same shared-raster representation used
+/// by native files while retaining support for earlier dense workspace data.
+pub mod recovery_document {
+    use super::{Document, MAX_DOCUMENT_PIXELS, Pixel, ProjectV2, with_project_decode_budget};
+    use serde::{Deserialize, Serialize};
+
+    pub fn serialize<S: serde::Serializer>(
+        doc: &Document,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        ProjectV2::new(doc).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<Document, D::Error> {
+        use serde::de::{Error, MapAccess, Visitor};
+
+        struct Recovery;
+        impl<'de> Visitor<'de> for Recovery {
+            type Value = Document;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a PixelCraft recovery document")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Document, M::Error> {
+                let key = map
+                    .next_key::<String>()?
+                    .ok_or_else(|| Error::missing_field("document"))?;
+                let mut doc = if matches!(key.as_str(), "document" | "shared_rasters") {
+                    // Decode raster arrays directly into their typed storage. A JSON Value for
+                    // each channel of a dense canvas can take much more memory than the image.
+                    let (mut document, mut shared) = (None, None);
+                    let mut next = Some(key);
+                    while let Some(field) = next {
+                        match field.as_str() {
+                            "document" if document.is_none() => document = Some(map.next_value()?),
+                            "shared_rasters" if shared.is_none() => {
+                                shared = Some(map.next_value()?)
+                            }
+                            "document" => return Err(Error::duplicate_field("document")),
+                            "shared_rasters" => {
+                                return Err(Error::duplicate_field("shared_rasters"));
+                            }
+                            _ => {
+                                map.next_value::<serde::de::IgnoredAny>()?;
+                            }
+                        }
+                        next = map.next_key()?;
+                    }
+                    ProjectV2 {
+                        document: document.ok_or_else(|| Error::missing_field("document"))?,
+                        shared_rasters: shared.unwrap_or_default(),
+                    }
+                    .restore()
+                    .map_err(Error::custom)?
+                } else {
+                    let decoder = serde::de::value::MapAccessDeserializer::new(RecoveryLegacy {
+                        first_value: Some(key),
+                        map,
+                    });
+                    Document::deserialize(decoder)?
+                };
+                doc.share_linked_rasters();
+                Ok(doc)
+            }
+        }
+        // Forward the field we peeked at into the legacy document's normal streaming decoder.
+        struct RecoveryLegacy<M> {
+            first_value: Option<String>,
+            map: M,
+        }
+        impl<'de, M: MapAccess<'de>> MapAccess<'de> for RecoveryLegacy<M> {
+            type Error = M::Error;
+
+            fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                seed: K,
+            ) -> Result<Option<K::Value>, Self::Error> {
+                match self.first_value.take() {
+                    Some(key) => seed
+                        .deserialize(serde::de::value::StringDeserializer::new(key))
+                        .map(Some),
+                    None => self.map.next_key_seed(seed),
+                }
+            }
+
+            fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+                &mut self,
+                seed: V,
+            ) -> Result<V::Value, Self::Error> {
+                self.map.next_value_seed(seed)
+            }
+        }
+        with_project_decode_budget(MAX_DOCUMENT_PIXELS * size_of::<Pixel>(), || {
+            decoder.deserialize_map(Recovery)
+        })
+    }
+}
+
 pub fn encode_project(d: &Document) -> Result<Vec<u8>, String> {
     d.validate()?;
     let mut out = PROJECT_MAGIC.to_vec();
     let mut z = ZlibEncoder::new(vec![], Compression::fast());
     let mut buffered = BufWriter::with_capacity(64 * 1024, &mut z);
-    serde_json::to_writer(&mut buffered, d).map_err(|e| e.to_string())?;
+    serde_json::to_writer(&mut buffered, &ProjectV2::new(d)).map_err(|e| e.to_string())?;
     buffered.into_inner().map_err(|e| e.to_string())?;
     out.extend(z.finish().map_err(|e| e.to_string())?);
     Ok(out)
 }
 pub fn decode_project(b: &[u8]) -> Result<Document, String> {
-    let b = b
-        .strip_prefix(PROJECT_MAGIC)
-        .ok_or("Invalid PixelCraft project version")?;
+    decode_project_reader(b)
+}
+
+fn decode_project_reader(mut input: impl Read) -> Result<Document, String> {
+    let mut magic = [0; PROJECT_MAGIC.len()];
+    input
+        .read_exact(&mut magic)
+        .map_err(|error| error.to_string())?;
+    let legacy = match magic.as_slice() {
+        PROJECT_MAGIC => false,
+        PROJECT_MAGIC_V1 => true,
+        _ => return Err("Invalid PixelCraft project version".into()),
+    };
+    with_project_decode_budget(MAX_DOCUMENT_PIXELS * size_of::<Pixel>(), || {
+        decode_project_payload(input, legacy)
+    })
+}
+
+fn decode_project_payload(input: impl Read, legacy: bool) -> Result<Document, String> {
     // Parse common projects from a byte slice. Keep the streaming path for
     // large projects so decoding does not also retain the whole JSON payload.
     const SLICE_LIMIT: usize = 96 * 1024 * 1024;
-    let mut decoder = ZlibDecoder::new(b);
+    let mut decoder = ZlibDecoder::new(input);
     let mut prefix = Vec::new();
     (&mut decoder)
         .take(SLICE_LIMIT as u64 + 1)
         .read_to_end(&mut prefix)
         .map_err(|e| e.to_string())?;
-    let d: Document = if prefix.len() <= SLICE_LIMIT {
-        serde_json::from_slice(&prefix)
-    } else {
-        let remaining = MAX_PROJECT_BYTES - prefix.len() as u64;
-        serde_json::from_reader(BufReader::with_capacity(
-            64 * 1024,
-            std::io::Cursor::new(prefix).chain(decoder.take(remaining)),
-        ))
-    }
-    .map_err(|e| e.to_string())?;
+    let mut d: Document = match (legacy, prefix.len() <= SLICE_LIMIT) {
+        (true, true) => serde_json::from_slice(&prefix).map_err(|e| e.to_string())?,
+        (false, true) => serde_json::from_slice::<ProjectV2>(&prefix)
+            .map_err(|e| e.to_string())?
+            .restore()?,
+        (legacy, false) => {
+            let remaining = MAX_PROJECT_BYTES - prefix.len() as u64;
+            let reader = BufReader::with_capacity(
+                64 * 1024,
+                std::io::Cursor::new(prefix).chain(decoder.take(remaining)),
+            );
+            if legacy {
+                serde_json::from_reader(reader).map_err(|e| e.to_string())?
+            } else {
+                serde_json::from_reader::<_, ProjectV2>(reader)
+                    .map_err(|e| e.to_string())?
+                    .restore()?
+            }
+        }
+    };
+    d.share_linked_rasters();
     d.validate()?;
     Ok(d)
 }
+
 fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &str) {
     for m in d
         .metadata
@@ -151,8 +365,104 @@ fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &st
         chunks.push(chunk(m.kind, m.data.clone()));
     }
 }
+fn encode_slice(slice: &SpriteSlice) -> Result<Vec<u8>, String> {
+    let center = slice.keys.iter().any(|key| key.center.is_some());
+    let pivot = slice.keys.iter().any(|key| key.pivot.is_some());
+    let mut data = Vec::new();
+    dword(&mut data, slice.keys.len() as u32);
+    dword(&mut data, u32::from(center) | (u32::from(pivot) << 1));
+    dword(&mut data, 0);
+    string(&mut data, &slice.name)?;
+    for key in &slice.keys {
+        dword(&mut data, key.frame as u32);
+        for value in key.bounds {
+            dword(&mut data, value as u32);
+        }
+        if center {
+            for value in key.center.unwrap_or([0; 4]) {
+                dword(&mut data, value as u32);
+            }
+        }
+        if pivot {
+            for value in key.pivot.unwrap_or([0; 2]) {
+                dword(&mut data, value as u32);
+            }
+        }
+    }
+    Ok(data)
+}
+
+fn decode_slice(data: &[u8]) -> Result<SpriteSlice, String> {
+    let count = u32at(data, 0)? as usize;
+    let flags = u32at(data, 4)?;
+    if flags & !3 != 0 || count > u16::MAX as usize {
+        return Err("Unsupported slice flags or key count".into());
+    }
+    let mut cursor = 12;
+    let name = read_string(data, &mut cursor)?;
+    let mut next = || {
+        let value = u32at(data, cursor);
+        cursor += 4;
+        value
+    };
+    let mut keys = Vec::new();
+    for _ in 0..count {
+        let frame = next()? as usize;
+        let bounds = [
+            next()? as i32,
+            next()? as i32,
+            next()? as i32,
+            next()? as i32,
+        ];
+        let center = if flags & 1 != 0 {
+            Some([
+                next()? as i32,
+                next()? as i32,
+                next()? as i32,
+                next()? as i32,
+            ])
+        } else {
+            None
+        };
+        let pivot = if flags & 2 != 0 {
+            Some([next()? as i32, next()? as i32])
+        } else {
+            None
+        };
+        keys.push(SliceKey {
+            frame,
+            bounds,
+            center,
+            pivot,
+        });
+    }
+    keys.sort_by_key(|key| key.frame);
+    Ok(SpriteSlice { name, keys })
+}
+
 pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
     d.validate()?;
+    if d.needs_baked_ase() {
+        let mut baked = Document::new(d.width, d.height);
+        baked.layers[0].name = "Baked artwork".into();
+        baked.durations = d.durations.clone();
+        baked.tags = d.tags.clone();
+        baked.slices = d.slices.clone();
+        baked.color_profile = d.color_profile.clone();
+        baked.layers[0].cel_meta = vec![CelMeta::default(); d.durations.len()];
+        baked.layers[0].tile_cels = vec![vec![]; d.durations.len()];
+        if d.width
+            .saturating_mul(d.height)
+            .saturating_mul(d.durations.len())
+            > MAX_DOCUMENT_PIXELS
+        {
+            return Err("Baked ASE copy exceeds the project pixel budget".into());
+        }
+        baked.layers[0].cels = (0..d.durations.len())
+            .map(|frame| d.composite(frame).into())
+            .collect();
+        return encode_ase(&baked);
+    }
     let mut out = d
         .metadata
         .iter()
@@ -202,6 +512,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
     for (new, (old, _)) in order.iter().enumerate() {
         ids[*old] = new;
     }
+    let mut link_sources = std::collections::HashMap::new();
     for f in 0..d.durations.len() {
         let mut chunks = vec![];
         let palette = d.palette_for(f);
@@ -325,14 +636,33 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             chunks.push(chunk(0x2019, c));
             append_metadata(&mut chunks, d, f, "palette");
         }
+        if f == 0 {
+            for (index, slice) in d.slices.iter().enumerate() {
+                chunks.push(chunk(0x2022, encode_slice(slice)?));
+                append_metadata(&mut chunks, d, f, &format!("slice:{index}"));
+            }
+        }
         for &(li, _) in &order {
             let l = &d.layers[li];
             if l.group {
                 continue;
             }
             let m = &l.cel_meta[f];
-            let effective_palette = d.editing_palette(li, f);
-            let palette = effective_palette.as_slice();
+            if l.tileset.is_none()
+                && m.artwork_link.is_none()
+                && m.bounds.is_none()
+                && m.indices.is_none()
+                && m.outside.is_empty()
+                && l.cels[f].allocation_pixels() == 0
+                && m.opacity == 255
+                && m.z_index == 0
+                && !d
+                    .metadata
+                    .iter()
+                    .any(|chunk| chunk.frame == f && chunk.owner == format!("cel:{li}"))
+            {
+                continue;
+            }
             let (mut x, mut y, mut w, mut h) = (0i32, 0i32, d.width, d.height);
             if l.tileset.is_none() {
                 if let Some(bounds) = m.bounds {
@@ -341,26 +671,27 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                     w = bounds[2] as usize;
                     h = bounds[3] as usize;
                 }
-                let mut maxx = x + w as i32;
-                let mut maxy = y + h as i32;
-                for (i, p) in l.cels[f].iter().enumerate().filter(|(_, p)| p[3] != 0) {
-                    let (cx, cy) = ((i % d.width) as i32, (i / d.width) as i32);
-                    let _ = p;
-                    x = x.min(cx);
-                    y = y.min(cy);
-                    maxx = maxx.max(cx + 1);
-                    maxy = maxy.max(cy + 1);
+                if m.bounds.is_some() || !m.outside.is_empty() {
+                    let mut maxx = x + w as i32;
+                    let mut maxy = y + h as i32;
+                    l.cels[f].visit_nonclear(|i, _| {
+                        let (cx, cy) = ((i % d.width) as i32, (i / d.width) as i32);
+                        x = x.min(cx);
+                        y = y.min(cy);
+                        maxx = maxx.max(cx + 1);
+                        maxy = maxy.max(cy + 1);
+                    });
+                    for p in &m.outside {
+                        x = x.min(p.x);
+                        y = y.min(p.y);
+                    }
+                    for p in &m.outside {
+                        maxx = maxx.max(p.x + 1);
+                        maxy = maxy.max(p.y + 1);
+                    }
+                    w = (maxx - x) as usize;
+                    h = (maxy - y) as usize;
                 }
-                for p in &m.outside {
-                    x = x.min(p.x);
-                    y = y.min(p.y);
-                }
-                for p in &m.outside {
-                    maxx = maxx.max(p.x + 1);
-                    maxy = maxy.max(p.y + 1);
-                }
-                w = (maxx - x) as usize;
-                h = (maxy - y) as usize;
                 if x < i16::MIN as i32
                     || y < i16::MIN as i32
                     || w > 65535
@@ -379,10 +710,23 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             word(&mut c, x as i16 as u16);
             word(&mut c, y as i16 as u16);
             c.push(m.opacity);
-            word(&mut c, if l.tileset.is_some() { 3 } else { 2 });
+            let linked_from = m.artwork_link.and_then(|link| {
+                let source = link_sources.entry((li, link)).or_insert(f);
+                (*source < f).then_some(*source)
+            });
+            let kind = if linked_from.is_some() {
+                1
+            } else if l.tileset.is_some() {
+                3
+            } else {
+                2
+            };
+            word(&mut c, kind);
             word(&mut c, m.z_index as u16);
             c.extend([0; 5]);
-            if let Some(ti) = l.tileset {
+            if let Some(source) = linked_from {
+                word(&mut c, source as u16);
+            } else if let Some(ti) = l.tileset {
                 let t = &d.tilesets[ti];
                 word(
                     &mut c,
@@ -410,25 +754,44 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             } else {
                 word(&mut c, w as u16);
                 word(&mut c, h as u16);
-                let mut p = vec![CLEAR; w * h];
-                for cy in 0..d.height {
-                    for cx in 0..d.width {
-                        if (cx as i32) >= x
-                            && (cy as i32) >= y
-                            && (cx as i32) < x + w as i32
-                            && (cy as i32) < y + h as i32
-                        {
-                            p[(cy as i32 - y) as usize * w + (cx as i32 - x) as usize] =
-                                l.cels[f][cy * d.width + cx];
-                        }
-                    }
+                if d.color_mode == ColorMode::Rgba
+                    && (x, y, w, h) == (0, 0, d.width, d.height)
+                    && m.outside.is_empty()
+                    && let Pixels::Dense(pixels) = &l.cels[f]
+                {
+                    c.extend(compress(pixels.as_slice().as_flattened())?);
+                    chunks.push(chunk(0x2005, c));
+                    append_metadata(&mut chunks, d, f, &format!("cel:{li}"));
+                    continue;
                 }
+
+                let mut p = vec![CLEAR; w * h];
+                l.cels[f].visit_nonclear(|index, pixel| {
+                    let cx = (index % d.width) as i32;
+                    let cy = (index / d.width) as i32;
+                    p[(cy - y) as usize * w + (cx - x) as usize] = pixel;
+                });
                 for o in &m.outside {
                     p[(o.y - y) as usize * w + (o.x - x) as usize] = o.color;
                 }
                 let encoded = if d.color_mode == ColorMode::Indexed {
-                    let mut indices: Vec<u8> =
-                        p.iter().map(|p| nearest(*p, palette) as u8).collect();
+                    let effective_palette = d.editing_palette(li, f);
+                    let palette = effective_palette.as_slice();
+                    // Reuse index matches for repeated colors without growing with the image.
+                    let mut indices_by_color = std::collections::HashMap::new();
+                    let mut indices: Vec<u8> = p
+                        .iter()
+                        .map(|&pixel| {
+                            if let Some(&index) = indices_by_color.get(&pixel) {
+                                return index;
+                            }
+                            let index = nearest(pixel, palette) as u8;
+                            if indices_by_color.len() < 4096 {
+                                indices_by_color.insert(pixel, index);
+                            }
+                            index
+                        })
+                        .collect();
                     if let Some(stored) = &m.indices {
                         for cy in 0..d.height {
                             for cx in 0..d.width {
@@ -449,7 +812,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                     }
                     indices
                 } else {
-                    pixels_bytes(&p, d.color_mode, palette)
+                    pixels_bytes(&p, d.color_mode, &[])
                 };
                 c.extend(compress(&encoded)?);
             }
@@ -500,7 +863,6 @@ pub fn decode_ase_with_resolver(
         || h > MAX_DIMENSION
         || w * h > MAX_PIXELS
         || frames == 0
-        || w * h * frames > MAX_DOCUMENT_PIXELS
     {
         return Err("Sprite exceeds canvas or memory limits".into());
     }
@@ -529,8 +891,16 @@ pub fn decode_ase_with_resolver(
             owner: "ase:header".into(),
         });
     }
-    type RawCel = (i32, i32, usize, usize, Vec<Pixel>, Option<Vec<u8>>);
+    type RawCel = (
+        usize,
+        usize,
+        std::sync::Arc<Vec<Pixel>>,
+        Option<std::sync::Arc<Vec<u8>>>,
+    );
     let mut raw: Vec<Vec<Option<RawCel>>> = vec![];
+    let mut decoded_pixels = 0usize;
+    let mut projected_pixels = 0usize;
+    let mut decoded_tile_bytes = 0usize;
     let mut parents: Vec<usize> = vec![];
     let mut flags = vec![];
     let mut p = 128;
@@ -649,7 +1019,7 @@ pub fn decode_ase_with_resolver(
                     }
                     let mut q = 16;
                     let name = read_string(data, &mut q)?;
-                    if w * h * frames * (d.layers.len() + 1) > MAX_DOCUMENT_PIXELS {
+                    if frames * (d.layers.len() + 1) > MAX_CEL_SLOTS {
                         return Err("Too many layers for this sprite size".into());
                     }
                     let mut l = Layer::new(name, w, h, frames);
@@ -701,7 +1071,7 @@ pub fn decode_ase_with_resolver(
                     d.layers[li].cel_meta[f].z_index = z_index;
                     owner = format!("cel:{li}");
                     if ty == 3 {
-                        deferred_tiles.push((li, f, x, y, data.to_vec()));
+                        deferred_tiles.push((li, f, x, y, std::sync::Arc::new(data.to_vec())));
                         continue;
                     }
                     if ty == 1 && d.layers[li].tileset.is_some() {
@@ -715,6 +1085,7 @@ pub fn decode_ase_with_resolver(
                             .ok_or("Linked tilemap is missing")?
                             .4
                             .clone();
+                        d.set_cel_link(li, f, link);
                         deferred_tiles.push((li, f, x, y, source));
                         continue;
                     }
@@ -724,6 +1095,12 @@ pub fn decode_ase_with_resolver(
                             let ch = u16at(data, 18)? as usize;
                             if cw * ch > MAX_PIXELS {
                                 return Err("Cel too large".into());
+                            }
+                            decoded_pixels = decoded_pixels.saturating_add(cw * ch);
+                            if decoded_pixels > MAX_DOCUMENT_PIXELS {
+                                return Err(
+                                    "Sprite image data exceeds the project pixel budget".into()
+                                );
                             }
                             let expected = cw * ch * (depth / 8);
                             let encoded = data.get(20..).ok_or("Truncated image cel")?;
@@ -738,14 +1115,18 @@ pub fn decode_ase_with_resolver(
                             (
                                 cw,
                                 ch,
-                                read_pixels(
+                                std::sync::Arc::new(read_pixels(
                                     &bytes,
                                     depth,
                                     &d.palette,
                                     transparent,
                                     flags[li] & 8 != 0,
-                                )?,
-                                if depth == 8 { Some(bytes) } else { None },
+                                )?),
+                                if depth == 8 {
+                                    Some(std::sync::Arc::new(bytes))
+                                } else {
+                                    None
+                                },
                             )
                         }
                         1 => {
@@ -753,19 +1134,21 @@ pub fn decode_ase_with_resolver(
                             if link >= f {
                                 return Err("Invalid linked cel".into());
                             }
-                            let (_, _, cw, ch, pixels, indices) =
+                            let (cw, ch, pixels, indices) =
                                 raw[li][link].clone().ok_or("Linked cel is missing")?;
-                            let pixels = if let Some(indices) = &indices {
-                                read_pixels(
-                                    indices,
-                                    8,
-                                    &d.palette,
-                                    transparent,
-                                    flags[li] & 8 != 0,
-                                )?
-                            } else {
-                                pixels
-                            };
+                            d.set_cel_link(li, f, link);
+                            let origin =
+                                |bounds: Option<[i32; 4]>| bounds.map_or((0, 0), |b| (b[0], b[1]));
+                            if depth != 8
+                                && origin(d.layers[li].cel_meta[link].bounds) == (x, y)
+                                && d.layers[li].cel_meta[link].outside.is_empty()
+                            {
+                                let layer = &mut d.layers[li];
+                                layer.cels[f] = layer.cels[link].clone();
+                                layer.cel_meta[f].bounds = layer.cel_meta[link].bounds;
+                                raw[li][f] = Some((cw, ch, pixels, indices));
+                                continue;
+                            }
                             (cw, ch, pixels, indices)
                         }
                         _ => return Err("Unknown cel encoding".into()),
@@ -773,16 +1156,49 @@ pub fn decode_ase_with_resolver(
                     if x != 0 || y != 0 || cw != w || ch != h {
                         d.layers[li].cel_meta[f].bounds = Some([x, y, cw as i32, ch as i32]);
                     }
+                    // Dense, canvas-aligned data can keep its decoded backing.
+                    // Sparse cels still go through the placement path below.
+                    if depth != 8
+                        && (x, y, cw, ch) == (0, 0, w, h)
+                        && pixels
+                            .iter()
+                            .filter(|&&pixel| pixel != CLEAR)
+                            .take(w * h / 2 + 1)
+                            .count()
+                            > w * h / 2
+                    {
+                        projected_pixels = projected_pixels.saturating_add(w * h);
+                        if projected_pixels > MAX_DOCUMENT_PIXELS {
+                            return Err("Placed cel data exceeds the project pixel budget".into());
+                        }
+                        d.layers[li].cels[f] = Pixels::Dense(pixels.clone());
+                        raw[li][f] = Some((cw, ch, pixels, indices));
+                        continue;
+                    }
+                    let indexed_palette = (depth == 8).then(|| d.editing_palette(li, f));
                     if indices.is_some() {
+                        decoded_pixels = decoded_pixels.saturating_add((w * h).div_ceil(4));
+                        if decoded_pixels > MAX_DOCUMENT_PIXELS {
+                            return Err("Indexed cel data exceeds the project pixel budget".into());
+                        }
                         d.layers[li].cel_meta[f].indices =
                             Some(std::sync::Arc::new(vec![transparent as u8; w * h]));
                     }
                     for cy in 0..ch {
                         for cx in 0..cw {
-                            let color = pixels[cy * cw + cx];
+                            let i = cy * cw + cx;
+                            let color = if let (Some(indices), Some(palette)) =
+                                (&indices, &indexed_palette)
+                            {
+                                *palette
+                                    .get(indices[i] as usize)
+                                    .ok_or("Invalid palette index")?
+                            } else {
+                                pixels[i]
+                            };
                             let (px, py) = (x + cx as i32, y + cy as i32);
                             if let Some(i) = d.index(px, py) {
-                                d.layers[li].cels[f][i] = color;
+                                d.layers[li].cels[f].set(i, color);
                                 if let (Some(target), Some(source)) =
                                     (&mut d.layers[li].cel_meta[f].indices, &indices)
                                 {
@@ -797,7 +1213,14 @@ pub fn decode_ase_with_resolver(
                             }
                         }
                     }
-                    raw[li][f] = Some((x, y, cw, ch, pixels, indices));
+                    projected_pixels = projected_pixels.saturating_add(
+                        d.layers[li].cels[f].allocation_pixels()
+                            + d.layers[li].cel_meta[f].outside.len().saturating_mul(3),
+                    );
+                    if projected_pixels > MAX_DOCUMENT_PIXELS {
+                        return Err("Sprite cel placements exceed the project pixel budget".into());
+                    }
+                    raw[li][f] = Some((cw, ch, pixels, indices));
                 }
                 0x2007 => {
                     if data.len() < 16 {
@@ -834,6 +1257,18 @@ pub fn decode_ase_with_resolver(
                     }
                     owner = "tags".into();
                 }
+                0x2022 => match decode_slice(data) {
+                    Ok(slice) => {
+                        owner = format!("slice:{}", d.slices.len());
+                        d.slices.push(slice);
+                    }
+                    Err(_) => d.metadata.push(MetadataChunk {
+                        frame: f,
+                        kind,
+                        data: data.to_vec(),
+                        owner: String::new(),
+                    }),
+                },
                 0x2023 => {
                     let id = u32at(data, 0)? as usize;
                     let fl = u32at(data, 4)?;
@@ -933,6 +1368,10 @@ pub fn decode_ase_with_resolver(
         if ![8, 16, 32].contains(&bits) || cw == 0 || ch == 0 || cw * ch > MAX_PIXELS {
             return Err("Unsupported tile size".into());
         }
+        decoded_tile_bytes = decoded_tile_bytes.saturating_add(cw * ch * 4);
+        if decoded_tile_bytes / 4 > MAX_DOCUMENT_PIXELS {
+            return Err("Tilemaps exceed the project pixel budget".into());
+        }
         let mask = u32at(&data, 22)?;
         let mx = u32at(&data, 26)?;
         let my = u32at(&data, 30)?;
@@ -958,7 +1397,10 @@ pub fn decode_ase_with_resolver(
                 continue;
             }
             let tile_id = (v & mask) >> mask.trailing_zeros().min(31);
-            let tile_id = tile_id + u32::from(legacy_tilesets[ti]);
+            let tile_id = tile_id
+                .checked_add(u32::from(legacy_tilesets[ti]))
+                .filter(|&id| id <= 0x1fff_ffff && id as usize <= t.tiles.len())
+                .ok_or("Invalid tile reference")?;
             tiles[i] = tile_id
                 | if v & mx != 0 { 0x80000000 } else { 0 }
                 | if v & my != 0 { 0x40000000 } else { 0 }
@@ -979,7 +1421,12 @@ pub fn decode_ase_with_resolver(
             let t = d.tilesets.get(ti).ok_or("Missing tileset")?;
             for c in &mut l.tile_cels {
                 if c.is_empty() {
-                    *c = vec![0; w.div_ceil(t.width) * h.div_ceil(t.height)];
+                    let count = w.div_ceil(t.width) * h.div_ceil(t.height);
+                    decoded_tile_bytes = decoded_tile_bytes.saturating_add(count * 4);
+                    if decoded_tile_bytes / 4 > MAX_DOCUMENT_PIXELS {
+                        return Err("Tilemaps exceed the project pixel budget".into());
+                    }
+                    *c = vec![0; count];
                 }
             }
         }
@@ -988,6 +1435,7 @@ pub fn decode_ase_with_resolver(
         d.frame_palettes = palettes.clone();
     }
     d.palette = palettes[0].clone();
+    d.share_linked_rasters();
     d.validate()?;
     Ok(d)
 }
@@ -1029,7 +1477,8 @@ pub fn load(path: &Path) -> Result<Document, String> {
         .unwrap_or("")
         .to_lowercase();
     if ext == "pixel" {
-        return decode_project(&std::fs::read(path).map_err(|e| e.to_string())?);
+        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        return decode_project_reader(file);
     }
     if ext == "ase" || ext == "aseprite" {
         return load_ase_path(path, &mut Vec::new());
@@ -1085,11 +1534,24 @@ pub fn save(path: &Path, d: &Document) -> Result<(), String> {
     if path.extension().and_then(|s| s.to_str()) != Some("pixel") && !d.references.is_empty() {
         return Err("Reference images require .pixel. Save as .pixel or explicitly discard references before saving ASE.".into());
     }
+    if path.extension().and_then(|s| s.to_str()) != Some("pixel") && d.needs_baked_ase() {
+        return Err(
+            "Save an editable .pixel project and use Export baked ASE copy for interchange.".into(),
+        );
+    }
     let bytes = if path.extension().and_then(|s| s.to_str()) == Some("pixel") {
         encode_project(d)?
     } else {
         encode_ase(d)?
     };
+    write_project_bytes(path, bytes)
+}
+
+pub fn export_baked_ase(path: &Path, doc: &Document) -> Result<(), String> {
+    write_project_bytes(path, encode_ase(doc)?)
+}
+
+fn write_project_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
     let temp = path.with_file_name(format!(
         ".{}.{}.tmp",
         path.file_name().unwrap_or_default().to_string_lossy(),
@@ -1146,7 +1608,7 @@ pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
     export_gif_scaled(path, d, 1)
 }
 pub fn export_gif_scaled(path: &Path, d: &Document, scale: usize) -> Result<(), String> {
-    encode_gif(path, d, 0, 0..d.durations.len(), scale)
+    export_gif_progress(path, d, scale, |_, _| Ok(()))
 }
 pub fn export_gif_with_repeat(path: &Path, d: &Document, repeat: u16) -> Result<(), String> {
     export_gif_frames(path, d, repeat, 0..d.durations.len())
@@ -1158,7 +1620,16 @@ pub fn export_gif_frames(
     repeat: u16,
     frames: impl IntoIterator<Item = usize>,
 ) -> Result<(), String> {
-    encode_gif(path, d, repeat, frames, 1)
+    encode_gif(path, d, repeat, frames, 1, |_, _| Ok(()))
+}
+
+pub(crate) fn export_gif_progress(
+    path: &Path,
+    d: &Document,
+    scale: usize,
+    progress: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<(), String> {
+    encode_gif(path, d, 0, 0..d.durations.len(), scale, progress)
 }
 
 fn encode_gif(
@@ -1167,6 +1638,7 @@ fn encode_gif(
     repeat: u16,
     frames: impl IntoIterator<Item = usize>,
     scale: usize,
+    mut progress: impl FnMut(usize, usize) -> Result<(), String>,
 ) -> Result<(), String> {
     d.validate()?;
     animation_dimensions(d, scale)?;
@@ -1178,7 +1650,8 @@ fn encode_gif(
         image::codecs::gif::Repeat::Finite(repeat)
     })
     .map_err(|e| e.to_string())?;
-    for f in frames {
+    for (done, f) in frames.into_iter().enumerate() {
+        progress(done, d.durations.len())?;
         if f >= d.durations.len() {
             return Err("Unknown animation frame".into());
         }
@@ -1208,6 +1681,15 @@ pub(crate) fn animation_dimensions(d: &Document, scale: usize) -> Result<(usize,
 
 /// Stream one composited frame at a time and distribute rounding across the timeline.
 pub fn export_mp4(path: &Path, d: &Document, scale: usize) -> Result<(), String> {
+    export_mp4_progress(path, d, scale, |_, _| Ok(()))
+}
+
+pub(crate) fn export_mp4_progress(
+    path: &Path,
+    d: &Document,
+    scale: usize,
+    mut progress: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<(), String> {
     use std::process::{Command, Stdio};
     d.validate()?;
     let (width, height) = animation_dimensions(d, scale)?;
@@ -1270,6 +1752,7 @@ pub fn export_mp4(path: &Path, d: &Document, scale: usize) -> Result<(), String>
         let mut elapsed = 0u64;
         let mut emitted = 0u64;
         for (f, &duration) in d.durations.iter().enumerate() {
+            progress(f, d.durations.len())?;
             elapsed += u64::from(duration);
             let end = (elapsed * 60).div_ceil(1000);
             if end == emitted {
@@ -1294,6 +1777,7 @@ pub fn export_mp4(path: &Path, d: &Document, scale: usize) -> Result<(), String>
                 })
                 .collect();
             for _ in emitted..end {
+                progress(f, d.durations.len())?;
                 input.write_all(&rgb).map_err(|e| e.to_string())?;
             }
             emitted = end;
@@ -1301,12 +1785,27 @@ pub fn export_mp4(path: &Path, d: &Document, scale: usize) -> Result<(), String>
         Ok(())
     })();
     drop(input);
-    let status = child.wait().map_err(|e| e.to_string())?;
+    if written.is_err() {
+        let _ = child.kill();
+    }
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            break Ok(status);
+        }
+        if let Err(error) = progress(d.durations.len(), d.durations.len()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
     let stderr = drain.join().unwrap_or_default();
+    written?;
+    let status = status?;
     if !status.success() {
         return Err(format!("FFmpeg could not encode MP4 ({status}): {stderr}"));
     }
-    written
+    Ok(())
 }
 type PngRecord = ([u8; 4], Vec<u8>);
 fn png_records(bytes: &[u8]) -> Result<Vec<PngRecord>, String> {
@@ -1427,4 +1926,90 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
         }
     }
     std::fs::write(path, out).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod project_budget_tests {
+    use super::*;
+
+    fn project_json(json: serde_json::Value, magic: &[u8]) -> Vec<u8> {
+        let mut output = magic.to_vec();
+        output.extend(compress(&serde_json::to_vec(&json).unwrap()).unwrap());
+        output
+    }
+
+    #[test]
+    fn rejects_dense_rasters_cumulatively_during_native_decode() {
+        let mut doc = Document::new(2, 2);
+        doc.add_frame(0, false);
+        doc.layers[0].cels[0] = vec![[1, 2, 3, 255]; 4].into();
+        doc.layers[0].cels[1] = vec![[4, 5, 6, 255]; 4].into();
+        let legacy = project_json(serde_json::to_value(&doc).unwrap(), PROJECT_MAGIC_V1);
+        let native = encode_project(&doc).unwrap();
+        for bytes in [legacy, native] {
+            let parsed = with_project_decode_budget(4 * 7, || decode_project(&bytes));
+            let error = parsed.expect_err("Both dense allocations must be charged");
+            assert!(error.contains("raster allocation budget"), "{error}");
+            assert_eq!(decode_project(&bytes).unwrap(), doc);
+        }
+    }
+
+    #[test]
+    fn shared_and_empty_rasters_fit_the_native_decode_budget() {
+        let mut doc = Document::new(32, 32);
+        doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
+        doc.add_frame(0, true);
+        doc.add_frame(1, false);
+        let bytes = encode_project(&doc).unwrap();
+        let budget = doc.layers[0].cels[0].allocation_pixels() * 4;
+        let decoded = with_project_decode_budget(budget, || decode_project(&bytes)).unwrap();
+        assert_eq!(decoded, doc);
+        assert!(decoded.layers[0].cels[0].shares_storage(&decoded.layers[0].cels[1]));
+        let error = with_project_decode_budget(budget - 1, || decode_project(&bytes))
+            .expect_err("A sparse block must pay for backing and map overhead");
+        assert!(error.contains("raster allocation budget"), "{error}");
+    }
+
+    #[test]
+    fn charges_index_and_tile_arrays_during_native_decode() {
+        let mut indexed = Document::new(2, 2);
+        indexed.layers[0].cel_meta[0].indices = Some(vec![0; 4].into());
+        let bytes = encode_project(&indexed).unwrap();
+        let error = with_project_decode_budget(3, || decode_project(&bytes))
+            .expect_err("Index bytes must be counted");
+        assert!(error.contains("raster allocation budget"), "{error}");
+        assert_eq!(decode_project(&bytes).unwrap(), indexed);
+
+        let mut tilemap = Document::new(2, 2);
+        tilemap.tilesets.push(Tileset {
+            name: "Empty".into(),
+            width: 1,
+            height: 1,
+            tiles: Vec::new(),
+        });
+        tilemap.add_tile_layer(0).unwrap();
+        let bytes = encode_project(&tilemap).unwrap();
+        let error = with_project_decode_budget(15, || decode_project(&bytes))
+            .expect_err("Tile placements must be counted");
+        assert!(error.contains("raster allocation budget"), "{error}");
+        assert_eq!(decode_project(&bytes).unwrap(), tilemap);
+    }
+
+    #[test]
+    fn native_decode_accepts_null_blocks_and_partial_sparse_blocks() {
+        let mut doc = Document::new(3, 1);
+        doc.add_frame(0, false);
+        let mut value = serde_json::to_value(&doc).unwrap();
+        value["layers"][0]["cels"][0] = serde_json::json!({"clear_pixels":3,"blocks":null});
+        let mut pixels = [[0; 4]; 16];
+        pixels[2] = [1, 2, 3, 255];
+        value["layers"][0]["cels"][1] = serde_json::json!({"len":3,"blocks":{"0":pixels}});
+        let decoded = decode_project(&project_json(value, PROJECT_MAGIC_V1)).unwrap();
+        assert_eq!(decoded.composite(0), doc.composite(0));
+        assert_eq!(decoded.composite(1)[2], [1, 2, 3, 255]);
+        assert_eq!(
+            decode_project(&encode_project(&decoded).unwrap()).unwrap(),
+            decoded
+        );
+    }
 }

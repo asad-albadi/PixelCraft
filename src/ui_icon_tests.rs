@@ -192,7 +192,19 @@ fn near_limit_document_survives_edits_and_playback() {
     for f in 0..3 {
         doc.add_frame(f, true);
     }
+    for (l, layer) in doc.layers.iter_mut().enumerate() {
+        for (f, cel) in layer.cels.iter_mut().enumerate() {
+            cel.fill([l as u8, f as u8, 1, 255]);
+        }
+    }
     assert_eq!(doc.stored_pixels(), 62_914_560);
+    // Put three of the dense frames on shared backing so the complete
+    // four-step history fits the editor's independently enforced undo budget.
+    for layer in &mut doc.layers {
+        for frame in 1..4 {
+            layer.cels[frame] = layer.cels[0].clone();
+        }
+    }
     app.replace(doc, None);
     let mut elapsed = Vec::new();
     for step in 0..20 {
@@ -1355,6 +1367,7 @@ fn preview_zoom_frame_sync_and_controls_across_sizes_and_scales() {
                         (image.width() * ctx.pixels_per_point() - 320. * zoom as f32).abs() < 0.01
                     );
                 }
+                let _ = app.frame_texture(&ctx, app.next_playback_frame().0);
                 app.playing = true;
                 app.last_tick =
                     Instant::now() - Duration::from_millis(u64::from(app.doc.durations[app.frame]));
@@ -1645,4 +1658,115 @@ fn modal_header_drags_and_backdrop_blocks_editor_clicks() {
     assert!(app.help);
     discard_frame(&mut app, &ctx, size, 1., vec![release]);
     assert!(!app.help);
+}
+
+#[test]
+fn frame_cache_retains_unaffected_frames_and_refreshes_linked_cels() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(8, 8);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.link_cel(0, 1, 0).unwrap();
+    app.replace(doc, None);
+    let linked = app.frame_texture(&ctx, 1);
+    let unaffected = app.frame_texture(&ctx, 2);
+    app.doc.set_pixel(0, 0, 0, [40, 90, 120, 255]);
+    let edited = app.frame_texture(&ctx, 0);
+    assert_eq!(app.frame_texture(&ctx, 2).id(), unaffected.id());
+    assert_ne!(app.frame_texture(&ctx, 1).id(), linked.id());
+    assert_eq!(app.frame_texture(&ctx, 0).id(), edited.id());
+    assert_eq!(app.doc.composite(1)[0], [40, 90, 120, 255]);
+}
+
+#[test]
+fn playback_prefetch_rejects_frames_from_an_obsolete_snapshot() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(32, 32);
+    doc.add_frame(0, false);
+    app.replace(doc, None);
+    app.playing = true;
+    let _ = app.frame_texture(&ctx, 0);
+    assert!(app.frame_prefetch.is_some());
+    app.doc.set_pixel(0, 1, 0, [190, 90, 20, 255]);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let _ = app.frame_texture(&ctx, 0);
+        if app.frame_textures[1].is_some() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Next frame was not prefetched");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let texture = app.frame_textures[1].as_ref().unwrap().id();
+    let mut updates = ctx.tex_manager().write().take_delta();
+    let egui::ImageData::Color(image) = &updates.set[&texture][0].image;
+    assert_eq!(image.pixels[0], Color32::from_rgb(190, 90, 20));
+    updates.clear();
+}
+
+#[test]
+fn playback_waits_for_a_cache_miss_without_skipping_the_frame() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(32, 32);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.durations.fill(17);
+    app.replace(doc, None);
+    let _ = app.frame_texture(&ctx, 0);
+    app.playing = true;
+    let start = Instant::now();
+    app.last_tick = start;
+
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(16)),
+        Duration::from_millis(1),
+        "An unready cel before its deadline is not a cache miss yet"
+    );
+    assert!(!app.playback_waiting_for_frame);
+    app.update_playback_clock(start + Duration::from_millis(40));
+    assert_eq!(
+        app.frame, 0,
+        "Hold the last frame while its successor renders"
+    );
+
+    let (image, error) = PixelCraft::compose_frame_image(&app.doc, 1);
+    app.store_frame_texture(&ctx, 1, image, error);
+    app.update_playback_clock(start + Duration::from_millis(80));
+    assert_eq!(app.frame, 1, "Present the first ready successor");
+    assert_eq!(
+        app.update_playback_clock(start + Duration::from_millis(81)),
+        Duration::from_millis(16)
+    );
+    assert_eq!(app.frame, 1);
+}
+
+#[test]
+fn cached_fast_playback_keeps_frame_order_across_repaint_jitter() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(4, 4);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.durations = vec![17, 16, 17];
+    app.replace(doc, None);
+    for f in 0..3 {
+        let _ = app.frame_texture(&ctx, f);
+    }
+    app.playing = true;
+    let start = Instant::now();
+    let repaint_schedules = [
+        [16, 33, 50, 66, 83, 100, 116, 133, 150],
+        [34, 50, 67, 84, 100, 117, 134, 150, 167],
+    ];
+    for schedule in repaint_schedules {
+        app.frame = 0;
+        app.last_tick = start;
+        for (redraw, millis) in schedule.into_iter().enumerate() {
+            app.update_playback_clock(start + Duration::from_millis(millis));
+            assert_eq!(app.frame, (redraw + 1) % 3, "redraw at {millis} ms");
+        }
+    }
 }

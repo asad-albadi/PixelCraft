@@ -24,7 +24,7 @@ fn gray_constructor_truncates_before_packing_painted_pixels() {
     )
     .unwrap();
     assert_eq!(
-        &*edited.layers[0].cels[0],
+        &edited.layers[0].cels[0].to_vec(),
         &[
             [255, 255, 255, 255],
             [2, 2, 2, 255],
@@ -62,7 +62,7 @@ fn gray_constructor_uses_long_alpha_and_retains_signed_integer_state() {
     )
     .unwrap();
     assert_eq!(
-        &*edited.layers[0].cels[0],
+        &edited.layers[0].cels[0].to_vec(),
         &[
             [80, 80, 80, 2],
             [80, 80, 80, 0],

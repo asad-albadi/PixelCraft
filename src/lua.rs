@@ -304,7 +304,7 @@ pub fn execute_with_host(
     if frame >= doc.durations.len() || layer >= doc.layers.len() {
         return Err("Invalid script context".into());
     }
-    if doc.stored_pixels() > 1_000_000 {
+    if doc.logical_pixels() > 1_000_000 {
         return Err(
             "Native scripts are limited to one million stored pixels per invocation".into(),
         );

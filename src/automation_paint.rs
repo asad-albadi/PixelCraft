@@ -261,16 +261,16 @@ pub(crate) fn paint(
             .map(|data| decode_mask(data, region.width * region.height))
             .transpose()?;
         let stride = doc.width;
-        let cel = &mut doc.layers[layer].cels[frame];
         for row in y..bottom {
             for col in x..right {
-                let pixel = &mut cel[row * stride + col];
+                let index = row * stride + col;
+                let pixel = doc.layers[layer].cels[frame][index];
                 if (!edit.skip_transparent || pixel[3] != 0)
                     && mask
                         .as_ref()
                         .is_none_or(|m| mask_contains(m, region.offset(col, row)))
                 {
-                    *pixel = CLEAR;
+                    doc.draw_pixel(layer, frame, index, CLEAR, 0);
                 }
             }
         }
@@ -284,15 +284,15 @@ pub(crate) fn paint(
     let pixels = rgba(blit.data, blit.encoding, count)?;
     let (x, y, right, bottom) = region.clipped(doc);
     let stride = doc.width;
-    let cel = &mut doc.layers[layer].cels[frame];
     for row in y..bottom {
         for col in x..right {
             let i = row * stride + col;
+            let previous = doc.layers[layer].cels[frame][i];
             let next = blit
                 .mode
-                .apply(cel[i], pixels[region.offset(col, row)], 255);
-            if next != cel[i] {
-                cel[i] = next;
+                .apply(previous, pixels[region.offset(col, row)], 255);
+            if next != previous {
+                doc.draw_pixel(layer, frame, i, next, 0);
             }
         }
     }
@@ -334,12 +334,12 @@ fn edit_region(
         p
     };
     if op == "recolor-region" {
-        let cel = &mut doc.layers[layer].cels[frame];
         for row in y..y + r.height {
             for col in x..x + r.width {
                 let i = row * stride + col;
-                if selected(col - x, row - y) && (!edit.skip_transparent || cel[i][3] != 0) {
-                    cel[i] = map(cel[i]);
+                let previous = doc.layers[layer].cels[frame][i];
+                if selected(col - x, row - y) && (!edit.skip_transparent || previous[3] != 0) {
+                    doc.draw_pixel(layer, frame, i, map(previous), 0);
                 }
             }
         }
@@ -363,18 +363,16 @@ fn edit_region(
         if !doc.editable(from_layer) {
             return Err("Source layer is locked".into());
         }
-        let cel = &mut doc.layers[from_layer].cels[from_frame];
         for row in 0..r.height {
             for col in 0..r.width {
                 let i = (y + row) * stride + x + col;
-                if selected(col, row) && (!edit.skip_transparent || cel[i][3] != 0) {
-                    cel[i] = CLEAR;
+                if selected(col, row) && (!edit.skip_transparent || source[i][3] != 0) {
+                    doc.draw_pixel(from_layer, from_frame, i, CLEAR, 0);
                 }
             }
         }
     }
     let height = doc.height as i64;
-    let cel = &mut doc.layers[layer].cels[frame];
     for row in 0..r.height {
         let dy = dest_y + row as i64;
         if !(0..height).contains(&dy) {
@@ -389,7 +387,7 @@ fn edit_region(
             let sx = x + if edit.flip_x { r.width - 1 - col } else { col };
             let p = source[sy * stride + sx];
             if selected(sx - x, sy - y) && (!edit.skip_transparent || p[3] != 0) {
-                cel[dy as usize * stride + dx as usize] = map(p);
+                doc.draw_pixel(layer, frame, dy as usize * stride + dx as usize, map(p), 0);
             }
         }
     }
@@ -452,7 +450,6 @@ fn paint_polygon(
             .saturating_mul(if polygon.edge_noise == 0 { 1 } else { 2 }),
     )?;
     let stride = doc.width;
-    let cel = &mut doc.layers[layer].cels[frame];
     const BAYER: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
     for row in y..bottom {
         for col in x..right {
@@ -467,7 +464,7 @@ fn paint_polygon(
                 } else {
                     polygon.color
                 };
-                cel[row as usize * stride + col as usize] = color;
+                doc.draw_pixel(layer, frame, row as usize * stride + col as usize, color, 0);
             }
         }
     }
@@ -734,7 +731,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            &result.layers[0].cels[0][..],
+            &result.layers[0].cels[0].to_vec()[..],
             &[
                 CLEAR,
                 [255, 0, 0, 255],
@@ -750,7 +747,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            &result.layers[0].cels[0][..],
+            &result.layers[0].cels[0].to_vec()[..],
             &[CLEAR, CLEAR, CLEAR, [255, 0, 0, 255], [0, 0, 255, 255]]
         );
     }
@@ -784,7 +781,7 @@ mod tests {
         assert!(first.layers[0].cels[0] != apply(&doc, command(12)).unwrap().layers[0].cels[0]);
         let pixels = &first.layers[0].cels[0];
         assert_eq!(pixels[10 * 20 + 10], [255, 0, 0, 255]);
-        assert!(pixels[21..39].contains(&CLEAR));
-        assert!(pixels[21..39].contains(&[255, 0, 0, 255]));
+        assert!(pixels.to_vec()[21..39].contains(&CLEAR));
+        assert!(pixels.to_vec()[21..39].contains(&[255, 0, 0, 255]));
     }
 }
