@@ -33,8 +33,9 @@ The check verifies frame names and rectangles, frame order and duration for
 each named Flipbook, the original sprite asset paths, and the references in the
 saved level. The expected Output Log result is `PC_FLIPBOOK_REIMPORT passed`.
 
-Verified in Unreal Engine 5.2.0 on Linux. Native Reimport kept all five
-saved level references and all six original PaperSprite paths. The walk
+Verified in Unreal Engine 5.2.0 on Linux and 5.8.4 on Windows. Native Reimport
+kept all five saved level references and all six original PaperSprite paths. The walk
 Flipbook changed from 200 ms to 355 ms, the reverse attack from 250 ms to
 294 ms, and the repeated ping-pong throw from 900 ms to 1520 ms. The new
-`dash` tag created a 203 ms Flipbook.
+`dash` tag created a 203 ms Flipbook. The Windows check also passed after
+closing Unreal Editor and reopening the project from disk.
