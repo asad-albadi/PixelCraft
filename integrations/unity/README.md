@@ -32,9 +32,9 @@ On Windows, pass the full paths to `Unity.exe` and `pixelcraft.exe` with `--unit
 
 The direct importer is a separate workflow. Version 3.0.2 reads tags and frame durations. Its clip generator treats zero repeats as looping and positive counts as non-looping. Use the sheet importer when authored direction, a precise finite repeat count, or stable references to individual sprites across insertions matter.
 
-### Verified in Unity 6000.3.28f1 on Linux
+### Verified in Unity 6000.3.28f1 on Windows and Linux
 
-Both import routes passed initial import, same-path redraw, and frame insertion with retiming. Each existing Animator Controller retained all three clip references.
+Both import routes passed initial import, same-path redraw, and frame insertion with retiming on both platforms. Each existing Animator Controller retained all three clip references. The Windows run also verified that the sheet importer rejects a same-named sprite with a mismatched rectangle and preserves the existing clip curves.
 
 - **PNG and JSON.** The redraw changed the artwork and preserved its fixed atlas cells. After insertion, all six surviving sprites kept their Unity GUIDs and local IDs, and all three animation clips kept theirs. The controller's walk clip sampled the redrawn sprite at its new position in the sequence.
 - **Official Aseprite importer 3.0.2.** The existing controller retained its three clips. The walk clip updated from 200 ms to 355 ms. The original last walk sprite moved from `Frame_3` to `Frame_4` and received a different local ID. A direct reference to that sprite does not track the underlying artwork across insertion.

@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -89,6 +90,8 @@ def fixture_operations(project, pixelcraft):
 
 
 def main():
+    # Unity diagnostics may contain characters absent from legacy Windows code pages.
+    sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pixelcraft", default="target/debug/pixelcraft")
     parser.add_argument("--unity", default="Unity")

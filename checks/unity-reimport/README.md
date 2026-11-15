@@ -15,4 +15,4 @@ The official Aseprite route imports a separate `Assets/Direct/hero.aseprite` fil
 
 Use `--route sheet` or `--route aseprite` to run one route in a new project. Use `--fixtures-only` to generate and keep the three stage exports under `Fixture/` without starting Unity. The sheet check invokes the same importer entry point used when selecting the JSON in Assets and choosing **Assets → PixelCraft → Import or Update Animation Clips**.
 
-See the [engine verification results](../../integrations/unity/README.md#verified-in-unity-6000328f1-on-linux).
+See the [engine verification results](../../integrations/unity/README.md#verified-in-unity-6000328f1-on-windows-and-linux).
