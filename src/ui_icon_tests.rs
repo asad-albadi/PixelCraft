@@ -1276,6 +1276,140 @@ fn preview_fit_uses_available_width_and_preserves_sprite_aspect() {
 }
 
 #[test]
+fn seamless_preview_repeats_both_axes_and_png_export_writes_one_tile() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let tile = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 0, 255],
+        [255, 0, 255, 255],
+        [0, 255, 255, 255],
+    ];
+    app.doc = Document::new(3, 2);
+    app.doc.add_frame(0, false);
+    for (index, &color) in tile.iter().enumerate() {
+        app.doc.set_pixel(0, 1, index, color);
+    }
+    app.frame = 1;
+    app.action("seamless");
+    assert!(app.studio.seamless);
+
+    let size = Vec2::new(1180., 840.);
+    let mut texture = egui::TextureId::default();
+    let mut texture_pixels = None;
+    let mut tile_bounds = Vec::new();
+    for _ in 0..4 {
+        let mut output = ctx.run_ui(input(size, 1., vec![]), |ui| {
+            texture = app.frame_texture(ui.ctx(), app.frame).id();
+            app.studio_dialogs(ui.ctx());
+        });
+        if let Some(deltas) = output.textures_delta.set.get(&texture) {
+            for delta in deltas {
+                let egui::ImageData::Color(image) = &delta.image;
+                assert_eq!(image.size, [3, 2]);
+                texture_pixels = Some(image.pixels.clone());
+            }
+        }
+        output.textures_delta.clear();
+        tile_bounds = output
+            .shapes
+            .iter()
+            .filter_map(|s| {
+                let egui::Shape::Rect(rect) = &s.shape else {
+                    return None;
+                };
+                let brush = rect.brush.as_ref()?;
+                if brush.fill_texture_id != texture {
+                    return None;
+                }
+                assert!(s.clip_rect.contains_rect(rect.rect));
+                assert_eq!(brush.uv, Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)));
+                Some(rect.rect)
+            })
+            .collect();
+    }
+    assert_eq!(texture_pixels.unwrap(), color_image(&tile, 3, 2).pixels);
+    assert_eq!(tile_bounds.len(), 9);
+    let first = tile_bounds[0];
+    assert!((first.width() / first.height() - 1.5).abs() < 0.02);
+    for (index, bounds) in tile_bounds.iter().enumerate() {
+        let offset = Vec2::new(
+            (index % 3) as f32 * first.width(),
+            (index / 3) as f32 * first.height(),
+        );
+        assert!((bounds.min - (first.min + offset)).length() < 2.);
+        assert!((bounds.size() - first.size()).length() < 2.);
+    }
+
+    let path = std::env::temp_dir().join(format!("pixelcraft-seamless-{}.png", std::process::id()));
+    app.start_export("png", path.clone());
+    let (_, result) = app
+        .export_job
+        .take()
+        .unwrap()
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    result.unwrap();
+    let png = image::open(&path).unwrap().into_rgba8();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(png.dimensions(), (3, 2));
+    assert_eq!(png.into_raw(), tile.concat());
+
+    // Match both sets of opposite edges while the preview is still open.
+    let fixed_tile = [tile[0], tile[1], tile[0], tile[0], tile[1], tile[0]];
+    for (index, &color) in fixed_tile.iter().enumerate() {
+        app.doc.set_pixel(0, 1, index, color);
+    }
+    let mut output = ctx.run_ui(input(size, 1., vec![]), |ui| {
+        texture = app.frame_texture(ui.ctx(), app.frame).id();
+        app.studio_dialogs(ui.ctx());
+    });
+    let egui::ImageData::Color(image) = &output.textures_delta.set[&texture][0].image;
+    assert_eq!(image.pixels, color_image(&fixed_tile, 3, 2).pixels);
+    let refreshed_copies = output.shapes.iter().filter(|s| {
+        matches!(
+            &s.shape,
+            egui::Shape::Rect(rect) if rect.brush.as_ref().is_some_and(
+                |brush| brush.fill_texture_id == texture
+            )
+        )
+    });
+    assert_eq!(refreshed_copies.count(), 9);
+    output.textures_delta.clear();
+}
+
+#[test]
+fn seamless_preview_keeps_tall_tile_rows_visible() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.doc = Document::new(4, 40);
+    app.action("seamless");
+
+    let size = Vec2::new(800., 480.);
+    let mut visible_tiles = 0;
+    for _ in 0..4 {
+        let mut texture = egui::TextureId::default();
+        let mut output = ctx.run_ui(input(size, 1., vec![]), |ui| {
+            texture = app.frame_texture(ui.ctx(), app.frame).id();
+            app.studio_dialogs(ui.ctx());
+        });
+        output.textures_delta.clear();
+        visible_tiles = output
+            .shapes
+            .iter()
+            .filter(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect)
+                    if rect.brush.as_ref().is_some_and(|brush| brush.fill_texture_id == texture)
+                        && shape.clip_rect.contains_rect(rect.rect))
+            })
+            .count();
+    }
+    assert_eq!(visible_tiles, 9);
+}
+
+#[test]
 fn preview_resize_pan_and_preferences_survive_restart() {
     let size = Vec2::new(1366., 900.);
     let ctx = egui::Context::default();

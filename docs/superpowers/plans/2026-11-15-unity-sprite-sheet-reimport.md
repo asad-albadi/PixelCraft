@@ -1,0 +1,8 @@
+# Unity sprite-sheet reimport
+
+The Unity PNG route uses one tagged PNG, its PixelCraft JSON sidecar, and the texture's existing Unity metadata. PixelCraft owns atlas layout and persistent frame identity. A Unity Editor menu command reads the JSON and writes one AnimationClip per tag. Each generated asset has a deterministic filename and an ownership label so reimport edits the existing clip, leaves Animator Controllers intact, and refuses to overwrite an unrelated asset.
+
+1. Finish sprite identity in `src/interchange.rs`. Preserve existing texture, sprite and local file IDs. Test fixed-cell redraw, insertion, deletion and matching names between the JSON and meta file. Frame deletion cannot recycle an ID in the saved native project. PixelCraft's editor has insertion and deletion but no full-frame reorder command.
+2. Add `integrations/unity/Editor/PixelCraftSpriteSheetImporter.cs`. Import the selected JSON from Assets, synchronously update the texture, and validate all sprite names and key sequences before changing clips. Use millisecond key times, tag direction, repeat counts and a final key for the last frame's hold. Update only the generated sprite curve and loop settings in each existing clip.
+3. Generate the idle/walk/jump fixture with the PixelCraft CLI and run the Unity Editor probe on first import, same-path redraw, and insertion with retiming. Verify asset GUIDs and local IDs, the live controller's clip references, and sampled sprite changes. Exercise Unity's official 2D Aseprite Importer separately with the same art.
+4. Verify both axes of Seamless Preview and confirm the normal PNG export writes the source tile once. Add a walkthrough with Editor/package versions, same-path reimport steps, and limits.

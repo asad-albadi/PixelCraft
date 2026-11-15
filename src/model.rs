@@ -848,6 +848,66 @@ pub struct AseTilesetInfo {
     pub base_index: i16,
     pub external: Option<[u32; 2]>,
 }
+// Older projects use their frame indices until a structural edit would shift them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct FrameExportIds(Option<FrameExportIdState>);
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct FrameExportIdState {
+    #[serde(deserialize_with = "decode_frame_export_ids")]
+    frames: Vec<u32>,
+    next: u64,
+}
+
+impl FrameExportIds {
+    fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
+
+    fn nonsequential_ids(&self) -> Option<&[u32]> {
+        self.0.as_ref().and_then(|state| {
+            (!state
+                .frames
+                .iter()
+                .copied()
+                .eq(0..state.frames.len() as u32))
+            .then_some(state.frames.as_slice())
+        })
+    }
+}
+
+impl PartialEq for FrameExportIds {
+    fn eq(&self, other: &Self) -> bool {
+        // An allocator advance alone does not change which sprites the document contains.
+        self.nonsequential_ids() == other.nonsequential_ids()
+    }
+}
+
+fn decode_frame_export_ids<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Vec<u32>, D::Error> {
+    struct FrameIds;
+    impl<'de> serde::de::Visitor<'de> for FrameIds {
+        type Value = Vec<u32>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an array of frame export IDs")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u32>, A::Error> {
+            let mut ids = Vec::new();
+            while let Some(id) = seq.next_element()? {
+                if ids.len() == u16::MAX as usize {
+                    return Err(serde::de::Error::custom("Too many frame export IDs"));
+                }
+                charge_project_bytes(std::mem::size_of::<u32>())?;
+                ids.push(id);
+            }
+            Ok(ids)
+        }
+    }
+    decoder.deserialize_seq(FrameIds)
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     #[serde(skip)]
@@ -858,6 +918,8 @@ pub struct Document {
     pub height: usize,
     pub layers: Vec<Layer>,
     pub durations: Vec<u16>,
+    #[serde(default, skip_serializing_if = "FrameExportIds::is_none")]
+    pub(crate) frame_export_ids: FrameExportIds,
     pub color_mode: ColorMode,
     pub palette: Vec<Pixel>,
     #[serde(default)]
@@ -1097,6 +1159,7 @@ impl Document {
             height: h,
             layers: vec![Layer::new("Layer 1".into(), w, h, 1)],
             durations: vec![DEFAULT_DURATION],
+            frame_export_ids: FrameExportIds::default(),
             color_mode: ColorMode::Rgba,
             palette: default_palette(),
             palette_names: vec![],
@@ -1116,6 +1179,38 @@ impl Document {
             references: vec![],
         }
     }
+    pub fn frame_export_id(&self, frame: usize) -> u32 {
+        self.frame_export_ids
+            .0
+            .as_ref()
+            .map_or(frame as u32, |ids| ids.frames[frame])
+    }
+
+    /// History restores the frames but keeps IDs allocated by abandoned edits reserved.
+    pub fn retain_frame_export_id_counter(&mut self, previous: &Self) {
+        if self.editor_id.0 != previous.editor_id.0 {
+            return;
+        }
+        let next = |doc: &Self| {
+            doc.frame_export_ids
+                .0
+                .as_ref()
+                .map_or(doc.durations.len() as u64, |ids| ids.next)
+        };
+        if next(previous) > next(self) {
+            self.explicit_frame_export_ids().next = next(previous);
+        }
+    }
+
+    fn explicit_frame_export_ids(&mut self) -> &mut FrameExportIdState {
+        self.frame_export_ids
+            .0
+            .get_or_insert_with(|| FrameExportIdState {
+                frames: (0..self.durations.len() as u32).collect(),
+                next: self.durations.len() as u64,
+            })
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         let mut reference_pixels = 0usize;
         for r in &self.references {
@@ -1151,6 +1246,18 @@ impl Document {
             || self.stored_pixels() > MAX_DOCUMENT_PIXELS
         {
             return Err("Project dimensions or stored pixel count exceed limits".into());
+        }
+        if let Some(ids) = &self.frame_export_ids.0 {
+            let mut seen = std::collections::HashSet::with_capacity(ids.frames.len());
+            if ids.frames.len() != self.durations.len()
+                || ids.next > u64::from(u32::MAX) + 1
+                || ids
+                    .frames
+                    .iter()
+                    .any(|&id| u64::from(id) >= ids.next || !seen.insert(id))
+            {
+                return Err("Invalid frame export identities".into());
+            }
         }
         if self
             .frame_palettes
@@ -2613,6 +2720,11 @@ impl Document {
 
     pub fn can_add_frame(&self, frame: usize, duplicate: bool) -> bool {
         frame < self.durations.len()
+            && self
+                .frame_export_ids
+                .0
+                .as_ref()
+                .is_none_or(|ids| u32::try_from(ids.next).is_ok())
             && self.durations.len() < u16::MAX as usize
             && self.layers.len().saturating_mul(self.durations.len() + 1) <= MAX_CEL_SLOTS
             && self.can_grow(self.layers.iter().fold(0usize, |total, layer| {
@@ -2634,6 +2746,14 @@ impl Document {
     pub fn add_frame(&mut self, f: usize, duplicate: bool) {
         if !self.can_add_frame(f, duplicate) {
             return;
+        }
+        if self.frame_export_ids.0.is_some() || f + 1 < self.durations.len() {
+            let ids = self.explicit_frame_export_ids();
+            let Ok(id) = u32::try_from(ids.next) else {
+                return;
+            };
+            ids.frames.insert(f + 1, id);
+            ids.next += 1;
         }
         for l in &mut self.layers {
             l.cels.insert(
@@ -2708,7 +2828,8 @@ impl Document {
         }
     }
     pub fn remove_frame(&mut self, f: usize) {
-        if self.durations.len() > 1 {
+        if self.durations.len() > 1 && f < self.durations.len() {
+            self.explicit_frame_export_ids().frames.remove(f);
             self.durations.remove(f);
             if f < self.frame_palettes.len() {
                 self.frame_palettes.remove(f);

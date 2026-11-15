@@ -374,7 +374,8 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
                 );
             }
         }
-        frames.push(json!({"filename":format!("frame_{f}"),"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[*f],"sourceFrame":f}));
+        let id = d.frame_export_id(*f);
+        frames.push(json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[*f],"sourceFrame":f}));
     }
     let tags:Vec<Value>=d.tags.iter().filter_map(|t|{let from=sprites.iter().position(|s|s.0>=t.from)?;let to=sprites.iter().rposition(|s|s.0<=t.to)?;if from>to{return None}Some(json!({"name":t.name,"from":from,"to":to,"repeat":t.repeat,"direction":match t.direction{1=>"reverse",2=>"pingpong",3=>"pingpong_reverse",_=>"forward"}}))}).collect();
     let scale = o.scale;

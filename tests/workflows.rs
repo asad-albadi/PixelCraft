@@ -257,3 +257,103 @@ fn crop_rejects_overflowing_coordinates() {
     assert!(crop(&mut doc, [1, 0, i32::MAX, 1]).is_err());
     assert_eq!(doc, before);
 }
+
+#[test]
+fn unity_reexport_keeps_sprite_ids_after_redraw_and_frame_insertion() {
+    use pixelcraft::{formats, interchange};
+    use serde_json::Value;
+
+    let dir = std::env::temp_dir().join(format!("pixelcraft-reimport-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("hero.png");
+    let json = dir.join("hero.json");
+    let meta = dir.join("hero.png.meta");
+    let options = SheetOptions {
+        preset: "Unity".into(),
+        columns: 2,
+        ..Default::default()
+    };
+    let read = || -> (Value, String) {
+        (
+            serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap(),
+            std::fs::read_to_string(&meta).unwrap(),
+        )
+    };
+
+    let mut d = Document::new(4, 4);
+    d.add_frame(0, false);
+    d.add_frame(1, false);
+    d.durations = vec![83, 120, 250];
+    for (i, name) in ["idle", "walk", "jump"].into_iter().enumerate() {
+        d.tags.push(FrameTag {
+            name: name.into(),
+            from: i,
+            to: i,
+            direction: 0,
+            repeat: 0,
+            color: [0; 3],
+        });
+    }
+    interchange::export_sheet(&png, &d, &options).unwrap();
+    let (first, first_meta) = read();
+    let sprite_guid = "00814b43dcb948909da78bd0b835435d";
+    let imported_meta = first_meta.replace("21300002", "-7348592071075510482");
+    // Unity may resave a sprite rectangle using IDs assigned by its Sprite Editor.
+    let marker = "      internalID: -7348592071075510482";
+    let imported_meta = if let Some((before, after)) = imported_meta.split_once(marker) {
+        let mut lines = before.lines().collect::<Vec<_>>();
+        if lines
+            .last()
+            .is_some_and(|line| line.starts_with("      spriteID: "))
+        {
+            lines.pop();
+        }
+        format!(
+            "{}\n      spriteID: {sprite_guid}\n{marker}{after}",
+            lines.join("\n")
+        )
+    } else {
+        panic!("Missing sprite local ID");
+    };
+    std::fs::write(&meta, &imported_meta).unwrap();
+    let first_png = std::fs::read(&png).unwrap();
+    d.set_pixel(0, 1, 15, [45, 160, 200, 255]);
+    interchange::export_sheet(&png, &d, &options).unwrap();
+    assert_ne!(first_png, std::fs::read(&png).unwrap());
+    let (redrawn, redrawn_meta) = read();
+    assert_eq!(first, redrawn);
+    assert!(redrawn_meta.contains(&format!("      spriteID: {sprite_guid}")));
+    assert!(redrawn_meta.contains("      frame_1: -7348592071075510482"));
+
+    d.add_frame(0, false);
+    d.durations[2] = 95;
+    let d = formats::decode_project(&formats::encode_project(&d).unwrap()).unwrap();
+    interchange::export_sheet(&png, &d, &options).unwrap();
+    let (after, after_meta) = read();
+    assert_eq!(
+        first_meta.lines().find(|line| line.starts_with("guid:")),
+        after_meta.lines().find(|line| line.starts_with("guid:"))
+    );
+    for (old, new) in [(0, 0), (1, 2), (2, 3)] {
+        let name = first["frames"][old]["filename"].as_str().unwrap();
+        assert_eq!(after["frames"][new]["filename"], name);
+        let entry = format!("      {name}: ");
+        let old_id = imported_meta
+            .lines()
+            .find_map(|line| line.strip_prefix(&entry))
+            .unwrap();
+        let new_id = after_meta
+            .lines()
+            .find_map(|line| line.strip_prefix(&entry))
+            .unwrap();
+        assert_eq!(old_id, new_id);
+    }
+    assert_eq!(after["frames"][2]["duration"], 95);
+    assert_eq!(after["meta"]["frameTags"][1]["name"], "walk");
+    assert_eq!(after["meta"]["frameTags"][1]["from"], 2);
+    let mut invalid = d.clone();
+    invalid.tags[2].name = "walk".into();
+    assert!(interchange::export_sheet(&png, &invalid, &options).is_err());
+    assert_eq!((after, after_meta), read());
+    std::fs::remove_dir_all(dir).unwrap();
+}

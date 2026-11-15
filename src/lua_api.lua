@@ -435,6 +435,18 @@ function spriteMethods:newCel(l,f,im,pos) local li,fi=layerNumber(l),frameNumber
 function spriteMethods:deleteCel(c) c.image:clear() end
 function spriteMethods:newLayer() assert((#doc.layers+1)*#doc.durations*doc.width*doc.height<=64000000,'Layer budget exceeded');local l={name='Layer '..(#doc.layers+1),visible=true,locked=false,opacity=255,cels={},cel_meta={},group=false,blend='Normal',tile_cels={}};for f=1,#doc.durations do l.cels[f]=Image(doc.width,doc.height)._pixels;l.cel_meta[f]={opacity=255,z_index=0,outside={}};l.tile_cels[f]={} end table.insert(doc.layers,l);rebuildHandles();return layerHandles[#doc.layers] end
 function spriteMethods:newGroup() local l=self:newLayer();doc.layers[l._index].group=true;return l end
+local function insertFrameExportId(index)
+ local ids=doc.frame_export_ids
+ if not ids then
+  if index>#doc.durations then return end
+  ids={frames={},next=#doc.durations}
+  for i=1,#doc.durations do ids.frames[i]=i-1 end
+  doc.frame_export_ids=ids
+ end
+ assert(ids.next<=4294967295,'Frame export ID limit exceeded')
+ table.insert(ids.frames,index,ids.next)
+ ids.next=ids.next+1
+end
 function spriteMethods:newFrame(f)
  assert((#doc.durations+1)*#doc.layers*doc.width*doc.height<=64000000,'Frame budget exceeded')
  local explicit=f~=nil
@@ -442,6 +454,7 @@ function spriteMethods:newFrame(f)
  assert(f%1==0 and f>=1 and f<=#doc.durations,'Missing frame')
  -- Sprite_newFrame (0x3f3b10) -> DocApi::addFrame (0x19f0b0):
  -- copy the preceding frame into the insertion slot, shifting later frames.
+ insertFrameExportId(f+1)
  table.insert(doc.durations,f+1,doc.durations[f])
  for _,l in ipairs(doc.layers) do
   table.insert(l.cels,f+1,copy(l.cels[f]))
@@ -463,6 +476,7 @@ function spriteMethods:newEmptyFrame(f)
  f=frameNumber(f) or (#doc.durations+1)
  assert(f%1==0 and f>=1 and f<=#doc.durations+1,'Missing frame')
  local previous=math.max(1,f-1)
+ insertFrameExportId(f)
  table.insert(doc.durations,f,doc.durations[previous])
  for _,l in ipairs(doc.layers) do
   local tiles={} for i=1,#(l.tile_cels[previous] or {}) do tiles[i]=0 end

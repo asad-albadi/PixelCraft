@@ -117,24 +117,42 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
         .ok_or("Invalid filename")?
         .to_string_lossy();
     meta["meta"]["image"] = json!(name);
+    if o.preset == "Unity" {
+        let mut names = std::collections::HashSet::new();
+        for tag in meta["meta"]["frameTags"].as_array().unwrap() {
+            let name = tag["name"].as_str().unwrap();
+            if name.trim().is_empty() || !names.insert(name) {
+                return Err(
+                    "Give each exported Unity animation tag a unique, non-empty name".into(),
+                );
+            }
+        }
+    }
     im.save(path).map_err(|e| e.to_string())?;
     write_json(&path.with_extension("json"), &meta)?;
     if o.preset == "Godot" {
-        std::fs::write(path.with_extension("tres"), godot(&meta, &name)?)
-            .map_err(|e| e.to_string())?;
+        let resource = path.with_extension("tres");
+        let previous = std::fs::read_to_string(&resource).ok();
+        let uid = previous
+            .as_deref()
+            .and_then(|text| text.lines().next())
+            .and_then(|header| header.strip_prefix("[gd_resource "))
+            .and_then(|header| header.split_once(" uid=\"uid://"))
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(uid, _)| uid)
+            .filter(|uid| {
+                !uid.is_empty()
+                    && uid.len() <= 16
+                    && uid
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            });
+        std::fs::write(resource, godot(&meta, &name, uid)?).map_err(|e| e.to_string())?;
     }
     if o.preset == "Unity" {
         let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-        let mut output = unity(&meta, &path.to_string_lossy(), im.height());
-        if let Ok(previous) = std::fs::read_to_string(&meta_path)
-            && let Some(guid) = previous
-                .lines()
-                .find_map(|l| l.strip_prefix("guid: "))
-                .filter(|v| v.len() == 32 && v.bytes().all(|b| b.is_ascii_hexdigit()))
-            && let Some(line) = output.lines().find(|l| l.starts_with("guid: "))
-        {
-            output = output.replace(line, &format!("guid: {guid}"));
-        }
+        let previous = std::fs::read_to_string(&meta_path).unwrap_or_default();
+        let output = unity(&meta, &path.to_string_lossy(), im.height(), &previous);
         std::fs::write(meta_path, output).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -146,17 +164,19 @@ pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())
 }
-fn godot(meta: &Value, name: &str) -> Result<String, String> {
+fn godot(meta: &Value, name: &str, uid: Option<&str>) -> Result<String, String> {
     let frames = meta["frames"].as_array().unwrap();
     let quoted = serde_json::to_string(&format!("res://{name}")).unwrap();
+    let uid = uid.map_or_else(String::new, |uid| format!(" uid=\"uid://{uid}\""));
     let mut s = format!(
-        "[gd_resource type=\"SpriteFrames\" load_steps={} format=3]\n\n[ext_resource type=\"Texture2D\" path={quoted} id=\"1\"]\n",
+        "[gd_resource type=\"SpriteFrames\" load_steps={} format=3{uid}]\n\n[ext_resource type=\"Texture2D\" path={quoted} id=\"1\"]\n",
         frames.len() + 2
     );
-    for (i, f) in frames.iter().enumerate() {
+    for f in frames {
+        let id = &f["frameId"];
         let r = &f["frame"];
         s += &format!(
-            "\n[sub_resource type=\"AtlasTexture\" id=\"Atlas_{i}\"]\natlas = ExtResource(\"1\")\nregion = Rect2({}, {}, {}, {})\nmargin = Rect2({}, {}, {}, {})\n",
+            "\n[sub_resource type=\"AtlasTexture\" id=\"Atlas_{id}\"]\natlas = ExtResource(\"1\")\nregion = Rect2({}, {}, {}, {})\nmargin = Rect2({}, {}, {}, {})\n",
             r["x"],
             r["y"],
             r["w"],
@@ -211,8 +231,9 @@ fn godot(meta: &Value, name: &str) -> Result<String, String> {
             .iter()
             .map(|i| {
                 format!(
-                    "{{\"duration\": {}, \"texture\": SubResource(\"Atlas_{i}\")}}",
-                    frames[*i]["duration"].as_f64().unwrap() / 1000.
+                    "{{\"duration\": {}, \"texture\": SubResource(\"Atlas_{}\")}}",
+                    frames[*i]["duration"].as_f64().unwrap() / 1000.,
+                    frames[*i]["frameId"]
                 )
             })
             .collect();
@@ -226,30 +247,138 @@ fn godot(meta: &Value, name: &str) -> Result<String, String> {
     s += &format!("\n[resource]\nanimations = [{}]\n", animations.join(",\n"));
     Ok(s)
 }
-fn unity(meta: &Value, name: &str, height: u32) -> String {
-    // Stable asset identity; export_sheet retains a pre-existing Unity GUID.
-    let mut hash = 0xcbf29ce484222325u64;
-    for b in name.bytes() {
-        hash = (hash ^ b as u64).wrapping_mul(0x100000001b3)
+#[derive(Default)]
+struct UnitySpriteIdentity<'a> {
+    file_id: Option<i64>,
+    sprite_id: Option<&'a str>,
+}
+
+fn unity_guid(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn unity_sprite_ids(previous: &str) -> std::collections::HashMap<&str, UnitySpriteIdentity<'_>> {
+    let mut sprites = std::collections::HashMap::<_, UnitySpriteIdentity<'_>>::new();
+    let mut current = None;
+    let mut in_sprites = false;
+    let mut in_table = false;
+    for line in previous.lines() {
+        if line.starts_with("    ") && !line.starts_with("     ") {
+            match line.trim() {
+                "sprites:" => in_sprites = true,
+                entry if in_sprites && entry.starts_with("- serializedVersion:") => current = None,
+                "nameFileIdTable:" => {
+                    in_sprites = false;
+                    in_table = true;
+                }
+                _ => {
+                    in_sprites = false;
+                    in_table = false;
+                }
+            }
+        }
+        if in_sprites {
+            if let Some(name) = line.strip_prefix("      name: ") {
+                current = Some(name.trim().trim_matches(['\'', '"']));
+            } else if let Some(name) = current {
+                if let Some(id) = line.strip_prefix("      internalID: ") {
+                    sprites.entry(name).or_default().file_id =
+                        id.trim().parse().ok().filter(|id| *id != 0);
+                }
+                if let Some(id) = line.strip_prefix("      spriteID: ").map(str::trim)
+                    && unity_guid(id)
+                {
+                    sprites.entry(name).or_default().sprite_id = Some(id);
+                }
+            }
+        } else if in_table
+            && let Some((name, id)) = line.strip_prefix("      ").and_then(|v| v.split_once(':'))
+            && let Ok(id) = id.trim().parse::<i64>()
+            && id != 0
+        {
+            sprites
+                .entry(name.trim().trim_matches(['\'', '"']))
+                .or_default()
+                .file_id = Some(id);
+        }
     }
-    let mut s = format!(
-        "fileFormatVersion: 2\nguid: {hash:016x}{:016x}\nTextureImporter:\n  serializedVersion: 12\n  mipmaps:\n    enableMipMap: 0\n  isReadable: 0\n  filterMode: 0\n  textureSettings:\n    serializedVersion: 2\n    filterMode: 0\n    aniso: 1\n    mipBias: 0\n    wrapU: 1\n    wrapV: 1\n  textureType: 8\n  spriteMode: 2\n  spritePixelsToUnits: 100\n  alphaIsTransparency: 1\n  textureCompression: 0\n  spriteSheet:\n    serializedVersion: 2\n    sprites:\n",
-        hash.rotate_left(29)
-    );
-    for (i, f) in meta["frames"].as_array().unwrap().iter().enumerate() {
-        let r = &f["frame"];
+    sprites
+}
+
+fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let generated_guid = || {
+        let digest = Sha256::digest(name.as_bytes());
+        format!(
+            "{:032x}",
+            u128::from_be_bytes(digest[..16].try_into().unwrap())
+        )
+    };
+    let guid = previous
+        .lines()
+        .find_map(|line| line.strip_prefix("guid: ").map(str::trim))
+        .filter(|value| unity_guid(value))
+        .map_or_else(generated_guid, str::to_owned);
+    let previous = unity_sprite_ids(previous);
+    let frames = meta["frames"].as_array().unwrap();
+    let mut reserved_ids: std::collections::HashSet<_> =
+        previous.values().filter_map(|id| id.file_id).collect();
+    let mut assigned = std::collections::HashSet::new();
+    let mut spare = -1;
+    let ids: Vec<_> = frames
+        .iter()
+        .map(|frame| {
+            let name = frame["filename"].as_str().unwrap();
+            let old = previous.get(name);
+            let default = 21300000 + 2 * frame["frameId"].as_i64().unwrap();
+            let id = old
+                .and_then(|old| old.file_id)
+                .filter(|id| assigned.insert(*id))
+                .or_else(|| {
+                    (reserved_ids.insert(default) && assigned.insert(default)).then_some(default)
+                })
+                .unwrap_or_else(|| {
+                    while reserved_ids.contains(&spare) {
+                        spare -= 1;
+                    }
+                    reserved_ids.insert(spare);
+                    assigned.insert(spare);
+                    spare
+                });
+            let sprite_id = old.and_then(|old| old.sprite_id).map_or_else(
+                || {
+                    let digest = Sha256::digest(format!("{guid}:{name}").as_bytes());
+                    format!(
+                        "{:032x}",
+                        u128::from_be_bytes(digest[..16].try_into().unwrap())
+                    )
+                },
+                str::to_owned,
+            );
+            (name, id, sprite_id)
+        })
+        .collect();
+
+    let mut s =
+        format!("fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  internalIDToNameTable:\n");
+    for (name, id, _) in &ids {
+        s += &format!("  - first:\n      213: {id}\n    second: {name}\n");
+    }
+    s += "  serializedVersion: 12\n  mipmaps:\n    enableMipMap: 0\n  isReadable: 0\n  filterMode: 0\n  textureSettings:\n    serializedVersion: 2\n    filterMode: 0\n    aniso: 1\n    mipBias: 0\n    wrapU: 1\n    wrapV: 1\n  maxTextureSize: 16384\n  textureType: 8\n  spriteMode: 2\n  spritePixelsToUnits: 100\n  alphaIsTransparency: 1\n  textureCompression: 0\n  spriteSheet:\n    serializedVersion: 2\n    sprites:\n";
+    for (frame, (name, id, sprite_id)) in frames.iter().zip(&ids) {
+        let r = &frame["frame"];
         s += &format!(
-            "    - serializedVersion: 2\n      name: frame_{i}\n      rect:\n        serializedVersion: 2\n        x: {}\n        y: {}\n        width: {}\n        height: {}\n      alignment: 0\n      pivot: {{x: 0.5, y: 0.5}}\n      border: {{x: 0, y: 0, z: 0, w: 0}}\n      internalID: {}\n",
+            "    - serializedVersion: 2\n      name: {name}\n      rect:\n        serializedVersion: 2\n        x: {}\n        y: {}\n        width: {}\n        height: {}\n      alignment: 0\n      pivot: {{x: 0.5, y: 0.5}}\n      border: {{x: 0, y: 0, z: 0, w: 0}}\n      spriteID: {sprite_id}\n      internalID: {id}\n",
             r["x"],
             height as u64 - r["y"].as_u64().unwrap() - r["h"].as_u64().unwrap(),
             r["w"],
             r["h"],
-            21300000 + i * 2
         );
     }
     s += "    nameFileIdTable:\n";
-    for (i, _) in meta["frames"].as_array().unwrap().iter().enumerate() {
-        s += &format!("      frame_{i}: {}\n", 21300000 + i * 2);
+    for (name, id, _) in ids {
+        s += &format!("      {name}: {id}\n");
     }
     s
 }

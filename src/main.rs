@@ -1336,8 +1336,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             timeline_anchor: self.timeline_anchor,
         }
     }
-    fn restore_history(&mut self, entry: HistoryEntry) {
+    fn restore_history(&mut self, mut entry: HistoryEntry) {
         self.cancel_gesture();
+        entry.doc.retain_frame_export_id_counter(&self.doc);
         self.doc = entry.doc;
         self.clamp();
         self.layer = entry.layer.min(self.doc.layers.len() - 1);
@@ -5157,6 +5158,22 @@ mod tests {
         assert_eq!(a.tool.name(), "Pencil");
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn undo_does_not_reissue_a_frame_export_identity() {
+        let mut a = app();
+        a.remember();
+        a.doc.add_frame(0, false);
+        let issued = a.doc.frame_export_id(1);
+        a.undo();
+        assert_eq!(a.doc.durations.len(), 1);
+        a.redo();
+        assert_eq!(a.doc.frame_export_id(1), issued);
+        a.undo();
+        a.remember();
+        a.doc.add_frame(0, false);
+        assert_ne!(a.doc.frame_export_id(1), issued);
+    }
+
     #[test]
     fn timeline_rectangle_matches_mcp_and_undo_restores_selection() {
         let mut a = app();
