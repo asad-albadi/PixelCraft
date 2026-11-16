@@ -93,6 +93,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 in progress. FLI and FLC imports preserve indexed pixels, palette changes, and authored frame timing. The decoder handles palette packets, byte runs, byte and word deltas, literal and black frames, optional prefix data, and ring frames. Chunk and canvas bounds are checked before publication. The MCP regression uses mixed encodings and malformed packets. All 417 frames of three independent FFmpeg fixtures matched its RGBA output exactly. Formatting, strict Clippy, and 504 Windows all-target tests passed. FLI/FLC encoding and PSD/PSB import remain open.
 
+- Item 35 in progress. 8-bit FLI/FLC export is available from the editor, CLI, and MCP. Exact indexed artwork retains palette slots. RGB exports preserve fitting colors and quantize palettes above 256 colors, using a white matte for transparency. FLC keeps per-frame delays and custom canvas sizes. FLI uses classic 320 × 200 dimensions and repeats frames to represent longer holds in 70 Hz ticks. Output uses compressed scanlines and writes the loop-transition frame. All 417 exported frames from three sample animations decoded pixel-for-pixel in FFmpeg. Formatting, strict Clippy, and 505 Windows all-target tests passed. PSD/PSB import remains open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

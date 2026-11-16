@@ -2390,6 +2390,7 @@ version = "0.8.0"
 dependencies = [
  "arboard",
  "base64",
+ "color_quant",
  "eframe",
  "flate2",
  "image",

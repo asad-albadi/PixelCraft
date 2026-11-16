@@ -2327,6 +2327,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let ext = match kind {
             "gif" => "gif",
             "mp4" => "mp4",
+            "fli" => "fli",
+            "flc" => "flc",
             "bmp" => "bmp",
             "jpeg" => "jpg",
             "ico" => "ico",
@@ -2351,7 +2353,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .save_file()
         };
         if let Some(path) = chosen {
-            if matches!(kind, "gif" | "mp4")
+            if matches!(kind, "gif" | "mp4" | "fli" | "flc")
                 && !path
                     .extension()
                     .and_then(|e| e.to_str())
@@ -2373,6 +2375,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             },
             "mp4" => ExportKind::Animation {
                 format: "mp4",
+                scale,
+            },
+            "fli" => ExportKind::Animation {
+                format: "fli",
+                scale,
+            },
+            "flc" => ExportKind::Animation {
+                format: "flc",
                 scale,
             },
             "baked-ase" => ExportKind::BakedAse,
@@ -2546,6 +2556,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "gif" => self.animation_export = Some("gif"),
             "mp4" => self.animation_export = Some("mp4"),
+            "fli" => self.animation_export = Some("fli"),
+            "flc" => self.animation_export = Some("flc"),
             "undo" => self.undo(),
             "undo-history" => self.history_open = !self.history_open,
             "redo" => self.redo(),
@@ -2996,6 +3008,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export PNG sequence…", "png-sequence"),
                         ("Export animation GIF…", "gif"),
                         ("Export video MP4…", "mp4"),
+                        ("Export FLI…", "fli"),
+                        ("Export FLC…", "flc"),
                         ("Export tileset atlas…", "tileset-atlas"),
                         ("Export Tiled map…", "tiledexport"),
                         ("Export BMP…", "bmp"),
@@ -5591,6 +5605,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let title = match kind {
                 "png-sequence" => "Export PNG sequence",
                 "gif" => "Export animated GIF",
+                "fli" => "Export FLI animation",
+                "flc" => "Export FLC animation",
                 _ => "Export MP4 video",
             };
             if fluent::modal_dialog(ctx, title, |ui| {

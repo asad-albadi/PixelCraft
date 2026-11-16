@@ -5,7 +5,7 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
-mod flic;
+pub(crate) mod flic;
 mod pcx;
 mod raster;
 mod vector;

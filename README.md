@@ -290,7 +290,7 @@ PCX import reads indexed and planar RGB artwork. A single opaque indexed layer e
 
 **Export SVG** and **Export CSS** write the selected frame as crisp, scaled pixel art with transparency. SVG files use rectangles. CSS files define the `.pixel-art` class, ready to attach to an empty element such as `<div class="pixel-art"></div>`. CLI and MCP accept `svg` and `css` as export formats and support layer filtering and cropping.
 
-The editor and headless import tools open 8-bit FLI and FLC animations as indexed sprites. Import preserves palette changes and frame timing. Loop-transition frames stored after the authored timeline are skipped.
+The editor and headless import tools open 8-bit FLI and FLC animations as indexed sprites. Import preserves palette changes and frame timing. Loop-transition frames stored after the authored timeline are skipped. Export both formats from the editor, CLI, or MCP. FLC supports custom dimensions and per-frame delays. Classic FLI uses 320 × 200 output, 6-bit color channels, and timing in 1/70-second ticks. Longer holds can repeat frames. Both formats use up to 256 colors per frame and composite transparency on white.
 
 ### Headless CLI
 

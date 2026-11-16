@@ -829,11 +829,27 @@ fn file_operation_mode(
                             )?
                             .write();
                         }
-                        "gif" | "mp4" => {
+                        "gif" | "mp4" | "fli" | "flc" => {
+                            if matches!(kind, "fli" | "flc") {
+                                if !extension(&out).eq_ignore_ascii_case(kind) {
+                                    return Err(
+                                        "FLIC export format must match the output extension".into(),
+                                    );
+                                }
+                                if v.get("frame").is_some() || v.get("region").is_some() {
+                                    return Err(
+                                        "FLIC export uses the whole canvas and all frames".into()
+                                    );
+                                }
+                            }
                             let filtered = filter_export_layers(&d, v)?;
                             let scale = export_scale(v)?;
                             if preview {
-                                formats::animation_dimensions(&filtered, scale)?;
+                                if matches!(kind, "fli" | "flc") {
+                                    formats::flic::dimensions(&filtered, scale, kind == "fli")?;
+                                } else {
+                                    formats::animation_dimensions(&filtered, scale)?;
+                                }
                                 return plan(&out, vec![out.clone()], false);
                             }
                             if let Some(files) = files {
@@ -1129,7 +1145,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|pcx|qoi|tga|jpeg|webp|svg|css|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|pcx|qoi|tga|jpeg|webp|svg|css|gif|mp4|fli|flc|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let v = cli_arguments(&args[1..])?;
@@ -1288,7 +1304,7 @@ fn rpc_with_root(
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "batch" => "Run ordered file export steps, or set dry_run to list output paths without writing files.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
-                        "live-export" => "Export a revision-matched sprite as PNG, BMP, ICO, PCX, QOI, TGA, JPEG, WebP, SVG, CSS, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to image and PNG sequence exports. Frame applies to still images.",
+                        "live-export" => "Export a revision-matched sprite as PNG, BMP, ICO, PCX, QOI, TGA, JPEG, WebP, SVG, CSS, GIF, MP4, FLI, FLC, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to image and PNG sequence exports. Frame applies to still images.",
                         "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
                         "live-export-progress" => "Report the completed and total frames of a running live export by job_id.",
                         "live-cancel-export" => "Request cancellation of a running live export by job_id.",
@@ -1934,6 +1950,7 @@ fn export_animation(kind: &str, output: &Path, doc: &Document, scale: usize) -> 
     match kind {
         "gif" => formats::export_gif_scaled(output, doc, scale),
         "mp4" => formats::export_mp4(output, doc, scale),
+        "fli" | "flc" => formats::flic::export(output, doc, scale, kind == "fli", |_, _| Ok(())),
         _ => Err("Unknown animation format".into()),
     }
 }
@@ -2362,17 +2379,24 @@ fn prepare_live_export_inner(
                 progress(1, 1)?;
                 Ok(metadata)
             }
-            "gif" | "mp4" => {
+            "gif" | "mp4" | "fli" | "flc" => {
                 if ["frame", "region"]
                     .iter()
                     .any(|key| args.get(key).is_some())
                 {
-                    return Err("GIF and MP4 export all frames and do not support cropping".into());
+                    return Err("Animation export uses the whole canvas and all frames".into());
                 }
                 let scale = export_scale(args)?;
-                let (width, height) = formats::animation_dimensions(d, scale)?;
+                let flic = matches!(kind.as_str(), "fli" | "flc");
+                let (width, height) = if flic {
+                    formats::flic::dimensions(d, scale, kind == "fli")?
+                } else {
+                    formats::animation_dimensions(d, scale)?
+                };
                 let filtered = filter_export_layers(d, args)?;
-                if kind == "mp4" {
+                if flic {
+                    formats::flic::export(temporary,&filtered,scale,kind == "fli",&mut progress)?;
+                } else if kind == "mp4" {
                     formats::export_mp4_progress(temporary, &filtered, scale, &mut progress)?;
                 } else {
                     formats::export_gif_progress(temporary, &filtered, scale, &mut progress)?;
@@ -2388,7 +2412,7 @@ fn prepare_live_export_inner(
                 )
             }
             _ => Err(
-                "Choose a supported raster, .gif or .mp4 path, or set format to png-sequence or tileset-atlas"
+                "Choose a supported image or animation path, or set format to png-sequence or tileset-atlas"
                     .into(),
             ),
         }

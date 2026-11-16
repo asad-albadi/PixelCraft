@@ -1785,6 +1785,108 @@ fn flic_import_keeps_indexed_deltas_palettes_and_timing() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn flic_exports_authored_palettes_renders_and_timing() {
+    use pixelcraft::model::ColorMode;
+    let w = Workspace::new();
+    let root = w.project();
+    let path = root.join("art.pixel");
+    let mut sprite = Document::new(3, 2);
+    sprite.add_frame(0, false);
+    sprite.durations = vec![70, 125];
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let white = [255; 4];
+    sprite.color_mode = ColorMode::Indexed;
+    sprite.layers[0].background = true;
+    sprite.palette = vec![white, red, red];
+    sprite.frame_palettes = vec![sprite.palette.clone(), vec![white, blue, blue]];
+    for (frame, color) in [red, blue].into_iter().enumerate() {
+        for (pixel, index) in [0, 1, 2, 2, 1, 0].into_iter().enumerate() {
+            sprite.layers[0].cels[frame].set(pixel, if index == 0 { white } else { color });
+        }
+        sprite.layers[0].cel_meta[frame].indices = Some(vec![0, 1, 2, 2, 1, 0].into());
+    }
+    formats::save(&path, &sprite).unwrap();
+    let reply = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"scaled.flc","format":"flc","scale":2}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let exported = root.join("scaled.flc");
+    let bytes = fs::read(&exported).unwrap();
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 0xaf12);
+    assert_eq!(
+        u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize,
+        bytes.len()
+    );
+    let loaded = formats::load(&exported).unwrap();
+    assert_eq!(loaded.durations, [70, 125]);
+    assert_eq!((loaded.width, loaded.height), (6, 4));
+    assert_eq!(loaded.palette_for(0)[1], red);
+    assert_eq!(loaded.palette_for(1)[2], blue);
+    assert_eq!(
+        &loaded.layers[0].cel_meta[0].indices.as_deref().unwrap()[..6],
+        &[0, 0, 1, 1, 2, 2]
+    );
+
+    let reply = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"bad.fli","format":"fli"}),
+    );
+    assert_error(&reply, "320");
+    assert!(!root.join("bad.fli").exists());
+
+    let mut rgb = Document::new(17, 17);
+    for y in 0..17 {
+        for x in 0..17 {
+            rgb.set_pixel(0, 0, y * 17 + x, [x as u8 * 15, y as u8 * 15, 41, 255]);
+        }
+    }
+    formats::save(&path, &rgb).unwrap();
+    let reply = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"quantized.flc","format":"flc"}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let palette_output = formats::load(&root.join("quantized.flc")).unwrap();
+    assert_eq!(palette_output.palette.len(), 256);
+    let error: usize = rgb
+        .composite(0)
+        .iter()
+        .zip(palette_output.composite(0))
+        .map(|(a, b)| {
+            a.iter()
+                .zip(b)
+                .map(|(a, b)| usize::from(a.abs_diff(b)))
+                .sum::<usize>()
+        })
+        .sum();
+    assert!(
+        error < 30 * 17 * 17,
+        "unexpected error after color quantization: {error}"
+    );
+
+    let mut classic = Document::new(320, 200);
+    classic.add_frame(0, false);
+    classic.durations = vec![100, 200];
+    classic.set_pixel(0, 0, 0, red);
+    classic.set_pixel(0, 1, 0, blue);
+    formats::save(&path, &classic).unwrap();
+    let output = root.join("classic.fli");
+    let args = json!({"output":output,"format":"fli"});
+    automation::prepare_live_export(&classic, 0, &args, "flic-test")
+        .unwrap()
+        .write()
+        .unwrap();
+    let classic = formats::load(&output).unwrap();
+    assert_eq!(classic.durations, [100, 100, 100]);
+    assert_eq!(classic.composite(0)[..2], [red, white]);
+    assert_eq!(classic.composite(1)[0], blue);
+    assert_eq!(classic.composite(2)[0], blue);
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

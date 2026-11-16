@@ -1,3 +1,6 @@
+mod encode;
+pub(crate) use encode::{dimensions, export};
+
 use crate::{
     automation::mcp_io,
     model::{

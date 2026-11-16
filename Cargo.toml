@@ -11,6 +11,7 @@ arboard = "3.6.1"
 sha2 = "0.10.9"
 image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg", "ico", "qoi", "tga", "webp"] }
 rfd = "0.17.2"
+color_quant = "1.1.0"
 flate2 = "1.1.10"
 base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
