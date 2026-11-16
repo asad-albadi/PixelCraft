@@ -1,0 +1,75 @@
+name: Pull request checks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixelcraft-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
+            libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev libwebp-dev
+          cp -L /usr/lib/x86_64-linux-gnu/liblua5.4.so.0 runtime/liblua5.4.so
+      - name: Install Rust checks
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup override set stable
+      - name: Format, lint, and test
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-pr-data
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  windows:
+    name: Windows checks and startup
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install Rust checks
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Build embedded Lua
+        run: ./packaging/build-windows-lua.ps1
+      - name: Build WebP runtime
+        run: ./packaging/build-windows-webp.ps1
+      - name: Format
+        run: cargo +stable fmt --check
+      - name: Lint
+        run: cargo +stable clippy --locked --all-targets -- -D warnings
+      - name: Test
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-pr-data
+        run: cargo +stable test --locked
+      - name: Build application
+        run: cargo +stable build --locked
+      - name: Open the Windows application
+        run: ./checks/graphics-fallback.ps1 -App target/debug/pixelcraft.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: PixelCraft-Windows-PR-startup
+          path: |
+            ${{ runner.temp }}/pixelcraft-fallback/*.log
+            ${{ runner.temp }}/pixelcraft-fallback/*.png
+          if-no-files-found: ignore
