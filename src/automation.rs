@@ -1018,18 +1018,10 @@ fn file_operation_mode(
                                 if preview {
                                     return plan(&out, vec![out.clone()], false);
                                 }
-                                let (image, mut metadata) = compose_region(
-                                    &sprite,
-                                    frame,
-                                    geometry,
-                                    &document_revision(&d),
-                                )?;
-                                write_operation_file(files, &out, |target| {
-                                    formats::write_raster_image(
-                                        target,
-                                        &image,
-                                        format,
-                                        geometry.scale,
+                                let revision = document_revision(&d);
+                                let mut metadata = write_operation_file(files, &out, |target| {
+                                    write_raster_region(
+                                        target, &sprite, frame, geometry, format, &revision,
                                     )
                                 })?;
                                 metadata["output"] = json!(out);
@@ -2227,10 +2219,15 @@ fn prepare_png_sequence_progress(
         let mut metadata = Value::Null;
         for (frame, name) in names.iter().enumerate() {
             progress(frame, names.len())?;
-            let (image, frame_metadata) =
-                preview_composite(&filtered, frame, args, revision, MAX_PIXELS)?;
-            mcp_io::write_image_as(temporary.join(name), &image, image::ImageFormat::Png)
-                .map_err(|e| e.to_string())?;
+            let geometry = preview_geometry(&filtered, frame, args, MAX_PIXELS)?;
+            let frame_metadata = write_raster_region(
+                &temporary.join(name),
+                &filtered,
+                frame,
+                geometry,
+                formats::RasterFormat::Standard(image::ImageFormat::Png),
+                revision,
+            )?;
             if frame == 0 {
                 metadata = frame_metadata;
             }
@@ -2374,8 +2371,7 @@ fn prepare_live_export_inner(
                 let sprite = filter_export_layers(d, args)?;
                 let geometry = preview_geometry(&sprite, f, args, MAX_PIXELS)?;
                 formats::validate_raster_size(format, geometry.width, geometry.height, geometry.scale)?;
-                let (image, metadata) = compose_region(&sprite, f, geometry, revision)?;
-                formats::write_raster_image(temporary, &image, format, geometry.scale)?;
+                let metadata = write_raster_region(temporary, &sprite, f, geometry, format, revision)?;
                 progress(1, 1)?;
                 Ok(metadata)
             }
@@ -2640,7 +2636,7 @@ fn compose_region(
         y,
         width: w,
         height: h,
-        scale,
+        ..
     } = geometry;
     let pixels = crate::color::display_pixels(sprite, f).unwrap_or_else(|_| sprite.composite(f));
     let cropped = (y..y + h)
@@ -2652,6 +2648,41 @@ fn compose_region(
         })
         .collect();
     let image = image::RgbaImage::from_raw(w as u32, h as u32, cropped).ok_or("Invalid image")?;
+    Ok((image, region_metadata(sprite, f, geometry, revision)))
+}
+
+fn write_raster_region(
+    path: &Path,
+    sprite: &Document,
+    frame: usize,
+    geometry: RenderGeometry,
+    format: formats::RasterFormat,
+    revision: &str,
+) -> Result<Value, String> {
+    if format == formats::RasterFormat::Standard(image::ImageFormat::Png) {
+        formats::validate_raster_size(format, geometry.width, geometry.height, geometry.scale)?;
+        formats::export_png_region(
+            path,
+            sprite,
+            frame,
+            [geometry.x, geometry.y, geometry.width, geometry.height],
+            geometry.scale,
+        )?;
+        return Ok(region_metadata(sprite, frame, geometry, revision));
+    }
+    let (image, metadata) = compose_region(sprite, frame, geometry, revision)?;
+    formats::write_raster_image(path, &image, format, geometry.scale)?;
+    Ok(metadata)
+}
+
+fn region_metadata(sprite: &Document, f: usize, geometry: RenderGeometry, revision: &str) -> Value {
+    let RenderGeometry {
+        x,
+        y,
+        width: w,
+        height: h,
+        scale,
+    } = geometry;
     let layers: Vec<_> = sprite
         .layers
         .iter()
@@ -2667,10 +2698,9 @@ fn compose_region(
             Some(i)
         })
         .collect();
-    let metadata = json!({"revision":revision,"frame":f,"layers":layers,"scale":scale,
+    json!({"revision":revision,"frame":f,"layers":layers,"scale":scale,
         "canvas_width":sprite.width,"canvas_height":sprite.height,"width":w*scale,"height":h*scale,
-        "region":{"x":x,"y":y,"width":w,"height":h}});
-    Ok((image, metadata))
+        "region":{"x":x,"y":y,"width":w,"height":h}})
 }
 
 #[cfg(test)]

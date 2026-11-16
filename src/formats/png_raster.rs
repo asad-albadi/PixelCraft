@@ -89,6 +89,7 @@ pub(super) fn write(
     path: &Path,
     doc: &Document,
     frames: &[usize],
+    origin: [usize; 2],
     image: &image::RgbaImage,
     scale: usize,
 ) -> Result<bool, String> {
@@ -113,7 +114,7 @@ pub(super) fn write(
             (color, samples)
         }
         ColorMode::Indexed => {
-            let Some((colors, indices)) = indexed_samples(doc, frames, image) else {
+            let Some((colors, indices)) = indexed_samples(doc, frames, origin, image) else {
                 return Ok(false);
             };
             palette = Some(colors);
@@ -167,6 +168,7 @@ pub(super) fn write(
 fn indexed_samples(
     doc: &Document,
     frames: &[usize],
+    [left, top]: [usize; 2],
     image: &image::RgbaImage,
 ) -> Option<(Vec<Pixel>, Vec<u8>)> {
     let mut visible = doc
@@ -216,7 +218,7 @@ fn indexed_samples(
         let pixel = color.0;
         let index = cached[x / doc.width]
             .and_then(|(indices, dx, dy)| {
-                doc.index((x % doc.width) as i32 - dx, y as i32 - dy)
+                doc.index((left + x % doc.width) as i32 - dx, (top + y) as i32 - dy)
                     .map(|i| indices[i])
             })
             .filter(|&slot| {

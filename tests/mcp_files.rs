@@ -1586,6 +1586,90 @@ fn pcx_interchange_keeps_palette_slots_and_checks_scanline_packets() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn cropped_and_sequence_png_exports_preserve_document_color_modes() {
+    use pixelcraft::model::ColorMode;
+
+    let w = Workspace::new();
+    let root = w.project();
+    let mut indexed = Document::new(4, 1);
+    indexed.color_mode = ColorMode::Indexed;
+    indexed.palette = vec![
+        [0; 4],
+        [10, 50, 30, 255],
+        [10, 50, 30, 255],
+        [40, 80, 60, 128],
+    ];
+    let slots = [1, 2, 3, 1];
+    indexed.layers[0].cels[0] = slots
+        .iter()
+        .map(|&slot| indexed.palette[slot as usize])
+        .collect();
+    indexed.layers[0].cel_meta[0].indices = Some(slots.to_vec().into());
+    formats::save(&root.join("indexed.pixel"), &indexed).unwrap();
+    let region = json!({"x":1,"y":0,"width":2,"height":1});
+    let reply = w.call(
+        "export",
+        json!({"input":"indexed.pixel","output":"crop.png","region":region,"layers":[0],"scale":2}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let live = root.join("live.png");
+    automation::prepare_live_export(
+        &indexed,
+        0,
+        &json!({"output":live,"region":region,"scale":2}),
+        "indexed-check",
+    )
+    .unwrap()
+    .write()
+    .unwrap();
+    for path in [root.join("crop.png"), live] {
+        let loaded = formats::load(&path).unwrap();
+        assert_eq!(loaded.color_mode, ColorMode::Indexed);
+        assert_eq!(loaded.palette, indexed.palette);
+        assert_eq!(
+            loaded.layers[0].cel_meta[0]
+                .indices
+                .as_deref()
+                .unwrap()
+                .as_slice(),
+            [2, 2, 3, 3, 2, 2, 3, 3]
+        );
+    }
+
+    let mut gray = Document::new(3, 1);
+    gray.color_mode = ColorMode::Grayscale;
+    gray.layers[0].cels[0].set(1, [65, 65, 65, 255]);
+    gray.layers[0].cels[0].set(2, [170, 170, 170, 64]);
+    gray.add_frame(0, true);
+    gray.layers[0].cels[1].set(1, [150, 150, 150, 255]);
+    let output = root.join("gray-frames");
+    automation::prepare_png_sequence(
+        &gray,
+        output.clone(),
+        &json!({"region":region,"scale":2}),
+        "gray-check",
+    )
+    .unwrap()
+    .write()
+    .unwrap();
+    for (index, level) in [65, 150].into_iter().enumerate() {
+        let loaded = formats::load(&output.join(format!("frame-{:04}.png", index + 1))).unwrap();
+        assert_eq!(loaded.color_mode, ColorMode::Grayscale);
+        assert_eq!(
+            loaded.composite(0),
+            [
+                [level, level, level, 255],
+                [level, level, level, 255],
+                [170, 170, 170, 64],
+                [170, 170, 170, 64],
+            ]
+            .repeat(2)
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn svg_and_css_export_scaled_rectangles_with_alpha() {
     use pixelcraft::model::CLEAR;
     let workspace = Workspace::new();

@@ -286,7 +286,7 @@ Double-click a timeline frame number or choose **Rename current frame** under **
 
 Choose **File → Repeat Last Export** to render a sprite again using its last successful export destination and settings. Each open tab keeps its own export history for the current editor session. Repeat reads the current artwork, and remembers the original frame for single-frame exports. PNG sequence repeats update the frame files for the current timeline and leave other files in the destination folder.
 
-Still PNG imports preserve indexed palette slots and transparency, or open grayscale files in Grayscale mode. Full-frame and horizontal sheet exports retain the document's PNG color mode when the rendered pixels fit it. If the colors require RGBA, the export uses RGBA to preserve the appearance.
+Still PNG imports preserve indexed palette slots and transparency, or open grayscale files in Grayscale mode. Full-frame, cropped, horizontal sheet, and PNG sequence exports retain the document's PNG color mode when the rendered pixels fit it. This includes file and live MCP exports. If the colors require RGBA, the export uses RGBA to preserve the appearance.
 
 The editor opens and exports ICO, QOI, and TGA. It also exports lossless WebP and JPEG. JPEG composites transparency on white. ICO accepts up to 256 × 256 pixels after scaling. Static WebP opens with the built-in decoder. Use the same extensions in CLI, file MCP, and live MCP raster export.
 

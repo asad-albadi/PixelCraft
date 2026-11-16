@@ -11,7 +11,7 @@ mod png_raster;
 mod psd;
 mod raster;
 mod vector;
-pub(crate) use raster::{raster_format, validate_raster_size, write_raster_image};
+pub(crate) use raster::{RasterFormat, raster_format, validate_raster_size, write_raster_image};
 
 const PROJECT_MAGIC_V1: &[u8] = b"PIXEL-WORKSHOP\0\x01";
 const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x02";
@@ -1641,6 +1641,44 @@ fn write_project_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
     export_raster_scaled(path, d, f, sheet, 1)
 }
+pub(crate) fn export_png_region(
+    path: &Path,
+    doc: &Document,
+    frame: usize,
+    [x, y, width, height]: [usize; 4],
+    scale: usize,
+) -> Result<(), String> {
+    let pixels = doc.composite(frame);
+    let cropped = (y..y + height)
+        .flat_map(|row| {
+            let start = row * doc.width + x;
+            pixels[start..start + width].as_flattened().iter().copied()
+        })
+        .collect();
+    let image = image::RgbaImage::from_raw(width as u32, height as u32, cropped)
+        .ok_or("Invalid PNG region")?;
+    write_document_png(path, doc, &[frame], [x, y], &image, scale)
+}
+
+fn write_document_png(
+    path: &Path,
+    doc: &Document,
+    frames: &[usize],
+    origin: [usize; 2],
+    image: &image::RgbaImage,
+    scale: usize,
+) -> Result<(), String> {
+    if !png_raster::write(path, doc, frames, origin, image, scale)? {
+        write_raster_image(
+            path,
+            image,
+            raster::RasterFormat::Standard(image::ImageFormat::Png),
+            scale,
+        )?;
+    }
+    write_png_metadata(path, doc)
+}
+
 pub fn export_raster_scaled(
     path: &Path,
     d: &Document,
@@ -1678,14 +1716,10 @@ pub fn export_raster_scaled(
             );
         }
     }
-    let is_png = format == raster::RasterFormat::Standard(image::ImageFormat::Png);
-    if !is_png || !png_raster::write(path, d, &frames, &im, scale)? {
-        write_raster_image(path, &im, format, scale)?;
+    if format == raster::RasterFormat::Standard(image::ImageFormat::Png) {
+        return write_document_png(path, d, &frames, [0, 0], &im, scale);
     }
-    if is_png {
-        write_png_metadata(path, d)?;
-    }
-    Ok(())
+    write_raster_image(path, &im, format, scale)
 }
 pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
     export_gif_scaled(path, d, 1)
