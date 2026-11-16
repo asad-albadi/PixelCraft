@@ -1461,6 +1461,66 @@ fn preview_resize_pan_and_preferences_survive_restart() {
 }
 
 #[test]
+fn editor_controls_dragging_indexed_swatches_preserves_pixels_and_undoes() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1366., 900.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.open_document(Document::new(4, 4), None);
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    app.doc.import_palette(vec![CLEAR, red, blue]).unwrap();
+    app.doc.set_color_mode(ColorMode::Indexed);
+    app.doc.set_pixel(0, 0, 0, red);
+    app.palette_index = 1;
+    app.fg = red;
+    let before = app.doc.clone();
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let heading = text_position(&mut output, "Document palette");
+    discard_frame(&mut app, &ctx, size, 1., click(heading));
+    for _ in 0..8 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let swatch = |i: usize| {
+        ctx.data(|d| d.get_temp::<Rect>(egui::Id::new(("document-swatch", i))))
+            .unwrap()
+            .center()
+    };
+    drag_layout(&mut app, &ctx, size, swatch(1), swatch(2));
+    assert_eq!(app.doc.palette, vec![CLEAR, blue, red]);
+    assert_eq!(app.doc.composite(0), before.composite(0));
+    assert_eq!(app.palette_index, 2);
+    app.undo();
+    assert_eq!(app.doc, before);
+}
+
+#[test]
+fn editor_controls_shade_direction_is_available_on_the_drawing_bar() {
+    use pixelcraft::productivity::BrushMode;
+    let ctx = egui::Context::default();
+    let size = Vec2::new(800., 600.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.open_document(Document::new(3, 1), None);
+    let palette = vec![[10, 0, 0, 255], [100, 0, 0, 255], [200, 0, 0, 255]];
+    app.doc.palette = palette.clone();
+    app.doc.set_pixel(0, 0, 0, palette[1]);
+    app.doc.set_pixel(0, 0, 1, palette[1]);
+    app.power.mode = BrushMode::Shade;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let previous = layout_rect(&ctx, "shade-previous").center();
+    let next = layout_rect(&ctx, "shade-next").center();
+    discard_frame(&mut app, &ctx, size, 1., click(previous));
+    app.power_paint((0, 0), app.fg, 1);
+    discard_frame(&mut app, &ctx, size, 1., click(next));
+    app.power_paint((1, 0), app.fg, 1);
+    assert_eq!(&app.doc.composite(0)[..2], &[palette[0], palette[2]]);
+}
+
+#[test]
 fn preview_click_recenters_canvas_and_updates_viewport_border() {
     let ctx = egui::Context::default();
     let size = Vec2::new(1366., 900.);

@@ -245,6 +245,7 @@ struct PixelCraft {
     used_colors: Vec<Pixel>,
     brush: i32,
     zoom: f32,
+    wheel_zoom_steps: f32,
     pan: Vec2,
     grid: bool,
     onion: bool,
@@ -398,6 +399,7 @@ impl PixelCraft {
             used_colors: vec![],
             brush: 1,
             zoom: 10.,
+            wheel_zoom_steps: 0.,
             pan: Vec2::ZERO,
             grid: false,
             onion: false,
@@ -3393,6 +3395,51 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         self.doc.drawing_index = None;
     }
+    fn whole_pixel_wheel_scale(&mut self, ctx: &egui::Context) -> f32 {
+        // A point-based wheel gesture (for example, a trackpad swipe) has
+        // fractional motion. Collect it before taking a single discrete step.
+        self.wheel_zoom_steps += ctx.input(|input| {
+            input
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    egui::Event::MouseWheel { unit, delta, .. } => {
+                        Some(if *unit == egui::MouseWheelUnit::Point {
+                            delta.y / 24.
+                        } else {
+                            delta.y
+                        })
+                    }
+                    _ => None,
+                })
+                .sum::<f32>()
+        });
+        let steps = self.wheel_zoom_steps.trunc();
+        self.wheel_zoom_steps -= steps;
+        if steps == 0. {
+            return self.zoom;
+        }
+        let points = ctx.pixels_per_point();
+        let mut scale = self.zoom * points;
+        if (scale - scale.round()).abs() < 0.0001 {
+            scale = scale.round();
+        }
+        for _ in 0..(steps.abs() as usize).min(40) {
+            scale = if steps > 0. {
+                if scale < 1. {
+                    (scale * 1.2).min(1.)
+                } else {
+                    scale.floor() + 1.
+                }
+            } else if scale > 1. {
+                scale.ceil() - 1.
+            } else {
+                scale / 1.2
+            };
+        }
+        scale.clamp(0.02 * points, (40. * points).floor().max(1.)) / points
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
         let (r, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         #[cfg(test)]
@@ -3426,15 +3473,26 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             } else {
                 egui::CursorIcon::Crosshair
             });
-            let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-            if scroll.abs() > 0.01 {
-                let old = self.zoom;
-                self.zoom = (self.zoom * (scroll * 0.003).exp()).clamp(0.02, 40.);
-                if let Some(p) = pointer {
-                    let offset = p - r.center() - self.pan;
-                    self.pan -= offset * (self.zoom / old - 1.);
+            let old = self.zoom;
+            self.zoom = if self.power.whole_pixel_wheel_zoom() {
+                self.whole_pixel_wheel_scale(&ctx)
+            } else {
+                self.wheel_zoom_steps = 0.;
+                let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
+                if scroll.abs() > 0.01 {
+                    (old * (scroll * 0.003).exp()).clamp(0.02, 40.)
+                } else {
+                    old
                 }
+            };
+            if self.zoom != old
+                && let Some(p) = pointer
+            {
+                let offset = p - r.center() - self.pan;
+                self.pan -= offset * (self.zoom / old - 1.);
             }
+        } else {
+            self.wheel_zoom_steps = 0.;
         }
         if can_edit
             && (response.dragged_by(egui::PointerButton::Middle)

@@ -21,6 +21,7 @@ struct Preferences {
     default_grid: bool,
     background_updates: bool,
     sample_references: bool,
+    whole_pixel_wheel_zoom: bool,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -38,6 +39,7 @@ impl Default for Preferences {
             default_grid: false,
             background_updates: false,
             sample_references: false,
+            whole_pixel_wheel_zoom: false,
         }
     }
 }
@@ -227,6 +229,9 @@ impl PowerTools {
     pub(super) fn background_updates(&self) -> bool {
         self.preferences.background_updates
     }
+    pub(super) fn whole_pixel_wheel_zoom(&self) -> bool {
+        self.preferences.whole_pixel_wheel_zoom
+    }
 
     pub(super) fn preferences_onion(&self) -> OnionOptions {
         self.preferences.onion.clone()
@@ -354,6 +359,7 @@ impl PixelCraft {
             } else {
                 p.checker_colors = None;
             }
+            ui.pc_checkbox(&mut p.whole_pixel_wheel_zoom, "Whole-pixel wheel zoom");
             ui.pc_checkbox(&mut p.autosave, "Enable recovery autosave");
             if before != serde_json::to_value(&*p).ok() {
                 ui.ctx().set_zoom_factor(self.power.interface_scale());
@@ -370,6 +376,25 @@ impl PixelCraft {
             self.save_workflow_preferences();
         }
     }
+    pub(super) fn move_palette_swatch(&mut self, from: usize, to: usize) {
+        if from == to {
+            return;
+        }
+        let mut next = self.doc.clone();
+        if let Err(error) = next.reorder_palette(from, to) {
+            self.status = error;
+            return;
+        }
+        self.remember();
+        self.doc = next;
+        self.palette_index = match self.palette_index {
+            index if index == from => to,
+            index if from < index && index <= to => index - 1,
+            index if to <= index && index < from => index + 1,
+            index => index,
+        };
+    }
+
     fn palette_arrangement_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Palette order & ramps", |ui| {
             let max = self.doc.palette.len() - 1;
@@ -384,14 +409,7 @@ impl PixelCraft {
                     .prefix("To swatch "),
             );
             if ui.pc_button("Move swatch to position").clicked() {
-                let mut next = self.doc.clone();
-                match next.reorder_palette(self.power.ramp_from, self.power.ramp_to) {
-                    Ok(()) => {
-                        self.remember();
-                        self.doc = next;
-                    }
-                    Err(e) => self.status = e,
-                }
+                self.move_palette_swatch(self.power.ramp_from, self.power.ramp_to);
             }
             ui.add(
                 egui::DragValue::new(&mut self.power.ramp_steps)
@@ -1233,6 +1251,45 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn editor_controls_whole_pixel_wheel_zoom_keeps_mouse_over_the_same_artwork() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(16, 16), None);
+        app.power.preferences.whole_pixel_wheel_zoom = true;
+        app.initial_view = 0;
+        app.zoom = 2.4;
+        let mut raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900., 600.))),
+            ..Default::default()
+        };
+        raw.viewports
+            .get_mut(&egui::ViewportId::ROOT)
+            .unwrap()
+            .native_pixels_per_point = Some(1.25);
+        ctx.run_ui(raw.clone(), |ui| app.canvas(ui))
+            .textures_delta
+            .clear();
+        let view = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new("canvas-bounds")))
+            .unwrap();
+        let pointer = view.center() + Vec2::new(12., -14.);
+        raw.events = vec![
+            egui::Event::PointerMoved(pointer),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0., 1.),
+                phase: egui::TouchPhase::Move,
+                modifiers: Default::default(),
+            },
+        ];
+        let before = (pointer - view.center() - app.pan) / app.zoom;
+        ctx.run_ui(raw, |ui| app.canvas(ui)).textures_delta.clear();
+        let after = (pointer - view.center() - app.pan) / app.zoom;
+        assert!((app.zoom * ctx.pixels_per_point() - 4.).abs() < 0.01);
+        assert!((before - after).length() < 0.01);
+    }
+
     #[test]
     fn pixel_perfect_shade_keeps_earlier_stroke_pixels() {
         let ctx = egui::Context::default();

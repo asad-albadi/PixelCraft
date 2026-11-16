@@ -390,6 +390,139 @@ impl PixelCraft {
             });
     }
 
+    fn document_palette(&mut self, ui: &mut egui::Ui) {
+        #[derive(Clone, Copy)]
+        struct Swatch {
+            tab: usize,
+            slot: usize,
+        }
+
+        let mut reorder = None;
+        ui.collapsing("Document palette", |ui| {
+            ui.small("Drag a swatch onto another to move it.");
+            let palette = self.doc.editing_palette(self.layer, self.frame);
+            let side = 22.;
+            let spacing = ui.spacing().item_spacing.x;
+            let columns = ((ui.available_width() + spacing) / (side + spacing))
+                .floor()
+                .max(1.) as usize;
+            egui::ScrollArea::vertical()
+                .id_salt("document-palette-scroll")
+                .max_height(174.)
+                .show(ui, |ui| {
+                    egui::Grid::new("document-palette-grid")
+                        .min_col_width(0.)
+                        .show(ui, |ui| {
+                            for (slot, &[r, g, b, a]) in palette.iter().enumerate() {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    Vec2::splat(side),
+                                    Sense::click_and_drag(),
+                                );
+                                #[cfg(test)]
+                                ui.ctx().data_mut(|d| {
+                                    d.insert_temp(egui::Id::new(("document-swatch", slot)), rect)
+                                });
+                                response.dnd_set_drag_payload(Swatch {
+                                    tab: self.active_tab,
+                                    slot,
+                                });
+                                let dragging =
+                                    response
+                                        .dnd_hover_payload::<Swatch>()
+                                        .is_some_and(|swatch| {
+                                            swatch.tab == self.active_tab && swatch.slot != slot
+                                        });
+                                if let Some(swatch) = response.dnd_release_payload::<Swatch>()
+                                    && swatch.tab == self.active_tab
+                                    && swatch.slot != slot
+                                {
+                                    reorder = Some((swatch.slot, slot));
+                                }
+                                let color = [r, g, b, a];
+                                if response.clicked() {
+                                    self.fg = color;
+                                    self.palette_index = slot;
+                                }
+                                let selected = self.palette_index == slot && self.fg == color;
+                                let name = self
+                                    .doc
+                                    .palette_names
+                                    .get(slot)
+                                    .filter(|name| !name.is_empty())
+                                    .map(String::as_str);
+                                let label = name.map_or_else(
+                                    || {
+                                        format!(
+                                            "Swatch {} · #{r:02X}{g:02X}{b:02X}{a:02X}",
+                                            slot + 1
+                                        )
+                                    },
+                                    |name| format!("Swatch {} · {name}", slot + 1),
+                                );
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::SelectableLabel,
+                                        response.enabled(),
+                                        selected,
+                                        &label,
+                                    )
+                                });
+                                response.context_menu(|ui| {
+                                    for (label, target) in [
+                                        ("Move earlier", slot.checked_sub(1)),
+                                        (
+                                            "Move later",
+                                            (slot + 1 < palette.len()).then_some(slot + 1),
+                                        ),
+                                    ] {
+                                        if let Some(target) = target
+                                            && ui.pc_button(label).clicked()
+                                        {
+                                            reorder = Some((slot, target));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                                let painter = ui.painter();
+                                if a < 255 {
+                                    painter.rect_filled(rect, 3, Color32::GRAY);
+                                    painter.line_segment(
+                                        [rect.left_bottom(), rect.right_top()],
+                                        Stroke::new(1., Color32::WHITE),
+                                    );
+                                }
+                                painter.rect_filled(
+                                    rect,
+                                    3,
+                                    Color32::from_rgba_unmultiplied(r, g, b, a),
+                                );
+                                painter.rect_stroke(
+                                    rect,
+                                    3,
+                                    if selected || dragging {
+                                        Stroke::new(2., self.colors().accent)
+                                    } else {
+                                        Stroke::new(
+                                            1.,
+                                            ui.visuals().widgets.inactive.bg_stroke.color,
+                                        )
+                                    },
+                                    egui::StrokeKind::Inside,
+                                );
+                                paint_focus(ui, &response, 3);
+                                response.on_hover_text(label);
+                                if (slot + 1) % columns == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+        });
+        if let Some((from, to)) = reorder {
+            self.move_palette_swatch(from, to);
+        }
+    }
+
     pub(super) fn palette(&mut self, ui: &mut egui::Ui) {
         egui::Frame::NONE
             .inner_margin(egui::Margin::symmetric(10, 0))
@@ -466,6 +599,7 @@ impl PixelCraft {
                         }
                     });
                 });
+                self.document_palette(ui);
                 ui.add_space(6.);
                 ui.label("From artwork");
                 let colors = self.sprite_colors();
@@ -802,7 +936,41 @@ impl PixelCraft {
             ui.pc_checkbox(&mut self.filled, "Filled");
         }
     }
+    fn shade_direction_controls(&mut self, ui: &mut egui::Ui) {
+        if self.power.mode != pixelcraft::productivity::BrushMode::Shade
+            || self.tool != Tool::Pencil
+        {
+            return;
+        }
+        for (reverse, icon, label, test_id) in [
+            (
+                true,
+                "prev",
+                "Shade toward previous palette color",
+                "shade-previous",
+            ),
+            (
+                false,
+                "next",
+                "Shade toward next palette color",
+                "shade-next",
+            ),
+        ] {
+            let response =
+                ui_icons::local_icon_button(ui, icon, label, self.power.reverse == reverse);
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new(test_id), response.rect));
+            let _ = test_id;
+            if response.clicked() {
+                self.power.reverse = reverse;
+            }
+        }
+        ui.separator();
+    }
+
     fn fluent_view_controls(&mut self, ui: &mut egui::Ui) {
+        self.shade_direction_controls(ui);
         egui::ComboBox::from_id_salt("canvas_zoom")
             .width(90.)
             .selected_text(format!("{:.0}%", self.zoom * 100.))
