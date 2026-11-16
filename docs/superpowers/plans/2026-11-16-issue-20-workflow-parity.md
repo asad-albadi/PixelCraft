@@ -23,6 +23,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - PR #19 baseline. 418 Windows all-target tests passed.
 - Items 27–29. Three focused regressions failed on the baseline, passed after the fix, and the Windows all-target suite passed 421 tests. Formatting and strict Clippy passed.
 
+- Items 1–2 in progress. Workspace decoding now runs off the UI thread. The editor presents Restore workspace and Discard backup, preserving artwork opened during recovery. Windows release-candidate debug startup became responsive in 0.73 seconds against a copied 33,561,892-byte recovery snapshot. Formatting, strict Clippy and 422 Windows all-target tests passed. Per-document choice and raw-image salvage remain open.
+
 ## Recovery and distribution
 
 - [ ] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

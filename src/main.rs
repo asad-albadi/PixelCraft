@@ -4754,6 +4754,7 @@ impl PixelCraft {
             .frame(egui::Frame::NONE.fill(self.colors().canvas))
             .show(ui, |ui| self.canvas(ui));
         self.dialogs(&ctx);
+        self.workspace_recovery_dialog(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
         self.poll_clipboard(&ctx);
