@@ -552,6 +552,15 @@ fn visible_bounds(pixels: &[Pixel], width: usize, height: usize) -> [usize; 4] {
     }
 }
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
+    let entries = &meta["frames"];
+    let count = match entries {
+        Value::Array(frames) => frames.len(),
+        Value::Object(frames) => frames.len(),
+        _ => return Err("Missing frames".into()),
+    };
+    if count > u16::MAX as usize {
+        return Err("Sheet exceeds limits".into());
+    }
     let frames: Vec<&Value> = if let Some(a) = meta["frames"].as_array() {
         a.iter().collect()
     } else if let Some(a) = meta["frames"].as_object() {
@@ -574,7 +583,6 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
         || h == 0
         || w > MAX_DIMENSION
         || h > MAX_DIMENSION
-        || frames.len() > 65535
         || w.saturating_mul(h).saturating_mul(frames.len()) > MAX_PIXELS
     {
         return Err("Sheet exceeds limits".into());

@@ -547,6 +547,73 @@ fn restricted_webp_import_keeps_the_shipped_decoder_available() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn restricted_split_slice_exports_update_all_unity_sidecars() {
+    use pixelcraft::model::{SliceKey, SpriteSlice};
+
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let input = root.join("art.pixel");
+    let mut sprite = Document::new(2, 2);
+    sprite.set_pixel(0, 0, 0, [235, 40, 20, 255]);
+    sprite.slices = ["left", "right"]
+        .into_iter()
+        .enumerate()
+        .map(|(x, name)| SpriteSlice {
+            name: name.into(),
+            keys: vec![SliceKey {
+                frame: 0,
+                bounds: [x as i32, 0, 1, 2],
+                center: None,
+                pivot: None,
+            }],
+        })
+        .collect();
+    formats::save(&input, &sprite).unwrap();
+
+    let export = |overwrite| {
+        workspace.call(
+            "export",
+            json!({"input":"art.pixel","output":"sheets","format":"sheet","overwrite":overwrite,
+                "options":{"split_slices":true,"preset":"Unity","padding":0,"extrude":1}}),
+        )
+    };
+    let first = export(false);
+    assert!(first["isError"].is_null(), "{first}");
+    let left = root.join("sheets/001-left.png");
+    let right = root.join("sheets/002-right.png");
+    let identities = |image: &std::path::Path| {
+        let meta = fs::read_to_string(image.with_extension("png.meta")).unwrap();
+        meta.lines()
+            .filter(|line| line.starts_with("guid:") || line.contains("internalID:"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    };
+    let first_ids = [identities(&left), identities(&right)];
+    assert!(first_ids.iter().all(|ids| ids.len() == 2));
+    let blocked = export(false);
+    assert_error(&blocked, "already exists");
+    let recolored = [25, 195, 85, 255];
+    sprite.set_pixel(0, 0, 0, recolored);
+    formats::save(&input, &sprite).unwrap();
+    let updated = export(true);
+    assert!(updated["isError"].is_null(), "{updated}");
+    assert_eq!([identities(&left), identities(&right)], first_ids);
+    assert_eq!(
+        image::open(&left).unwrap().into_rgba8().get_pixel(1, 1).0,
+        recolored
+    );
+    assert_eq!(fs::read_dir(root.join("sheets")).unwrap().count(), 6);
+    assert!(!fs::read_dir(&root).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".pixelcraft-output-")
+    }));
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

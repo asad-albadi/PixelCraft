@@ -706,11 +706,12 @@ impl PixelCraft {
             return false;
         };
         let tile = self.doc.layers[self.layer].tile_cels[self.frame][y * geometry.columns + x];
-        if tile & 0x1fffffff == 0 {
+        let tile_id = tile & TILE_ID_MASK;
+        if tile_id == 0 {
             self.status = "Empty tile cell".into();
         } else {
-            self.selected_tile = tile & 0x1fffffff;
-            self.status = format!("Picked tile {}", self.selected_tile);
+            self.selected_tile = tile;
+            self.status = format!("Picked tile {tile_id}");
         }
         true
     }
@@ -2575,24 +2576,37 @@ mod smarter_fill_tests {
         });
         app.doc.add_tile_layer(0).unwrap();
         app.layer = 1;
-        app.doc.layers[1].tile_cels[0] = vec![1, 1, 2, 1];
+        let flipped_tile = 2 | 0x8000_0000;
+        app.doc.layers[1].tile_cels[0] = vec![1, 1, flipped_tile, 1];
         assert!(app.pick_tile((4, 0)));
-        assert_eq!(app.selected_tile, 2);
+        assert_eq!(app.selected_tile, flipped_tile);
+        assert_eq!(app.status, "Picked tile 2");
+        app.tool = Tool::Pencil;
+        app.remember();
+        app.paint_at((6, 0), CLEAR);
+        assert_eq!(app.doc.layers[1].tile_cels[0][3], flipped_tile);
+        app.undo();
         app.remember();
         app.power_fill((0, 0), CLEAR);
-        assert_eq!(app.doc.layers[1].tile_cels[0], vec![2, 2, 2, 1]);
+        assert_eq!(
+            app.doc.layers[1].tile_cels[0],
+            vec![flipped_tile, flipped_tile, flipped_tile, 1]
+        );
         app.undo();
         app.power.fill_global = true;
         app.tile_pixel_mode = Some(false);
         app.power_fill((0, 0), CLEAR);
-        assert_eq!(app.doc.layers[1].tile_cels[0], vec![1, 1, 2, 1]);
+        assert_eq!(app.doc.layers[1].tile_cels[0], vec![1, 1, flipped_tile, 1]);
         app.tile_pixel_mode = None;
         app.selection = Some((1, 0, 1, 0));
         app.power_fill((1, 0), CLEAR);
-        assert_eq!(app.doc.layers[1].tile_cels[0], vec![2, 1, 2, 1]);
+        assert_eq!(
+            app.doc.layers[1].tile_cels[0],
+            vec![flipped_tile, 1, flipped_tile, 1]
+        );
         app.selection = None;
         app.power_fill((2, 0), CLEAR);
-        assert_eq!(app.doc.layers[1].tile_cels[0], vec![2; 4]);
+        assert_eq!(app.doc.layers[1].tile_cels[0], vec![flipped_tile; 4]);
         assert_eq!(app.doc.tilesets[0].tiles[0][0], [10, 20, 30, 255]);
         assert_eq!(app.doc.tilesets[0].tiles[1][0], [40, 50, 60, 255]);
     }

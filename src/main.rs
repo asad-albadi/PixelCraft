@@ -7,6 +7,8 @@ mod fluent;
 mod ui_icons;
 use ui_icons::UiIcons;
 mod productivity_ui;
+
+const TILE_ID_MASK: u32 = 0x1fff_ffff;
 mod script_ui;
 mod studio;
 mod system_appearance;
@@ -1287,7 +1289,14 @@ impl PixelCraft {
             ui.separator();ui.heading("Tilesets & tile layers");
             ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}
 if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
-            if !edited.tilesets.is_empty(){ui.horizontal(|ui|{if ui.pc_button("+ Tile layer from last tileset").clicked(){add_tile=true;}ui.add(egui::DragValue::new(&mut self.selected_tile).range(1..=edited.tilesets.last().map(|t|t.tiles.len()).unwrap_or(1).max(1) as u32).prefix("Paint tile "));});}
+            if !edited.tilesets.is_empty(){ui.horizontal(|ui|{if ui.pc_button("+ Tile layer from last tileset").clicked(){add_tile=true;}let mut tile_id = self.selected_tile & TILE_ID_MASK;
+                    let tile_count = edited.layers[self.layer].tileset
+                        .and_then(|index| edited.tilesets.get(index))
+                        .or_else(|| edited.tilesets.last())
+                        .map_or(1, |tileset| tileset.tiles.len().max(1));
+                    if ui.add(egui::DragValue::new(&mut tile_id).range(1..=tile_count as u32).prefix("Paint tile ")).changed() {
+                        self.selected_tile = tile_id;
+                    }});}
             ui.horizontal_wrapped(|ui| {
                 ui.pc_selectable_value(&mut self.tile_pixel_mode, None, "Place tiles");
                 ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(false), "Edit shared tile pixels");

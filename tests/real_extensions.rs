@@ -75,8 +75,10 @@ fn rectangle_geometry_and_image_specs_follow_the_active_sprite() {
         local spec = sprite.spec
         assert(spec.width == 4 and spec.height == 3)
         assert(spec.colorMode == ColorMode.INDEXED and spec.transparentColor == 2)
+        assert(spec == sprite.spec and Image(spec).spec == spec)
         spec.width = 2
         assert(sprite.spec.width == 4)
+        assert(spec ~= sprite.spec and spec == ImageSpec(spec))
 
         spec.transparentColor = 5
         local im = Image(spec)
@@ -97,6 +99,20 @@ fn rectangle_geometry_and_image_specs_follow_the_active_sprite() {
         local gray = Image(ImageSpec{width=2,height=2,colorMode=ColorMode.GRAY})
         gray:drawPixel(1, 1, app.pixelColor.graya(70, 130))
         assert(gray.colorMode == ColorMode.GRAY and gray:getPixel(1, 1) == app.pixelColor.graya(70, 130))
+
+        local rgbMask = app.pixelColor.rgba(10, 20, 30, 0)
+        local rgb = Image(ImageSpec{width=2,height=1,transparentColor=rgbMask})
+        assert(rgb:getPixel(0, 0) == rgbMask)
+        rgb:drawPixel(0, 0, app.pixelColor.rgba(200, 100, 0, 255))
+        rgb:clear()
+        assert(rgb:getPixel(0, 0) == rgbMask and rgb:getPixel(1, 0) == rgbMask)
+
+        local grayMask = app.pixelColor.graya(40, 0)
+        local maskedGray = Image(ImageSpec{colorMode=ColorMode.GRAY,transparentColor=grayMask})
+        assert(maskedGray:getPixel(0, 0) == grayMask)
+        maskedGray:drawPixel(0, 0, app.pixelColor.graya(100, 255))
+        maskedGray:clear()
+        assert(maskedGray:getPixel(0, 0) == grayMask)
         "#,
         0,
         0,

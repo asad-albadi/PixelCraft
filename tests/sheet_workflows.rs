@@ -10,6 +10,16 @@ use pixelcraft::{
 use serde_json::json;
 
 #[test]
+fn oversized_hash_sheet_is_rejected_before_decoding_frame_entries() {
+    let frames: serde_json::Map<_, _> = (0..=u16::MAX)
+        .map(|index| (format!("frame_{index}"), serde_json::Value::Null))
+        .collect();
+    let metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","sources":[]}});
+    let error = unpack_sheet(&RgbaImage::new(1, 1), &metadata).expect_err("reject excess frames");
+    assert_eq!(error, "Sheet exceeds limits");
+}
+
+#[test]
 fn frame_renames_roundtrip_without_changing_export_keys() {
     let mut doc = Document::new(1, 1);
     doc.add_frame(0, false);

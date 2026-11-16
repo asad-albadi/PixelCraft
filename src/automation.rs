@@ -767,7 +767,11 @@ fn file_operation(
                         "sheet" => {
                             let options = options::<SheetExportOptions>(&v["options"])?;
                             if options.split_slices {
-                                let plans = interchange::plan_slice_sheets(&d, &options.sheet)?;
+                                let plans = interchange::plan_slice_sheets(
+                                    &d,
+                                    &options.sheet,
+                                    options.extrude,
+                                )?;
                                 let paths: Vec<_> =
                                     plans.iter().map(|plan| out.join(&plan.file_name)).collect();
                                 let destinations: Vec<_> = paths

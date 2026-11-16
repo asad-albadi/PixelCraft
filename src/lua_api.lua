@@ -353,14 +353,20 @@ function Rectangle(x,y,w,h)
  return result
 end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
+local imageSpecType={__name='ImageSpec'}
+function imageSpecType.__eq(a,b)
+ return getmetatable(a)==imageSpecType and getmetatable(b)==imageSpecType
+  and a.width==b.width and a.height==b.height
+  and a.colorMode==b.colorMode and a.transparentColor==b.transparentColor
+end
 function ImageSpec(options)
  options=options or {}
- return {
+ return setmetatable({
   width=options.width or 1,
   height=options.height or 1,
   colorMode=options.colorMode or ColorMode.RGB,
   transparentColor=options.transparentColor or 0,
- }
+ },imageSpecType)
 end
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}
 AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}
@@ -372,7 +378,7 @@ local function image(p,w,h,mode,transparent)
  mode=mode or doc.color_mode
  return setmetatable({
   _pixels=p,width=w,height=h,colorMode=mode,
-  _transparent=transparent or doc.transparent_index,
+  _transparent=transparent or (mode==ColorMode.INDEXED and doc.transparent_index or 0),
   bytesPerPixel=mode=='Rgba' and 4 or mode=='Grayscale' and 2 or 1,
  },{
   __index=function(im,k)
@@ -391,13 +397,24 @@ function Image(w,h,mode)
   w,h,mode,transparent=w.width,w.height,w.colorMode or mode,w.transparentColor
  end
  assert(type(w)=='number' and type(h)=='number' and w>0 and h>0 and w*h<=16000000,'Image dimensions exceed budget')
- local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h,mode,transparent)
+ local pixels={}
+ local im=image(pixels,w,h,mode,transparent)
+ local r,g,b,a=0,0,0,0
+ if im.colorMode==ColorMode.RGB then
+  r,g,b,a=table.unpack(unpackColor(im._transparent))
+ elseif im.colorMode==ColorMode.GRAY then
+  local mask=pixelInteger(im._transparent)
+  local gray=mask&255
+  r,g,b,a=gray,gray,gray,(mask>>8)&255
+ end
+ for i=1,w*h do pixels[i]={r,g,b,a} end
+ return im
 end
 function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 and y>=0 and x<self.width and y<self.height then local value=unpackColor(c);self._pixels[y*self.width+x+1]=value;if self._put then self._put(x,y,value)end end end
 imageMethods.putPixel=imageMethods.drawPixel
 function imageMethods:getPixel(x,y) if x<0 or y<0 or x>=self.width or y>=self.height then return 0 end return rgba(table.unpack(self._pixels[y*self.width+x+1])) end
 function imageMethods:clear(c)
- c=c or (self.colorMode==ColorMode.INDEXED and self._transparent or 0)
+ c=c or self._transparent
  for y=0,self.height-1 do for x=0,self.width-1 do self:drawPixel(x,y,c) end end
 end
 function imageMethods:clone() return Image(self) end
