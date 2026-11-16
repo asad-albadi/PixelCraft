@@ -86,6 +86,8 @@ struct StoredTab {
     #[serde(with = "formats::recovery_document")]
     saved: Document,
     path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    live_save_root: Option<PathBuf>,
     layer: usize,
     frame: usize,
     zoom: f32,
@@ -114,6 +116,7 @@ impl PixelCraft {
                         doc: t.doc.clone(),
                         saved: t.saved.clone(),
                         path: t.path.clone(),
+                        live_save_root: t.live_save_root.clone(),
                         layer: t.layer,
                         frame: t.frame,
                         zoom: t.zoom,
@@ -127,6 +130,7 @@ impl PixelCraft {
                         doc: self.doc.clone(),
                         saved: self.saved.clone(),
                         path: self.path.clone(),
+                        live_save_root: self.live_save_root.clone(),
                         layer: self.layer,
                         frame: self.frame,
                         zoom: self.zoom,
@@ -244,7 +248,7 @@ impl PixelCraft {
                             doc: t.doc.clone(),
                             saved: t.saved.clone(),
                             path: t.path.clone(),
-                            live_save_root: None,
+                            live_save_root: t.live_save_root.clone(),
                             layer: t.layer,
                             frame: t.frame,
                             undo: vec![],
@@ -261,6 +265,7 @@ impl PixelCraft {
                     }
                     let t = self.tabs[active].take().unwrap();
                     self.replace(t.doc, t.path);
+                    self.live_save_root = t.live_save_root;
                     self.saved = t.saved;
                     self.layer = t.layer;
                     self.frame = t.frame;
@@ -992,7 +997,12 @@ mod tests {
         a.studio.recovery_enabled = true;
         a.studio.recovery_root = root.clone();
         a.doc.set_pixel(1, 0, 0, [11, 22, 33, 255]);
-        a.open_document(Document::new(3, 2), None);
+        let first_project = root.join("first");
+        let second_project = root.join("second");
+        a.path = Some(first_project.join("art.pixel"));
+        a.live_save_root = Some(first_project.clone());
+        a.open_document(Document::new(3, 2), Some(second_project.join("art.pixel")));
+        a.live_save_root = Some(second_project.clone());
         a.doc.set_pixel(0, 0, 5, [99, 88, 77, 255]);
         a.named_colors.push(("Grass".into(), [1, 2, 3, 255]));
         a.zoom = 7.;
@@ -1005,11 +1015,13 @@ mod tests {
         b.restore_workspace();
         assert_eq!(b.tabs.len(), 2);
         assert_eq!(b.active_tab, 1);
+        assert_eq!(b.live_save_root.as_ref(), Some(&second_project));
         assert!(b.dirty());
         assert_eq!(b.doc.layers[0].cels[0][5], [99, 88, 77, 255]);
         assert_eq!(b.zoom, 7.);
         assert_eq!(b.pan, Vec2::new(10., 20.));
         b.switch_tab(0);
+        assert_eq!(b.live_save_root.as_ref(), Some(&first_project));
         assert!(b.dirty());
         assert_eq!(b.doc.layers[1].cels[0][0], [11, 22, 33, 255]);
         assert_eq!(b.named_colors[1].0, "Grass");

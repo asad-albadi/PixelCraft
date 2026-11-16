@@ -297,7 +297,7 @@ Pass a unique `job_id` to `live-export`. While the request is running, call `liv
 
 #### Live pixel painting
 
-Use `live-save` with the revision from `live-inspect` to write the active sprite to its current project path. Use `live-save-as` with `revision` and an `output` path to name an untitled sprite or save a copy. The editor adopts the new path after the file is saved. File MCP also supports `save` and `save-as` with an explicit `input` and its file revision. The user-selected current project path remains available to revision-checked `live-save` without an overwrite flag. Paths adopted by a restricted `live-save-as` retain their project-root restriction while that tab is open.
+Use `live-save` with the revision from `live-inspect` to write the active sprite to its current project path. Use `live-save-as` with `revision` and an `output` path to name an untitled sprite or save a copy. The editor adopts the new path after the file is saved. File MCP also supports `save` and `save-as` with an explicit `input` and its file revision. The user-selected current project path remains available to revision-checked `live-save` without an overwrite flag. Paths adopted by a restricted `live-save-as` retain their project-root restriction, including in recovered tabs.
 
 In the **File** menu, choose **Export animation GIF…** or **Export video MP4…** and select a scale. Both use integer nearest-neighbor scaling. The same options are available through `live-export` with `revision`, `output`, and optional `scale`. The file MCP `export` tool takes `input` instead of a live revision. The extension selects PNG, GIF, or MP4 for live export. For example, a 480×270 sprite exported with `scale:4` produces 1920×1080.
 
