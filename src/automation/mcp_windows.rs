@@ -351,7 +351,7 @@ fn directory_names(directory: &File) -> io::Result<Vec<OsString>> {
             }
             let next = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
             let length = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
-            if length % 2 != 0
+            if !length.is_multiple_of(2)
                 || length > data.len() - 12
                 || (next != 0 && (next < 12 + length || next >= data.len()))
             {
@@ -361,8 +361,11 @@ fn directory_names(directory: &File) -> io::Result<Vec<OsString>> {
                 ));
             }
             let wide: Vec<u16> = data[12..12 + length]
-                .chunks_exact(2)
-                .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
                 .collect();
             let name = OsString::from_wide(&wide);
             if name != "." && name != ".." {
