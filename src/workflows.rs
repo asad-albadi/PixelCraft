@@ -734,6 +734,29 @@ fn expand_bounds_to_grid(
 }
 
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
+    unpack_sheet_samples(
+        [im.width() as usize, im.height() as usize],
+        meta,
+        |x, y| im.get_pixel(x as u32, y as u32).0,
+        None,
+    )
+}
+
+pub(crate) fn unpack_png_sheet(sheet: &Document, meta: &Value) -> Result<Document, String> {
+    unpack_sheet_samples(
+        [sheet.width, sheet.height],
+        meta,
+        |x, y| sheet.layers[0].cels[0][y * sheet.width + x],
+        Some(sheet),
+    )
+}
+
+fn unpack_sheet_samples(
+    [sheet_width, sheet_height]: [usize; 2],
+    meta: &Value,
+    pixel_at: impl Fn(usize, usize) -> Pixel,
+    png: Option<&Document>,
+) -> Result<Document, String> {
     let entries = &meta["frames"];
     let count = match entries {
         Value::Array(frames) => frames.len(),
@@ -772,6 +795,33 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
         return Err("Sheet exceeds limits".into());
     }
     let mut d = Document::new(w, h);
+    let mut indexed = None;
+    if let Some(png) = png {
+        d.metadata.clone_from(&png.metadata);
+        d.color_profile.clone_from(&png.color_profile);
+        if png.color_mode == ColorMode::Grayscale {
+            d.color_mode = ColorMode::Grayscale;
+        } else if let Some(slots) = png.layers[0].cel_meta[0].indices.as_ref() {
+            let padding = frames.iter().any(|frame| {
+                frame["frame"]["w"].as_u64() != Some(w as u64)
+                    || frame["frame"]["h"].as_u64() != Some(h as u64)
+            });
+            let mut palette = png.palette.clone();
+            let mut clear = palette.iter().position(|color| color[3] == 0);
+            if padding && clear.is_none() && palette.len() < 256 {
+                clear = Some(palette.len());
+                palette.push(CLEAR);
+            }
+            if !padding || clear.is_some() {
+                let fill = clear.unwrap_or(0);
+                indexed = Some((slots, fill as u8));
+                d.color_mode = ColorMode::Indexed;
+                d.palette = palette;
+                d.transparent_index = fill;
+                d.layers[0].background = clear.is_none();
+            }
+        }
+    }
     for (f, v) in frames.iter().enumerate() {
         if v["rotated"] == true {
             return Err("Rotated atlas entries are unsupported".into());
@@ -792,8 +842,8 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
         let (x, y, rw, rh) = (get("x")?, get("y")?, get("w")?, get("h")?);
         let ox = v["spriteSourceSize"]["x"].as_u64().unwrap_or(0);
         let oy = v["spriteSourceSize"]["y"].as_u64().unwrap_or(0);
-        if x.saturating_add(rw) > im.width() as u64
-            || y.saturating_add(rh) > im.height() as u64
+        if x.saturating_add(rw) > sheet_width as u64
+            || y.saturating_add(rh) > sheet_height as u64
             || ox.saturating_add(rw) > w as u64
             || oy.saturating_add(rh) > h as u64
         {
@@ -802,8 +852,18 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
         for cy in 0..rh {
             for cx in 0..rw {
                 d.layers[0].cels[f][(oy + cy) as usize * w + (ox + cx) as usize] =
-                    im.get_pixel((x + cx) as u32, (y + cy) as u32).0;
+                    pixel_at((x + cx) as usize, (y + cy) as usize);
             }
+        }
+        if let Some((slots, fill)) = indexed {
+            let mut indices = vec![fill; w * h];
+            for row in 0..rh as usize {
+                let from = (y as usize + row) * sheet_width + x as usize;
+                let to = (oy as usize + row) * w + ox as usize;
+                let len = rw as usize;
+                indices[to..to + len].copy_from_slice(&slots[from..from + len]);
+            }
+            d.layers[0].cel_meta[f].indices = Some(indices.into());
         }
     }
     // Atlas frame IDs belong to their source sprite. When importing multiple

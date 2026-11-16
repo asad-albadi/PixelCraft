@@ -1591,6 +1591,15 @@ pub(crate) fn load_with_path_check(
             .ok_or("Sheet JSON must name its image")?;
         let image_path = path.parent().unwrap_or(Path::new(".")).join(name);
         check_path(&image_path)?;
+        if image_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        {
+            let png = load_with_path_check(&image_path, check_path)?;
+            if png.durations.len() == 1 {
+                return crate::workflows::unpack_png_sheet(&png, &meta);
+            }
+        }
         let im = mcp_io::open_image(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
@@ -1674,6 +1683,28 @@ fn write_document_png(
             scale,
         )?;
     }
+    write_png_metadata(path, doc)
+}
+
+pub(crate) fn write_packed_png(
+    path: &Path,
+    doc: &Document,
+    options: &crate::workflows::SheetOptions,
+    metadata: &mut serde_json::Value,
+    image: &image::RgbaImage,
+    extrude: usize,
+) -> Result<(), String> {
+    let color_type = png_raster::write_sheet(path, doc, options, metadata, image, extrude)?;
+    let format = match color_type {
+        Some(png::ColorType::Indexed) => "INDEXED8",
+        Some(png::ColorType::Grayscale) => "GRAY8",
+        Some(png::ColorType::GrayscaleAlpha) => "GRAYALPHA88",
+        _ => "RGBA8888",
+    };
+    if color_type.is_none() {
+        mcp_io::write_image_as(path, image, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    }
+    metadata["meta"]["format"] = serde_json::json!(format);
     write_png_metadata(path, doc)
 }
 

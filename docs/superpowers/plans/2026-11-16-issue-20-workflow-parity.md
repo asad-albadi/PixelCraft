@@ -113,6 +113,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 37 animated-PNG checkpoint. Indexed APNG keeps original slots through separate posters, source/over blending, partial rectangles, and background/previous disposal. Exact blended colors use spare palette slots. The existing RGBA decoder handles palettes that cannot accommodate the result and can round alpha down by one in a partial blend. Grayscale APNG keeps Grayscale mode and authored frame delays. PNG and APNG metadata is now scanned without allocating a second copy of image data. The regressions cover both file extensions, poster exclusion, dynamic palettes, full-palette fallback, and grayscale gamma. Formatting, strict Clippy, and 518 Windows all-target tests passed. Packed sprite-sheet mode preservation remains open.
 
+- Item 37 complete. Packed sprite sheets write grayscale or indexed PNG when the packed samples fit the mode. The exporter uses source-frame and placement geometry to retain exact palette slots through trimming, scale, slices, grid splits, and extrusion, and can add spare palette entries for composited colors and padding. Reopening a PNG sheet through its JSON companion retains mode, palette slots, color metadata, and animation timing. An external Pillow check confirmed every scaled index and transparency entry through the CLI sheet/JSON round trip. Formatting, strict Clippy, and 520 Windows all-target tests passed. The separate multi-file sequence and grid import workflows still combine their source images as RGBA and can be revisited with the remaining import workflow work.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -160,7 +162,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
 - [x] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
 - [x] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.
-- [ ] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.
+- [x] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.
 - [ ] **38. Apply imported pixel aspect ratios and grid defaults.** Use the stored values as editable sprite properties.
 - [ ] **39. Expand grid sheet import.** Add column-major order, optional trailing partial cells, and deriving cell dimensions from row and column counts.
 - [ ] **40. Export Unity and Godot sidecars together.** Generate both engine sidecars and JSON from the same sheet export.

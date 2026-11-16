@@ -4,6 +4,7 @@ use crate::{
 };
 use image::Pixel as _;
 use png::{BitDepth, BlendOp, ColorType, DisposeOp};
+use serde_json::Value;
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Seek},
@@ -295,36 +296,100 @@ pub(super) fn write(
     image: &image::RgbaImage,
     scale: usize,
 ) -> Result<bool, String> {
-    let mut palette = None;
-    let (color, samples) = match doc.color_mode {
-        ColorMode::Grayscale if image.pixels().all(|p| p[0] == p[1] && p[1] == p[2]) => {
-            let transparent = image.pixels().any(|p| p[3] < 255);
-            let color = if transparent {
-                ColorType::GrayscaleAlpha
-            } else {
-                ColorType::Grayscale
+    let (color, samples, palette) = match doc.color_mode {
+        ColorMode::Grayscale => {
+            let Some((color, samples)) = grayscale_samples(image) else {
+                return Ok(false);
             };
-            let mut samples = Vec::with_capacity(
-                image.width() as usize * image.height() as usize * color.samples(),
-            );
-            for pixel in image.pixels() {
-                samples.push(pixel[0]);
-                if transparent {
-                    samples.push(pixel[3]);
-                }
-            }
-            (color, samples)
+            (color, samples, None)
         }
         ColorMode::Indexed => {
             let Some((colors, indices)) = indexed_samples(doc, frames, origin, image) else {
                 return Ok(false);
             };
-            palette = Some(colors);
-            (ColorType::Indexed, indices)
+            (ColorType::Indexed, indices, Some(colors))
         }
         _ => return Ok(false),
     };
-    let (width, height) = (image.width() as usize, image.height() as usize);
+    write_samples(
+        path,
+        [image.width(), image.height()],
+        color,
+        &samples,
+        palette.as_deref(),
+        scale,
+    )?;
+    Ok(true)
+}
+
+pub(super) fn write_sheet(
+    path: &Path,
+    doc: &Document,
+    options: &crate::workflows::SheetOptions,
+    metadata: &Value,
+    image: &image::RgbaImage,
+    extrude: usize,
+) -> Result<Option<ColorType>, String> {
+    let (color, samples, palette) = match doc.color_mode {
+        ColorMode::Grayscale => {
+            let Some((color, samples)) = grayscale_samples(image) else {
+                return Ok(None);
+            };
+            (color, samples, None)
+        }
+        ColorMode::Indexed => {
+            let filtered =
+                crate::workflows::filter_layers_for_export(doc, options.layers.as_deref())?;
+            let Some((palette, indices)) =
+                packed_sheet_indices(&filtered, metadata, image, options.scale, extrude)
+            else {
+                return Ok(None);
+            };
+            (ColorType::Indexed, indices, Some(palette))
+        }
+        ColorMode::Rgba => return Ok(None),
+    };
+    write_samples(
+        path,
+        [image.width(), image.height()],
+        color,
+        &samples,
+        palette.as_deref(),
+        1,
+    )?;
+    Ok(Some(color))
+}
+
+fn grayscale_samples(image: &image::RgbaImage) -> Option<(ColorType, Vec<u8>)> {
+    if image.pixels().any(|p| p[0] != p[1] || p[1] != p[2]) {
+        return None;
+    }
+    let transparent = image.pixels().any(|p| p[3] < 255);
+    let color = if transparent {
+        ColorType::GrayscaleAlpha
+    } else {
+        ColorType::Grayscale
+    };
+    let mut samples =
+        Vec::with_capacity(image.width() as usize * image.height() as usize * color.samples());
+    for pixel in image.pixels() {
+        samples.push(pixel[0]);
+        if transparent {
+            samples.push(pixel[3]);
+        }
+    }
+    Some((color, samples))
+}
+
+fn write_samples(
+    path: &Path,
+    [width, height]: [u32; 2],
+    color: ColorType,
+    samples: &[u8],
+    palette: Option<&[Pixel]>,
+    scale: usize,
+) -> Result<(), String> {
+    let (width, height) = (width as usize, height as usize);
     let file = mcp_io::create(path).map_err(|e| e.to_string())?;
     let mut enc = png::Encoder::new(file, (width * scale) as u32, (height * scale) as u32);
     enc.set_color(color);
@@ -343,7 +408,7 @@ pub(super) fn write(
     let mut writer = enc.write_header().map_err(|e| e.to_string())?;
     if scale == 1 {
         writer
-            .write_image_data(&samples)
+            .write_image_data(samples)
             .map_err(|e| e.to_string())?;
     } else {
         use std::io::Write;
@@ -364,7 +429,104 @@ pub(super) fn write(
         stream.finish().map_err(|e| e.to_string())?;
     }
     writer.finish().map_err(|e| e.to_string())?;
-    Ok(true)
+    Ok(())
+}
+
+fn packed_sheet_indices(
+    doc: &Document,
+    metadata: &Value,
+    image: &image::RgbaImage,
+    scale: usize,
+    extrude: usize,
+) -> Option<(Vec<Pixel>, Vec<u8>)> {
+    let frames = metadata["frames"].as_array()?;
+    let first = json_index(&frames.first()?["sourceFrame"])?;
+    let default_layer = sole_raster_layer(doc);
+    let initial_layer = json_index(&frames[0]["sourceLayer"]).or(default_layer);
+    let mut palette = initial_layer.map_or_else(
+        || doc.palette_for(first).to_vec(),
+        |layer| doc.editing_palette(layer, first),
+    );
+    let mut mapped = HashMap::new();
+    for (slot, &pixel) in palette.iter().enumerate() {
+        mapped.entry(pixel).or_insert(slot as u8);
+    }
+    let clear = palette
+        .iter()
+        .position(|p| p[3] == 0)
+        .map(|slot| slot as u8);
+    let mut indices = Vec::with_capacity(image.width() as usize * image.height() as usize);
+    for pixel in image.pixels() {
+        let slot = if let Some(slot) = clear.filter(|_| pixel.0 == CLEAR) {
+            slot
+        } else {
+            palette_slot(&mut palette, &mut mapped, pixel.0)?
+        };
+        indices.push(slot);
+    }
+    let slice = metadata["meta"]["sourceSlice"]
+        .as_str()
+        .and_then(|name| doc.slices.iter().find(|s| s.name == name));
+    let sheet_width = image.width() as usize;
+    let border = extrude * scale;
+    // Use the packing rectangles to recover source slots lost in the RGBA composite.
+    for entry in frames {
+        let frame = json_index(&entry["sourceFrame"])?;
+        let Some(layer) = json_index(&entry["sourceLayer"]).or(default_layer) else {
+            continue;
+        };
+        let Some(source) = doc.layers[layer].cel_meta[frame].indices.as_deref() else {
+            continue;
+        };
+        let rect = &entry["frame"];
+        let (left, top) = (json_index(&rect["x"])?, json_index(&rect["y"])?);
+        let (width, height) = (json_index(&rect["w"])?, json_index(&rect["h"])?);
+        let crop = &entry["spriteSourceSize"];
+        let grid = &entry["gridCell"];
+        let key = doc.sampled_cel_key(layer, frame);
+        let slice = slice.and_then(|slice| slice.key_at(frame));
+        let offset = |axis, grid_axis: &str| {
+            ((json_index(&crop[grid_axis])? / scale) as i32)
+                .checked_add(json_index(&grid[grid_axis]).unwrap_or(0) as i32)?
+                .checked_add(slice.map_or(0, |key| key.bounds[axis]))
+        };
+        let dx = offset(0, "x")? - key.x;
+        let dy = offset(1, "y")? - key.y;
+        let right = left + width + border;
+        let bottom = top + height + border;
+        if width == 0 || height == 0 || right > sheet_width || bottom > image.height() as usize {
+            return None;
+        }
+        for y in top.checked_sub(border)?..bottom {
+            let sy = dy + (y.saturating_sub(top).min(height - 1) / scale) as i32;
+            for x in left.checked_sub(border)?..right {
+                let sx = dx + (x.saturating_sub(left).min(width - 1) / scale) as i32;
+                if let Some(index) = doc.index(sx, sy) {
+                    let candidate = source[index];
+                    let pixel = image.get_pixel(x as u32, y as u32).0;
+                    if palette.get(candidate as usize) == Some(&pixel) {
+                        indices[y * sheet_width + x] = candidate;
+                    }
+                }
+            }
+        }
+    }
+    Some((palette, indices))
+}
+
+fn json_index(value: &Value) -> Option<usize> {
+    usize::try_from(value.as_u64()?).ok()
+}
+
+fn sole_raster_layer(doc: &Document) -> Option<usize> {
+    let mut visible = doc
+        .layers
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer.visible && !layer.group && !layer.is_ase_reference());
+    let (index, layer) = visible.next()?;
+    (layer.tileset.is_none() && layer.adjustment.is_none() && visible.next().is_none())
+        .then_some(index)
 }
 
 fn indexed_samples(

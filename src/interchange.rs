@@ -161,6 +161,7 @@ pub(crate) fn export_sheet_extruded(
         previous_path,
         o,
         d,
+        extrude,
         pack_sheet_with_extrusion(d, o, extrude)?,
     )
 }
@@ -239,6 +240,7 @@ pub(crate) fn export_sheet_for_slice_with_previous(
         previous,
         options,
         doc,
+        0,
         pack_sheet_for_slice(doc, options, slice)?,
     )
 }
@@ -510,7 +512,14 @@ impl SliceSheet<'_> {
         o: &SheetOptions,
         extrude: usize,
     ) -> Result<(), String> {
-        write_packed_sheet(path, previous_path, o, d, self.pack(d, o, extrude)?)
+        write_packed_sheet(
+            path,
+            previous_path,
+            o,
+            d,
+            extrude,
+            self.pack(d, o, extrude)?,
+        )
     }
 
     fn pack(
@@ -669,6 +678,7 @@ fn write_packed_sheet(
     previous_path: &Path,
     o: &SheetOptions,
     doc: &Document,
+    extrude: usize,
     (im, mut meta): (image::RgbaImage, Value),
 ) -> Result<(), String> {
     let name = path
@@ -745,7 +755,14 @@ fn write_packed_sheet(
     } else {
         None
     };
-    mcp_io::write_image(path, &im).map_err(|e| e.to_string())?;
+    if path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+    {
+        crate::formats::write_packed_png(path, doc, o, &mut meta, &im, extrude)?;
+    } else {
+        mcp_io::write_image(path, &im).map_err(|e| e.to_string())?;
+    }
     write_json(&json_path, &meta)?;
     if let Some(contents) = sidecar {
         let companion = sheet_engine_sidecar(path, &o.preset).unwrap();

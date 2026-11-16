@@ -84,6 +84,132 @@ fn grayscale_png_round_trips_luminance_and_transparency() {
 }
 
 #[test]
+fn packed_png_sheets_preserve_duplicate_indices_and_grayscale() {
+    use pixelcraft::{
+        interchange::export_sheet,
+        model::{CLEAR, Document},
+        workflows::SheetOptions,
+    };
+    let dir = std::env::temp_dir().join(format!("pw-png-packed-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut doc = Document::new(4, 1);
+    doc.color_mode = ColorMode::Indexed;
+    let leaf = [40, 95, 50, 255];
+    doc.palette = vec![CLEAR, leaf, leaf, [100, 20, 50, 130]];
+    for (index, slot) in [0, 2, 1, 3].into_iter().enumerate() {
+        doc.layers[0].cels[0].set(index, doc.palette[slot]);
+    }
+    doc.layers[0].cel_meta[0].indices = Some(vec![0, 2, 1, 3].into());
+    doc.add_frame(0, true);
+    doc.layers[0].cel_meta[1].indices = Some(vec![0, 1, 2, 3].into());
+    let options = SheetOptions {
+        trim: true,
+        scale: 2,
+        border_padding: Some(1),
+        shape_padding: Some(2),
+        ..SheetOptions::default()
+    };
+    let path = dir.join("sheet.png");
+    export_sheet(&path, &doc, &options).unwrap();
+    let sheet = load(&path).unwrap();
+    assert_eq!(sheet.color_mode, ColorMode::Indexed);
+    assert_eq!(sheet.palette, doc.palette);
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
+    let slots = sheet.layers[0].cel_meta[0].indices.as_ref().unwrap();
+    for (frame, expected) in [[2, 2, 1, 1, 3, 3], [1, 1, 2, 2, 3, 3]]
+        .into_iter()
+        .enumerate()
+    {
+        let rect = &meta["frames"][frame]["frame"];
+        let x = rect["x"].as_u64().unwrap() as usize;
+        let y = rect["y"].as_u64().unwrap() as usize;
+        assert_eq!(
+            &slots[y * sheet.width + x..y * sheet.width + x + 6],
+            expected
+        );
+    }
+    assert_eq!(slots[0], 0);
+    let reopened = load(&path.with_extension("json")).unwrap();
+    assert_eq!(reopened.color_mode, ColorMode::Indexed);
+    assert_eq!(reopened.palette, doc.palette);
+    assert_eq!(
+        reopened.layers[0].cel_meta[0]
+            .indices
+            .as_ref()
+            .unwrap()
+            .as_slice(),
+        [0, 0, 2, 2, 1, 1, 3, 3].repeat(2)
+    );
+
+    doc.set_color_mode(ColorMode::Grayscale);
+    let gray = dir.join("gray-sheet.png");
+    export_sheet(&gray, &doc, &options).unwrap();
+    assert_eq!(load(&gray).unwrap().color_mode, ColorMode::Grayscale);
+    assert_eq!(
+        load(&gray.with_extension("json")).unwrap().color_mode,
+        ColorMode::Grayscale
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn indexed_sheet_preserves_indices_in_slice_grid_cells_and_extrusion() {
+    use pixelcraft::model::{CLEAR, Document, DrawingGrid, SliceKey, SpriteSlice};
+    use serde_json::json;
+    let dir = std::env::temp_dir().join(format!("pw-png-extruded-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut doc = Document::new(5, 1);
+    doc.color_mode = ColorMode::Indexed;
+    let leaf = [40, 95, 50, 255];
+    doc.palette = vec![CLEAR, leaf, leaf, [100, 20, 50, 255]];
+    let source = [3, 2, 1, 1, 2];
+    doc.layers[0].cels[0] = source
+        .iter()
+        .map(|&slot| doc.palette[slot as usize])
+        .collect();
+    doc.layers[0].cel_meta[0].indices = Some(source.to_vec().into());
+    doc.drawing_grid = Some(DrawingGrid {
+        origin: [0, 0],
+        size: [2, 1],
+    });
+    doc.slices.push(SpriteSlice {
+        name: "Samples".into(),
+        keys: vec![SliceKey {
+            frame: 0,
+            bounds: [1, 0, 4, 1],
+            center: None,
+            pivot: None,
+        }],
+    });
+    let input = dir.join("source.pixel");
+    let output = dir.join("packed.png");
+    save(&input, &doc).unwrap();
+    pixelcraft::automation::operation("export", &json!({
+        "input":input, "output":output, "format":"sheet",
+        "options":{"slice":"Samples","split_grid":true,"split_layers":true,"scale":2,"extrude":1}
+    })).unwrap();
+    let sheet = load(&output).unwrap();
+    assert_eq!(sheet.color_mode, ColorMode::Indexed);
+    let meta: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(output.with_extension("json")).unwrap()).unwrap();
+    let slots = sheet.layers[0].cel_meta[0].indices.as_ref().unwrap();
+    for (frame, expected) in [[2, 2, 2, 2, 1, 1, 1, 1], [1, 1, 1, 1, 2, 2, 2, 2]]
+        .into_iter()
+        .enumerate()
+    {
+        let rect = &meta["frames"][frame]["frame"];
+        let x = rect["x"].as_u64().unwrap() as usize;
+        let y = rect["y"].as_u64().unwrap() as usize;
+        assert_eq!(
+            &slots[y * sheet.width + x - 2..y * sheet.width + x + 6],
+            expected
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn indexed_apng_preserves_slots_through_partial_frames_and_disposal() {
     let dir = std::env::temp_dir().join(format!("pw-apng-indexed-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

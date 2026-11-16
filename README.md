@@ -286,7 +286,7 @@ Double-click a timeline frame number or choose **Rename current frame** under **
 
 Choose **File → Repeat Last Export** to render a sprite again using its last successful export destination and settings. Each open tab keeps its own export history for the current editor session. Repeat reads the current artwork, and remembers the original frame for single-frame exports. PNG sequence repeats update the frame files for the current timeline and leave other files in the destination folder.
 
-Still PNG imports preserve indexed palette slots and transparency, or open grayscale files in Grayscale mode. Full-frame, cropped, horizontal sheet, and PNG sequence exports retain the document's PNG color mode when the rendered pixels fit it. This includes file and live MCP exports. If the colors require RGBA, the export uses RGBA to preserve the appearance.
+Still PNG imports preserve indexed palette slots and transparency, or open grayscale files in Grayscale mode. Full-frame, cropped, horizontal sheet, packed sprite-sheet, and PNG sequence exports retain the document's PNG color mode when the rendered pixels fit it. This includes file and live MCP exports. Opening a PNG sprite sheet through its JSON companion also preserves color mode and applicable palette slots. If the colors require RGBA, the export uses RGBA to preserve the appearance.
 
 Animated PNG imports retain grayscale or indexed mode where possible, along with frame delays and color metadata. Indexed animation keeps original palette slots and can add exact blended colors to unused slots. Imports that exceed indexed capacity use RGBA.
 
