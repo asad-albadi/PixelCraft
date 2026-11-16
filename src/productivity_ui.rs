@@ -1368,7 +1368,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         &doc,
                         PathBuf::from(output),
                         &revision,
-                        request.operation == "live-save",
+                        request.operation == "live-save" || args["overwrite"] == true,
                     )?;
                     return Ok(LiveResult::Save(prepared, doc));
                 }
@@ -1704,6 +1704,19 @@ mod bridge_tests {
             [10, 20, 30, 255]
         );
         assert!(!a.dirty());
+        a.doc.set_pixel(0, 0, 0, [40, 50, 60, 255]);
+        let rev = revision(&mut a);
+        request(
+            &mut a,
+            "live-save-as",
+            json!({"revision":rev,"output":output,"overwrite":true}),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            formats::load(&output).unwrap().layers[0].cels[0][0],
+            [40, 50, 60, 255]
+        );
         std::fs::remove_file(output).unwrap();
         std::fs::remove_dir(folder).unwrap();
     }

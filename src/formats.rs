@@ -1439,7 +1439,12 @@ pub fn decode_ase_with_resolver(
     d.validate()?;
     Ok(d)
 }
-fn load_ase_path(path: &Path, stack: &mut Vec<std::path::PathBuf>) -> Result<Document, String> {
+fn load_ase_path(
+    path: &Path,
+    stack: &mut Vec<std::path::PathBuf>,
+    check_path: &impl Fn(&Path) -> Result<(), String>,
+) -> Result<Document, String> {
+    check_path(path)?;
     let path = path
         .canonicalize()
         .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1449,7 +1454,11 @@ fn load_ase_path(path: &Path, stack: &mut Vec<std::path::PathBuf>) -> Result<Doc
     stack.push(path.clone());
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
     let result = decode_ase_with_resolver(&bytes, &mut |file, id| {
-        let external = load_ase_path(&path.parent().unwrap().join(file.replace('\\', "/")), stack)?;
+        let external = load_ase_path(
+            &path.parent().unwrap().join(file.replace('\\', "/")),
+            stack,
+            check_path,
+        )?;
         let index = external
             .ase_tilesets
             .iter()
@@ -1471,6 +1480,14 @@ fn load_ase_path(path: &Path, stack: &mut Vec<std::path::PathBuf>) -> Result<Doc
     result
 }
 pub fn load(path: &Path) -> Result<Document, String> {
+    load_with_path_check(path, &|_| Ok(()))
+}
+
+pub(crate) fn load_with_path_check(
+    path: &Path,
+    check_path: &impl Fn(&Path) -> Result<(), String>,
+) -> Result<Document, String> {
+    check_path(path)?;
     let ext = path
         .extension()
         .and_then(|s| s.to_str())
@@ -1481,7 +1498,7 @@ pub fn load(path: &Path) -> Result<Document, String> {
         return decode_project_reader(file);
     }
     if ext == "ase" || ext == "aseprite" {
-        return load_ase_path(path, &mut Vec::new());
+        return load_ase_path(path, &mut Vec::new(), check_path);
     }
     if matches!(ext.as_str(), "gif" | "webp" | "apng") {
         return crate::interchange::load_animation(path);
@@ -1490,7 +1507,7 @@ pub fn load(path: &Path) -> Result<Document, String> {
         return crate::interchange::load_ora(path);
     }
     if matches!(ext.as_str(), "tmj" | "tsj") {
-        return crate::interchange::load_tiled(path);
+        return crate::interchange::load_tiled_with_path_check(path, check_path);
     }
     if ext == "json" {
         let meta: serde_json::Value =
@@ -1499,7 +1516,9 @@ pub fn load(path: &Path) -> Result<Document, String> {
         let name = meta["meta"]["image"]
             .as_str()
             .ok_or("Sheet JSON must name its image")?;
-        let im = image::open(path.parent().unwrap_or(Path::new(".")).join(name))
+        let image_path = path.parent().unwrap_or(Path::new(".")).join(name);
+        check_path(&image_path)?;
+        let im = image::open(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
         return crate::workflows::unpack_sheet(&im, &meta);

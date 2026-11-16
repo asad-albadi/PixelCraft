@@ -648,8 +648,44 @@ pub fn tag_document(d: &Document, index: usize) -> Result<Document, String> {
     out.validate()?;
     Ok(out)
 }
+pub(crate) fn tag_export_paths(dir: &Path, d: &Document, gif: bool) -> Vec<PathBuf> {
+    d.tags
+        .iter()
+        .enumerate()
+        .map(|(i, tag)| {
+            let name: String = tag
+                .name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            dir.join(format!(
+                "{:03}-{}.{}",
+                i + 1,
+                if name.is_empty() { "tag" } else { &name },
+                if gif { "gif" } else { "png" }
+            ))
+        })
+        .collect()
+}
+
 pub fn batch_tags(
     dir: &Path,
+    d: &Document,
+    gif: bool,
+    options: &SheetOptions,
+) -> Result<Vec<PathBuf>, String> {
+    batch_tags_with_previous(dir, dir, d, gif, options)
+}
+
+pub(crate) fn batch_tags_with_previous(
+    dir: &Path,
+    previous_dir: &Path,
     d: &Document,
     gif: bool,
     options: &SheetOptions,
@@ -658,30 +694,15 @@ pub fn batch_tags(
         return Err("Add animation tags before batch exporting".into());
     }
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let mut paths = vec![];
-    for (i, t) in d.tags.iter().enumerate() {
-        let name: String = t
-            .name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let path = dir.join(format!(
-            "{:03}-{}.{}",
-            i + 1,
-            if name.is_empty() { "tag" } else { &name },
-            if gif { "gif" } else { "png" }
-        ));
+    let paths = tag_export_paths(dir, d, gif);
+    for (i, (tag, path)) in d.tags.iter().zip(&paths).enumerate() {
         if gif {
-            formats::export_gif_frames(&path, d, t.repeat, tag_frames(t))?;
+            formats::export_gif_frames(path, d, tag.repeat, tag_frames(tag))?;
         } else {
-            interchange::export_sheet(
-                &path,
+            let previous = previous_dir.join(path.file_name().unwrap());
+            interchange::export_sheet_with_previous(
+                path,
+                &previous,
                 d,
                 &SheetOptions {
                     tag: Some(i),
@@ -689,7 +710,6 @@ pub fn batch_tags(
                 },
             )?;
         }
-        paths.push(path);
     }
     Ok(paths)
 }

@@ -1,5 +1,7 @@
 //! Headless commands and a newline-delimited JSON-RPC MCP stdio server.
 use crate::{atlas::*, formats, interchange, model::*, productivity::*, workflows::SheetOptions};
+mod mcp_files;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::{
@@ -536,6 +538,50 @@ fn options<T: serde::de::DeserializeOwned + Default>(v: &Value) -> Result<T, Str
     }
 }
 pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
+    file_operation(op, v, None)
+}
+
+fn write_operation_file<T>(
+    files: Option<&mcp_files::Files<'_>>,
+    out: &Path,
+    encode: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
+    if let Some(files) = files {
+        files.write_file(out, encode)
+    } else {
+        encode(out)
+    }
+}
+
+fn file_operation(
+    op: &str,
+    v: &Value,
+    files: Option<&mcp_files::Files<'_>>,
+) -> Result<Value, String> {
+    let resolve = |p| mcp_files::Files::resolve(files.and_then(|files| files.root), p);
+    let argument_path = |key| path(v, key).map(resolve);
+    let check_input = |p: &Path| files.map_or(Ok(()), |f| f.check_read(p));
+    let input_path = |key| {
+        let p = argument_path(key)?;
+        check_input(&p)?;
+        Ok::<_, String>(p)
+    };
+    let input_paths = || {
+        v["inputs"]
+            .as_array()
+            .ok_or("Expected inputs array")?
+            .iter()
+            .map(|p| {
+                let p = p.as_str().ok_or("Input must be a path")?;
+                let p = resolve(p.into());
+                check_input(&p)?;
+                Ok::<_, String>(p)
+            })
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let save = |out: &Path, d: &Document| {
+        write_operation_file(files, out, |target| formats::save(target, d))
+    };
     match op {
         "create" => {
             let (w, h) = (number(v, "width")?, number(v, "height")?);
@@ -548,65 +594,68 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                 return Err("Invalid canvas dimensions".into());
             }
             let d = Document::new(w, h);
-            let output = path(v, "output")?;
-            if output.exists() {
+            let output = argument_path("output")?;
+            if files.is_none() && output.exists() {
                 return Err("Output already exists".into());
             }
-            formats::save(&output, &d)?;
+            save(&output, &d)?;
             Ok(inspect(&d))
         }
         "atlas" => {
-            let paths = v["inputs"].as_array().ok_or("Expected inputs array")?;
             let mut docs = vec![];
-            let paths = paths
-                .iter()
-                .map(|p| p.as_str().map(PathBuf::from).ok_or("Input must be a path"))
-                .collect::<Result<Vec<_>, _>>()?;
+            let paths = input_paths()?;
             for p in expand_atlas_inputs(&paths)? {
                 docs.push((
                     p.file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
-                    formats::load(&p)?,
+                    formats::load_with_path_check(&p, &check_input)?,
                 ));
             }
-            let out = path(v, "output")?;
-            export_atlas(&out, &docs, &options::<AtlasOptions>(&v["options"])?)?;
+            let out = argument_path("output")?;
+            let options = options::<AtlasOptions>(&v["options"])?;
+            if let Some(files) = files {
+                files.write_files(
+                    &out,
+                    &[out.clone(), out.with_extension("json")],
+                    false,
+                    |target| export_atlas(target, &docs, &options),
+                )?;
+            } else {
+                export_atlas(&out, &docs, &options)?;
+            }
             Ok(json!({"output":out}))
         }
         "import-sequence" => {
-            let paths = v["inputs"]
-                .as_array()
-                .ok_or("Expected inputs array")?
-                .iter()
-                .map(|p| p.as_str().map(PathBuf::from).ok_or("Input must be a path"))
-                .collect::<Result<Vec<_>, _>>()?;
+            let paths = input_paths()?;
             let d = interchange::load_sequence(&paths)?;
-            formats::save(&path(v, "output")?, &d)?;
+            save(&argument_path("output")?, &d)?;
             Ok(inspect(&d))
         }
         "import-grid" => {
-            let im = read_image(&path(v, "input")?)?;
+            let im = read_image(&input_path("input")?)?;
             let d = import_grid_with_options(&im, &options::<GridImportOptions>(&v["options"])?)?;
-            let out = path(v, "output")?;
-            formats::save(&out, &d)?;
+            let out = argument_path("output")?;
+            save(&out, &d)?;
             Ok(inspect(&d))
         }
         "palette-convert" => {
-            let input = path(v, "input")?;
-            let output = path(v, "output")?;
+            let input = input_path("input")?;
+            let output = argument_path("output")?;
             let p = parse_palette(
                 &std::fs::read(&input).map_err(|e| e.to_string())?,
                 extension(&input),
             )?;
-            std::fs::write(&output, write_palette(&p, extension(&output))?)
-                .map_err(|e| e.to_string())?;
+            write_operation_file(files, &output, |target| {
+                std::fs::write(target, write_palette(&p, extension(target))?)
+                    .map_err(|e| e.to_string())
+            })?;
             Ok(json!({"colors":p.len(),"output":output}))
         }
         _ => {
-            let input = path(v, "input")?;
-            let mut d = formats::load(&input)?;
+            let input = input_path("input")?;
+            let mut d = formats::load_with_path_check(&input, &check_input)?;
             match op {
                 "save" | "save-as" => {
                     let revision = document_revision(&d);
@@ -616,9 +665,15 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                     let output = if op == "save" {
                         input
                     } else {
-                        path(v, "output")?
+                        argument_path("output")?
                     };
-                    prepare_live_save(&d, output, &revision, op == "save")?.write()
+                    if let Some(files) = files {
+                        let metadata = save_metadata(&d, &output, &revision)?;
+                        files.write_file(&output, |target| formats::save(target, &d))?;
+                        Ok(metadata)
+                    } else {
+                        prepare_live_save(&d, output, &revision, op == "save")?.write()
+                    }
                 }
                 "inspect" => Ok(inspect(&d)),
                 "render" | "export" | "import" => {
@@ -630,7 +685,7 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                         };
                         return render_preview(&d, f, v, &document_revision(&d), MAX_PIXELS);
                     }
-                    let out = path(v, "output")?;
+                    let out = argument_path("output")?;
                     if op == "render" && (v.get("region").is_some() || v.get("layers").is_some()) {
                         if !extension(&out).eq_ignore_ascii_case("png")
                             || v.get("format").is_some_and(|format| format != "png")
@@ -646,33 +701,66 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                         };
                         let (image, mut metadata) =
                             preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
-                        image
-                            .save_with_format(&out, image::ImageFormat::Png)
-                            .map_err(|e| e.to_string())?;
+                        write_operation_file(files, &out, |target| {
+                            image
+                                .save_with_format(target, image::ImageFormat::Png)
+                                .map_err(|e| e.to_string())
+                        })?;
                         metadata["output"] = json!(out);
                         return Ok(metadata);
                     }
                     let kind = v["format"].as_str().unwrap_or_else(|| extension(&out));
                     match kind {
                         "png-sequence" => {
-                            return prepare_png_sequence(&d, out, v, &document_revision(&d))?
-                                .write();
+                            let replace = files.is_some_and(|files| files.overwrite);
+                            if let Some(files) = files {
+                                files.check_write(&out)?;
+                                for name in sequence_names(&d) {
+                                    files.check_write(&out.join(name))?;
+                                }
+                            }
+                            return prepare_png_sequence_progress(
+                                &d,
+                                out,
+                                v,
+                                &document_revision(&d),
+                                replace,
+                                |_, _| Ok(()),
+                            )?
+                            .write();
                         }
                         "gif" | "mp4" => {
                             let filtered = filter_export_layers(&d, v)?;
-                            write_animation_export(kind, &out, &filtered, export_scale(v)?)?;
+                            let scale = export_scale(v)?;
+                            write_operation_file(files, &out, |target| {
+                                write_animation_export(kind, target, &filtered, scale)
+                            })?;
                         }
-                        "sheet" => interchange::export_sheet(
-                            &out,
-                            &d,
-                            &options::<SheetOptions>(&v["options"])?,
-                        )?,
+                        "sheet" => {
+                            let options = options::<SheetOptions>(&v["options"])?;
+                            if let Some(files) = files {
+                                files.write_files(
+                                    &out,
+                                    &interchange::sheet_output_paths(&out, &options),
+                                    false,
+                                    |target| {
+                                        interchange::export_sheet_with_previous(
+                                            target, &out, &d, &options,
+                                        )
+                                    },
+                                )?;
+                            } else {
+                                interchange::export_sheet(&out, &d, &options)?;
+                            }
+                        }
                         "ase" | "aseprite"
                             if op == "export" && (d.needs_baked_ase() || d.has_frame_names()) =>
                         {
-                            formats::export_baked_ase(&out, &d)?;
+                            write_operation_file(files, &out, |target| {
+                                formats::export_baked_ase(target, &d)
+                            })?;
                         }
-                        "pixel" | "ase" | "aseprite" => formats::save(&out, &d)?,
+                        "pixel" | "ase" | "aseprite" => save(&out, &d)?,
                         "png" if v.get("layers").is_some() || v.get("region").is_some() => {
                             let frame = v
                                 .get("frame")
@@ -681,9 +769,11 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                                 .unwrap_or(0);
                             let (image, mut metadata) =
                                 preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
-                            image
-                                .save_with_format(&out, image::ImageFormat::Png)
-                                .map_err(|e| e.to_string())?;
+                            write_operation_file(files, &out, |target| {
+                                image
+                                    .save_with_format(target, image::ImageFormat::Png)
+                                    .map_err(|e| e.to_string())
+                            })?;
                             metadata["output"] = json!(out);
                             return Ok(metadata);
                         }
@@ -692,41 +782,59 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                             if f >= d.durations.len() {
                                 return Err("Invalid frame".into());
                             }
-                            formats::export_raster_scaled(
-                                &out,
-                                &d,
-                                f,
-                                false,
-                                v["scale"].as_u64().unwrap_or(1) as usize,
-                            )?;
+                            write_operation_file(files, &out, |target| {
+                                formats::export_raster_scaled(
+                                    target,
+                                    &d,
+                                    f,
+                                    false,
+                                    v["scale"].as_u64().unwrap_or(1) as usize,
+                                )
+                            })?;
                         }
                         _ => return Err("Unknown export format".into()),
                     }
                     Ok(json!({"output":out}))
                 }
                 "batch-tags" => {
-                    let paths = batch_tags(
-                        &path(v, "output")?,
-                        &d,
-                        v["format"] == "gif",
-                        &options::<SheetOptions>(&v["options"])?,
-                    )?;
+                    let out = argument_path("output")?;
+                    let gif = v["format"] == "gif";
+                    let options = options::<SheetOptions>(&v["options"])?;
+                    let paths = if let Some(files) = files {
+                        let paths = tag_export_paths(&out, &d, gif);
+                        let destinations = if gif {
+                            paths.clone()
+                        } else {
+                            paths
+                                .iter()
+                                .flat_map(|path| interchange::sheet_output_paths(path, &options))
+                                .collect()
+                        };
+                        files.write_files(&out, &destinations, true, |target| {
+                            batch_tags_with_previous(target, &out, &d, gif, &options)
+                        })?;
+                        paths
+                    } else {
+                        batch_tags(&out, &d, gif, &options)?
+                    };
                     Ok(json!({"outputs":paths}))
                 }
                 "palette-export" => {
-                    let out = path(v, "output")?;
-                    std::fs::write(&out, write_palette(&d.palette, extension(&out))?)
-                        .map_err(|e| e.to_string())?;
+                    let out = argument_path("output")?;
+                    write_operation_file(files, &out, |target| {
+                        std::fs::write(target, write_palette(&d.palette, extension(target))?)
+                            .map_err(|e| e.to_string())
+                    })?;
                     Ok(json!({"output":out}))
                 }
                 "palette-import" => {
-                    let p = path(v, "palette")?;
+                    let p = input_path("palette")?;
                     let palette = parse_palette(
                         &std::fs::read(&p).map_err(|e| e.to_string())?,
                         extension(&p),
                     )?;
                     d.import_palette(palette)?;
-                    formats::save(&path(v, "output")?, &d)?;
+                    save(&argument_path("output")?, &d)?;
                     Ok(inspect(&d))
                 }
                 "edit" | "commands" => {
@@ -735,7 +843,7 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                     } else {
                         apply_edits(&d, v)?
                     };
-                    formats::save(&path(v, "output")?, &d)?;
+                    save(&argument_path("output")?, &d)?;
                     Ok(inspect(&d))
                 }
                 _ => Err(format!("Unknown operation: {op}")),
@@ -764,7 +872,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});
@@ -795,6 +903,12 @@ pub fn run_cli(args: &[String]) -> Result<Value, String> {
     operation(op, &v)
 }
 pub fn serve_mcp(live: Option<&Path>) -> Result<(), String> {
+    serve_mcp_with_root(live, None)
+}
+
+pub fn serve_mcp_with_root(live: Option<&Path>, root: Option<&Path>) -> Result<(), String> {
+    let root = root.map(mcp_files::project_root).transpose()?;
+    let root = root.as_deref();
     let stdin = std::io::stdin();
     std::thread::scope(|scope| {
         let stdout = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
@@ -831,11 +945,11 @@ pub fn serve_mcp(live: Option<&Path>) -> Result<(), String> {
                 }
                 let send = send.clone();
                 exports.push(scope.spawn(move || {
-                    if let Some(response) = rpc(&request, live) {
+                    if let Some(response) = rpc_with_root(&request, live, root) {
                         let _ = send(&response);
                     }
                 }));
-            } else if let Some(response) = rpc(&request, live) {
+            } else if let Some(response) = rpc_with_root(&request, live, root) {
                 send(&response)?;
             }
         }
@@ -844,6 +958,10 @@ pub fn serve_mcp(live: Option<&Path>) -> Result<(), String> {
 }
 
 pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
+    rpc_with_root(r, live, None)
+}
+
+fn rpc_with_root(r: &Value, live: Option<&Path>, root: Option<&Path>) -> Option<Value> {
     r.get("id")?;
     let method = r["method"].as_str().unwrap_or("");
     let result: Result<Value, String> = match method {
@@ -876,16 +994,25 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
                         "live-commands" | "commands" => "Atomic edits with the current revision. Set frame name and/or timing with set-frame (frame,name,duration ms). Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
-                        "live-export" => "Export a revision-matched sprite to a new PNG, GIF or MP4 file, or set format to png-sequence and output to a new directory. Integer scale uses nearest-neighbor. Layers apply to all formats; region applies to PNG and PNG sequences; frame applies to single PNG only.",
+                        "live-export" => "Export a revision-matched sprite to a PNG, GIF or MP4 file, or set format to png-sequence and output to a directory. Integer scale uses nearest-neighbor. Layers apply to all formats; region applies to PNG and PNG sequences; frame applies to single PNG only.",
                         "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
                         "live-export-progress" => "Report the completed and total frames of a running live export by job_id.",
                         "live-cancel-export" => "Request cancellation of a running live export by job_id.",
                         "live-save" => "Save the revision-matched sprite to its current project path. Use live-save-as for untitled sprites.",
-                        "live-save-as" => "Save the revision-matched sprite to a new .pixel or .aseprite path and make it the current project path.",
+                        "live-save-as" => "Save the revision-matched sprite to a .pixel or .aseprite path and make it the current project path.",
                         _ => CLI_HELP,
                     };
                     let mut tool = json!({"name":name,"description":format!("PixelCraft {name}. {details}"),
                     "inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"document_id":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}});
+                if (OPERATIONS.contains(name) && *name != "inspect")
+                    || matches!(*name, "live-save-as" | "live-export")
+                {
+                    tool["inputSchema"]["properties"]["overwrite"] = json!({
+                        "type": "boolean",
+                        "default": false,
+                        "description": "Allow replacement of existing output files, including generated companions."
+                    });
+                }
                 if matches!(*name, "render" | "live-render" | "export" | "live-export" | "live-preview-commands" | "live-commands" | "live-edit") {
                     let props = &mut tool["inputSchema"]["properties"];
                     props["layers"] = json!({"type":"array","items":{"type":"integer","minimum":0}});
@@ -936,12 +1063,29 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
         "tools/call" => {
             let name = r["params"]["name"].as_str().unwrap_or("");
             let args = &r["params"]["arguments"];
-            let value = if name.starts_with("live-") {
-                live.ok_or_else(|| "Live editor access is disabled".to_string())
-                    .and_then(|path| live_call(path, name, args))
-            } else {
-                operation(name, args)
-            };
+            let value = (|| {
+                let overwrite = match args.get("overwrite") {
+                    Some(value) => value.as_bool().ok_or("overwrite must be a boolean")?,
+                    None => false,
+                };
+                let files = mcp_files::Files { root, overwrite };
+                if name.starts_with("live-") {
+                    let bridge = live.ok_or("Live editor access is disabled")?;
+                    let mut args = args.clone();
+                    if matches!(name, "live-export" | "live-save-as") {
+                        let out = mcp_files::Files::resolve(root, path(&args, "output")?);
+                        if name == "live-export" && args["format"] == "png-sequence" {
+                            files.check_write(&out)?;
+                        } else {
+                            files.check_file(&out)?;
+                        }
+                        args["output"] = json!(out);
+                    }
+                    live_call(bridge, name, &args)
+                } else {
+                    file_operation(name, args, Some(&files))
+                }
+            })();
             Ok(match value {
                 Ok(mut v) if v["mimeType"] == "image/png" => {
                     let data = v.as_object_mut().and_then(|o| o.remove("data"));
@@ -1458,6 +1602,7 @@ pub fn write_animation_export(
 pub struct PreparedExport {
     pub output: PathBuf,
     staging: PathBuf,
+    preserve_staging: bool,
     temporary: PathBuf,
     metadata: Value,
     replace: bool,
@@ -1466,7 +1611,9 @@ pub struct PreparedExport {
 
 impl Drop for PreparedExport {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.staging);
+        if !self.preserve_staging {
+            let _ = std::fs::remove_dir_all(&self.staging);
+        }
     }
 }
 
@@ -1499,6 +1646,7 @@ fn prepare_output(
     let mut prepared = PreparedExport {
         output,
         staging,
+        preserve_staging: false,
         temporary,
         metadata: Value::Null,
         replace,
@@ -1514,16 +1662,21 @@ pub fn prepare_live_save(
     revision: &str,
     replace: bool,
 ) -> Result<PreparedExport, String> {
-    if !matches!(extension(&output), "pixel" | "ase" | "aseprite") {
+    let metadata = save_metadata(d, &output, revision)?;
+    prepare_output(output, replace, |temporary| {
+        formats::save(temporary, d)?;
+        Ok(metadata)
+    })
+}
+
+fn save_metadata(d: &Document, output: &Path, revision: &str) -> Result<Value, String> {
+    if !matches!(extension(output), "pixel" | "ase" | "aseprite") {
         return Err("Choose a .pixel, .ase or .aseprite project path".into());
     }
     let mut metadata = inspect_revision(d, revision);
     metadata["output"] = json!(output);
     check_live_response_size(&metadata)?;
-    prepare_output(output, replace, |temporary| {
-        formats::save(temporary, d)?;
-        Ok(metadata)
-    })
+    Ok(metadata)
 }
 
 pub fn prepare_png_sequence(
@@ -1532,7 +1685,39 @@ pub fn prepare_png_sequence(
     args: &Value,
     revision: &str,
 ) -> Result<PreparedExport, String> {
-    prepare_png_sequence_progress(doc, output, args, revision, |_, _| Ok(()))
+    prepare_png_sequence_progress(doc, output, args, revision, false, |_, _| Ok(()))
+}
+
+fn sequence_names(doc: &Document) -> Vec<String> {
+    (1..=doc.durations.len())
+        .map(|index| format!("frame-{index:04}.png"))
+        .collect()
+}
+
+fn check_sequence_outputs(output: &Path, names: &[String]) -> Result<Vec<PathBuf>, String> {
+    match std::fs::symlink_metadata(output) {
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(format!(
+                "Sequence output must be a directory: {}",
+                output.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    let files = mcp_files::Files {
+        root: None,
+        overwrite: true,
+    };
+    names
+        .iter()
+        .map(|name| {
+            let frame = output.join(name);
+            files.check_file(&frame)?;
+            Ok(frame)
+        })
+        .collect()
 }
 
 fn prepare_png_sequence_progress(
@@ -1540,16 +1725,23 @@ fn prepare_png_sequence_progress(
     output: PathBuf,
     args: &Value,
     revision: &str,
+    replace: bool,
     mut progress: impl FnMut(usize, usize) -> Result<(), String>,
 ) -> Result<PreparedExport, String> {
     if args.get("frame").is_some() {
         return Err("PNG sequence export uses all timeline frames".into());
     }
-    let names: Vec<_> = (1..=doc.durations.len())
-        .map(|index| format!("frame-{index:04}.png"))
-        .collect();
+    let names = sequence_names(doc);
+    if replace {
+        check_sequence_outputs(&output, &names)?;
+    }
     let filtered = filter_export_layers(doc, args)?;
-    let mut prepared = prepare_output(output, false, |temporary| {
+    let staging_target = if replace && output.is_dir() {
+        output.join("frames")
+    } else {
+        output.clone()
+    };
+    let mut prepared = prepare_output(staging_target, replace, |temporary| {
         std::fs::create_dir(temporary).map_err(|e| e.to_string())?;
         let mut metadata = Value::Null;
         for (frame, name) in names.iter().enumerate() {
@@ -1572,6 +1764,7 @@ fn prepare_png_sequence_progress(
         metadata["frames"] = json!(names.len());
         Ok(metadata)
     })?;
+    prepared.output = output;
     prepared.sequence = names;
     Ok(prepared)
 }
@@ -1593,14 +1786,20 @@ pub fn prepare_live_export_with_progress(
     mut progress: impl FnMut(usize, usize) -> Result<(), String>,
 ) -> Result<PreparedExport, String> {
     let output = path(args, "output")?;
+    let replace = args["overwrite"] == true;
     if args["format"] == "png-sequence" {
-        return prepare_png_sequence_progress(d, output, args, revision, progress);
+        return prepare_png_sequence_progress(d, output, args, revision, replace, progress);
     }
+    mcp_files::Files {
+        root: None,
+        overwrite: replace,
+    }
+    .check_file(&output)?;
     let kind = extension(&output).to_ascii_lowercase();
     if args.get("format").is_some_and(|v| v != kind.as_str()) {
         return Err("Export format must match the output extension".into());
     }
-    prepare_output(output, false, |temporary| match kind.as_str() {
+    prepare_output(output, replace, |temporary| match kind.as_str() {
         "png" => {
             progress(0, 1)?;
             let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
@@ -1641,7 +1840,11 @@ pub fn prepare_live_export_with_progress(
 
 impl PreparedExport {
     pub fn write(mut self) -> Result<Value, String> {
-        if !self.sequence.is_empty() {
+        if !self.sequence.is_empty() && self.replace {
+            let files = check_sequence_outputs(&self.output, &self.sequence)?;
+            std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
+            mcp_files::publish_files(&self, &files, true, true)?;
+        } else if !self.sequence.is_empty() {
             std::fs::create_dir(&self.output).map_err(|e| e.to_string())?;
             for (index, name) in self.sequence.iter().enumerate() {
                 if let Err(error) =

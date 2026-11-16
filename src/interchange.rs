@@ -111,7 +111,34 @@ fn natural_key(p: &Path) -> String {
     }
     out
 }
+fn sheet_engine_sidecar(path: &Path, preset: &str) -> Option<PathBuf> {
+    match preset {
+        "Godot" => Some(path.with_extension("tres")),
+        "Unity" => {
+            let mut name = path.as_os_str().to_owned();
+            name.push(".meta");
+            Some(PathBuf::from(name))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn sheet_output_paths(path: &Path, options: &SheetOptions) -> Vec<PathBuf> {
+    let mut paths = vec![path.to_path_buf(), path.with_extension("json")];
+    paths.extend(sheet_engine_sidecar(path, &options.preset));
+    paths
+}
+
 pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), String> {
+    export_sheet_with_previous(path, path, d, o)
+}
+
+pub(crate) fn export_sheet_with_previous(
+    path: &Path,
+    previous_path: &Path,
+    d: &Document,
+    o: &SheetOptions,
+) -> Result<(), String> {
     let (im, mut meta) = pack_sheet(d, o)?;
     let name = path
         .file_name()
@@ -132,7 +159,7 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
     let json_path = path.with_extension("json");
     companion_exists(&json_path)?;
     let sidecar = if o.preset == "Godot" {
-        let resource = path.with_extension("tres");
+        let resource = sheet_engine_sidecar(previous_path, &o.preset).unwrap();
         let mut header = String::new();
         if companion_exists(&resource)? {
             const MAX_HEADER_BYTES: usize = 4096;
@@ -158,12 +185,10 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
                         .bytes()
                         .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
             });
-        Some((resource, godot(&meta, &name, uid)?))
+        Some(godot(&meta, &name, uid)?)
     } else if o.preset == "Unity" {
         const MAX_UNITY_META_BYTES: usize = 64 * 1024 * 1024;
-        let mut meta_name = path.as_os_str().to_owned();
-        meta_name.push(".meta");
-        let meta_path = PathBuf::from(meta_name);
+        let meta_path = sheet_engine_sidecar(previous_path, &o.preset).unwrap();
         let mut previous = String::new();
         if companion_exists(&meta_path)? {
             let source = File::open(&meta_path).map_err(|e| e.to_string())?;
@@ -179,16 +204,19 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
                 return Err(too_large());
             }
         }
-        Some((
-            meta_path,
-            unity(&meta, &path.to_string_lossy(), im.height(), &previous)?,
-        ))
+        Some(unity(
+            &meta,
+            &previous_path.to_string_lossy(),
+            im.height(),
+            &previous,
+        )?)
     } else {
         None
     };
     im.save(path).map_err(|e| e.to_string())?;
     write_json(&json_path, &meta)?;
-    if let Some((companion, contents)) = sidecar {
+    if let Some(contents) = sidecar {
+        let companion = sheet_engine_sidecar(path, &o.preset).unwrap();
         fs::write(companion, contents).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -784,6 +812,13 @@ pub fn export_tiled(path: &Path, d: &Document, f: usize) -> Result<(), String> {
     )
 }
 pub fn load_tiled(path: &Path) -> Result<Document, String> {
+    load_tiled_with_path_check(path, &|_| Ok(()))
+}
+
+pub(crate) fn load_tiled_with_path_check(
+    path: &Path,
+    check_path: &impl Fn(&Path) -> Result<(), String>,
+) -> Result<Document, String> {
     let v: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let num = |v: &Value, k: &str| {
@@ -792,11 +827,16 @@ pub fn load_tiled(path: &Path) -> Result<Document, String> {
             .ok_or_else(|| format!("Missing Tiled {k}"))
     };
     let base = path.parent().unwrap_or(Path::new("."));
-    fn tileset(v: &Value, base: &Path) -> Result<Tileset, String> {
+    fn tileset(
+        v: &Value,
+        base: &Path,
+        check_path: &impl Fn(&Path) -> Result<(), String>,
+    ) -> Result<Tileset, String> {
         let mut v = v.clone();
         let mut base = base.to_path_buf();
         if let Some(source) = v["source"].as_str() {
             let p = base.join(source);
+            check_path(&p)?;
             v = serde_json::from_slice(&std::fs::read(&p).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             base = p.parent().unwrap().into();
@@ -815,7 +855,9 @@ pub fn load_tiled(path: &Path) -> Result<Document, String> {
         if columns == 0 {
             return Err("Image collection tilesets are unsupported".into());
         }
-        let im = image::open(base.join(v["image"].as_str().ok_or("Missing tileset image")?))
+        let image_path = base.join(v["image"].as_str().ok_or("Missing tileset image")?);
+        check_path(&image_path)?;
+        let im = image::open(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
         let margin = v["margin"].as_u64().unwrap_or(0) as usize;
@@ -843,7 +885,7 @@ pub fn load_tiled(path: &Path) -> Result<Document, String> {
         })
     }
     if v["type"] == "tileset" {
-        let t = tileset(&v, base)?;
+        let t = tileset(&v, base, check_path)?;
         let mut d = Document::new(t.width, t.height);
         d.tilesets.push(t);
         d.add_tile_layer(0)?;
@@ -871,7 +913,7 @@ pub fn load_tiled(path: &Path) -> Result<Document, String> {
     let sets = v["tilesets"].as_array().ok_or("Missing tilesets")?;
     let mut gids = vec![];
     for s in sets {
-        let t = tileset(s, base)?;
+        let t = tileset(s, base, check_path)?;
         if t.width != tw || t.height != th {
             return Err("Mixed tile sizes are unsupported".into());
         }

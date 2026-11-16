@@ -4758,15 +4758,25 @@ fn main() -> eframe::Result {
         let result = if headless_args[0] == "--cli" {
             pixelcraft::automation::run_cli(&headless_args[1..]).map(|v| println!("{v}"))
         } else {
-            let live = if headless_args.len() == 3 && headless_args[1] == "--live" {
-                Some(std::path::Path::new(&headless_args[2]))
-            } else if headless_args.len() == 1 {
-                None
-            } else {
-                eprintln!("Use --mcp [--live BRIDGE_CONFIG]");
+            let mut live = None;
+            let mut root = None;
+            let (args, remainder) = headless_args[1..].as_chunks::<2>();
+            for pair in args {
+                let path = Some(std::path::Path::new(&pair[1]));
+                match pair[0].as_str() {
+                    "--live" if live.is_none() => live = path,
+                    "--project-root" if root.is_none() => root = path,
+                    _ => {
+                        eprintln!("Use --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]");
+                        std::process::exit(2);
+                    }
+                }
+            }
+            if !remainder.is_empty() {
+                eprintln!("Use --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]");
                 std::process::exit(2);
-            };
-            pixelcraft::automation::serve_mcp(live)
+            }
+            pixelcraft::automation::serve_mcp_with_root(live, root)
         };
         if let Err(e) = result {
             eprintln!("{e}");
