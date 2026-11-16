@@ -608,14 +608,14 @@ impl PixelCraft {
         }
     }
     pub(super) fn wand_at(&mut self, p: (i32, i32), op: SelectionOp) {
-        let hits = matching(
+        let hits = matching_on_axes(
             &self.doc.layer_pixels(self.layer, self.frame),
             self.doc.width,
             self.doc.height,
             p,
             self.power.tolerance,
             self.power.contiguous,
-            self.doc.wraparound,
+            self.drawing_axes(),
         );
         let mut mask = if self.selection.is_some() {
             (0..hits.len())
@@ -648,6 +648,7 @@ impl PixelCraft {
         self.studio.mask = Some(mask);
     }
     pub(super) fn power_paint(&mut self, p: (i32, i32), color: Pixel, size: i32) {
+        let axes = self.drawing_axes();
         let mask = self.selection.map(|_| {
             (0..self.doc.width * self.doc.height)
                 .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
@@ -675,7 +676,15 @@ impl PixelCraft {
             }
             o.mask = Some(allowed);
             let before = self.doc.layers[self.layer].cels[self.frame].clone();
-            paint_brush(&mut self.doc, self.layer, self.frame, p, color, size, &o);
+            paint_brush_on_axes(
+                &mut self.doc,
+                (self.layer, self.frame),
+                p,
+                color,
+                size,
+                &o,
+                axes,
+            );
             for (i, (a, b)) in before
                 .iter()
                 .zip(self.doc.layers[self.layer].cels[self.frame].iter())
@@ -686,7 +695,15 @@ impl PixelCraft {
                 }
             }
         } else {
-            paint_brush(&mut self.doc, self.layer, self.frame, p, color, size, &o);
+            paint_brush_on_axes(
+                &mut self.doc,
+                (self.layer, self.frame),
+                p,
+                color,
+                size,
+                &o,
+                axes,
+            );
         }
     }
     pub(super) fn fill_controls(&mut self, ui: &mut egui::Ui) {
@@ -726,13 +743,13 @@ impl PixelCraft {
                 return;
             };
             let cells = &self.doc.layers[self.layer].tile_cels[self.frame];
-            let mut matches = matching_by(
+            let mut matches = matching_by_on_axes(
                 cells,
                 geometry.columns,
                 geometry.rows,
                 (x as i32, y as i32),
                 !self.power.fill_global,
-                self.doc.wraparound,
+                self.drawing_axes(),
                 |a, b| a == b,
             );
             if self.selection.is_some() || self.studio.mask.is_some() {
@@ -760,14 +777,14 @@ impl PixelCraft {
             return;
         }
         let color = self.doc.snapped_color(self.frame, color);
-        let hits = matching(
+        let hits = matching_on_axes(
             &self.doc.layer_pixels(self.layer, self.frame),
             self.doc.width,
             self.doc.height,
             p,
             self.power.fill_tolerance,
             !self.power.fill_global,
-            self.doc.wraparound,
+            self.drawing_axes(),
         );
         for (i, hit) in hits.into_iter().enumerate() {
             if hit && self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
@@ -795,7 +812,7 @@ impl PixelCraft {
         egui::Window::new("Workflow tools").open(&mut open).default_width(530.).default_height(650.).show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{
  self.palette_arrangement_ui(ui);
  ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
- ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember();self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("Wraparound drawing is independent of View → Seamless preview.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
+ ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember();self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("The seamless canvas uses the axes selected under View.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
 if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
  ui.collapsing("Reference images",|ui|{if ui.pc_checkbox(&mut self.power.preferences.sample_references,"Sample reference colors").changed(){self.save_workflow_preferences();}
 if ui.pc_button("Import PNG / JPEG overlay…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("Reference image",&["png","jpg","jpeg"]).pick_file(){match import_reference(&path){Ok(r)=>{let mut next=self.doc.clone();next.references.push(r);match next.validate(){Ok(())=>{self.remember();self.doc=next;},Err(e)=>self.status=e}},Err(e)=>self.status=e}}ui.small("Saved inside .pixel projects; excluded from artwork exports. Enable Move to drag; Shift-drag scales.");let mut remove=None;for i in 0..self.doc.references.len(){let mut r=self.doc.references[i].clone();ui.separator();ui.horizontal(|ui|{ui_icons::checkbox(ui,&mut r.visible,"eye",&r.name);if ui_icons::button_as(ui,"move","reference-move","Move / scale",self.power.reference_edit==Some(i),false).clicked(){self.power.reference_edit=if self.power.reference_edit==Some(i){None}else{Some(i)};}

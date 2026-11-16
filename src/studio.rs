@@ -22,7 +22,7 @@ pub(super) struct Studio {
     pub tiles_open: bool,
     tile_browser_set: usize,
     show_tile_indices: bool,
-    pub seamless: bool,
+    pub seamless: WrapAxes,
     pub mirror_x: bool,
     pub mirror_y: bool,
     pub pixel_perfect: bool,
@@ -137,7 +137,7 @@ impl Default for Studio {
             tiles_open: false,
             tile_browser_set: 0,
             show_tile_indices: false,
-            seamless: false,
+            seamless: WrapAxes::NONE,
             mirror_x: false,
             mirror_y: false,
             pixel_perfect: false,
@@ -737,7 +737,18 @@ impl PixelCraft {
                 self.studio.tile_browser_set = self.doc.layers[self.layer].tileset.unwrap_or(0);
                 self.studio.tiles_open = true;
             }
-            "seamless" => self.studio.seamless = !self.studio.seamless,
+            "seamless" | "seamless-horizontal" | "seamless-vertical" => {
+                let axes = match s {
+                    "seamless-horizontal" => WrapAxes::HORIZONTAL,
+                    "seamless-vertical" => WrapAxes::VERTICAL,
+                    _ => WrapAxes::BOTH,
+                };
+                self.set_seamless_axes(if self.studio.seamless == axes {
+                    WrapAxes::NONE
+                } else {
+                    axes
+                });
+            }
             "lasso" => self.tool = Tool::Lasso,
             "move" => self.tool = Tool::Move,
             "gradient" => self.tool = Tool::Gradient,
@@ -1550,7 +1561,23 @@ impl PixelCraft {
                     });
                 }
                 ui.pc_checkbox(&mut self.studio.show_tile_indices, "Show tile indices on canvas");
-                ui.pc_checkbox(&mut self.studio.seamless, "Seamless preview");
+                let mut axes = self.studio.seamless;
+                let modes = [
+                    (WrapAxes::NONE, "Off"),
+                    (WrapAxes::HORIZONTAL, "Horizontal"),
+                    (WrapAxes::VERTICAL, "Vertical"),
+                    (WrapAxes::BOTH, "Both axes"),
+                ];
+                egui::ComboBox::from_label("Seamless canvas")
+                    .selected_text(modes.iter().find(|(mode, _)| *mode == axes).map_or("Off", |(_, label)| *label))
+                    .show_ui(ui, |ui| {
+                        for (mode, label) in modes {
+                            ui.pc_selectable_value(&mut axes, mode, label);
+                        }
+                    });
+                if axes != self.studio.seamless {
+                    self.set_seamless_axes(axes);
+                }
                 if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked() {
                     self.studio_action("tiledexport");
                 }
@@ -1774,33 +1801,8 @@ if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::File
             self.studio.sheet_open = open;
         }
         self.tileset_browser(ctx);
-        if self.studio.seamless {
-            egui::Window::new("Seamless preview")
-                .default_width(350.)
-                .show(ctx, |ui| {
-                    let tex = self.frame_texture(ctx, self.frame);
-                    let aspect = self.doc.width as f32 / self.doc.height as f32;
-                    // Reserve room for the title, padding, and Close button.
-                    let grid_height = (ctx.content_rect().height() - 96.).max(3.);
-                    let tile_width = (ui.available_width() / 3.)
-                        .min(180.)
-                        .min(grid_height * aspect / 3.);
-                    let tile_size = Vec2::new(tile_width, tile_width / aspect);
-                    ui.spacing_mut().item_spacing = Vec2::ZERO;
-                    for _ in 0..3 {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = Vec2::ZERO;
-                            for _ in 0..3 {
-                                ui.add(egui::Image::new(&tex).fit_to_exact_size(tile_size));
-                            }
-                        });
-                    }
-                    if ui.pc_button("Close preview").clicked() {
-                        self.studio.seamless = false;
-                    }
-                });
-        }
     }
+
     pub(super) fn stroke_line(&mut self, a: (i32, i32), b: (i32, i32), color: Pixel) {
         let (mut x, mut y) = a;
         let dx = (b.0 - x).abs();
@@ -2523,7 +2525,6 @@ mod tests {
         a.studio.open = true;
         a.studio.sheet_open = true;
         a.studio.tiles_open = true;
-        a.studio.seamless = true;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| a.studio_dialogs(ui.ctx()));
         assert!(!output.shapes.is_empty());
         output.textures_delta.clear();

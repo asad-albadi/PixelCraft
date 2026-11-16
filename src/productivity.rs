@@ -32,7 +32,19 @@ pub fn matching(
     contiguous: bool,
     wrap: bool,
 ) -> Vec<bool> {
-    matching_by(p, w, h, seed, contiguous, wrap, |c, target| {
+    matching_on_axes(p, w, h, seed, tolerance, contiguous, wrap.into())
+}
+
+pub fn matching_on_axes(
+    p: &[Pixel],
+    w: usize,
+    h: usize,
+    seed: (i32, i32),
+    tolerance: u8,
+    contiguous: bool,
+    axes: WrapAxes,
+) -> Vec<bool> {
+    matching_by_on_axes(p, w, h, seed, contiguous, axes, |c, target| {
         (c[3] == 0 && target[3] == 0) || (0..4).all(|i| c[i].abs_diff(target[i]) <= tolerance)
     })
 }
@@ -44,6 +56,18 @@ pub fn matching_by<T: Copy>(
     seed: (i32, i32),
     contiguous: bool,
     wrap: bool,
+    matches: impl Fn(T, T) -> bool,
+) -> Vec<bool> {
+    matching_by_on_axes(p, w, h, seed, contiguous, wrap.into(), matches)
+}
+
+pub fn matching_by_on_axes<T: Copy>(
+    p: &[T],
+    w: usize,
+    h: usize,
+    seed: (i32, i32),
+    contiguous: bool,
+    axes: WrapAxes,
     matches: impl Fn(T, T) -> bool,
 ) -> Vec<bool> {
     let mut out = vec![false; p.len()];
@@ -70,14 +94,10 @@ pub fn matching_by<T: Copy>(
     out[first] = true;
     while let Some(i) = stack.pop() {
         let (x, y) = ((i % w) as i32, (i / w) as i32);
-        for (mut x, mut y) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
-            if wrap {
-                x = x.rem_euclid(w as i32);
-                y = y.rem_euclid(h as i32);
-            }
-            if x < 0 || y < 0 || x as usize >= w || y as usize >= h {
+        for point in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] {
+            let Some((x, y)) = axes.position((w, h), point) else {
                 continue;
-            }
+            };
             let n = y as usize * w + x as usize;
             if !out[n] && matches(p[n], target) {
                 out[n] = true;
@@ -115,9 +135,33 @@ pub fn paint_brush(
     paint_brush_with_ink(d, (l, f), p, color, size, o, |_, _, source| source);
 }
 
+pub fn paint_brush_on_axes(
+    d: &mut Document,
+    (l, f): (usize, usize),
+    p: (i32, i32),
+    color: Pixel,
+    size: i32,
+    o: &BrushOptions,
+    axes: WrapAxes,
+) {
+    paint_brush_with_ink_on_axes(d, (l, f, axes), p, color, size, o, |_, _, source| source);
+}
+
 pub(crate) fn paint_brush_with_ink(
     d: &mut Document,
     (l, f): (usize, usize),
+    p: (i32, i32),
+    color: Pixel,
+    size: i32,
+    o: &BrushOptions,
+    ink: impl FnMut(usize, Pixel, Pixel) -> Pixel,
+) {
+    paint_brush_with_ink_on_axes(d, (l, f, d.wraparound.into()), p, color, size, o, ink);
+}
+
+fn paint_brush_with_ink_on_axes(
+    d: &mut Document,
+    (l, f, axes): (usize, usize, WrapAxes),
     p: (i32, i32),
     color: Pixel,
     size: i32,
@@ -163,17 +207,14 @@ pub(crate) fn paint_brush_with_ink(
         }
     }
     let mut shaded = std::collections::HashSet::new();
-    for (mut x, mut y, mut c) in points {
-        if d.wraparound {
-            x = x.rem_euclid(d.width as i32);
-            y = y.rem_euclid(d.height as i32);
-        }
-        let Some(i) = d.index(x, y) else {
+    for (x, y, mut c) in points {
+        let Some(i) = d.position_on_axes(x, y, axes) else {
             continue;
         };
         if o.mask.as_ref().is_some_and(|m| m.get(i) != Some(&true)) {
             continue;
         }
+        let (x, y) = ((i % d.width) as i32, (i / d.width) as i32);
         match o.mode {
             BrushMode::Shade => {
                 if !shaded.insert(i) {

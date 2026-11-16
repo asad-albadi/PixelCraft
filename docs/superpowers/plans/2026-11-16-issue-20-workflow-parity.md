@@ -49,6 +49,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 22 complete. Always-create mode gives each changed tile placement its own variant for the whole pencil or eraser stroke. Fast drags interpolate missing samples. Direct MCP pixel edits can request the new mode and retain support for the legacy variant flag. Tests cover exact-match artwork, flips, one variant per placement, pointer input, and Undo. Formatting, strict Clippy, and 468 Windows all-target tests passed.
 
+- Item 23 complete. The main canvas repeats horizontally, vertically, or on both axes. The copies share the frame texture and accept paint, erase, shapes, fill, and sampling through the existing editor tools. Each stroke uses one Undo entry and PNG export writes the single source tile. Tests exercise pointer drags across each axis, fill, brush footprints, fitting tall sprites, texture refresh, and exports. Formatting, strict Clippy, and 470 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -79,7 +81,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **20. Expand layer organization.** Add flatten all or visible, layer via copy or cut, compatible layer type conversions, and collapsible groups.
 - [x] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
 - [x] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.
-- [ ] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.
+- [x] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.
 - [ ] **24. Expand playback and onion skin controls.** Add selected-range playback, play once, subtags, rewind on stop, and draggable onion ranges.
 - [ ] **25. Add an Undo History panel.** Inspect entries and jump to a point in the active document’s history.
 - [ ] **26. Add split views and a configurable drawing grid.** Show multiple views of the same document, configure grid geometry and snapping, and set the grid from a selection.

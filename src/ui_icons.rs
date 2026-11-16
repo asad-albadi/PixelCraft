@@ -52,7 +52,7 @@ pub fn icon_name(action: &str) -> &str {
         "up" => "arrow-up",
         "down" => "arrow-down",
         "onion" => "onion-skin",
-        "seamless" => "wrap",
+        "seamless" | "seamless-horizontal" | "seamless-vertical" => "wrap",
         "rotate" => "rotate-cw",
         "flipx" | "selectionflipx" => "flip-horizontal",
         "flipy" | "selectionflipy" => "flip-vertical",
@@ -592,6 +592,8 @@ fn button_named(
                 | "grid"
                 | "onion"
                 | "seamless"
+                | "seamless-horizontal"
+                | "seamless-vertical"
                 | "play"
                 | "lock"
                 | "theme"

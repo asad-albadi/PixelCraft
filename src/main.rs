@@ -894,9 +894,51 @@ impl PixelCraft {
             egui::TextureOptions::NEAREST,
         )
     }
+    fn drawing_axes(&self) -> WrapAxes {
+        if self.studio.seamless == WrapAxes::NONE {
+            self.doc.wraparound.into()
+        } else {
+            self.studio.seamless
+        }
+    }
+
+    fn set_seamless_axes(&mut self, axes: WrapAxes) {
+        self.cancel_gesture();
+        self.studio.seamless = axes;
+        if axes != WrapAxes::NONE {
+            self.zoom = self.zoom.min(self.canvas_fit_scale());
+            self.pan = Vec2::ZERO;
+        }
+    }
+
+    fn canvas_fit_scale(&self) -> f32 {
+        let view = self.canvas_view_size.unwrap_or(Vec2::splat(512.)) - Vec2::splat(32.);
+        let size = Vec2::new(
+            self.doc.width as f32
+                * if self.studio.seamless.horizontal {
+                    3.
+                } else {
+                    1.
+                },
+            self.doc.height as f32
+                * if self.studio.seamless.vertical {
+                    3.
+                } else {
+                    1.
+                },
+        );
+        let zoom = (view.x / size.x).min(view.y / size.y);
+        (if zoom >= 1. { zoom.floor() } else { zoom }).clamp(0.02, 32.)
+    }
+
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
         self.doc.drawing_index = self.drawing_palette_index(color);
         if let Some(ti) = self.doc.layers[self.layer].tileset {
+            let p = self
+                .studio
+                .seamless
+                .position((self.doc.width, self.doc.height), p)
+                .unwrap_or(p);
             let t = &self.doc.tilesets[ti];
             let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
                 self.status = "Point is outside this tilemap cel".into();
@@ -2311,9 +2353,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "grid" => self.grid = !self.grid,
             "onion" => self.onion = !self.onion,
             "fit" => {
-                self.zoom = (480. / self.doc.width.max(self.doc.height) as f32)
-                    .floor()
-                    .clamp(0.02, 32.);
+                self.zoom = if self.studio.seamless == WrapAxes::NONE {
+                    (480. / self.doc.width.max(self.doc.height) as f32)
+                        .floor()
+                        .clamp(0.02, 32.)
+                } else {
+                    self.canvas_fit_scale()
+                };
                 self.pan = Vec2::ZERO;
             }
             "properties" => self.properties_open = true,
@@ -2697,7 +2743,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Toggle pixel grid", "grid"),
                         ("Toggle onion skin", "onion"),
                         ("Fit canvas", "fit"),
-                        ("Seamless preview", "seamless"),
+                        ("Seamless canvas · both axes", "seamless"),
+                        ("Seamless canvas · horizontal", "seamless-horizontal"),
+                        ("Seamless canvas · vertical", "seamless-vertical"),
                     ],
                 ),
                 ("Extensions", vec![("Extensions & scripts…", "extensions")]),
@@ -2786,7 +2834,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             "grid" => self.grid,
                             "onion" => self.onion,
                             "play" => self.playing,
-                            "seamless" => self.studio.seamless,
+                            "seamless" => self.studio.seamless == WrapAxes::BOTH,
+                            "seamless-horizontal" => self.studio.seamless == WrapAxes::HORIZONTAL,
+                            "seamless-vertical" => self.studio.seamless == WrapAxes::VERTICAL,
                             _ => false,
                         };
                         let icon = if a == "play" && self.playing {
@@ -4179,12 +4229,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let l = self.layer;
         let f = self.frame;
         let (x0, y0, x1, y1) = (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
+        let axes = self.drawing_axes();
         match self.tool {
-            Tool::Line => self.doc.line(l, f, a, b, c, self.brush),
+            Tool::Line => self.doc.line_on_axes((l, f), a, b, c, self.brush, axes),
             Tool::Rect => {
                 if self.filled {
                     for y in y0..=y1 {
-                        self.doc.line(l, f, (x0, y), (x1, y), c, 1)
+                        self.doc.line_on_axes((l, f), (x0, y), (x1, y), c, 1, axes)
                     }
                 } else {
                     for (a, b) in [
@@ -4193,11 +4244,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ((x1, y1), (x0, y1)),
                         ((x0, y1), (x0, y0)),
                     ] {
-                        self.doc.line(l, f, a, b, c, self.brush)
+                        self.doc.line_on_axes((l, f), a, b, c, self.brush, axes)
                     }
                 }
             }
-            Tool::Ellipse => self.doc.ellipse(l, f, a, b, c, self.filled, self.brush),
+            Tool::Ellipse => {
+                self.doc
+                    .ellipse_on_axes((l, f), (a, b), c, self.filled, self.brush, axes)
+            }
             _ => {}
         }
         if let Some(before) = before {
@@ -4263,6 +4317,51 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             };
         }
         scale.clamp(0.02 * points, (40. * points).floor().max(1.)) / points
+    }
+
+    fn paint_canvas_checker(&self, painter: &egui::Painter, board: Rect, r: Rect) {
+        // Draw only visible checker squares, including at high zoom and while panning.
+        let check = self.power.checker_size();
+        let check_size = check * self.zoom;
+        let cols = (self.doc.width as f32 / check).ceil() as i32;
+        let rows = (self.doc.height as f32 / check).ceil() as i32;
+        painter.rect_filled(
+            board,
+            0,
+            self.power.checker_color(0).unwrap_or_else(|| {
+                if self.dark_mode {
+                    Color32::from_rgb(82, 83, 94)
+                } else {
+                    Color32::from_rgb(80, 81, 93)
+                }
+            }),
+        );
+        for y in (((r.min.y - board.min.y) / check_size).floor() as i32).clamp(0, rows)
+            ..(((r.max.y - board.min.y) / check_size).ceil() as i32).clamp(0, rows)
+        {
+            for x in (((r.min.x - board.min.x) / check_size).floor() as i32).clamp(0, cols)
+                ..(((r.max.x - board.min.x) / check_size).ceil() as i32).clamp(0, cols)
+            {
+                if (x + y) % 2 == 0 {
+                    let q = Rect::from_min_size(
+                        board.min + Vec2::new(x as f32 * check_size, y as f32 * check_size),
+                        Vec2::splat(check_size),
+                    )
+                    .intersect(board);
+                    painter.rect_filled(
+                        q,
+                        0,
+                        self.power.checker_color(1).unwrap_or_else(|| {
+                            if self.dark_mode {
+                                Color32::from_rgb(64, 65, 76)
+                            } else {
+                                Color32::from_rgb(63, 64, 76)
+                            }
+                        }),
+                    );
+                }
+            }
+        }
     }
 
     fn canvas(&mut self, ui: &mut egui::Ui) {
@@ -4346,48 +4445,25 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if view_changed || self.pan != previous_pan || self.zoom != previous_zoom {
             ctx.request_repaint();
         }
-        // Draw only visible checker squares, including at high zoom and while panning.
-        let check = self.power.checker_size();
-        let check_size = check * self.zoom;
-        let cols = (self.doc.width as f32 / check).ceil() as i32;
-        let rows = (self.doc.height as f32 / check).ceil() as i32;
-        painter.rect_filled(
-            board,
-            0,
-            self.power.checker_color(0).unwrap_or_else(|| {
-                if self.dark_mode {
-                    Color32::from_rgb(82, 83, 94)
-                } else {
-                    Color32::from_rgb(80, 81, 93)
-                }
-            }),
-        );
-        for y in (((r.min.y - board.min.y) / check_size).floor() as i32).clamp(0, rows)
-            ..(((r.max.y - board.min.y) / check_size).ceil() as i32).clamp(0, rows)
-        {
-            for x in (((r.min.x - board.min.x) / check_size).floor() as i32).clamp(0, cols)
-                ..(((r.max.x - board.min.x) / check_size).ceil() as i32).clamp(0, cols)
-            {
-                if (x + y) % 2 == 0 {
-                    let q = Rect::from_min_size(
-                        board.min + Vec2::new(x as f32 * check_size, y as f32 * check_size),
-                        Vec2::splat(check_size),
-                    )
-                    .intersect(board);
-                    painter.rect_filled(
-                        q,
-                        0,
-                        self.power.checker_color(1).unwrap_or_else(|| {
-                            if self.dark_mode {
-                                Color32::from_rgb(64, 65, 76)
-                            } else {
-                                Color32::from_rgb(63, 64, 76)
-                            }
-                        }),
-                    );
+        let repeats = self.studio.seamless;
+        let rx = i32::from(repeats.horizontal);
+        let ry = i32::from(repeats.vertical);
+        let mut copies = [board; 9];
+        let mut count = 0;
+        for y in -ry..=ry {
+            for x in -rx..=rx {
+                let copy = board.translate(Vec2::new(
+                    x as f32 * board.width(),
+                    y as f32 * board.height(),
+                ));
+                if copy.intersects(r) {
+                    self.paint_canvas_checker(&painter, copy, r);
+                    copies[count] = copy;
+                    count += 1;
                 }
             }
         }
+        let copies = &copies[..count];
         self.draw_references_pass(ui, board, true);
         if self.onion && !self.playing {
             let pixels = pixelcraft::productivity::onion_pixels(
@@ -4410,12 +4486,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         let rotation_preview = self.rotation_preview(ui, board);
         if let Some(t) = rotation_preview.as_ref().or(self.texture.as_ref()) {
-            painter.image(
-                t.id(),
-                board,
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
-                Color32::WHITE,
-            );
+            for &copy in copies {
+                painter.image(
+                    t.id(),
+                    copy,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
+                    Color32::WHITE,
+                );
+            }
         }
         self.draw_references(ui, board);
         self.paint_tile_indices(&painter, board);
@@ -4448,7 +4526,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ((p.y - board.min.y) / self.zoom).floor() as i32,
             )
         });
-        self.hover = pos.filter(|(x, y)| self.doc.index(*x, *y).is_some());
+        let w = self.doc.width as i32;
+        let h = self.doc.height as i32;
+        let limits = (-rx * w, (rx + 1) * w - 1, -ry * h, (ry + 1) * h - 1);
+        let on_canvas = pos.filter(|&(x, y)| {
+            (limits.0..=limits.1).contains(&x) && (limits.2..=limits.3).contains(&y)
+        });
+        self.hover = on_canvas.and_then(|p| repeats.position((self.doc.width, self.doc.height), p));
+        let draws = matches!(
+            self.tool,
+            Tool::Pencil | Tool::Eraser | Tool::Line | Tool::Rect | Tool::Ellipse
+        );
+        let accepts_copies = draws
+            || matches!(self.tool, Tool::Fill | Tool::Wand | Tool::Picker)
+            || ctx.input(|i| i.modifiers.alt);
         let pressed = ctx.input(|i| {
             i.pointer.button_pressed(egui::PointerButton::Primary)
                 || i.pointer.button_pressed(egui::PointerButton::Secondary)
@@ -4457,15 +4548,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if can_edit
             && pressed
             && response.hovered()
-            && self.hover.is_some()
+            && let Some(raw) = on_canvas
+            && (accepts_copies || self.doc.index(raw.0, raw.1).is_some())
             && self.tool != Tool::Hand
         {
             self.playing = false;
             self.playback_waiting_for_frame = false;
-            let p = self.hover.unwrap();
+            let p = if draws { raw } else { self.hover.unwrap() };
             self.stroke_color = self.fg;
             let sample_color = ctx.input(|i| i.modifiers.alt);
             if sample_color || self.tool == Tool::Picker {
+                let p = self.hover.unwrap();
                 if sample_color || self.tile_pixel_mode.is_some() || !self.pick_tile(p) {
                     self.set_active_color(self.sample_color(p.0, p.1));
                 }
@@ -4530,14 +4623,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         if can_edit && down {
             if let (Some(a), Some(mut b)) = (self.start, pos) {
-                if !self.doc.wraparound
-                    || !matches!(
-                        self.tool,
-                        Tool::Pencil | Tool::Eraser | Tool::Line | Tool::Rect | Tool::Ellipse
-                    )
-                {
-                    b.0 = b.0.clamp(0, self.doc.width as i32 - 1);
-                    b.1 = b.1.clamp(0, self.doc.height as i32 - 1);
+                if draws && repeats != WrapAxes::NONE {
+                    b.0 = b.0.clamp(limits.0, limits.1);
+                    b.1 = b.1.clamp(limits.2, limits.3);
+                } else if !draws || !self.doc.wraparound {
+                    b.0 = b.0.clamp(0, w - 1);
+                    b.1 = b.1.clamp(0, h - 1);
                 }
                 match self.tool {
                     Tool::Lasso => {
@@ -4659,7 +4750,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 egui::StrokeKind::Outside,
             );
         }
-        if let Some((x, y)) = self.hover
+        if let Some((x, y)) = on_canvas
             && matches!(self.tool, Tool::Pencil | Tool::Eraser)
         {
             let size = self.brush as f32 * self.zoom;
@@ -6328,6 +6419,95 @@ mod tests {
         assert!(!a.dirty());
         assert!(a.undo.is_empty());
     }
+    #[test]
+    fn seamless_fill_and_brush_footprints_honor_the_view_axes() {
+        let mut a = app();
+        a.replace(Document::new(3, 3), None);
+        let barrier = [29, 80, 114, 255];
+        let paint = [220, 50, 80, 255];
+        for index in [1, 3, 4, 5, 7, 8] {
+            a.doc.set_pixel(0, 0, index, barrier);
+        }
+        a.doc.wraparound = true;
+        a.action("seamless-horizontal");
+        assert_eq!(a.studio.seamless, WrapAxes::HORIZONTAL);
+        a.power_fill((0, 0), paint);
+        assert_eq!(a.doc.layers[0].cels[0][2], paint);
+        assert_eq!(a.doc.layers[0].cels[0][6], CLEAR);
+        a.action("seamless-vertical");
+        assert_eq!(a.studio.seamless, WrapAxes::VERTICAL);
+        a.doc.set_pixel(0, 0, 0, CLEAR);
+        a.power_fill((0, 0), paint);
+        assert_eq!(a.doc.layers[0].cels[0][6], paint);
+        assert!(a.doc.wraparound);
+
+        a.doc = Document::new(4, 4);
+        a.studio.seamless = WrapAxes::HORIZONTAL;
+        a.doc.brush_shape = BrushShape::Square;
+        a.brush = 3;
+        a.paint_at((0, 0), paint);
+        let pixels = &a.doc.layers[0].cels[0];
+        assert_eq!(pixels[3], paint);
+        assert_eq!(pixels[12], CLEAR);
+        a.action("seamless");
+        a.paint_at((0, 0), paint);
+        assert_eq!(a.doc.layers[0].cels[0][15], paint);
+        a.action("seamless");
+        assert_eq!(a.studio.seamless, WrapAxes::NONE);
+    }
+
+    #[test]
+    fn seamless_pointer_strokes_cross_only_selected_axes_and_undo_together() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(4, 4), None);
+        a.zoom = 10.;
+        a.studio.seamless = WrapAxes::HORIZONTAL;
+        let paint = [180, 25, 63, 255];
+        a.fg = paint;
+        let draw = |a: &mut PixelCraft, events| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| a.canvas(ui));
+            });
+            output.textures_delta.clear();
+        };
+        draw(&mut a, vec![]);
+        let drag = |a: &mut PixelCraft, from, to| {
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            draw(a, vec![egui::Event::PointerMoved(from), button(from, true)]);
+            draw(a, vec![egui::Event::PointerMoved(to)]);
+            draw(a, vec![button(to, false)]);
+        };
+        // Begin in the left copy and end in the center sprite.
+        drag(&mut a, Pos2::new(275., 295.), Pos2::new(285., 295.));
+        let canvas = &a.doc.layers[0].cels[0];
+        assert_eq!(&canvas.to_vec()[4..8], &[paint, CLEAR, CLEAR, paint]);
+        assert_eq!(a.undo.len(), 1);
+        // The horizontal view has no canvas above the sprite.
+        drag(&mut a, Pos2::new(295., 275.), Pos2::new(295., 275.));
+        assert_eq!(a.undo.len(), 1);
+        a.undo();
+        assert!(a.doc.composite(0).iter().all(|&p| p == CLEAR));
+        a.studio.seamless = WrapAxes::VERTICAL;
+        drag(&mut a, Pos2::new(295., 275.), Pos2::new(295., 285.));
+        let canvas = &a.doc.layers[0].cels[0];
+        assert_eq!(canvas[1], paint);
+        assert_eq!(canvas[13], paint);
+        assert_eq!(a.undo.len(), 1);
+    }
+
     #[test]
     fn actual_pointer_stroke_changes_canvas_and_is_one_undo_step() {
         let ctx = egui::Context::default();

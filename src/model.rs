@@ -22,6 +22,51 @@ pub const MAX_DIMENSION: usize = 16384;
 pub const MAX_PIXELS: usize = 64_000_000;
 pub const MAX_DOCUMENT_PIXELS: usize = 128_000_000;
 pub(crate) const MAX_CEL_SLOTS: usize = 1_000_000;
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WrapAxes {
+    pub horizontal: bool,
+    pub vertical: bool,
+}
+
+impl WrapAxes {
+    pub const NONE: Self = Self {
+        horizontal: false,
+        vertical: false,
+    };
+    pub const HORIZONTAL: Self = Self {
+        horizontal: true,
+        vertical: false,
+    };
+    pub const VERTICAL: Self = Self {
+        horizontal: false,
+        vertical: true,
+    };
+    pub const BOTH: Self = Self {
+        horizontal: true,
+        vertical: true,
+    };
+
+    pub fn position(self, size: (usize, usize), (mut x, mut y): (i32, i32)) -> Option<(i32, i32)> {
+        let (width, height) = (i32::try_from(size.0).ok()?, i32::try_from(size.1).ok()?);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        if self.horizontal {
+            x = x.rem_euclid(width);
+        }
+        if self.vertical {
+            y = y.rem_euclid(height);
+        }
+        ((0..width).contains(&x) && (0..height).contains(&y)).then_some((x, y))
+    }
+}
+
+impl From<bool> for WrapAxes {
+    fn from(value: bool) -> Self {
+        if value { Self::BOTH } else { Self::NONE }
+    }
+}
+
 pub(crate) fn line_pixels<E>(
     a: (i32, i32),
     b: (i32, i32),
@@ -2270,6 +2315,17 @@ impl Document {
         true
     }
     pub fn stamp(&mut self, l: usize, f: usize, x: i32, y: i32, c: Pixel, size: i32) {
+        self.stamp_on_axes((l, f), (x, y), c, size, self.wraparound.into());
+    }
+
+    fn stamp_on_axes(
+        &mut self,
+        (l, f): (usize, usize),
+        (x, y): (i32, i32),
+        c: Pixel,
+        size: i32,
+        axes: WrapAxes,
+    ) {
         if !self.editable(l) || self.layers[l].tileset.is_some() {
             return;
         }
@@ -2289,15 +2345,27 @@ impl Document {
                     BrushShape::Horizontal => dy == 0,
                     BrushShape::Vertical => dx == 0,
                 };
-                if accept && let Some(i) = self.drawing_position(x + dx, y + dy) {
+                if accept && let Some(i) = self.position_on_axes(x + dx, y + dy, axes) {
                     self.draw_pixel(l, f, i, c, ci);
                 }
             }
         }
     }
     pub fn line(&mut self, l: usize, f: usize, a: (i32, i32), b: (i32, i32), c: Pixel, size: i32) {
+        self.line_on_axes((l, f), a, b, c, size, self.wraparound.into());
+    }
+
+    pub fn line_on_axes(
+        &mut self,
+        cel: (usize, usize),
+        a: (i32, i32),
+        b: (i32, i32),
+        c: Pixel,
+        size: i32,
+        axes: WrapAxes,
+    ) {
         let _: Result<(), std::convert::Infallible> = line_pixels(a, b, |(x, y)| {
-            self.stamp(l, f, x, y, c, size);
+            self.stamp_on_axes(cel, (x, y), c, size, axes);
             Ok(())
         });
     }
@@ -2314,6 +2382,18 @@ impl Document {
         c: Pixel,
         filled: bool,
         size: i32,
+    ) {
+        self.ellipse_on_axes((l, f), (a, b), c, filled, size, self.wraparound.into());
+    }
+
+    pub fn ellipse_on_axes(
+        &mut self,
+        cel: (usize, usize),
+        (a, b): ((i32, i32), (i32, i32)),
+        c: Pixel,
+        filled: bool,
+        size: i32,
+        axes: WrapAxes,
     ) {
         let (mut x0, mut y0, mut x1, mut y1) = (
             a.0.min(b.0) as i64,
@@ -2333,10 +2413,17 @@ impl Document {
         b1 = 8 * b * b;
         let mut draw = |lx: i64, rx: i64, y: i64| {
             if filled {
-                self.line(l, f, (lx as i32, y as i32), (rx as i32, y as i32), c, 1)
+                self.line_on_axes(
+                    cel,
+                    (lx as i32, y as i32),
+                    (rx as i32, y as i32),
+                    c,
+                    1,
+                    axes,
+                )
             } else {
-                self.stamp(l, f, lx as i32, y as i32, c, size);
-                self.stamp(l, f, rx as i32, y as i32, c, size);
+                self.stamp_on_axes(cel, (lx as i32, y as i32), c, size, axes);
+                self.stamp_on_axes(cel, (rx as i32, y as i32), c, size, axes);
             }
         };
         loop {
@@ -2367,14 +2454,12 @@ impl Document {
         }
     }
     pub fn drawing_position(&self, x: i32, y: i32) -> Option<usize> {
-        if self.wraparound {
-            self.index(
-                x.rem_euclid(self.width as i32),
-                y.rem_euclid(self.height as i32),
-            )
-        } else {
-            self.index(x, y)
-        }
+        self.position_on_axes(x, y, self.wraparound.into())
+    }
+
+    pub fn position_on_axes(&self, x: i32, y: i32, axes: WrapAxes) -> Option<usize> {
+        let (x, y) = axes.position((self.width, self.height), (x, y))?;
+        Some(y as usize * self.width + x as usize)
     }
     pub fn fill(&mut self, l: usize, f: usize, x: i32, y: i32, c: Pixel) {
         if !self.editable(l) || self.layers[l].tileset.is_some() {

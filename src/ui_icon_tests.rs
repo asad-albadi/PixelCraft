@@ -1326,14 +1326,14 @@ fn seamless_preview_repeats_both_axes_and_png_export_writes_one_tile() {
         [255, 0, 255, 255],
         [0, 255, 255, 255],
     ];
-    app.doc = Document::new(3, 2);
+    app.replace(Document::new(3, 2), None);
     app.doc.add_frame(0, false);
     for (index, &color) in tile.iter().enumerate() {
         app.doc.set_pixel(0, 1, index, color);
     }
     app.frame = 1;
     app.action("seamless");
-    assert!(app.studio.seamless);
+    assert_eq!(app.studio.seamless, WrapAxes::BOTH);
 
     let size = Vec2::new(1180., 840.);
     let mut texture = egui::TextureId::default();
@@ -1342,7 +1342,7 @@ fn seamless_preview_repeats_both_axes_and_png_export_writes_one_tile() {
     for _ in 0..4 {
         let mut output = ctx.run_ui(input(size, 1., vec![]), |ui| {
             texture = app.frame_texture(ui.ctx(), app.frame).id();
-            app.studio_dialogs(ui.ctx());
+            egui::CentralPanel::default().show(ui, |ui| app.canvas(ui));
         });
         if let Some(deltas) = output.textures_delta.set.get(&texture) {
             for delta in deltas {
@@ -1356,16 +1356,18 @@ fn seamless_preview_repeats_both_axes_and_png_export_writes_one_tile() {
             .shapes
             .iter()
             .filter_map(|s| {
-                let egui::Shape::Rect(rect) = &s.shape else {
+                let egui::Shape::Mesh(mesh) = &s.shape else {
                     return None;
                 };
-                let brush = rect.brush.as_ref()?;
-                if brush.fill_texture_id != texture {
+                if mesh.texture_id != texture {
                     return None;
                 }
-                assert!(s.clip_rect.contains_rect(rect.rect));
-                assert_eq!(brush.uv, Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)));
-                Some(rect.rect)
+                let bounds = mesh.calc_bounds();
+                assert!(s.clip_rect.contains_rect(bounds));
+                assert!(mesh.vertices.iter().all(|vertex| {
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)).contains(vertex.uv)
+                }));
+                Some(bounds)
             })
             .collect();
     }
@@ -1403,16 +1405,14 @@ fn seamless_preview_repeats_both_axes_and_png_export_writes_one_tile() {
     }
     let mut output = ctx.run_ui(input(size, 1., vec![]), |ui| {
         texture = app.frame_texture(ui.ctx(), app.frame).id();
-        app.studio_dialogs(ui.ctx());
+        egui::CentralPanel::default().show(ui, |ui| app.canvas(ui));
     });
     let egui::ImageData::Color(image) = &output.textures_delta.set[&texture][0].image;
     assert_eq!(image.pixels, color_image(&fixed_tile, 3, 2).pixels);
     let refreshed_copies = output.shapes.iter().filter(|s| {
         matches!(
             &s.shape,
-            egui::Shape::Rect(rect) if rect.brush.as_ref().is_some_and(
-                |brush| brush.fill_texture_id == texture
-            )
+            egui::Shape::Mesh(mesh) if mesh.texture_id == texture
         )
     });
     assert_eq!(refreshed_copies.count(), 9);
@@ -1423,25 +1423,24 @@ fn seamless_preview_repeats_both_axes_and_png_export_writes_one_tile() {
 fn seamless_preview_keeps_tall_tile_rows_visible() {
     let ctx = egui::Context::default();
     let mut app = PixelCraft::with_context(&ctx, None);
-    app.doc = Document::new(4, 40);
-    app.action("seamless");
-
+    app.replace(Document::new(4, 40), None);
     let size = Vec2::new(800., 480.);
+    app.canvas_view_size = Some(size - Vec2::splat(16.));
+    app.action("seamless");
     let mut visible_tiles = 0;
     for _ in 0..4 {
         let mut texture = egui::TextureId::default();
         let mut output = ctx.run_ui(input(size, 1., vec![]), |ui| {
             texture = app.frame_texture(ui.ctx(), app.frame).id();
-            app.studio_dialogs(ui.ctx());
+            egui::CentralPanel::default().show(ui, |ui| app.canvas(ui));
         });
         output.textures_delta.clear();
         visible_tiles = output
             .shapes
             .iter()
             .filter(|shape| {
-                matches!(&shape.shape, egui::Shape::Rect(rect)
-                    if rect.brush.as_ref().is_some_and(|brush| brush.fill_texture_id == texture)
-                        && shape.clip_rect.contains_rect(rect.rect))
+                matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                    if mesh.texture_id == texture && shape.clip_rect.contains_rect(mesh.calc_bounds()))
             })
             .count();
     }
