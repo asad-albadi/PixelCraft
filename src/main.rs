@@ -899,7 +899,7 @@ impl PixelCraft {
     }
 
     fn compose_frame_image(doc: &Document, frame: usize) -> (egui::ColorImage, Option<String>) {
-        let pixels = doc.composite(frame);
+        let pixels = doc.composite_view(frame);
         let (pixels, error) = if doc.color_profile.is_empty() {
             (pixels, None)
         } else {

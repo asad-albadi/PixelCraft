@@ -715,6 +715,9 @@ pub struct CelMeta {
     pub tilemap: Option<TilemapGeometry>,
     #[serde(default)]
     pub bounds: Option<[i32; 4]>,
+    /// ASE reference placement in signed 16.16 sprite coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_bounds: Option<[i32; 4]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork_link: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -730,6 +733,7 @@ impl Default for CelMeta {
             indices: None,
             tilemap: None,
             bounds: None,
+            reference_bounds: None,
             artwork_link: None,
             keyframe: None,
         }
@@ -919,6 +923,10 @@ pub struct Layer {
     pub adjustment: Option<Adjustment>,
 }
 impl Layer {
+    pub fn is_ase_reference(&self) -> bool {
+        self.ase_flags & 64 != 0 && !self.group && self.tileset.is_none()
+    }
+
     fn prune_cel_links(&mut self) {
         let mut counts = std::collections::HashMap::new();
         for link in self.cel_meta.iter().filter_map(|cel| cel.artwork_link) {
@@ -2738,6 +2746,11 @@ impl Document {
                         && key == other.sampled_cel_key(layer, frame)
                         && left.opacity == right.opacity
                         && left.z_index == right.z_index
+                        && a.is_ase_reference() == b.is_ase_reference()
+                        && (!a.is_ase_reference()
+                            || (left.reference_bounds == right.reference_bounds
+                                && left.bounds == right.bounds
+                                && left.outside == right.outside))
                         && match (a.tileset, b.tileset) {
                             (None, None) => {
                                 a.cels[frame] == b.cels[frame]
@@ -2754,7 +2767,59 @@ impl Document {
     }
 
     pub fn composite(&self, f: usize) -> Vec<Pixel> {
-        self.composite_group(f, None, 0, None)
+        self.composite_group(f, None, 0, None, false)
+    }
+    pub fn composite_view(&self, f: usize) -> Vec<Pixel> {
+        self.composite_group(f, None, 0, None, true)
+    }
+    fn visit_scaled_reference(
+        &self,
+        layer: usize,
+        frame: usize,
+        [dx, dy]: [i32; 2],
+        mut visit: impl FnMut(Option<usize>, usize, Pixel),
+    ) {
+        const FIXED: i64 = 65_536;
+        const HALF: i64 = FIXED / 2;
+        let layer = &self.layers[layer];
+        let meta = &layer.cel_meta[frame];
+        let Some([x, y, w, h]) = meta.reference_bounds.map(|b| b.map(i64::from)) else {
+            return;
+        };
+        let [sx, sy, sw, sh] = meta
+            .bounds
+            .unwrap_or([0, 0, self.width as i32, self.height as i32]);
+        if w <= 0 || h <= 0 || sw <= 0 || sh <= 0 {
+            return;
+        }
+        let outside: std::collections::HashMap<_, _> = meta
+            .outside
+            .iter()
+            .map(|pixel| ((pixel.x, pixel.y), pixel.color))
+            .collect();
+        let x = x + i64::from(dx) * FIXED;
+        let y = y + i64::from(dy) * FIXED;
+        let edge = |value: i64, limit: usize| {
+            (value - HALF + FIXED - 1)
+                .div_euclid(FIXED)
+                .clamp(0, limit as i64) as usize
+        };
+        let left = edge(x, self.width);
+        let right = edge(x + w, self.width);
+        let top = edge(y, self.height);
+        let bottom = edge(y + h, self.height);
+        for row in top..bottom {
+            let py = sy + ((row as i64 * FIXED + HALF - y) * i64::from(sh) / h) as i32;
+            for col in left..right {
+                let px = sx + ((col as i64 * FIXED + HALF - x) * i64::from(sw) / w) as i32;
+                let source = self.index(px, py);
+                let pixel = source.map_or_else(
+                    || outside.get(&(px, py)).copied().unwrap_or(CLEAR),
+                    |index| layer.cels[frame][index],
+                );
+                visit(source, row * self.width + col, pixel);
+            }
+        }
     }
     pub(crate) fn composite_layer_for_export(&self, frame: usize, layer: usize) -> Vec<Pixel> {
         let mut include = vec![false; self.layers.len()];
@@ -2763,7 +2828,7 @@ impl Document {
             include[layer] = true;
             index = self.layers[layer].parent;
         }
-        self.composite_group(frame, None, 0, Some(&include))
+        self.composite_group(frame, None, 0, Some(&include), false)
     }
     fn composite_group(
         &self,
@@ -2771,9 +2836,10 @@ impl Document {
         parent: Option<usize>,
         depth: usize,
         include: Option<&[bool]>,
+        show_references: bool,
     ) -> Vec<Pixel> {
         let mut out = vec![CLEAR; self.width * self.height];
-        self.composite_into(f, parent, depth, include, &mut out);
+        self.composite_into(f, parent, depth, include, show_references, &mut out);
         out
     }
     fn composite_into(
@@ -2782,6 +2848,7 @@ impl Document {
         parent: Option<usize>,
         depth: usize,
         include: Option<&[bool]>,
+        show_references: bool,
         out: &mut Vec<Pixel>,
     ) {
         if depth > self.layers.len() {
@@ -2792,7 +2859,10 @@ impl Document {
             .iter()
             .enumerate()
             .filter(|(index, layer)| {
-                layer.parent == parent && layer.visible && include.is_none_or(|flags| flags[*index])
+                layer.parent == parent
+                    && layer.visible
+                    && (show_references || !layer.is_ase_reference())
+                    && include.is_none_or(|flags| flags[*index])
             })
             .map(|(i, l)| (i as i32 + l.cel_meta[f].z_index as i32, i))
             .collect();
@@ -2803,7 +2873,7 @@ impl Document {
             let key = self.sampled_cel_key(i, f);
             if l.group && !self.compose_groups && l.mask.is_none() && key == CelKeyframe::default()
             {
-                self.composite_into(f, Some(i), depth + 1, include, out);
+                self.composite_into(f, Some(i), depth + 1, include, show_references, out);
                 transparent_rgb_possible = out.iter().any(|p| p[3] == 0 && *p != CLEAR);
                 continue;
             }
@@ -2823,6 +2893,15 @@ impl Document {
                     ((u16::from(opacity) * u16::from(mask[index][3]) + 127) / 255) as u8
                 })
             };
+            if l.is_ase_reference() && l.cel_meta[f].reference_bounds.is_some() {
+                self.visit_scaled_reference(i, f, [key.x, key.y], |source, dest, pixel| {
+                    let alpha = source.map_or(opacity, coverage);
+                    if pixel[3] != 0 && alpha != 0 {
+                        out[dest] = blend(out[dest], pixel, alpha, l.blend);
+                    }
+                });
+                continue;
+            }
             if let Some(adjustment) = &l.adjustment {
                 for (index, pixel) in out
                     .iter_mut()
@@ -2890,7 +2969,7 @@ impl Document {
             }
             let rendered;
             let pixels = if l.group {
-                rendered = self.composite_group(f, Some(i), depth + 1, include);
+                rendered = self.composite_group(f, Some(i), depth + 1, include, show_references);
                 &rendered
             } else if l.tileset.is_some() {
                 rendered = self.layer_pixels(i, f);

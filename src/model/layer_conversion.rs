@@ -80,6 +80,7 @@ impl Document {
 
         let target = &mut self.layers[layer];
         target.background = true;
+        target.ase_flags &= !64;
         target.visible = true;
         target.parent = None;
         target.opacity = 255;
@@ -88,7 +89,7 @@ impl Document {
         for frame in 0..self.durations.len() {
             reserve(&mut budget, area)?;
             let mut pixels = vec![fill; area];
-            scene.composite_into(frame, None, 0, None, &mut pixels);
+            scene.composite_into(frame, None, 0, None, true, &mut pixels);
             target.cels[frame] = pixels.into();
             let meta = &mut target.cel_meta[frame];
             meta.indices = None;
@@ -97,6 +98,7 @@ impl Document {
             meta.keyframe = None;
             meta.artwork_link = None;
             meta.bounds = None;
+            meta.reference_bounds = None;
         }
         self.remap_converted_indices(layer)?;
         self.layers[..=layer].rotate_right(1);

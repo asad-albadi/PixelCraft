@@ -105,6 +105,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 complete. PSD and PSB import now uses the embedded merged image for visible clipping and recognized adjustment layers while preserving available raster layers in an editable group. The importer honors the version resource when Photoshop declares that no real merge was saved. Four external PSD/PSB clipping and adjustment fixtures matched reference alpha and visible pixels exactly. A fifth opened its raster layers without a merged image. Formatting, strict Clippy, and 511 Windows all-target tests passed. The format checklist covers every requested importer and exporter. Native editing of Photoshop-only effects, support for additional Photoshop color modes, and 32-bit ICC conversion remain outside the implemented raster interchange.
 
+- Item 36 complete. ASE reference cels retain their signed 16.16 position and size in native project state and write the precise-bounds chunk back to ASE. Older projects containing the opaque chunk are migrated on load. The editor compositor and reference-enabled eyedropper sample the scaled artwork at sprite-pixel centers. Raster exports omit reference layers. The regression verifies negative source coordinates, fractional placement, linked-frame geometry, both save formats, legacy metadata migration, and frame-cache invalidation. Formatting, strict Clippy, and 512 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -151,7 +153,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
 - [x] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
 - [x] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
-- [ ] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.
+- [x] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.
 - [ ] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.
 - [ ] **38. Apply imported pixel aspect ratios and grid defaults.** Use the stored values as editable sprite properties.
 - [ ] **39. Expand grid sheet import.** Add column-major order, optional trailing partial cells, and deriving cell dimensions from row and column counts.

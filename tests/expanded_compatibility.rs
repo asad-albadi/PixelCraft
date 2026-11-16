@@ -71,6 +71,79 @@ fn negative_subtile_origin_survives_save() {
         d.composite(0)
     );
 }
+
+#[test]
+fn ase_reference_cels_use_precise_bounds_without_exporting_as_artwork() {
+    let mut source = Document::new(6, 3);
+    let red = [210, 20, 30, 255];
+    let green = [35, 190, 20, 255];
+    source.layers[0].ase_flags |= 64;
+    source.layers[0].cel_meta[0].bounds = Some([-1, 0, 2, 1]);
+    source.layers[0].cel_meta[0].outside.push(OutsidePixel {
+        x: -1,
+        y: 0,
+        color: red,
+    });
+    source.layers[0].cels[0].set(0, green);
+    let mut data = 1u32.to_le_bytes().to_vec();
+    for v in [81_920i32, 49_152, 4 * 65_536, 98_304] {
+        data.extend(v.to_le_bytes()); // Destination (1.25, .75), size (4, 1.5).
+    }
+    data.extend([0; 16]);
+    source.metadata.push(MetadataChunk {
+        frame: 0,
+        kind: 0x2006,
+        data,
+        owner: "cel:0".into(),
+    });
+    source.add_frame(0, true);
+    source.layers[0].cel_meta[0].artwork_link = Some(0);
+    source.layers[0].cel_meta[1].artwork_link = Some(0);
+    let mut second = source.metadata[0].clone();
+    second.frame = 1;
+    second.data[4..8].copy_from_slice(&(-16_384i32).to_le_bytes());
+    source.metadata.retain(|chunk| chunk.frame != 1);
+    source.metadata.push(second);
+
+    let loaded = decode_ase(&encode_ase(&source).unwrap()).unwrap();
+    let legacy = decode_project(&encode_project(&source).unwrap()).unwrap();
+    let native = decode_project(&encode_project(&loaded).unwrap()).unwrap();
+    let ase = decode_ase(&encode_ase(&loaded).unwrap()).unwrap();
+    for d in [loaded, legacy, native, ase] {
+        let bounds = [81_920, 49_152, 262_144, 98_304];
+        assert_eq!(d.layers[0].cel_meta[0].reference_bounds, Some(bounds));
+        assert_eq!(
+            d.layers[0].cel_meta[1].reference_bounds.unwrap()[0],
+            -16_384
+        );
+        assert!(d.layers[0].cel_meta[1].artwork_link.is_some());
+        let sample = |x, y| pixelcraft::productivity::sample_canvas(&d, 0, x, y, true);
+        assert_eq!(sample(1, 1), red);
+        assert_eq!(sample(2, 1), red);
+        assert_eq!(sample(3, 1), green);
+        assert_eq!(sample(4, 1), green);
+        for (x, y) in [(0, 1), (5, 1), (2, 0), (2, 2)] {
+            assert_eq!(sample(x, y), CLEAR);
+        }
+        assert_eq!(d.composite(0), vec![CLEAR; 18]);
+        assert_eq!(
+            d.composite_view(1)[6..12],
+            [red, red, green, green, CLEAR, CLEAR]
+        );
+        let mut moved = d.clone();
+        moved.layers[0].cel_meta[0]
+            .reference_bounds
+            .as_mut()
+            .unwrap()[0] += 65_536;
+        assert!(!d.same_frame_pixels(&moved, 0));
+        assert!(d.same_frame_pixels(&moved, 1));
+        assert_eq!(
+            moved.composite_view(0)[6..12],
+            [CLEAR, CLEAR, red, red, green, green]
+        );
+    }
+}
+
 #[test]
 fn lua_selection_undo_color_and_commands() {
     let d = Document::new(3, 2);

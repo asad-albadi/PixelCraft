@@ -378,7 +378,7 @@ pub fn onion_pixels(d: &Document, f: usize, o: &OnionOptions) -> Vec<Pixel> {
             }
         }
     }
-    for (p, c) in out.iter_mut().zip(d.composite(f)) {
+    for (p, c) in out.iter_mut().zip(d.composite_view(f)) {
         *p = over(*p, c, 255);
     }
     out
@@ -952,7 +952,13 @@ pub(crate) fn expand_atlas_inputs_with_path_check(
 
 /// Sample the rendered reference stack, excluding checkerboard and onion skin.
 pub fn sample_canvas(d: &Document, frame: usize, x: i32, y: i32, references: bool) -> Pixel {
-    let artwork = d.index(x, y).map_or(CLEAR, |i| d.composite(frame)[i]);
+    let artwork = d.index(x, y).map_or(CLEAR, |i| {
+        if references {
+            d.composite_view(frame)[i]
+        } else {
+            d.composite(frame)[i]
+        }
+    });
     if !references {
         return artwork;
     }

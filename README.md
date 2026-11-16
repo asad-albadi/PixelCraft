@@ -197,6 +197,8 @@ External tilesets resolve relative to the project and are embedded on save. Spar
 
 The ASE implementation follows the [published format specification](https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md); no original program is required.
 
+Imported ASE reference layers use their precise per-cel position and size in the editor. The canvas samples them at sprite resolution, and the eyedropper includes them when reference sampling is enabled. ASE and PixelCraft saves preserve the original cel and its placement. Raster artwork exports omit reference layers.
+
 ## Independent extensions and storage
 
 **Extensions → Extensions & scripts** runs Lua scripts and installs `.lua`, `.zip`, `.aseprite-extension`, or folders containing `package.json`. Manifest contributions include `scripts`, `themes`, `palettes`, `keys`/`shortcuts`, `languages`, and `ditheringMatrices`, each with a `path`. Original theme directory paths beginning with `./` are accepted. Installed packages can be enabled, disabled and uninstalled here; registered plugin commands run in this interface. ZIP extraction supports stored/deflated entries, checks CRC and size, and rejects path traversal, symlinks and encryption. Installation is staged; existing packages are not overwritten.

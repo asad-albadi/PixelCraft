@@ -359,9 +359,52 @@ fn decode_project_payload(input: impl Read, legacy: bool) -> Result<Document, St
             }
         }
     };
+    restore_reference_bounds(&mut d);
     d.share_linked_rasters();
     d.validate()?;
     Ok(d)
+}
+
+fn restore_reference_bounds(doc: &mut Document) {
+    let layers = &mut doc.layers;
+    doc.metadata.retain(|chunk| {
+        if chunk.kind != 0x2006 || !u32at(&chunk.data, 0).is_ok_and(|flags| flags & 1 != 0) {
+            return true;
+        }
+        let Some(layer) = chunk
+            .owner
+            .strip_prefix("cel:")
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| layers.get_mut(index))
+            .filter(|layer| layer.is_ase_reference())
+        else {
+            return true;
+        };
+        let Some(meta) = layer.cel_meta.get_mut(chunk.frame) else {
+            return true;
+        };
+        let Some(data) = chunk.data.get(4..20) else {
+            return true;
+        };
+        let bounds =
+            std::array::from_fn(|i| i32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()));
+        if bounds[2] <= 0 || bounds[3] <= 0 {
+            return true;
+        }
+        meta.reference_bounds.get_or_insert(bounds);
+        false
+    });
+}
+
+fn append_cel_extra(chunks: &mut Vec<Vec<u8>>, meta: &CelMeta) {
+    if let Some(bounds) = meta.reference_bounds {
+        let mut data = 1u32.to_le_bytes().to_vec();
+        for value in bounds {
+            data.extend(value.to_le_bytes());
+        }
+        data.extend([0; 16]);
+        chunks.push(chunk(0x2006, data));
+    }
 }
 
 fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &str) {
@@ -666,6 +709,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             if l.tileset.is_none()
                 && m.artwork_link.is_none()
                 && m.bounds.is_none()
+                && m.reference_bounds.is_none()
                 && m.indices.is_none()
                 && m.outside.is_empty()
                 && l.cels[f].allocation_pixels() == 0
@@ -776,6 +820,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                 {
                     c.extend(compress(pixels.as_slice().as_flattened())?);
                     chunks.push(chunk(0x2005, c));
+                    append_cel_extra(&mut chunks, m);
                     append_metadata(&mut chunks, d, f, &format!("cel:{li}"));
                     continue;
                 }
@@ -832,6 +877,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                 c.extend(compress(&encoded)?);
             }
             chunks.push(chunk(0x2005, c));
+            append_cel_extra(&mut chunks, m);
             append_metadata(&mut chunks, d, f, &format!("cel:{li}"));
         }
         append_metadata(&mut chunks, d, f, "");
@@ -1451,6 +1497,7 @@ pub fn decode_ase_with_resolver(
         d.frame_palettes = palettes.clone();
     }
     d.palette = palettes[0].clone();
+    restore_reference_bounds(&mut d);
     d.share_linked_rasters();
     d.validate()?;
     Ok(d)
