@@ -30,7 +30,11 @@
 </p>
 
 <p align="center">
-  <img src="shots/pixelcraft.png" alt="PixelCraft's current interface at 1920×1080, showing sprite tabs, the compact Colors selector, dominant-color swatches, mushroom garden artwork, the bottom-left sprite preview, drawing tools and animation timeline" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft.png">
+    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-light.png">
+    <img src="shots/pixelcraft-light.png" alt="PixelCraft at 1920×1080 showing the mushroom garden sprite, color swatches, drawing tools, sprite preview, layers, and animation timeline" width="100%">
+  </picture>
   <br>
   <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
 </p>
