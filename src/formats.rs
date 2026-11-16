@@ -7,6 +7,7 @@ use std::{
 };
 mod pcx;
 mod raster;
+mod vector;
 pub(crate) use raster::{raster_format, validate_raster_size, write_raster_image};
 
 const PROJECT_MAGIC_V1: &[u8] = b"PIXEL-WORKSHOP\0\x01";
@@ -1630,8 +1631,7 @@ pub fn export_raster_scaled(
             );
         }
     }
-    let im = crate::workflows::scale_image(&im, scale)?;
-    write_raster_image(path, &im, format)?;
+    write_raster_image(path, &im, format, scale)?;
     if path
         .extension()
         .is_some_and(|s| s.eq_ignore_ascii_case("png"))

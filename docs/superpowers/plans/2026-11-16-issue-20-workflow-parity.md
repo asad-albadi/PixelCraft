@@ -89,6 +89,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 in progress. PCX imports packed and planar indexed data and planar RGB, with strict scanline and canvas bounds. Export writes indexed output when a single opaque indexed layer maps exactly to its source palette and RGB output with a white matte otherwise. Tests cover duplicate palette slots, scaling, uncompressed low-bit planes, RGB padding, malformed packets, and live crops. Pillow-produced files round-tripped through PixelCraft and decoded with exact pixels in FFmpeg. Formatting, strict Clippy, and 502 Windows all-target tests passed. PSD/PSB, FLI/FLC, SVG, and CSS remain open.
 
+- Item 35 in progress. SVG and CSS export the current frame with exact positions and alpha at integer scale in the editor, CLI, and MCP. The writers merge identical horizontal runs across rows and stream native geometry without allocating an enlarged bitmap. CSS emits a fixed-size .pixel-art class. Tests reconstruct SVG pixels, check CSS crop geometry and alpha, and cover an empty sprite. Formatting, strict Clippy, and 503 Windows all-target tests passed. PSD/PSB and FLI/FLC remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

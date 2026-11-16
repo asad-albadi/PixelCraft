@@ -1002,15 +1002,19 @@ fn file_operation_mode(
                                 if preview {
                                     return plan(&out, vec![out.clone()], false);
                                 }
-                                let (image, mut metadata) = preview_composite(
+                                let (image, mut metadata) = compose_region(
                                     &sprite,
                                     frame,
-                                    v,
+                                    geometry,
                                     &document_revision(&d),
-                                    MAX_PIXELS,
                                 )?;
                                 write_operation_file(files, &out, |target| {
-                                    formats::write_raster_image(target, &image, format)
+                                    formats::write_raster_image(
+                                        target,
+                                        &image,
+                                        format,
+                                        geometry.scale,
+                                    )
                                 })?;
                                 metadata["output"] = json!(out);
                                 return Ok(metadata);
@@ -1125,7 +1129,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|pcx|qoi|tga|jpeg|webp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|pcx|qoi|tga|jpeg|webp|svg|css|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let v = cli_arguments(&args[1..])?;
@@ -1284,7 +1288,7 @@ fn rpc_with_root(
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "batch" => "Run ordered file export steps, or set dry_run to list output paths without writing files.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
-                        "live-export" => "Export a revision-matched sprite as PNG, BMP, ICO, PCX, QOI, TGA, JPEG, WebP, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to raster images and PNG sequences. Frame applies to single-frame raster exports.",
+                        "live-export" => "Export a revision-matched sprite as PNG, BMP, ICO, PCX, QOI, TGA, JPEG, WebP, SVG, CSS, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to image and PNG sequence exports. Frame applies to still images.",
                         "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
                         "live-export-progress" => "Report the completed and total frames of a running live export by job_id.",
                         "live-cancel-export" => "Request cancellation of a running live export by job_id.",
@@ -2353,8 +2357,8 @@ fn prepare_live_export_inner(
                 let sprite = filter_export_layers(d, args)?;
                 let geometry = preview_geometry(&sprite, f, args, MAX_PIXELS)?;
                 formats::validate_raster_size(format, geometry.width, geometry.height, geometry.scale)?;
-                let (image, metadata) = preview_composite(&sprite, f, args, revision, MAX_PIXELS)?;
-                formats::write_raster_image(temporary, &image, format)?;
+                let (image, metadata) = compose_region(&sprite, f, geometry, revision)?;
+                formats::write_raster_image(temporary, &image, format, geometry.scale)?;
                 progress(1, 1)?;
                 Ok(metadata)
             }
@@ -2527,6 +2531,7 @@ fn preview_image(
     preview_composite(&sprite, f, args, revision, limit)
 }
 
+#[derive(Clone, Copy)]
 struct RenderGeometry {
     x: usize,
     y: usize,
@@ -2592,13 +2597,27 @@ fn preview_composite(
     revision: &str,
     limit: usize,
 ) -> Result<(image::RgbaImage, Value), String> {
+    let geometry = preview_geometry(sprite, f, args, limit)?;
+    let (image, metadata) = compose_region(sprite, f, geometry, revision)?;
+    Ok((
+        crate::workflows::scale_image(&image, geometry.scale)?,
+        metadata,
+    ))
+}
+
+fn compose_region(
+    sprite: &Document,
+    f: usize,
+    geometry: RenderGeometry,
+    revision: &str,
+) -> Result<(image::RgbaImage, Value), String> {
     let RenderGeometry {
         x,
         y,
         width: w,
         height: h,
         scale,
-    } = preview_geometry(sprite, f, args, limit)?;
+    } = geometry;
     let pixels = crate::color::display_pixels(sprite, f).unwrap_or_else(|_| sprite.composite(f));
     let cropped = (y..y + h)
         .flat_map(|row| {
@@ -2609,7 +2628,6 @@ fn preview_composite(
         })
         .collect();
     let image = image::RgbaImage::from_raw(w as u32, h as u32, cropped).ok_or("Invalid image")?;
-    let image = crate::workflows::scale_image(&image, scale)?;
     let layers: Vec<_> = sprite
         .layers
         .iter()
@@ -2626,7 +2644,7 @@ fn preview_composite(
         })
         .collect();
     let metadata = json!({"revision":revision,"frame":f,"layers":layers,"scale":scale,
-        "canvas_width":sprite.width,"canvas_height":sprite.height,"width":image.width(),"height":image.height(),
+        "canvas_width":sprite.width,"canvas_height":sprite.height,"width":w*scale,"height":h*scale,
         "region":{"x":x,"y":y,"width":w,"height":h}});
     Ok((image, metadata))
 }

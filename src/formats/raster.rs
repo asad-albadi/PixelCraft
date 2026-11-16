@@ -1,4 +1,4 @@
-use super::pcx;
+use super::{pcx, vector};
 use crate::{
     automation::mcp_io,
     model::{Document, MAX_DIMENSION, MAX_PIXELS},
@@ -54,11 +54,19 @@ fn decode(decoder: impl ImageDecoder) -> Result<Document, String> {
 pub(crate) enum RasterFormat {
     Standard(ImageFormat),
     Pcx,
+    Svg,
+    Css,
 }
 
 pub(crate) fn raster_format(extension: &str) -> Option<RasterFormat> {
     if extension.eq_ignore_ascii_case("pcx") {
         return Some(RasterFormat::Pcx);
+    }
+    if extension.eq_ignore_ascii_case("svg") {
+        return Some(RasterFormat::Svg);
+    }
+    if extension.eq_ignore_ascii_case("css") {
+        return Some(RasterFormat::Css);
     }
     let format = ImageFormat::from_extension(extension)?;
     matches!(
@@ -99,13 +107,25 @@ pub(crate) fn write_raster_image(
     path: &Path,
     image: &RgbaImage,
     format: RasterFormat,
+    scale: usize,
 ) -> Result<(), String> {
-    validate_raster_size(format, image.width() as usize, image.height() as usize, 1)?;
+    validate_raster_size(
+        format,
+        image.width() as usize,
+        image.height() as usize,
+        scale,
+    )?;
+    match format {
+        RasterFormat::Svg => return vector::write(path, image, scale, vector::VectorFormat::Svg),
+        RasterFormat::Css => return vector::write(path, image, scale, vector::VectorFormat::Css),
+        _ => {}
+    }
+    let image = crate::workflows::scale_image(image, scale)?;
     let RasterFormat::Standard(format) = format else {
-        return pcx::write_rgb(path, image);
+        return pcx::write_rgb(path, &image);
     };
     if format != ImageFormat::Jpeg {
-        return mcp_io::write_image_as(path, image, format).map_err(|e| e.to_string());
+        return mcp_io::write_image_as(path, &image, format).map_err(|e| e.to_string());
     }
     let matte = image::RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let [r, g, b, a] = image.get_pixel(x, y).0;

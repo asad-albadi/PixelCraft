@@ -2333,6 +2333,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "qoi" => "qoi",
             "tga" => "tga",
             "webp" => "webp",
+            "svg" => "svg",
+            "css" => "css",
             _ => "png",
         };
         let sequence = kind == "png-sequence";
@@ -2528,9 +2530,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "saveas" => {
                 self.save(true);
             }
-            "png" | "bmp" | "jpeg" | "ico" | "pcx" | "qoi" | "tga" | "webp" | "sheet" => {
-                self.export(s)
-            }
+            "png" | "bmp" | "jpeg" | "ico" | "pcx" | "qoi" | "tga" | "webp" | "svg" | "css"
+            | "sheet" => self.export(s),
             "png-sequence" => {
                 self.sequence_name = self
                     .path
@@ -3002,6 +3003,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export icon…", "ico"),
                         ("Export PCX…", "pcx"),
                         ("Export QOI…", "qoi"),
+                        ("Export SVG…", "svg"),
+                        ("Export CSS…", "css"),
                         ("Export TGA…", "tga"),
                         ("Open sample garden", "demo"),
                     ],

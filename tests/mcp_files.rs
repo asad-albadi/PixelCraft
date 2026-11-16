@@ -1586,6 +1586,84 @@ fn pcx_interchange_keeps_palette_slots_and_checks_scanline_packets() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn svg_and_css_export_scaled_rectangles_with_alpha() {
+    use pixelcraft::model::CLEAR;
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let mut sprite = Document::new(4, 3);
+    let solid = [20, 40, 60, 255];
+    let translucent = [170, 25, 45, 128];
+    for index in [0, 1, 4, 5] {
+        sprite.set_pixel(0, 0, index, solid);
+    }
+    sprite.set_pixel(0, 0, 11, translucent);
+    let path = root.join("art.pixel");
+    formats::save(&path, &sprite).unwrap();
+    let exported = workspace.call(
+        "export",
+        json!({"input":"art.pixel","output":"art.svg","format":"svg","scale":2}),
+    );
+    assert!(exported["isError"].is_null(), "{exported}");
+    let svg = fs::read_to_string(root.join("art.svg")).unwrap();
+    let xml = roxmltree::Document::parse(&svg).unwrap();
+    let node = xml.root_element();
+    assert_eq!(node.attribute("viewBox"), Some("0 0 8 6"));
+    assert_eq!(node.attribute("shape-rendering"), Some("crispEdges"));
+    let mut pixels = [CLEAR; 8 * 6];
+    let rects: Vec<_> = node.children().filter(|n| n.has_tag_name("rect")).collect();
+    assert_eq!(
+        rects.len(),
+        2,
+        "adjacent equal pixels should share a rectangle"
+    );
+    for rect in rects {
+        let position = |name| rect.attribute(name).unwrap().parse::<usize>().unwrap();
+        let color = rect.attribute("fill").unwrap().trim_start_matches('#');
+        let channel = |start| u8::from_str_radix(&color[start..start + 2], 16).unwrap();
+        let alpha = rect.attribute("fill-opacity").map_or(255, |alpha| {
+            (alpha.parse::<f64>().unwrap() * 255.0).round() as u8
+        });
+        for y in position("y")..position("y") + position("height") {
+            for x in position("x")..position("x") + position("width") {
+                assert_eq!(pixels[y * 8 + x], CLEAR);
+                pixels[y * 8 + x] = [channel(0), channel(2), channel(4), alpha];
+            }
+        }
+    }
+    let expected = sprite.composite(0);
+    for y in 0..6 {
+        for x in 0..8 {
+            assert_eq!(pixels[y * 8 + x], expected[y / 2 * 4 + x / 2]);
+        }
+    }
+    let css_path = root.join("crop.css");
+    automation::prepare_live_export(
+        &sprite,
+        0,
+        &json!({
+            "output":css_path,"format":"css","scale":3,"region":{"x":2,"y":1,"width":2,"height":2}
+        }),
+        "test",
+    )
+    .unwrap()
+    .write()
+    .unwrap();
+    let css = fs::read_to_string(css_path).unwrap();
+    assert!(css.contains(".pixel-art"));
+    assert!(css.contains("width: 6px") && css.contains("height: 6px"));
+    assert!(css.contains("linear-gradient(#aa192d80, #aa192d80) 3px 3px / 3px 3px no-repeat"));
+    assert_eq!(css.matches("linear-gradient").count(), 1);
+
+    let blank = Document::new(1, 1);
+    formats::save(&path, &blank).unwrap();
+    let reply = workspace.call("export", json!({"input":"art.pixel","output":"empty.css"}));
+    assert!(reply["isError"].is_null(), "{reply}");
+    let css = fs::read_to_string(root.join("empty.css")).unwrap();
+    assert!(css.contains("background: transparent;") && !css.contains("linear-gradient"));
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(
