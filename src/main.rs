@@ -23,7 +23,7 @@ use pixelcraft::{
     updates::{self, AboutInfo, INSTALLED_VERSION, Release},
 };
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -138,6 +138,16 @@ enum Pending {
     Close,
     CloseTab,
     Demo,
+}
+
+enum OpenTarget {
+    Tab,
+    RasterLayer { document: EditorId, frame_id: u32 },
+}
+
+struct FileOpenJob {
+    target: OpenTarget,
+    receiver: std::sync::mpsc::Receiver<(PathBuf, Result<Document, String>)>,
 }
 #[derive(PartialEq)]
 struct ClipboardTarget {
@@ -440,7 +450,7 @@ struct PixelCraft {
     timeline_duration: u16,
     timeline_destination: Option<(usize, usize)>,
     cel_occupied: Vec<Vec<bool>>,
-    open_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<Document, String>)>>,
+    open_job: Option<FileOpenJob>,
     play_after_open: bool,
     export_job: Option<ExportJob>,
     last_export: Option<ExportRecipe>,
@@ -2566,6 +2576,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "new" => self.request(Pending::New),
             "closetab" => self.request(Pending::CloseTab),
             "open" => self.request(Pending::Open),
+            "import-layer" => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .add_filter(
+                        "Raster image",
+                        pixelcraft::productivity::RASTER_LAYER_EXTENSIONS,
+                    )
+                    .pick_file()
+                {
+                    self.open_as_raster_layer(path);
+                }
+            }
             "save" => {
                 self.save(false);
             }
@@ -3030,6 +3051,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     vec![
                         ("New sprite…   Ctrl+N", "new"),
                         ("Open…   Ctrl+O", "open"),
+                        ("Import as Layer…", "import-layer"),
                         ("Close sprite   Ctrl+W", "closetab"),
                         ("Import PNG sequence…", "sequence"),
                         ("Grid import, tag batch & atlas…", "workflow"),
@@ -7409,6 +7431,92 @@ mod tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc.drawing_grid(), DrawingGrid::default());
+    }
+
+    #[test]
+    fn raster_layer_import_crops_and_pads_only_the_target_frame_and_undoes() {
+        let mut a = app();
+        let mut target = Document::new(3, 2);
+        target.add_frame(0, true);
+        target.layers[0].cels[0].set(0, [80, 40, 10, 255]);
+        a.replace(target, None);
+        a.frame = 1;
+        let mut source = Document::new(4, 1);
+        source.layers[0].cels[0] = vec![
+            [10, 0, 0, 255],
+            [20, 0, 0, 128],
+            [30, 0, 0, 255],
+            [40, 0, 0, 255],
+        ]
+        .into();
+        let before = a.doc.clone();
+        a.install_raster_layer(Path::new("Overlay.png"), &source, 1)
+            .unwrap();
+        assert_eq!((a.doc.width, a.doc.height, a.frame, a.layer), (3, 2, 1, 1));
+        assert_eq!(a.doc.layers[1].name, "Overlay");
+        assert_eq!(
+            a.doc.layers[1].cels[0].iter().copied().collect::<Vec<_>>(),
+            [CLEAR; 6]
+        );
+        assert_eq!(
+            a.doc.layers[1].cels[1].iter().copied().collect::<Vec<_>>(),
+            [
+                [10, 0, 0, 255],
+                [20, 0, 0, 128],
+                [30, 0, 0, 255],
+                CLEAR,
+                CLEAR,
+                CLEAR,
+            ]
+        );
+        assert_eq!(a.history_label(1), Some("Import as layer"));
+        let after = a.doc.clone();
+        a.undo();
+        assert_eq!(a.doc, before);
+        a.redo();
+        assert_eq!(a.doc, after);
+        assert!(
+            a.install_raster_layer(Path::new("Other.png"), &source, 20)
+                .is_err()
+        );
+        assert_eq!(a.doc, after);
+    }
+
+    #[test]
+    fn queued_raster_layer_import_follows_the_original_frame_identity() {
+        let dir =
+            std::env::temp_dir().join(format!("pixelcraft-layer-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Stamp.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([70, 40, 30, 255]))
+            .save(&path)
+            .unwrap();
+        let mut a = app();
+        let mut target = Document::new(2, 1);
+        target.add_frame(0, true);
+        a.replace(target, None);
+        a.frame = 1;
+        a.open_as_raster_layer(path.clone());
+        a.doc.add_frame(0, false);
+
+        let complete = |app: &mut PixelCraft| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.open_job.is_some() && Instant::now() < deadline {
+                app.poll_open_document();
+                std::thread::yield_now();
+            }
+            assert!(app.open_job.is_none(), "Raster import timed out");
+        };
+        complete(&mut a);
+        assert_eq!(a.status, "Imported image as layer");
+        assert_eq!(a.frame, 2);
+        assert_eq!(a.doc.layers[1].cels[2][0], [70, 40, 30, 255]);
+        a.open_as_raster_layer(path);
+        a.replace(Document::new(2, 1), None);
+        complete(&mut a);
+        assert!(a.status.contains("target is no longer active"));
+        assert_eq!(a.doc.layers.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

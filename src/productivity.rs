@@ -300,6 +300,102 @@ pub fn read_image(path: &Path) -> Result<RgbaImage, String> {
         .map(|i| i.to_rgba8())
         .map_err(|e| e.to_string())
 }
+
+pub const RASTER_LAYER_EXTENSIONS: &[&str] = &[
+    "png", "bmp", "jpg", "jpeg", "jfif", "webp", "gif", "apng", "ico", "pcx", "qoi", "tga",
+];
+
+pub fn read_raster_layer(path: &Path) -> Result<Document, String> {
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    if !extension.is_some_and(|extension| {
+        RASTER_LAYER_EXTENSIONS
+            .iter()
+            .any(|format| format.eq_ignore_ascii_case(extension))
+    }) {
+        return Err("Choose a supported raster image".into());
+    }
+    formats::load(path)
+}
+
+pub fn prepare_raster_layer(
+    target: &Document,
+    source: &Document,
+    frame: usize,
+    name: String,
+) -> Result<Layer, String> {
+    if frame >= target.durations.len() {
+        return Err("The destination frame no longer exists".into());
+    }
+    if !target.can_add_layer() {
+        return Err("Layer limit reached for this canvas size".into());
+    }
+    let [width, height] = [
+        target.width.min(source.width),
+        target.height.min(source.height),
+    ];
+    let area = target.width * target.height;
+    let mut layer = Layer::new(name, target.width, target.height, target.durations.len());
+    let source_pixels = source.composite(0);
+    let source_pixels = if target.color_profile.is_empty() && !source.color_profile.is_empty() {
+        crate::color::to_srgb(&source.color_profile, &source_pixels).unwrap_or(source_pixels)
+    } else {
+        source_pixels
+    };
+    let mut palette = target.palette_for(frame).to_vec();
+    let transparent = target.transparent_index.min(palette.len() - 1);
+    let mut indices = if target.color_mode == ColorMode::Indexed {
+        palette[transparent][3] = 0;
+        Some(vec![transparent as u8; area])
+    } else {
+        None
+    };
+    let source_indices = source
+        .layers
+        .first()
+        .and_then(|layer| layer.cel_meta[0].indices.as_deref());
+    let mut cached_slots = std::collections::HashMap::new();
+    let mut pixels = if width * height >= area.div_ceil(2) {
+        vec![CLEAR; area].into()
+    } else {
+        Pixels::empty(area)
+    };
+    for y in 0..height {
+        for x in 0..width {
+            let from = y * source.width + x;
+            let to = y * target.width + x;
+            let color = source_pixels[from];
+            if let Some(indices) = &mut indices {
+                let slot = source_indices
+                    .and_then(|slots| slots.get(from).copied())
+                    .filter(|&slot| palette.get(slot as usize) == Some(&color))
+                    .or_else(|| cached_slots.get(&color).copied())
+                    .unwrap_or_else(|| {
+                        let slot = if color[3] == 0 {
+                            transparent
+                        } else {
+                            nearest(color, &palette)
+                        } as u8;
+                        if cached_slots.len() < 4096 {
+                            cached_slots.insert(color, slot);
+                        }
+                        slot
+                    });
+                indices[to] = slot;
+                pixels.set(to, palette[slot as usize]);
+            } else {
+                pixels.set(to, convert(color, target.color_mode, &palette));
+            }
+        }
+    }
+    let index_cost = indices.as_ref().map_or(0, |slots| slots.len().div_ceil(4));
+    if !target.can_grow(pixels.allocation_pixels() + index_cost) {
+        return Err("Imported image exceeds the document pixel budget".into());
+    }
+    layer.cels[frame] = pixels;
+    layer.cel_meta[frame].indices = indices.map(Into::into);
+    Ok(layer)
+}
+
 pub fn import_reference(path: &Path) -> Result<ReferenceImage, String> {
     let im = read_image(path)?;
     Ok(ReferenceImage {

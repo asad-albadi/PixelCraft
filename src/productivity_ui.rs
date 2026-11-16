@@ -632,6 +632,20 @@ impl PixelCraft {
             .collect()
     }
     pub(super) fn open_recent(&mut self, p: PathBuf) {
+        self.queue_file_open(p, OpenTarget::Tab);
+    }
+
+    pub(super) fn open_as_raster_layer(&mut self, p: PathBuf) {
+        self.queue_file_open(
+            p,
+            OpenTarget::RasterLayer {
+                document: self.doc.editor_id,
+                frame_id: self.doc.frame_export_id(self.frame),
+            },
+        );
+    }
+
+    fn queue_file_open(&mut self, p: PathBuf, target: OpenTarget) {
         if self.open_job.is_some() {
             self.status = "A file is already opening".into();
             return;
@@ -641,9 +655,17 @@ impl PixelCraft {
             "Opening {}",
             p.file_name().unwrap_or_default().to_string_lossy()
         );
-        self.open_job = Some(rx);
+        let into_layer = matches!(target, OpenTarget::RasterLayer { .. });
+        self.open_job = Some(FileOpenJob {
+            target,
+            receiver: rx,
+        });
         std::thread::spawn(move || {
-            let result = formats::load(&p);
+            let result = if into_layer {
+                read_raster_layer(&p)
+            } else {
+                formats::load(&p)
+            };
             let _ = tx.send((p, result));
         });
     }
@@ -653,7 +675,7 @@ impl PixelCraft {
             return;
         }
         let Some(job) = &self.open_job else { return };
-        let (p, result) = match job.try_recv() {
+        let (p, result) = match job.receiver.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -662,7 +684,24 @@ impl PixelCraft {
                 return;
             }
         };
-        self.open_job = None;
+        let target = self.open_job.take().unwrap().target;
+        if let OpenTarget::RasterLayer { document, frame_id } = target {
+            let result = result.and_then(|source| {
+                let frame = (self.doc.editor_id == document)
+                    .then(|| {
+                        (0..self.doc.durations.len())
+                            .find(|&frame| self.doc.frame_export_id(frame) == frame_id)
+                    })
+                    .flatten()
+                    .ok_or("The import target is no longer active")?;
+                self.install_raster_layer(&p, &source, frame)
+            });
+            self.status = match result {
+                Ok(()) => "Imported image as layer".into(),
+                Err(error) => format!("Could not import layer: {error}"),
+            };
+            return;
+        }
         match result {
             Ok(d) => {
                 self.add_recent(p.clone());
@@ -681,6 +720,33 @@ impl PixelCraft {
                 self.status = format!("Could not open: {e}");
             }
         }
+    }
+
+    pub(super) fn install_raster_layer(
+        &mut self,
+        path: &Path,
+        source: &Document,
+        frame: usize,
+    ) -> Result<(), String> {
+        let name = path
+            .file_stem()
+            .filter(|stem| !stem.is_empty())
+            .map_or_else(
+                || "Imported image".into(),
+                |stem| stem.to_string_lossy().into_owned(),
+            );
+        let layer = prepare_raster_layer(&self.doc, source, frame, name)?;
+        self.remember_action("Import as layer");
+        self.doc.layers.push(layer);
+        self.stop_playback(false);
+        self.layer = self.doc.layers.len() - 1;
+        self.frame = frame;
+        self.timeline_anchor = None;
+        self.selected_cels = None;
+        self.timeline_frames = TimelineHeaders::default();
+        self.timeline_layers = TimelineHeaders::default();
+        self.timeline_destination = None;
+        Ok(())
     }
     pub(super) fn draw_selection_mask(&self, painter: &egui::Painter, board: Rect, view: Rect) {
         let Some(mask) = &self.studio.mask else {

@@ -60,7 +60,7 @@ pub fn icon_name(action: &str) -> &str {
         "png" | "demo" => "image",
         "mp4" => "gif",
         "png-sequence" => "export",
-        "sequence" => "import",
+        "sequence" | "import-layer" => "import",
         "tiles" | "tiledexport" | "tileset-atlas" => "tilemap",
         "workflow" => "settings",
 
