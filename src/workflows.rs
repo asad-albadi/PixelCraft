@@ -3,7 +3,10 @@ use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod canvas_resize;
 mod rotsprite;
+
+pub use canvas_resize::resize_canvas;
 
 #[derive(Clone, Copy)]
 pub enum Transform {

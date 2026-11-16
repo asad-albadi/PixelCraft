@@ -29,6 +29,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 2 complete. The recovery window can extract readable image cels as layers or frames into a new unsaved sprite, including hidden and off-canvas pixels. A bounded fallback reads valid raster records from otherwise damaged backups, one tab at a time. The focused regressions went red before the fixes, then passed. Formatting, strict Clippy, and 427 Windows all-target tests passed. Raster records that cannot be decoded remain unavailable.
 
+- Item 11 complete. Sprite → Canvas size supports nine anchors and custom offsets across all layers and frames. Tile grids retain phase and flip flags and cover the resized canvas. Tests cover exact indexed slots, animation timing and IDs, tile expansion and shrink, exposed off-canvas pixels, masks, slice translation, invalid input atomicity and editor undo/redo. Formatting, strict Clippy, and 431 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -44,7 +46,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.
 - [ ] **9. Add on-canvas scale and skew handles.** Support interactive transforms on a selection and across the selected timeline cels.
 - [ ] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.
-- [ ] **11. Resize the canvas with anchors and offsets.** Apply resizing across layers and frames, including tilemaps.
+- [x] **11. Resize the canvas with anchors and offsets.** Apply resizing across layers and frames, including tilemaps.
 - [ ] **12. Add whole-sprite operations.** Resample, auto-trim, duplicate, rotate, and flip sprites across layers and frames.
 - [ ] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.
 - [ ] **14. Generate palettes and improve indexed conversion.** Build an editable palette from artwork and expose conversion dithering and transparent-index controls.

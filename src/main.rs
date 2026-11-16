@@ -2505,6 +2505,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Rotate selection 90°", "rotate"),
                         ("Flip selection horizontally", "selectionflipx"),
                         ("Flip selection vertically", "selectionflipy"),
+                        ("Canvas size…", "resizecanvas"),
                         ("Crop to selection", "crop"),
                     ],
                 ),

@@ -42,6 +42,7 @@ pub(super) struct Studio {
     rotation_rotsprite: bool,
     rotation_preview: bool,
     rotation_texture: Option<RotationPreview>,
+    canvas_resize: Option<CanvasResize>,
     adjustment_input: Adjustment,
     recovery_root: PathBuf,
     last_save: Instant,
@@ -54,6 +55,41 @@ pub(super) struct Studio {
     reset_recovery_history: bool,
     restore_started: Instant,
     pub recovery_status: String,
+}
+
+struct CanvasResize {
+    document: String,
+    size: [usize; 2],
+    anchor: usize,
+    offset: [i32; 2],
+}
+
+const CANVAS_ANCHORS: [&str; 10] = [
+    "Top left",
+    "Top",
+    "Top right",
+    "Left",
+    "Center",
+    "Right",
+    "Bottom left",
+    "Bottom",
+    "Bottom right",
+    "Custom offset",
+];
+
+impl CanvasResize {
+    fn offset_from(&self, old: [usize; 2]) -> [i32; 2] {
+        if self.anchor == 9 {
+            return self.offset;
+        }
+        let [horizontal, vertical] = [(self.anchor % 3) as i32, (self.anchor / 3) as i32];
+        let dx = self.size[0] as i32 - old[0] as i32;
+        let dy = self.size[1] as i32 - old[1] as i32;
+        [
+            (dx * horizontal).div_euclid(2),
+            (dy * vertical).div_euclid(2),
+        ]
+    }
 }
 
 struct RotationPreview {
@@ -98,6 +134,7 @@ impl Default for Studio {
             rotation_rotsprite: false,
             rotation_preview: false,
             rotation_texture: None,
+            canvas_resize: None,
             adjustment_input: Adjustment::Levels {
                 black: 0,
                 white: 255,
@@ -672,6 +709,14 @@ impl PixelCraft {
             "rotate" => self.transform_selection(Transform::Rotate),
             "selectionflipx" => self.transform_selection(Transform::FlipX),
             "selectionflipy" => self.transform_selection(Transform::FlipY),
+            "resizecanvas" => {
+                self.studio.canvas_resize = Some(CanvasResize {
+                    document: self.doc.editor_id.to_string(),
+                    size: [self.doc.width, self.doc.height],
+                    anchor: 4,
+                    offset: [0, 0],
+                });
+            }
             "crop" => {
                 let mut d = self.doc.clone();
                 match workflows::crop(&mut d, self.selection_bounds()) {
@@ -1058,7 +1103,85 @@ impl PixelCraft {
         });
     }
 
+    fn apply_canvas_resize(&mut self, resize: &CanvasResize) -> Result<(), String> {
+        let old = [self.doc.width, self.doc.height];
+        let offset = resize.offset_from(old);
+        if resize.size == old && offset == [0, 0] {
+            return Ok(());
+        }
+        let mut resized = self.doc.clone();
+        workflows::resize_canvas(&mut resized, resize.size, offset)?;
+        self.remember();
+        self.doc = resized;
+        self.selection = None;
+        self.studio.mask = None;
+        self.studio.move_mask = None;
+        self.studio.polygon.clear();
+        self.status = format!("Canvas resized to {} × {}", self.doc.width, self.doc.height);
+        Ok(())
+    }
+
+    fn canvas_resize_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut resize) = self.studio.canvas_resize.take() else {
+            return;
+        };
+        if resize.document != self.doc.editor_id.to_string() {
+            return;
+        }
+        let old = [self.doc.width, self.doc.height];
+        let mut open = true;
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Canvas size")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Width");
+                    ui.add(egui::DragValue::new(&mut resize.size[0]).range(1..=MAX_DIMENSION));
+                    ui.label("Height");
+                    ui.add(egui::DragValue::new(&mut resize.size[1]).range(1..=MAX_DIMENSION));
+                });
+                let old_anchor = resize.anchor;
+                let old_offset = resize.offset_from(old);
+                egui::ComboBox::from_label("Anchor")
+                    .selected_text(CANVAS_ANCHORS[resize.anchor])
+                    .show_ui(ui, |ui| {
+                        for (anchor, name) in CANVAS_ANCHORS.into_iter().enumerate() {
+                            ui.pc_selectable_value(&mut resize.anchor, anchor, name);
+                        }
+                    });
+                if resize.anchor == 9 && old_anchor != 9 {
+                    resize.offset = old_offset;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Offset");
+                    if resize.anchor == 9 {
+                        ui.add(egui::DragValue::new(&mut resize.offset[0]).prefix("X "));
+                        ui.add(egui::DragValue::new(&mut resize.offset[1]).prefix("Y "));
+                    } else {
+                        let [x, y] = resize.offset_from(old);
+                        ui.label(format!("X {x}, Y {y}"));
+                    }
+                });
+                ui.small("Pixels and whole tiles outside the new canvas are cropped.");
+                ui.horizontal(|ui| {
+                    apply = ui.pc_button("Resize").clicked();
+                    cancel = ui.pc_button("Cancel").clicked();
+                });
+            });
+        if apply {
+            if let Err(error) = self.apply_canvas_resize(&resize) {
+                self.status = error;
+                self.studio.canvas_resize = Some(resize);
+            }
+        } else if open && !cancel {
+            self.studio.canvas_resize = Some(resize);
+        }
+    }
+
     pub(super) fn studio_dialogs(&mut self, ctx: &egui::Context) {
+        self.canvas_resize_dialog(ctx);
         if self.studio.open {
             let mut open = true;
             egui::Window::new("Drawing & selection studio")
@@ -1405,6 +1528,27 @@ fn write_recovery_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canvas_size_action_uses_an_anchor_and_undo_restores_the_sprite() {
+        let mut editor = app();
+        let mut source = Document::new(2, 2);
+        let ink = [109, 48, 28, 255];
+        source.set_pixel(0, 0, 0, ink);
+        editor.replace(source.clone(), None);
+        assert!(editor.studio_action("resizecanvas"));
+        let mut resize = editor.studio.canvas_resize.take().unwrap();
+        resize.size = [6, 4];
+        resize.anchor = 4;
+        editor.apply_canvas_resize(&resize).unwrap();
+        assert_eq!([editor.doc.width, editor.doc.height], [6, 4]);
+        assert_eq!(editor.doc.composite(0)[8], ink);
+        assert_eq!(editor.doc.composite(0)[0], CLEAR);
+        editor.undo();
+        assert_eq!(editor.doc, source);
+        editor.redo();
+        assert_eq!(editor.doc.composite(0)[8], ink);
+    }
 
     #[test]
     fn rotation_mode_applies_to_the_whole_sprite_without_a_selection() {
