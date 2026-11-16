@@ -1,9 +1,9 @@
-use super::{PreparedExport, prepare_output};
+use super::{PreparedExport, prepare_output_under};
 use serde_json::Value;
 use std::{
     fs,
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 pub(super) fn project_root(path: &Path) -> Result<PathBuf, String> {
@@ -17,6 +17,104 @@ pub(super) fn project_root(path: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(root)
+}
+
+#[cfg(windows)]
+fn same_component(a: Component<'_>, b: Component<'_>) -> bool {
+    use std::path::Prefix;
+    match (a, b) {
+        (Component::Prefix(a), Component::Prefix(b)) => match (a.kind(), b.kind()) {
+            (
+                Prefix::Disk(a) | Prefix::VerbatimDisk(a),
+                Prefix::Disk(b) | Prefix::VerbatimDisk(b),
+            ) => a.eq_ignore_ascii_case(&b),
+            (
+                Prefix::UNC(server_a, share_a) | Prefix::VerbatimUNC(server_a, share_a),
+                Prefix::UNC(server_b, share_b) | Prefix::VerbatimUNC(server_b, share_b),
+            ) => server_a.eq_ignore_ascii_case(server_b) && share_a.eq_ignore_ascii_case(share_b),
+            _ => false,
+        },
+        (Component::Normal(a), Component::Normal(b)) => a.eq_ignore_ascii_case(b),
+        _ => a == b,
+    }
+}
+
+#[cfg(not(windows))]
+fn same_component(a: Component<'_>, b: Component<'_>) -> bool {
+    a == b
+}
+
+fn project_suffix<'a>(root: &Path, path: &'a Path) -> Result<std::path::Components<'a>, String> {
+    let outside = || format!("Path escapes the project root: {}", path.display());
+    let mut suffix = path.components();
+    for part in root.components() {
+        if !suffix.next().is_some_and(|p| same_component(p, part)) {
+            return Err(outside());
+        }
+    }
+    let mut depth = 0;
+    for part in suffix.clone() {
+        match part {
+            Component::Normal(name) => {
+                #[cfg(windows)]
+                if name.to_string_lossy().ends_with([' ', '.'])
+                    || name.to_string_lossy().contains(':')
+                {
+                    return Err(outside());
+                }
+                let _ = name;
+                depth += 1;
+            }
+            Component::ParentDir if depth > 0 => depth -= 1,
+            Component::CurDir => {}
+            _ => return Err(outside()),
+        }
+    }
+    Ok(suffix)
+}
+
+#[cfg(windows)]
+fn check_reparse_points(root: &Path, parts: std::path::Components<'_>) -> Result<(), String> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    let check = |path: &Path| match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+            Err(format!(
+                "Project-root access to Windows reparse points is disabled: {}",
+                path.display()
+            ))
+        }
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("Could not inspect {}: {e}", path.display())),
+    };
+    let ancestors: Vec<_> = root
+        .ancestors()
+        .filter(|path| path.file_name().is_some())
+        .collect();
+    for ancestor in ancestors.into_iter().rev() {
+        if !check(ancestor)? {
+            return Err(format!(
+                "The project root no longer exists: {}",
+                root.display()
+            ));
+        }
+    }
+    let mut current = root.to_path_buf();
+    for part in parts {
+        match part {
+            Component::Normal(name) => current.push(name),
+            Component::ParentDir => {
+                current.pop();
+                continue;
+            }
+            _ => continue,
+        }
+        if !check(&current)? {
+            break;
+        }
+    }
+    Ok(())
 }
 
 pub(super) struct Files<'a> {
@@ -33,7 +131,25 @@ impl Files<'_> {
     }
 
     pub(super) fn check_read(&self, path: &Path) -> Result<(), String> {
-        self.check_path(path, false)
+        self.check_path(path, false)?;
+        if self.root.is_some() && !fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+            return Err(format!("Input must be a regular file: {}", path.display()));
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_atlas_input(&self, path: &Path) -> Result<(), String> {
+        self.check_path(path, false)?;
+        if self.root.is_some() {
+            let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+            if !metadata.is_file() && !metadata.is_dir() {
+                return Err(format!(
+                    "Atlas input must be a file or directory: {}",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn check_write(&self, path: &Path) -> Result<(), String> {
@@ -44,6 +160,9 @@ impl Files<'_> {
         let Some(root) = self.root else {
             return Ok(());
         };
+        let _suffix = project_suffix(root, path)?;
+        #[cfg(windows)]
+        check_reparse_points(root, _suffix)?;
         // Check the nearest existing ancestor for new paths. Use symlink metadata
         // so a dangling link is treated as a link rather than as a missing name.
         let mut ancestor = path;
@@ -114,10 +233,11 @@ impl Files<'_> {
         } else {
             output.to_path_buf()
         };
-        let prepared = prepare_output(staging_target, true, |_| Ok(Value::Null))?;
+        let prepared = prepare_output_under(staging_target, true, self.root, |_| Ok(Value::Null))?;
         let result = encode(&prepared.temporary)?;
-        // Recheck all destinations before publishing in case a file appeared
-        // while the encoder was running.
+        // Recheck staging and destinations before publishing in case a path
+        // changed while the encoder was running.
+        self.check_write(&prepared.staging)?;
         for file in files {
             self.check_file(file)?;
         }
@@ -142,9 +262,12 @@ pub(super) fn publish_files(
         &prepared.staging
     };
     let mut backups = if replace && files.len() > 1 {
-        Some(prepare_output(prepared.staging.clone(), true, |_| {
-            Ok(Value::Null)
-        })?)
+        Some(prepare_output_under(
+            prepared.staging.clone(),
+            true,
+            prepared.project_root.as_deref(),
+            |_| Ok(Value::Null),
+        )?)
     } else {
         None
     };
@@ -205,11 +328,43 @@ Backup retained at {}",
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn restricted_cleanup_leaves_redirected_external_staging_untouched() {
+        use std::os::unix::fs::symlink;
+
+        let workspace =
+            std::env::temp_dir().join(format!("pixelcraft-cleanup-test-{}", std::process::id()));
+        let root = workspace.join("project");
+        let parent = root.join("export");
+        let outside = workspace.join("outside");
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let prepared = prepare_output_under(
+            parent.join("file.png"),
+            true,
+            Some(&root.canonicalize().unwrap()),
+            |_| Ok(Value::Null),
+        )
+        .unwrap();
+        let unrelated = outside
+            .join(prepared.staging.file_name().unwrap())
+            .join("keep");
+        fs::create_dir(unrelated.parent().unwrap()).unwrap();
+        fs::write(&unrelated, b"unrelated content").unwrap();
+        fs::rename(&parent, root.join("moved")).unwrap();
+        symlink(&outside, &parent).unwrap();
+        drop(prepared);
+        let contents = fs::read(&unrelated);
+        fs::remove_dir_all(workspace).unwrap();
+        assert_eq!(contents.unwrap(), b"unrelated content");
+    }
+
     #[test]
     fn failed_overwrite_restores_previously_published_files() {
         let output =
             std::env::temp_dir().join(format!("pixelcraft-rollback-test-{}", std::process::id()));
-        let prepared = prepare_output(output, true, |_| Ok(Value::Null)).unwrap();
+        let prepared = prepare_output_under(output, true, None, |_| Ok(Value::Null)).unwrap();
         let published = prepared.staging.join("published");
         let staged = &prepared.temporary;
         fs::create_dir(&published).unwrap();

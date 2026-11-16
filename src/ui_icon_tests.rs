@@ -1497,6 +1497,59 @@ fn editor_controls_dragging_indexed_swatches_preserves_pixels_and_undoes() {
 }
 
 #[test]
+fn changing_default_sprite_width_preserves_the_current_pixel_grid() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1366., 900.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.grid = !app.power.default_grid();
+    let current_grid = app.grid;
+    let default_size = app.power.new_sprite_size();
+    app.settings_open = true;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let heading = text_position(&mut output, "New sprites");
+    discard_frame(&mut app, &ctx, size, 1., click(heading));
+    for _ in 0..8 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let width = layout_rect(&ctx, "default-sprite-width").center();
+    drag_layout(&mut app, &ctx, size, width, width + Vec2::new(15., 0.));
+    assert_ne!(app.power.new_sprite_size(), default_size);
+    assert_eq!(app.grid, current_grid);
+}
+
+#[test]
+fn document_palette_preserves_opaque_first_swatch_in_rgba_mode() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1366., 900.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.open_document(Document::new(4, 4), None);
+    let white = [255, 255, 255, 255];
+    app.doc
+        .import_palette(vec![white, [255, 0, 0, 255]])
+        .unwrap();
+    assert_eq!(app.doc.color_mode, ColorMode::Rgba);
+    app.fg = [0, 0, 0, 255];
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let heading = text_position(&mut output, "Document palette");
+    discard_frame(&mut app, &ctx, size, 1., click(heading));
+    for _ in 0..8 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let swatch = ctx
+        .data(|d| d.get_temp::<Rect>(egui::Id::new(("document-swatch", 0usize))))
+        .unwrap()
+        .center();
+    discard_frame(&mut app, &ctx, size, 1., click(swatch));
+    assert_eq!(app.fg, white);
+}
+
+#[test]
 fn editor_controls_shade_direction_is_available_on_the_drawing_bar() {
     use pixelcraft::productivity::BrushMode;
     let ctx = egui::Context::default();

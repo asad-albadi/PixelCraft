@@ -322,11 +322,15 @@ impl PixelCraft {
             let before = (p.new_sprite_size(), p.default_grid);
             ui.horizontal(|ui| {
                 ui.label("Default size");
-                ui.add(
+                let _width = ui.add(
                     egui::DragValue::new(&mut p.new_sprite_width)
                         .range(1..=MAX_DIMENSION)
                         .suffix(" px"),
                 );
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(egui::Id::new("default-sprite-width"), _width.rect);
+                });
                 ui.label("×");
                 let height_limit =
                     MAX_DIMENSION.min(MAX_PIXELS / p.new_sprite_width.clamp(1, MAX_DIMENSION));
@@ -338,7 +342,6 @@ impl PixelCraft {
             });
             ui.pc_checkbox(&mut p.default_grid, "Show pixel grid by default");
             if before != (p.new_sprite_size(), p.default_grid) {
-                self.grid = p.default_grid;
                 self.save_workflow_preferences();
             }
         });
@@ -1329,6 +1332,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         }
         if op == "live-save" {
             request.arguments["output"] = serde_json::json!(self.path);
+            request.project_root = self.live_save_root.clone();
         }
         Some((self.doc.clone(), revision, self.frame))
     }
@@ -1358,11 +1362,12 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         .map(LiveResult::Read);
                 }
                 "live-export" => {
-                    return automation::prepare_live_export_with_progress(
+                    return automation::prepare_live_export_under(
                         &doc,
                         frame,
                         args,
                         &revision,
+                        request.project_root.as_deref(),
                         |done, total| {
                             if Instant::now() >= request.deadline {
                                 return Err("Live request expired; no output published".into());
@@ -1377,11 +1382,12 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         .as_str()
                         .filter(|p| !p.is_empty())
                         .ok_or("Missing output path")?;
-                    let prepared = automation::prepare_live_save(
+                    let prepared = automation::prepare_live_save_under(
                         &doc,
                         PathBuf::from(output),
                         &revision,
                         request.operation == "live-save" || args["overwrite"] == true,
+                        request.project_root.as_deref(),
                     )?;
                     return Ok(LiveResult::Save(prepared, doc));
                 }
@@ -1494,6 +1500,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     self.saved = snapshot;
                     self.add_recent(path.clone());
                     self.path = Some(path);
+                    self.live_save_root = prepared.request.project_root.clone();
                     self.status = "Saved sprite through MCP".into();
                     return Ok(result);
                 }
@@ -1647,6 +1654,16 @@ mod bridge_tests {
         arguments: serde_json::Value,
         expired: bool,
     ) -> Result<serde_json::Value, String> {
+        request_under(a, operation, arguments, expired, None)
+    }
+
+    fn request_under(
+        a: &mut PixelCraft,
+        operation: &str,
+        arguments: serde_json::Value,
+        expired: bool,
+        project_root: Option<PathBuf>,
+    ) -> Result<serde_json::Value, String> {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut request = LiveRequest {
             deadline: if expired {
@@ -1656,6 +1673,7 @@ mod bridge_tests {
             },
             operation: operation.into(),
             arguments,
+            project_root,
             response: tx,
             export_progress: Default::default(),
         };
@@ -1666,6 +1684,93 @@ mod bridge_tests {
         }
         rx.recv().unwrap()
     }
+    #[cfg(unix)]
+    #[test]
+    fn live_save_preserves_the_restriction_of_its_saved_as_path() {
+        use serde_json::json;
+        use std::os::unix::fs::symlink;
+
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let workspace = std::env::temp_dir().join(format!(
+            "pixelcraft-live-save-redirect-{}",
+            std::process::id()
+        ));
+        let root = workspace.join("project");
+        let original = root.join("original");
+        let outside = workspace.join("outside");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&original, &alias).unwrap();
+        let info = request(&mut app, "live-inspect", json!({}), false).unwrap();
+        request_under(
+            &mut app,
+            "live-save-as",
+            json!({"revision":info["revision"],"output":alias.join("art.pixel")}),
+            false,
+            Some(root.canonicalize().unwrap()),
+        )
+        .unwrap();
+        app.open_document(Document::new(1, 1), None);
+        app.switch_tab(0);
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&outside, &alias).unwrap();
+        let info = request(&mut app, "live-inspect", json!({}), false).unwrap();
+        let outcome = request(
+            &mut app,
+            "live-save",
+            json!({"revision":info["revision"]}),
+            false,
+        );
+        let outside_created = outside.join("art.pixel").exists();
+        std::fs::remove_dir_all(&workspace).unwrap();
+        assert!(matches!(outcome, Err(error) if error.contains("project root")));
+        assert!(!outside_created);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restricted_live_sequence_rejects_redirected_parent_at_publish() {
+        use std::os::unix::fs::symlink;
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let workspace =
+            std::env::temp_dir().join(format!("pixelcraft-live-redirect-{}", std::process::id()));
+        let root = workspace.join("project");
+        let original = root.join("original");
+        let outside = workspace.join("outside");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&original).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        symlink(&original, &alias).unwrap();
+        let (response, result) = std::sync::mpsc::channel();
+        let mut request = LiveRequest {
+            deadline: Instant::now() + Duration::from_secs(3),
+            operation: "live-export".into(),
+            arguments: serde_json::json!({
+                "revision":app.live_revision(), "format":"png-sequence",
+                "output":alias.join("frames"), "overwrite":true
+            }),
+            project_root: Some(root.canonicalize().unwrap()),
+            response,
+            export_progress: Default::default(),
+        };
+        let (snapshot, revision, frame) = app.begin_live_request(&mut request).unwrap();
+        let prepared = PixelCraft::prepare_live_request(snapshot, revision, frame, request);
+        assert!(prepared.result.is_ok());
+        std::fs::remove_file(&alias).unwrap();
+        symlink(&outside, &alias).unwrap();
+        app.finish_live_request(prepared);
+        let outcome = result.recv().unwrap();
+        let outside_created = outside.join("frames").exists();
+        let staged_files = std::fs::read_dir(&original).unwrap().count();
+        std::fs::remove_dir_all(&workspace).unwrap();
+        assert!(matches!(outcome, Err(error) if error.contains("project root")));
+        assert!(!outside_created);
+        assert_eq!(staged_files, 0);
+    }
+
     #[test]
     fn live_saves_bind_path_and_preserve_previous_file_on_collision() {
         use serde_json::json;
@@ -1970,6 +2075,7 @@ mod bridge_tests {
                 {"op":"blit","layer":0,"frame":0,"x":0,"y":0,"width":1,"height":1,"data":"/////w=="}
             ]}),
             deadline: Instant::now() + Duration::from_secs(2),
+            project_root: None,
             response,
             export_progress: Default::default(),
         };

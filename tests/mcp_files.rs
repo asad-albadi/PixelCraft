@@ -289,3 +289,40 @@ fn mcp_preflights_atlas_metadata_before_writing_atlas_image() {
     assert!(!w.project().join("atlas.png").exists());
     assert_eq!(fs::read(metadata).unwrap(), b"keep");
 }
+
+#[test]
+fn restricted_mcp_rejects_outside_paths_before_probing_them() {
+    let w = Workspace::new();
+    for input in ["../outside.pixel", "../missing.pixel"] {
+        assert_error(
+            &w.call("inspect", json!({"input":input})),
+            "Path escapes the project root",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn restricted_mcp_rejects_special_files_as_inputs() {
+    let w = Workspace::new();
+    let _socket = std::os::unix::net::UnixListener::bind(w.project().join("socket.pixel")).unwrap();
+    assert_error(
+        &w.call("inspect", json!({"input":"socket.pixel"})),
+        "Input must be a regular file",
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn restricted_mcp_rejects_external_unc_roots_before_probing_them() {
+    let w = Workspace::new();
+    for input in [
+        r"\\192.0.2.1\share\outside.pixel",
+        r"\\?\UNC\192.0.2.1\share\outside.pixel",
+    ] {
+        assert_error(
+            &w.call("inspect", json!({"input":input})),
+            "Path escapes the project root",
+        );
+    }
+}

@@ -281,7 +281,7 @@ pixelcraft --cli palette-convert --input colors.hex --output colors.gpl
 
 Configure an MCP client to launch the executable with `--mcp`. The newline-delimited stdio JSON-RPC server advertises file inspection, PNG rendering, revision-checked edits, import/export, palettes, tag batches and atlases. Rendering returns an MCP image. File tools operate on explicitly supplied local paths and do not require the editor to be open.
 
-Add `--project-root DIRECTORY` to restrict file tools and explicit live output paths to a project directory. Relative paths resolve from that directory. Absolute paths, symlinks, and external files referenced by imports must resolve inside it. This option can be combined with `--live BRIDGE_CONFIG`. Use a project directory you control. Path checks assume other processes leave the directory and its symlinks in place during each file operation.
+Add `--project-root DIRECTORY` to restrict file tools and explicit live output paths to a project directory. Relative paths resolve from that directory. Absolute paths must be under the configured directory, and resolved paths must stay inside it, including companion files referenced by imports. On Windows, files under the root must use ordinary paths without junctions or other reparse points. This option can be combined with `--live BRIDGE_CONFIG`. Use a project directory you control. Path checks assume other processes leave the directory and its symlinks in place between each check and file access.
 
 MCP file writes require `"overwrite": true` to replace an existing file. This applies to every generated atlas, sprite-sheet, and batch sidecar.
 
@@ -297,7 +297,7 @@ Pass a unique `job_id` to `live-export`. While the request is running, call `liv
 
 #### Live pixel painting
 
-Use `live-save` with the revision from `live-inspect` to write the active sprite to its current project path. Use `live-save-as` with `revision` and an `output` path to name an untitled sprite or save a copy. The editor adopts the new path after the file is saved. File MCP also supports `save` and `save-as` with an explicit `input` and its file revision. The user-selected current project path remains available to revision-checked `live-save` without an overwrite flag or a project-root restriction.
+Use `live-save` with the revision from `live-inspect` to write the active sprite to its current project path. Use `live-save-as` with `revision` and an `output` path to name an untitled sprite or save a copy. The editor adopts the new path after the file is saved. File MCP also supports `save` and `save-as` with an explicit `input` and its file revision. The user-selected current project path remains available to revision-checked `live-save` without an overwrite flag. Paths adopted by a restricted `live-save-as` retain their project-root restriction while that tab is open.
 
 In the **File** menu, choose **Export animation GIF…** or **Export video MP4…** and select a scale. Both use integer nearest-neighbor scaling. The same options are available through `live-export` with `revision`, `output`, and optional `scale`. The file MCP `export` tool takes `input` instead of a live revision. The extension selects PNG, GIF, or MP4 for live export. For example, a 480×270 sprite exported with `scale:4` produces 1920×1080.
 

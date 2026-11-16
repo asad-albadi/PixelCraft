@@ -244,6 +244,7 @@ impl PixelCraft {
                             doc: t.doc.clone(),
                             saved: t.saved.clone(),
                             path: t.path.clone(),
+                            live_save_root: None,
                             layer: t.layer,
                             frame: t.frame,
                             undo: vec![],

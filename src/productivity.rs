@@ -831,19 +831,31 @@ pub const ATLAS_EXTENSIONS: &[&str] = &[
     "apng", "tmj", "tsj",
 ];
 pub fn expand_atlas_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    fn visit(p: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+    expand_atlas_inputs_with_path_check(inputs, |_| Ok(()))
+}
+
+pub(crate) fn expand_atlas_inputs_with_path_check(
+    inputs: &[PathBuf],
+    check_path: impl Fn(&Path) -> Result<(), String>,
+) -> Result<Vec<PathBuf>, String> {
+    fn visit(
+        p: &Path,
+        out: &mut Vec<PathBuf>,
+        check_path: &impl Fn(&Path) -> Result<(), String>,
+    ) -> Result<(), String> {
         let meta = std::fs::symlink_metadata(p).map_err(|e| e.to_string())?;
         if meta.file_type().is_symlink() {
             return Ok(());
         }
         if meta.is_dir() {
+            check_path(p)?;
             let mut children = std::fs::read_dir(p)
                 .map_err(|e| e.to_string())?
                 .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
                 .collect::<Result<Vec<_>, _>>()?;
             children.sort();
             for child in children {
-                visit(&child, out)?;
+                visit(&child, out, check_path)?;
             }
         } else if meta.is_file()
             && p.extension()
@@ -859,7 +871,7 @@ pub fn expand_atlas_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     }
     let mut out = vec![];
     for p in inputs {
-        visit(p, &mut out)?;
+        visit(p, &mut out, &check_path)?;
     }
     out.sort();
     out.dedup();

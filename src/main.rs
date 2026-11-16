@@ -163,6 +163,7 @@ struct SpriteTab {
     doc: Document,
     saved: Document,
     path: Option<PathBuf>,
+    live_save_root: Option<PathBuf>,
     layer: usize,
     frame: usize,
     undo: Vec<HistoryEntry>,
@@ -234,6 +235,7 @@ struct PixelCraft {
     doc: Document,
     saved: Document,
     path: Option<PathBuf>,
+    live_save_root: Option<PathBuf>,
     layer: usize,
     frame: usize,
     tool: Tool,
@@ -313,8 +315,11 @@ struct PixelCraft {
     about_info: AboutInfo,
     update_job: Option<std::sync::mpsc::Receiver<Result<Release, String>>>,
     latest_release: Option<Release>,
-    download_job: Option<std::sync::mpsc::Receiver<Result<updates::VerifiedDownload, String>>>,
-    downloaded_update: Option<updates::VerifiedDownload>,
+    download_job: Option<(
+        String,
+        std::sync::mpsc::Receiver<Result<updates::VerifiedDownload, String>>,
+    )>,
+    downloaded_update: Option<(String, updates::VerifiedDownload)>,
     background_update_attempt: Option<String>,
     update_status: String,
     next_update_check: Option<Instant>,
@@ -389,6 +394,7 @@ impl PixelCraft {
             saved: doc.clone(),
             doc,
             path: None,
+            live_save_root: None,
             layer: 1,
             frame: 0,
             tool: Tool::Pencil,
@@ -1401,6 +1407,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.doc = d;
         self.saved = self.doc.clone();
         self.path = path;
+        self.live_save_root = None;
         self.layer = 0;
         self.frame = 0;
         self.timeline_anchor = None;
@@ -1424,6 +1431,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             doc: self.doc.clone(),
             saved: self.saved.clone(),
             path: self.path.clone(),
+            live_save_root: self.live_save_root.clone(),
             layer: self.layer,
             frame: self.frame,
             undo: self.undo.clone(),
@@ -1452,6 +1460,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.doc, &mut tab.doc);
         std::mem::swap(&mut self.saved, &mut tab.saved);
         std::mem::swap(&mut self.path, &mut tab.path);
+        std::mem::swap(&mut self.live_save_root, &mut tab.live_save_root);
         std::mem::swap(&mut self.layer, &mut tab.layer);
         std::mem::swap(&mut self.frame, &mut tab.frame);
         std::mem::swap(&mut self.undo, &mut tab.undo);
@@ -1669,9 +1678,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     path.file_name().unwrap_or_default().to_string_lossy()
                 );
                 if tab == self.active_tab {
+                    if self.path.as_ref() != Some(&path) {
+                        self.live_save_root = None;
+                    }
                     self.path = Some(path);
                     self.saved = saving;
                 } else if let Some(Some(tab)) = self.tabs.get_mut(tab) {
+                    if tab.path.as_ref() != Some(&path) {
+                        tab.live_save_root = None;
+                    }
                     tab.path = Some(path);
                     tab.saved = saving;
                 }
@@ -1692,6 +1707,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     path.file_name().unwrap_or_default().to_string_lossy()
                 );
                 self.add_recent(path.clone());
+                if self.path.as_ref() != Some(&path) {
+                    self.live_save_root = None;
+                }
                 self.path = Some(path);
                 self.saved = self.doc.clone();
                 true
@@ -4307,7 +4325,19 @@ impl PixelCraft {
         {
             match result {
                 Ok(release) => {
-                    if self.downloaded_update.is_none() && self.download_job.is_none() {
+                    if self
+                        .downloaded_update
+                        .as_ref()
+                        .is_some_and(|(tag, _)| tag != &release.tag)
+                    {
+                        self.downloaded_update = None;
+                    }
+                    if self.downloaded_update.is_none()
+                        && self
+                            .download_job
+                            .as_ref()
+                            .is_none_or(|(tag, _)| tag != &release.tag)
+                    {
                         self.update_status = if release.is_newer_than(INSTALLED_VERSION) {
                             "A new version is available.".into()
                         } else {
@@ -4317,7 +4347,6 @@ impl PixelCraft {
                     self.latest_release = Some(release);
                 }
                 Err(error) => {
-                    self.latest_release = None;
                     if self.downloaded_update.is_none() && self.download_job.is_none() {
                         self.update_status = error;
                     }
@@ -4325,16 +4354,22 @@ impl PixelCraft {
             }
             self.update_job = None;
         }
-        if let Some(job) = &self.download_job
+        if let Some((tag, job)) = &self.download_job
             && let Ok(result) = job.try_recv()
         {
-            match result {
-                Ok(download) => {
-                    self.downloaded_update = Some(download);
-                    self.update_status =
-                        "Download verified. Ready to install when you confirm.".into();
+            if self
+                .latest_release
+                .as_ref()
+                .is_none_or(|release| &release.tag == tag)
+            {
+                match result {
+                    Ok(download) => {
+                        self.downloaded_update = Some((tag.clone(), download));
+                        self.update_status =
+                            "Download verified. Ready to install when you confirm.".into();
+                    }
+                    Err(e) => self.update_status = e,
                 }
-                Err(e) => self.update_status = e,
             }
             self.download_job = None;
         }
@@ -5815,15 +5850,17 @@ mod tests {
 
 impl PixelCraft {
     fn check_updates(&mut self, ctx: &egui::Context) {
-        self.latest_release = None;
         if self.download_job.is_none() && self.downloaded_update.is_none() {
             self.background_update_attempt = None;
         }
         if let Some(slug) = updates::repository_slug(&self.about_info.repository) {
             self.next_update_check = Some(Instant::now() + Duration::from_secs(3600));
-            self.update_status = "Checking GitHub releases…".into();
+            if self.download_job.is_none() && self.downloaded_update.is_none() {
+                self.update_status = "Checking GitHub releases…".into();
+            }
             self.update_job = Some(updates::check(&slug, ctx.clone()));
         } else {
+            self.latest_release = None;
             self.next_update_check = None;
             self.update_job = None;
             self.update_status =
@@ -5832,7 +5869,10 @@ impl PixelCraft {
     }
 
     fn update_to_download(&self, background: bool) -> Option<&Release> {
-        if self.download_job.is_some() || self.downloaded_update.is_some() {
+        if self.update_job.is_some()
+            || self.download_job.is_some()
+            || self.downloaded_update.is_some()
+        {
             return None;
         }
         self.latest_release.as_ref().filter(|release| {
@@ -5850,11 +5890,14 @@ impl PixelCraft {
         };
         self.background_update_attempt = Some(release.tag.clone());
         self.update_status = "Downloading update and verifying SHA-256…".into();
-        self.download_job = Some(updates::download(
-            release,
-            self.about_info.repository.clone(),
-            extensions::config_directory().join("updates"),
-            ctx.clone(),
+        self.download_job = Some((
+            release.tag.clone(),
+            updates::download(
+                release,
+                self.about_info.repository.clone(),
+                extensions::config_directory().join("updates"),
+                ctx.clone(),
+            ),
         ));
     }
 
@@ -5906,7 +5949,7 @@ impl PixelCraft {
                     && ui.pc_button("Download update in PixelCraft").clicked(){
                         self.start_update_download(ctx, false);
                     }
-                if let Some(download)=&self.downloaded_update {
+                if let Some((_, download))=&self.downloaded_update {
                     ui.small(format!("Verified: {}",download.name));
                     if ui.pc_button("Install verified update…").clicked(){
                         let target=if cfg!(target_os="linux") {std::env::var_os("APPIMAGE").map(PathBuf::from).or_else(||rfd::FileDialog::new().add_filter("AppImage",&["AppImage"]).set_file_name(&download.name).save_file())}else{None};
@@ -5946,6 +5989,30 @@ impl PixelCraft {
 #[cfg(test)]
 mod update_ui_tests {
     use super::*;
+
+    #[test]
+    fn a_superseded_download_cannot_hide_the_new_release_status() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("test.png")));
+        let (release_sender, release_receiver) = std::sync::mpsc::channel();
+        let (download_sender, download_receiver) = std::sync::mpsc::channel();
+        app.latest_release = Some(Release::parse(r#"{"tag_name":"v99.0.0"}"#).unwrap());
+        app.update_job = Some(release_receiver);
+        app.download_job = Some(("v99.0.0".into(), download_receiver));
+        release_sender
+            .send(Ok(Release::parse(r#"{"tag_name":"v100.0.0"}"#).unwrap()))
+            .unwrap();
+        download_sender
+            .send(Err("Old download failed".into()))
+            .unwrap();
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.render(ui));
+        output.textures_delta.clear();
+
+        assert_eq!(app.update_status, "A new version is available.");
+        assert_eq!(app.latest_release.unwrap().tag, "v100.0.0");
+        assert!(app.download_job.is_none());
+    }
 
     fn has_notice(shape: &egui::Shape) -> bool {
         match shape {

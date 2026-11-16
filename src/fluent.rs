@@ -420,7 +420,11 @@ impl PixelCraft {
         let mut reorder = None;
         ui.collapsing("Document palette", |ui| {
             ui.small("Drag a swatch onto another to move it.");
-            let palette = self.doc.editing_palette(self.layer, self.frame);
+            let palette = if self.doc.color_mode == ColorMode::Indexed {
+                self.doc.editing_palette(self.layer, self.frame)
+            } else {
+                self.doc.palette_for(self.frame).to_vec()
+            };
             let side = 22.;
             let spacing = ui.spacing().item_spacing.x;
             let columns = ((ui.available_width() + spacing) / (side + spacing))

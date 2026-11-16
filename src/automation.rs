@@ -566,7 +566,7 @@ fn file_operation(
         check_input(&p)?;
         Ok::<_, String>(p)
     };
-    let input_paths = || {
+    let input_paths = |allow_directories| {
         v["inputs"]
             .as_array()
             .ok_or("Expected inputs array")?
@@ -574,7 +574,13 @@ fn file_operation(
             .map(|p| {
                 let p = p.as_str().ok_or("Input must be a path")?;
                 let p = resolve(p.into());
-                check_input(&p)?;
+                if allow_directories {
+                    if let Some(files) = files {
+                        files.check_atlas_input(&p)?;
+                    }
+                } else {
+                    check_input(&p)?;
+                }
                 Ok::<_, String>(p)
             })
             .collect::<Result<Vec<_>, _>>()
@@ -603,8 +609,10 @@ fn file_operation(
         }
         "atlas" => {
             let mut docs = vec![];
-            let paths = input_paths()?;
-            for p in expand_atlas_inputs(&paths)? {
+            let paths = input_paths(true)?;
+            for p in expand_atlas_inputs_with_path_check(&paths, |p| {
+                files.map_or(Ok(()), |files| files.check_atlas_input(p))
+            })? {
                 docs.push((
                     p.file_name()
                         .unwrap_or_default()
@@ -628,7 +636,7 @@ fn file_operation(
             Ok(json!({"output":out}))
         }
         "import-sequence" => {
-            let paths = input_paths()?;
+            let paths = input_paths(false)?;
             let d = interchange::load_sequence(&paths)?;
             save(&argument_path("output")?, &d)?;
             Ok(inspect(&d))
@@ -725,6 +733,7 @@ fn file_operation(
                                 v,
                                 &document_revision(&d),
                                 replace,
+                                files.and_then(|files| files.root),
                                 |_, _| Ok(()),
                             )?
                             .write();
@@ -1081,7 +1090,7 @@ fn rpc_with_root(r: &Value, live: Option<&Path>, root: Option<&Path>) -> Option<
                         }
                         args["output"] = json!(out);
                     }
-                    live_call(bridge, name, &args)
+                    live_call(bridge, name, &args, root)
                 } else {
                     file_operation(name, args, Some(&files))
                 }
@@ -1170,6 +1179,7 @@ pub struct LiveRequest {
     pub deadline: std::time::Instant,
     pub operation: String,
     pub arguments: Value,
+    pub project_root: Option<PathBuf>,
     pub response: mpsc::Sender<Result<Value, String>>,
     pub export_progress: LiveExportProgress,
 }
@@ -1294,6 +1304,7 @@ impl LiveBridge {
                                 deadline,
                                 operation: operation.into(),
                                 arguments: arguments.clone(),
+                                project_root: v["project_root"].as_str().map(PathBuf::from),
                                 response: res_tx,
                                 export_progress: export_progress.clone(),
                             })
@@ -1504,7 +1515,7 @@ pub fn check_live_response_size(value: &Value) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn live_call(config: &Path, op: &str, args: &Value) -> Result<Value, String> {
+fn live_call(config: &Path, op: &str, args: &Value, root: Option<&Path>) -> Result<Value, String> {
     let v: Value = serde_json::from_slice(&std::fs::read(config).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let addr: std::net::SocketAddr = v["address"]
@@ -1525,7 +1536,7 @@ fn live_call(config: &Path, op: &str, args: &Value) -> Result<Value, String> {
     writeln!(
         stream,
         "{}",
-        json!({"token":v["token"],"operation":op,"arguments":args})
+        json!({"token":v["token"],"operation":op,"arguments":args,"project_root":root})
     )
     .map_err(|e| e.to_string())?;
     let mut line = String::new();
@@ -1607,11 +1618,16 @@ pub struct PreparedExport {
     metadata: Value,
     replace: bool,
     sequence: Vec<String>,
+    project_root: Option<PathBuf>,
 }
 
 impl Drop for PreparedExport {
     fn drop(&mut self) {
-        if !self.preserve_staging {
+        let guard = mcp_files::Files {
+            root: self.project_root.as_deref(),
+            overwrite: self.replace,
+        };
+        if !self.preserve_staging && guard.check_write(&self.staging).is_ok() {
             let _ = std::fs::remove_dir_all(&self.staging);
         }
     }
@@ -1622,6 +1638,20 @@ fn prepare_output(
     replace: bool,
     encode: impl FnOnce(&Path) -> Result<Value, String>,
 ) -> Result<PreparedExport, String> {
+    prepare_output_under(output, replace, None, encode)
+}
+
+fn prepare_output_under(
+    output: PathBuf,
+    replace: bool,
+    root: Option<&Path>,
+    encode: impl FnOnce(&Path) -> Result<Value, String>,
+) -> Result<PreparedExport, String> {
+    let files = mcp_files::Files {
+        root,
+        overwrite: replace,
+    };
+    files.check_write(&output)?;
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if !replace && output.try_exists().map_err(|e| e.to_string())? {
         return Err("Output already exists. Choose a new path.".into());
@@ -1632,11 +1662,28 @@ fn prepare_output(
     } else {
         parent
     };
+    let resolved_parent;
+    let parent = if root.is_some() {
+        resolved_parent = parent.canonicalize().map_err(|e| e.to_string())?;
+        files.check_write(&resolved_parent)?;
+        &resolved_parent
+    } else {
+        parent
+    };
     let filename = output.file_name().ok_or("Invalid output filename")?;
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+    };
+    #[cfg(not(unix))]
+    let builder = std::fs::DirBuilder::new();
     let staging = loop {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = parent.join(format!(".pixelcraft-output-{}-{n}", std::process::id()));
-        match std::fs::create_dir(&dir) {
+        match builder.create(&dir) {
             Ok(()) => break dir,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e.to_string()),
@@ -1651,6 +1698,7 @@ fn prepare_output(
         metadata: Value::Null,
         replace,
         sequence: vec![],
+        project_root: root.map(Path::to_path_buf),
     };
     prepared.metadata = encode(&prepared.temporary)?;
     Ok(prepared)
@@ -1662,8 +1710,18 @@ pub fn prepare_live_save(
     revision: &str,
     replace: bool,
 ) -> Result<PreparedExport, String> {
+    prepare_live_save_under(d, output, revision, replace, None)
+}
+
+pub fn prepare_live_save_under(
+    d: &Document,
+    output: PathBuf,
+    revision: &str,
+    replace: bool,
+    root: Option<&Path>,
+) -> Result<PreparedExport, String> {
     let metadata = save_metadata(d, &output, revision)?;
-    prepare_output(output, replace, |temporary| {
+    prepare_output_under(output, replace, root, |temporary| {
         formats::save(temporary, d)?;
         Ok(metadata)
     })
@@ -1685,7 +1743,7 @@ pub fn prepare_png_sequence(
     args: &Value,
     revision: &str,
 ) -> Result<PreparedExport, String> {
-    prepare_png_sequence_progress(doc, output, args, revision, false, |_, _| Ok(()))
+    prepare_png_sequence_progress(doc, output, args, revision, false, None, |_, _| Ok(()))
 }
 
 fn sequence_names(doc: &Document) -> Vec<String> {
@@ -1694,7 +1752,12 @@ fn sequence_names(doc: &Document) -> Vec<String> {
         .collect()
 }
 
-fn check_sequence_outputs(output: &Path, names: &[String]) -> Result<Vec<PathBuf>, String> {
+fn check_sequence_outputs(
+    output: &Path,
+    names: &[String],
+    files: &mcp_files::Files<'_>,
+) -> Result<Vec<PathBuf>, String> {
+    files.check_write(output)?;
     match std::fs::symlink_metadata(output) {
         Ok(metadata) if !metadata.is_dir() => {
             return Err(format!(
@@ -1706,10 +1769,6 @@ fn check_sequence_outputs(output: &Path, names: &[String]) -> Result<Vec<PathBuf
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(e.to_string()),
     }
-    let files = mcp_files::Files {
-        root: None,
-        overwrite: true,
-    };
     names
         .iter()
         .map(|name| {
@@ -1726,14 +1785,20 @@ fn prepare_png_sequence_progress(
     args: &Value,
     revision: &str,
     replace: bool,
+    root: Option<&Path>,
     mut progress: impl FnMut(usize, usize) -> Result<(), String>,
 ) -> Result<PreparedExport, String> {
     if args.get("frame").is_some() {
         return Err("PNG sequence export uses all timeline frames".into());
     }
     let names = sequence_names(doc);
+    let files = mcp_files::Files {
+        root,
+        overwrite: replace,
+    };
+    files.check_write(&output)?;
     if replace {
-        check_sequence_outputs(&output, &names)?;
+        check_sequence_outputs(&output, &names, &files)?;
     }
     let filtered = filter_export_layers(doc, args)?;
     let staging_target = if replace && output.is_dir() {
@@ -1741,7 +1806,7 @@ fn prepare_png_sequence_progress(
     } else {
         output.clone()
     };
-    let mut prepared = prepare_output(staging_target, replace, |temporary| {
+    let mut prepared = prepare_output_under(staging_target, replace, root, |temporary| {
         std::fs::create_dir(temporary).map_err(|e| e.to_string())?;
         let mut metadata = Value::Null;
         for (frame, name) in names.iter().enumerate() {
@@ -1783,15 +1848,26 @@ pub fn prepare_live_export_with_progress(
     f: usize,
     args: &Value,
     revision: &str,
+    progress: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<PreparedExport, String> {
+    prepare_live_export_under(d, f, args, revision, None, progress)
+}
+
+pub fn prepare_live_export_under(
+    d: &Document,
+    f: usize,
+    args: &Value,
+    revision: &str,
+    root: Option<&Path>,
     mut progress: impl FnMut(usize, usize) -> Result<(), String>,
 ) -> Result<PreparedExport, String> {
     let output = path(args, "output")?;
     let replace = args["overwrite"] == true;
     if args["format"] == "png-sequence" {
-        return prepare_png_sequence_progress(d, output, args, revision, replace, progress);
+        return prepare_png_sequence_progress(d, output, args, revision, replace, root, progress);
     }
     mcp_files::Files {
-        root: None,
+        root,
         overwrite: replace,
     }
     .check_file(&output)?;
@@ -1799,7 +1875,7 @@ pub fn prepare_live_export_with_progress(
     if args.get("format").is_some_and(|v| v != kind.as_str()) {
         return Err("Export format must match the output extension".into());
     }
-    prepare_output(output, replace, |temporary| match kind.as_str() {
+    prepare_output_under(output, replace, root, |temporary| match kind.as_str() {
         "png" => {
             progress(0, 1)?;
             let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
@@ -1840,8 +1916,14 @@ pub fn prepare_live_export_with_progress(
 
 impl PreparedExport {
     pub fn write(mut self) -> Result<Value, String> {
+        let guard = mcp_files::Files {
+            root: self.project_root.as_deref(),
+            overwrite: self.replace,
+        };
+        guard.check_write(&self.output)?;
+        guard.check_write(&self.staging)?;
         if !self.sequence.is_empty() && self.replace {
-            let files = check_sequence_outputs(&self.output, &self.sequence)?;
+            let files = check_sequence_outputs(&self.output, &self.sequence, &guard)?;
             std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
             mcp_files::publish_files(&self, &files, true, true)?;
         } else if !self.sequence.is_empty() {
@@ -1858,6 +1940,9 @@ impl PreparedExport {
                 }
             }
         } else {
+            if self.project_root.is_some() {
+                guard.check_file(&self.output)?;
+            }
             if self.replace {
                 std::fs::rename(&self.temporary, &self.output)
             } else {
