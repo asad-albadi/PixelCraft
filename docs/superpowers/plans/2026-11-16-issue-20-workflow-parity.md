@@ -101,6 +101,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 indexed checkpoint. PSD and PSB import now reads planar 8-bit color tables, the defined palette length, and the optional transparency index. Exact per-pixel slots are retained so duplicate swatches stay independently editable. The tests cover tagged transparency in PSD, an opaque slot zero in PSB, and editing duplicate slots. An external indexed PSD fixture matched all exported pixels, including transparency. Formatting, strict Clippy, and 509 Windows all-target tests passed. The remaining Photoshop validation includes merged transparency versus saved alpha channels and color profiles.
 
+- Item 35 merged-image checkpoint. The loader recognizes signed layer counts, merged transparency tags, and alpha identifiers. It skips saved selection planes during preview decoding and removes Photoshop's white matte from partially transparent preview pixels with explicit transparency. Embedded 8- and 16-bit RGB and grayscale ICC profiles survive import. Seven external RGB and grayscale fixtures retained their ICC payload byte-for-byte through PNG export, with alpha and visible colors matching within one channel value. The six high-depth fixtures and the indexed fixture also passed again. Formatting, strict Clippy, and 510 Windows all-target tests passed. Photoshop clipping and adjustment previews, 32-bit profile conversion, and native grayscale PNG export remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

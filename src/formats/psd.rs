@@ -53,35 +53,58 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     }
     let mut doc = Document::new(width, height);
     let color_data = input.length(false)?;
-    let transparent = if indexed {
+    let table = if indexed {
         if color_data != 768 {
             return Err("Invalid Photoshop indexed color table size".into());
         }
-        let table = input.array::<768>()?;
-        let resources = input.length(false)?;
-        let (count, transparent) = input.section(resources, indexed_resources)?;
+        Some(input.array::<768>()?)
+    } else {
+        input.skip(color_data)?;
+        None
+    };
+    let resources = input.length(false)?;
+    let resources = input.section(resources, |input| {
+        ImageResources::read(input, indexed, depth != SampleDepth::Float)
+    })?;
+    let transparent = resources.transparent;
+    if let Some(table) = table {
         doc.color_mode = ColorMode::Indexed;
-        doc.palette = (0..count)
+        doc.palette = (0..resources.palette_count)
             .map(|i| [table[i], table[256 + i], table[512 + i], 255])
             .collect();
         doc.transparent_index = transparent.map_or(0, usize::from);
-        transparent
-    } else {
-        input.skip(color_data)?;
-        let resources = input.length(false)?;
-        input.skip(resources)?;
-        None
-    };
+    }
+    doc.color_profile = resources.icc;
     let section = input.length(large)?;
     if mode == 1 {
         doc.color_mode = ColorMode::Grayscale;
     }
-    let layers = if section > 0 {
+    let (layers, explicit_alpha) = if section > 0 {
         input.section(section, |input| {
             read_layer_section(input, &mut doc, transparent, encoding)
         })?
     } else {
-        ImportedLayers::None
+        (ImportedLayers::None, false)
+    };
+    let alpha = if indexed || channels == colors {
+        None
+    } else if explicit_alpha {
+        Some(colors)
+    } else if let Some(ids) = &resources.alpha_ids {
+        ids.iter()
+            .position(|&id| id == 0)
+            .and_then(|i| channels.checked_sub(ids.len()).map(|base| base + i))
+            .filter(|&index| index >= colors)
+    } else if layers == ImportedLayers::None {
+        // Flat files from some writers omit the layer and resource metadata.
+        Some(colors)
+    } else {
+        None
+    };
+    let merged = MergedChannels {
+        total: channels,
+        alpha,
+        white_matte: explicit_alpha || resources.alpha_ids.is_some(),
     };
     match layers {
         ImportedLayers::Editable => {}
@@ -90,7 +113,7 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
             decode_merged(
                 &mut input,
                 [width, height],
-                channels,
+                merged,
                 encoding,
                 palette,
                 transparent,
@@ -103,7 +126,7 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
             decode_merged(
                 &mut input,
                 [width, height],
-                channels,
+                merged,
                 encoding,
                 palette,
                 transparent,
@@ -127,39 +150,86 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     Ok(doc)
 }
 
-fn indexed_resources(input: &mut Input) -> Result<(usize, Option<u8>), String> {
-    let mut count = 256;
-    let mut transparent = None;
-    while input.position < input.end {
-        if input.array::<4>()? != *b"8BIM" {
-            return Err("Invalid Photoshop image resource signature".into());
-        }
-        let id = input.u16()?;
-        let name = u64::from(input.byte()?) + 1;
-        input.skip(name.next_multiple_of(2) - 1)?;
-        let length = input.length(false)?;
-        input.section(length, |input| {
-            match id {
-                1046 => {
-                    count = usize::from(input.u16()?);
-                    if count == 0 || count > 256 {
-                        return Err("Invalid Photoshop indexed color count".into());
-                    }
-                }
-                1047 => transparent = u8::try_from(input.u16()?).ok(),
-                _ => {}
+struct ImageResources {
+    palette_count: usize,
+    transparent: Option<u8>,
+    alpha_ids: Option<Vec<u32>>,
+    icc: Vec<u8>,
+}
+
+impl ImageResources {
+    fn read(input: &mut Input, indexed: bool, preserve_icc: bool) -> Result<Self, String> {
+        let mut resources = Self {
+            palette_count: 256,
+            transparent: None,
+            alpha_ids: None,
+            icc: Vec::new(),
+        };
+        while input.position < input.end {
+            if !matches!(
+                &input.array::<4>()?,
+                b"8BIM" | b"MeSa" | b"AgHg" | b"PHUT" | b"DCSR"
+            ) {
+                return Err("Invalid Photoshop image resource signature".into());
             }
-            Ok(())
-        })?;
-        input.skip(length % 2)?;
+            let id = input.u16()?;
+            let name = u64::from(input.byte()?) + 1;
+            input.skip(name.next_multiple_of(2) - 1)?;
+            let length = input.length(false)?;
+            input.section(length, |input| {
+                match id {
+                    1039 if preserve_icc && (128..=16 * 1024 * 1024).contains(&length) => {
+                        let bytes = length as usize;
+                        let mut profile = vec![0; 20 + bytes];
+                        profile[0] = 2; // Embedded ICC profile in PixelCraft's document format.
+                        profile[16..20].copy_from_slice(&(bytes as u32).to_le_bytes());
+                        input.read_exact(&mut profile[20..]).map_err(io_text)?;
+                        if moxcms::ColorProfile::new_from_slice(&profile[20..]).is_ok_and(|p| {
+                            matches!(
+                                p.color_space,
+                                moxcms::DataColorSpace::Rgb | moxcms::DataColorSpace::Gray
+                            )
+                        }) {
+                            resources.icc = profile;
+                        }
+                    }
+                    1046 if indexed => {
+                        resources.palette_count = usize::from(input.u16()?);
+                        if !(1..=256).contains(&resources.palette_count) {
+                            return Err("Invalid Photoshop indexed color count".into());
+                        }
+                    }
+                    1047 if indexed => resources.transparent = u8::try_from(input.u16()?).ok(),
+                    1053 if length > 0 && length <= 56 * 4 && length % 4 == 0 => {
+                        resources.alpha_ids = Some(
+                            (0..length / 4)
+                                .map(|_| input.u32())
+                                .collect::<Result<Vec<_>, _>>()?,
+                        );
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })?;
+            input.skip(length % 2)?;
+        }
+        resources.transparent = resources
+            .transparent
+            .filter(|&slot| usize::from(slot) < resources.palette_count);
+        Ok(resources)
     }
-    Ok((count, transparent.filter(|&slot| usize::from(slot) < count)))
+}
+
+struct MergedChannels {
+    total: usize,
+    alpha: Option<usize>,
+    white_matte: bool,
 }
 
 fn decode_merged(
     input: &mut Input,
     [width, height]: [usize; 2],
-    channels: usize,
+    channels: MergedChannels,
     encoding: ChannelEncoding,
     palette: Option<&[Pixel]>,
     transparent: Option<u8>,
@@ -171,12 +241,8 @@ fn decode_merged(
         input,
         compression,
         [width, height],
-        channels,
-        if palette.is_some() {
-            1
-        } else {
-            channels.min(colors + 1)
-        },
+        channels.total,
+        |index| index < colors || Some(index) == channels.alpha,
         encoding,
     )?;
     if let Some(palette) = palette {
@@ -190,7 +256,18 @@ fn decode_merged(
         layer.background = transparent.is_none();
     } else {
         layer.cels[0] = (0..width * height)
-            .map(|i| color_at(&planes, colors, i))
+            .map(|i| {
+                let mut pixel = color_at(&planes, colors, i);
+                let alpha = u16::from(pixel[3]);
+                if channels.white_matte && alpha > 0 && alpha < 255 {
+                    for value in &mut pixel[..3] {
+                        // Photoshop's stored preview is composited over white.
+                        let straight = u16::from(*value).saturating_sub(255 - alpha);
+                        *value = ((straight * 255 + alpha / 2) / alpha) as u8;
+                    }
+                }
+                pixel
+            })
             .collect();
     }
     Ok(())
@@ -381,16 +458,15 @@ fn read_layer_section(
     doc: &mut Document,
     transparent: Option<u8>,
     encoding: ChannelEncoding,
-) -> Result<ImportedLayers, String> {
+) -> Result<(ImportedLayers, bool), String> {
     let length = input.length(encoding.large)?;
     let start = input.position;
+    let mut layers = ImportedLayers::None;
+    let mut explicit_alpha = false;
     if encoding.depth == SampleDepth::Byte && length != 0 {
-        let decoded = input.section(length, |input| {
+        (layers, explicit_alpha) = input.section(length, |input| {
             read_layers(input, doc, transparent, encoding)
         })?;
-        if decoded != ImportedLayers::None {
-            return Ok(decoded);
-        }
     } else {
         input.skip(length)?;
     }
@@ -403,27 +479,29 @@ fn read_layer_section(
             SampleDepth::Float => b"Lr32",
         };
         while let Some((key, length)) = input.tagged_header(encoding.large)? {
-            if &key == wanted {
-                let decoded = input.section(length, |input| {
+            if &key == wanted && layers == ImportedLayers::None {
+                let (decoded, alpha) = input.section(length, |input| {
                     read_layers(input, doc, transparent, encoding)
                 })?;
-                if decoded != ImportedLayers::None {
-                    return Ok(decoded);
-                }
+                layers = decoded;
+                explicit_alpha |= alpha;
             } else {
+                explicit_alpha |= matches!(&key, b"Mtrn" | b"Mt16" | b"Mt32");
                 input.skip(length)?;
             }
             let padding = (4 - length % 4) % 4;
             input.skip(padding.min(input.end - input.position))?;
         }
     }
-    if encoding.depth != SampleDepth::Byte && length != 0 {
+    if layers == ImportedLayers::None && encoding.depth != SampleDepth::Byte && length != 0 {
         input.seek_to(start)?;
-        return input.section(length, |input| {
+        let (decoded, alpha) = input.section(length, |input| {
             read_layers(input, doc, transparent, encoding)
-        });
+        })?;
+        layers = decoded;
+        explicit_alpha |= alpha;
     }
-    Ok(ImportedLayers::None)
+    Ok((layers, explicit_alpha))
 }
 
 fn read_layers(
@@ -431,12 +509,13 @@ fn read_layers(
     doc: &mut Document,
     transparent: Option<u8>,
     encoding: ChannelEncoding,
-) -> Result<ImportedLayers, String> {
+) -> Result<(ImportedLayers, bool), String> {
     let colors = encoding.color_planes;
     let indexed = doc.color_mode == ColorMode::Indexed;
-    let count = input.i16()?.unsigned_abs() as usize;
+    let signed_count = input.i16()?;
+    let count = signed_count.unsigned_abs() as usize;
     if count == 0 {
-        return Ok(ImportedLayers::None);
+        return Ok((ImportedLayers::None, false));
     }
     let records = (0..count)
         .map(|_| Record::read(input, encoding.large))
@@ -467,7 +546,7 @@ fn read_layers(
         )
     });
     if retained == 0 {
-        return Ok(ImportedLayers::None);
+        return Ok((ImportedLayers::None, signed_count < 0));
     }
     let indexed_storage = if indexed {
         area.div_ceil(4).saturating_mul(retained)
@@ -535,7 +614,7 @@ fn read_layers(
                     color_planes: usize::from(target.is_some_and(|index| index < colors)),
                     ..encoding
                 };
-                let plane = decode_planes(input, compression, size, 1, 1, encoding)?
+                let plane = decode_planes(input, compression, size, 1, |_| true, encoding)?
                     .pop()
                     .unwrap();
                 if let Some(index) = target {
@@ -606,11 +685,12 @@ fn read_layers(
         }
         doc.layers.push(layer);
     }
-    Ok(if needs_preview {
+    let layers = if needs_preview {
         ImportedLayers::NeedsPreview
     } else {
         ImportedLayers::Editable
-    })
+    };
+    Ok((layers, signed_count < 0))
 }
 
 fn color_at(planes: &[Vec<u8>], colors: usize, index: usize) -> Pixel {
@@ -753,7 +833,7 @@ fn decode_planes(
     compression: u16,
     [width, height]: [usize; 2],
     count: usize,
-    included: usize,
+    include: impl Fn(usize) -> bool,
     encoding: ChannelEncoding,
 ) -> Result<Vec<Vec<u8>>, String> {
     let area = width * height;
@@ -773,17 +853,20 @@ fn decode_planes(
             }
             Ok::<_, String>(plane)
         };
-    let mut planes = Vec::with_capacity(included);
+    let mut planes = Vec::with_capacity((0..count).filter(|&index| include(index)).count());
+    let bytes = (area as u64) * (encoding.depth.bytes() as u64);
     match compression {
         0 => {
-            let bytes = (area as u64) * (encoding.depth.bytes() as u64);
             input.end_for(bytes * count as u64)?;
-            for index in 0..included {
-                planes.push(read_plane(index, &mut |row| {
-                    input.read_exact(row).map_err(io_text)
-                })?);
+            for index in 0..count {
+                if include(index) {
+                    planes.push(read_plane(index, &mut |row| {
+                        input.read_exact(row).map_err(io_text)
+                    })?);
+                } else {
+                    input.skip(bytes)?;
+                }
             }
-            input.skip(bytes * (count - included) as u64)?;
         }
         1 => {
             let sizes = (0..count * height)
@@ -797,7 +880,7 @@ fn decode_planes(
                 .collect::<Result<Vec<_>, _>>()?;
             input.end_for(sizes.iter().map(|&size| u64::from(size)).sum())?;
             for (index, rows) in sizes.chunks_exact(height).enumerate() {
-                if index >= included {
+                if !include(index) {
                     input.skip(rows.iter().map(|&size| u64::from(size)).sum())?;
                 } else {
                     let mut sizes = rows.iter().copied();
@@ -811,10 +894,20 @@ fn decode_planes(
         }
         2 | 3 => {
             let mut zip = ZlibDecoder::new(input);
-            for index in 0..included {
-                planes.push(read_plane(index, &mut |row| {
-                    zip.read_exact(row).map_err(io_text)
-                })?);
+            let decoded = (0..count)
+                .rfind(|&index| include(index))
+                .map_or(0, |i| i + 1);
+            for index in 0..decoded {
+                if include(index) {
+                    planes.push(read_plane(index, &mut |row| {
+                        zip.read_exact(row).map_err(io_text)
+                    })?);
+                } else if io::copy(&mut zip.by_ref().take(bytes), &mut io::sink())
+                    .map_err(io_text)?
+                    != bytes
+                {
+                    return Err("Truncated Photoshop ZIP channel".into());
+                }
             }
         }
         _ => return Err("Unsupported Photoshop channel compression".into()),

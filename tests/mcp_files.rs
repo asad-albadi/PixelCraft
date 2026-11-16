@@ -2120,36 +2120,77 @@ fn photoshop_high_depth_tagged_layers_convert_samples_and_remain_editable() {
 #[test]
 fn photoshop_unrasterized_fill_uses_merged_preview_and_retains_source_layers() {
     let w = Workspace::new();
-    let mut layer = 1i16.to_be_bytes().to_vec();
-    layer.extend_from_slice(&[0; 16]); // Shape bounds are stored outside its raster record.
-    layer.extend_from_slice(&0u16.to_be_bytes());
-    layer.extend_from_slice(b"8BIMnorm");
-    layer.extend_from_slice(&[255, 0, 0, 0]);
-    let mut extra = vec![0; 8];
-    extra.extend_from_slice(b"\x05Shape\0\0");
-    extra.extend_from_slice(b"8BIMSoCo\0\0\0\x04\0\0\0\x10");
-    layer.extend_from_slice(&(extra.len() as u32).to_be_bytes());
-    layer.extend(extra);
-    let mut src = b"8BPS\0\x01".to_vec();
-    src.extend_from_slice(&[0; 6]);
-    src.extend_from_slice(b"\0\x03\0\0\0\x01\0\0\0\x01\0\x08\0\x03");
-    src.extend_from_slice(&[0; 8]);
-    src.extend_from_slice(&(layer.len() as u32 + 8).to_be_bytes());
-    src.extend_from_slice(&(layer.len() as u32).to_be_bytes());
-    src.extend(layer);
-    src.extend_from_slice(&[0; 4]);
-    src.extend_from_slice(b"\0\0\x40\x60\x80");
-    let path = w.project().join("shape.psd");
-    fs::write(&path, src).unwrap();
+    for (count, tag, expected_alpha) in [(1i16, false, 255), (-1, false, 0), (1, true, 0)] {
+        let mut layer = count.to_be_bytes().to_vec();
+        layer.extend_from_slice(&[0; 16]); // Shape bounds are stored outside its raster record.
+        layer.extend_from_slice(&0u16.to_be_bytes());
+        layer.extend_from_slice(b"8BIMnorm");
+        layer.extend_from_slice(&[255, 0, 0, 0]);
+        let mut extra = vec![0; 8];
+        extra.extend_from_slice(b"\x05Shape\0\0");
+        extra.extend_from_slice(b"8BIMSoCo\0\0\0\x04\0\0\0\x10");
+        layer.extend_from_slice(&(extra.len() as u32).to_be_bytes());
+        layer.extend(extra);
+        let mut src = b"8BPS\0\x01".to_vec();
+        src.extend_from_slice(&[0; 6]);
+        src.extend_from_slice(b"\0\x04\0\0\0\x01\0\0\0\x01\0\x08\0\x03");
+        src.extend_from_slice(&[0; 8]);
+        let tag_len = if tag { 12 } else { 0 };
+        src.extend_from_slice(&(layer.len() as u32 + 8 + tag_len).to_be_bytes());
+        src.extend_from_slice(&(layer.len() as u32).to_be_bytes());
+        src.extend(layer);
+        src.extend_from_slice(&[0; 4]);
+        if tag {
+            src.extend_from_slice(b"8BIMMtrn\0\0\0\0");
+        }
+        src.extend_from_slice(b"\0\0\x40\x60\x80\0");
+        let path = w.project().join("shape.psd");
+        fs::write(&path, src).unwrap();
 
-    let loaded = formats::load(&path).unwrap();
-    assert_eq!(loaded.composite(0), [[64, 96, 128, 255]]);
-    assert_eq!(loaded.layers.len(), 3);
-    assert_eq!(loaded.layers[0].name, "Shape");
-    assert_eq!(loaded.layers[0].parent, Some(1));
-    assert!(loaded.layers[1].group);
-    assert!(!loaded.layers[1].visible);
-    assert_eq!(loaded.layers[2].name, "Photoshop merged preview");
+        let loaded = formats::load(&path).unwrap();
+        assert_eq!(loaded.composite(0)[0][3], expected_alpha);
+        if expected_alpha == 255 {
+            assert_eq!(loaded.composite(0), [[64, 96, 128, 255]]);
+        }
+        assert_eq!(loaded.layers.len(), 3);
+        assert_eq!(loaded.layers[0].name, "Shape");
+        assert_eq!(loaded.layers[0].parent, Some(1));
+        assert!(loaded.layers[1].group);
+        assert!(!loaded.layers[1].visible);
+        assert_eq!(loaded.layers[2].name, "Photoshop merged preview");
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn photoshop_flat_rgb_keeps_icc_and_distinguishes_saved_channels_from_alpha() {
+    let w = Workspace::new();
+    let icc = moxcms::ColorProfile::new_srgb().encode().unwrap();
+    for (ids, expected) in [
+        ([8u32, 9], [160, 192, 224, 255]),
+        ([8, 0], [66, 129, 193, 128]),
+    ] {
+        let mut src = b"8BPS\0\x01".to_vec();
+        src.extend_from_slice(&[0; 6]);
+        src.extend_from_slice(b"\0\x05\0\0\0\x01\0\0\0\x01\0\x08\0\x03");
+        src.extend_from_slice(&[0; 4]);
+        let mut resources = b"8BIM\x04\x1d\0\0\0\0\0\x08".to_vec();
+        for id in ids {
+            resources.extend_from_slice(&id.to_be_bytes());
+        }
+        resources.extend_from_slice(b"8BIM\x04\x0f\0\0");
+        resources.extend_from_slice(&(icc.len() as u32).to_be_bytes());
+        resources.extend(&icc);
+        resources.resize(resources.len().next_multiple_of(2), 0);
+        src.extend_from_slice(&(resources.len() as u32).to_be_bytes());
+        src.extend(resources);
+        src.extend_from_slice(b"\0\0\0\0\0\0\xa0\xc0\xe0\0\x80");
+        let path = w.project().join("extra.psd");
+        fs::write(&path, src).unwrap();
+        let doc = formats::load(&path).unwrap();
+        assert_eq!(doc.composite(0)[0], expected);
+        assert_eq!(doc.color_profile.get(20..), Some(icc.as_slice()));
+    }
 }
 
 #[cfg(any(target_os = "linux", windows))]
