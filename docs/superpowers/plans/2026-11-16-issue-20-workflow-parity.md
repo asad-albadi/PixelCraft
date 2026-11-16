@@ -119,6 +119,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 39 complete. Grid import supports row-major and column-major order, optional partial edge cells with transparent padding, and deriving uniform cell dimensions from row/column counts after offsets and spacing. Derived sizes round down for complete cells and up when partial cells are enabled. The GUI preview, CLI and MCP use the same geometry. Static indexed and grayscale PNG grids preserve source mode and palette slots when representable. Regressions verify preview/CLI/MCP agreement, frame and layer order, duration, transparent padding, and duplicate indexed slots. Formatting, strict Clippy, and 524 Windows all-target tests passed.
 
+- Item 40 complete. The Unity + Godot preset publishes a PNG, shared JSON, Unity .png.meta, and Godot .tres from one sheet build. Batch preview lists all four paths, and editor, CLI, and MCP exports stage the coordinated files. Re-export preserves existing Unity GUIDs and Godot resource UIDs. A regression also verifies that an invalid sidecar destination leaves the rest of the bundle untouched. Godot 4.5.1 loaded the SpriteFrames resource in a Windows smoke test. Unity 6000.6.9f1 imported its generated multiple-sprite texture and kept the GUID on forced reimport. Formatting, strict Clippy, and 525 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -169,7 +171,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.
 - [x] **38. Apply imported pixel aspect ratios and grid defaults.** Use the stored values as editable sprite properties.
 - [x] **39. Expand grid sheet import.** Add column-major order, optional trailing partial cells, and deriving cell dimensions from row and column counts.
-- [ ] **40. Export Unity and Godot sidecars together.** Generate both engine sidecars and JSON from the same sheet export.
+- [x] **40. Export Unity and Godot sidecars together.** Generate both engine sidecars and JSON from the same sheet export.
 - [ ] **41. Import a raster file into the current document.** Add a direct Import as Layer action with defined crop and transparent-padding behavior.
 - [ ] **42. Include global frame tags in packed atlases.** Write rebased `meta.frameTags` while preserving per-source tags.
 - [ ] **43. Make atlas input lists editable.** Append files from successive selections, add paths manually, and remove individual inputs.

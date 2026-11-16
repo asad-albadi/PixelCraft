@@ -512,6 +512,75 @@ fn mcp_preflights_engine_sidecars_and_preserves_unity_identity_on_overwrite() {
 #[cfg(any(target_os = "linux", windows))]
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn combined_engine_sheet_plans_and_reexports_both_sidecars_transactionally() {
+    let w = Workspace::new();
+    let root = w.project();
+    let sheet = root.join("shared.png");
+    let json_path = root.join("shared.json");
+    let resource = root.join("shared.tres");
+    let meta = root.join("shared.png.meta");
+    let args = json!({"input":root.join("art.pixel"),"output":sheet,"format":"sheet",
+        "options":{"preset":"Unity + Godot"}});
+    let plan = automation::run_cli(&[
+        "batch".into(),
+        json!({
+            "steps":[{"operation":"export","arguments":args}],"dry_run":true
+        })
+        .to_string(),
+    ])
+    .unwrap();
+    assert_eq!(
+        plan["steps"][0]["outputs"],
+        json!([sheet, json_path, resource, meta])
+    );
+    assert!(!sheet.exists() && !json_path.exists() && !resource.exists() && !meta.exists());
+
+    let old_unity = "fileFormatVersion: 2\nguid: 123456789012345678901234567890ab\n";
+    let old_godot = "[gd_resource type=\"SpriteFrames\" format=3 uid=\"uid://abc123\"]\n";
+    fs::write(&meta, old_unity).unwrap();
+    fs::write(&resource, old_godot).unwrap();
+    assert_error(&w.call("export", args.clone()), "Output already exists");
+    assert!(!sheet.exists());
+    let mut overwrite = args;
+    overwrite["overwrite"] = json!(true);
+    let reply = w.call("export", overwrite.clone());
+    assert!(reply["isError"].is_null(), "{reply}");
+    assert!(fs::read_to_string(&meta).unwrap().starts_with(old_unity));
+    assert!(
+        fs::read_to_string(&resource)
+            .unwrap()
+            .contains("uid=\"uid://abc123\"")
+    );
+    assert!(
+        fs::read_to_string(&resource)
+            .unwrap()
+            .contains("shared.png")
+    );
+    let json: Value = serde_json::from_slice(&fs::read(&json_path).unwrap()).unwrap();
+    assert_eq!(json["meta"]["image"], "shared.png");
+    assert!(sheet.is_file());
+
+    let before = [
+        fs::read(&sheet).unwrap(),
+        fs::read(&json_path).unwrap(),
+        fs::read(&meta).unwrap(),
+    ];
+    fs::remove_file(&resource).unwrap();
+    fs::create_dir(&resource).unwrap();
+    let reply = w.call("export", overwrite);
+    assert_eq!(reply["isError"], true, "{reply}");
+    assert_eq!(
+        [
+            fs::read(&sheet).unwrap(),
+            fs::read(&json_path).unwrap(),
+            fs::read(&meta).unwrap()
+        ],
+        before
+    );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn restricted_mcp_tileset_atlas_respects_root_and_overwrite() {
     let w = Workspace::new();
     let mut doc = Document::new(1, 1);

@@ -2051,7 +2051,7 @@ impl PixelCraft {
                 egui::ComboBox::from_label("Engine preset")
                     .selected_text(&self.studio.sheet.preset)
                     .show_ui(ui, |ui| {
-                        for preset in ["Generic", "Godot", "Unity"] {
+                        for preset in SheetOptions::PRESETS {
                             ui.pc_selectable_value(
                                 &mut self.studio.sheet.preset,
                                 preset.into(),

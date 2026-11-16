@@ -3,6 +3,7 @@ use pixelcraft::{
     atlas::*,
     automation::{self, LiveBridge},
     productivity::*,
+    workflows::SheetOptions,
 };
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize, Deserialize)]
@@ -968,7 +969,7 @@ if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=
             egui::ComboBox::from_label("Sheet engine preset")
                 .selected_text(&self.studio.sheet.preset)
                 .show_ui(ui, |ui| {
-                    for preset in ["Generic", "Godot", "Unity"] {
+                    for preset in SheetOptions::PRESETS {
                         ui.pc_selectable_value(&mut self.studio.sheet.preset, preset.into(), preset);
                     }
                 });

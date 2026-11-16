@@ -118,21 +118,41 @@ fn natural_key(p: &Path) -> String {
     }
     out
 }
-fn sheet_engine_sidecar(path: &Path, preset: &str) -> Option<PathBuf> {
-    match preset {
-        "Godot" => Some(path.with_extension("tres")),
-        "Unity" => {
-            let mut name = path.as_os_str().to_owned();
-            name.push(".meta");
-            Some(PathBuf::from(name))
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SheetEngine {
+    Godot,
+    Unity,
+}
+
+impl SheetEngine {
+    fn sidecar(self, path: &Path) -> PathBuf {
+        match self {
+            Self::Godot => path.with_extension("tres"),
+            Self::Unity => {
+                let mut name = path.as_os_str().to_owned();
+                name.push(".meta");
+                PathBuf::from(name)
+            }
         }
-        _ => None,
+    }
+}
+
+fn sheet_engines(preset: &str) -> &'static [SheetEngine] {
+    match preset {
+        "Godot" => &[SheetEngine::Godot],
+        "Unity" => &[SheetEngine::Unity],
+        "Unity + Godot" => &[SheetEngine::Godot, SheetEngine::Unity],
+        _ => &[],
     }
 }
 
 pub(crate) fn sheet_output_paths(path: &Path, options: &SheetOptions) -> Vec<PathBuf> {
     let mut paths = vec![path.to_path_buf(), path.with_extension("json")];
-    paths.extend(sheet_engine_sidecar(path, &options.preset));
+    paths.extend(
+        sheet_engines(&options.preset)
+            .iter()
+            .map(|engine| engine.sidecar(path)),
+    );
     paths
 }
 
@@ -289,6 +309,7 @@ pub(crate) fn plan_slice_sheets<'a>(
     let mut record_budget = MAX_CEL_SLOTS;
     let mut label_budget = 32 * 1024 * 1024usize;
     let mut godot_budget = MAX_CEL_SLOTS;
+    let exports_godot = sheet_engines(&o.preset).contains(&SheetEngine::Godot);
     let spacing = SheetSpacing::new(o, extrude)?;
     for (index, slice) in d.slices.iter().enumerate() {
         if target.is_some_and(|target| index != target) {
@@ -382,7 +403,7 @@ pub(crate) fn plan_slice_sheets<'a>(
                 label_budget = label_budget
                     .checked_sub(tag.name.len().saturating_mul(groups))
                     .ok_or("Split slice export exceeds the metadata label limit")?;
-                if o.preset == "Godot" {
+                if exports_godot {
                     let span = to - from + 1;
                     let turn = if tag.direction >= 2 {
                         span.saturating_sub(2)
@@ -401,7 +422,7 @@ pub(crate) fn plan_slice_sheets<'a>(
                 }
             }
         }
-        if o.preset == "Godot" && !has_tag {
+        if exports_godot && !has_tag {
             godot_budget = godot_budget
                 .checked_sub(samples)
                 .ok_or("Split slice export exceeds the combined Godot animation key limit")?;
@@ -687,7 +708,8 @@ fn write_packed_sheet(
         .to_string_lossy();
     sheet_templates::apply(doc, o, previous_path, &mut meta)?;
     meta["meta"]["image"] = json!(name);
-    if o.preset == "Unity" {
+    let engines = sheet_engines(&o.preset);
+    if engines.contains(&SheetEngine::Unity) {
         let mut names = std::collections::HashSet::new();
         for tag in meta["meta"]["frameTags"].as_array().unwrap() {
             let name = tag["name"].as_str().unwrap();
@@ -700,61 +722,21 @@ fn write_packed_sheet(
     }
     let json_path = path.with_extension("json");
     companion_exists(&json_path)?;
-    let sidecar = if o.preset == "Godot" {
-        let resource = sheet_engine_sidecar(previous_path, &o.preset).unwrap();
-        let mut header = String::new();
-        if companion_exists(&resource)? {
-            const MAX_HEADER_BYTES: usize = 4096;
-            let source = mcp_io::open(&resource).map_err(|e| e.to_string())?;
-            BufReader::new(source.take(MAX_HEADER_BYTES as u64 + 1))
-                .read_line(&mut header)
-                .map_err(|e| e.to_string())?;
-            if header.len() > MAX_HEADER_BYTES {
-                return Err("Previous Godot resource header exceeds 4 KiB".into());
+    let mut sidecars = Vec::with_capacity(engines.len());
+    for &engine in engines {
+        let contents = match engine {
+            SheetEngine::Godot => {
+                godot(&meta, &name, previous_godot_uid(previous_path)?.as_deref())?
             }
-        }
-        let uid = header
-            .lines()
-            .next()
-            .and_then(|header| header.strip_prefix("[gd_resource "))
-            .and_then(|header| header.split_once(" uid=\"uid://"))
-            .and_then(|(_, rest)| rest.split_once('"'))
-            .map(|(uid, _)| uid)
-            .filter(|uid| {
-                !uid.is_empty()
-                    && uid.len() <= 16
-                    && uid
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-            });
-        Some(godot(&meta, &name, uid)?)
-    } else if o.preset == "Unity" {
-        const MAX_UNITY_META_BYTES: usize = 64 * 1024 * 1024;
-        let meta_path = sheet_engine_sidecar(previous_path, &o.preset).unwrap();
-        let mut previous = String::new();
-        if companion_exists(&meta_path)? {
-            let source = mcp_io::open(&meta_path).map_err(|e| e.to_string())?;
-            let too_large = || "Previous Unity metadata exceeds 64 MiB".to_string();
-            if source.metadata().map_err(|e| e.to_string())?.len() > MAX_UNITY_META_BYTES as u64 {
-                return Err(too_large());
-            }
-            source
-                .take(MAX_UNITY_META_BYTES as u64 + 1)
-                .read_to_string(&mut previous)
-                .map_err(|e| e.to_string())?;
-            if previous.len() > MAX_UNITY_META_BYTES {
-                return Err(too_large());
-            }
-        }
-        Some(unity(
-            &meta,
-            &previous_path.to_string_lossy(),
-            im.height(),
-            &previous,
-        )?)
-    } else {
-        None
-    };
+            SheetEngine::Unity => unity(
+                &meta,
+                &previous_path.to_string_lossy(),
+                im.height(),
+                &previous_unity_meta(previous_path)?,
+            )?,
+        };
+        sidecars.push((engine.sidecar(path), contents));
+    }
     if path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
@@ -764,11 +746,61 @@ fn write_packed_sheet(
         mcp_io::write_image(path, &im).map_err(|e| e.to_string())?;
     }
     write_json(&json_path, &meta)?;
-    if let Some(contents) = sidecar {
-        let companion = sheet_engine_sidecar(path, &o.preset).unwrap();
-        mcp_io::write(companion, contents).map_err(|e| e.to_string())?;
+    for (companion, contents) in sidecars {
+        mcp_io::write(&companion, contents).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn previous_godot_uid(previous_path: &Path) -> Result<Option<String>, String> {
+    let resource = SheetEngine::Godot.sidecar(previous_path);
+    let mut header = String::new();
+    if companion_exists(&resource)? {
+        const MAX_HEADER_BYTES: usize = 4096;
+        let source = mcp_io::open(&resource).map_err(|e| e.to_string())?;
+        BufReader::new(source.take(MAX_HEADER_BYTES as u64 + 1))
+            .read_line(&mut header)
+            .map_err(|e| e.to_string())?;
+        if header.len() > MAX_HEADER_BYTES {
+            return Err("Previous Godot resource header exceeds 4 KiB".into());
+        }
+    }
+    Ok(header
+        .lines()
+        .next()
+        .and_then(|header| header.strip_prefix("[gd_resource "))
+        .and_then(|header| header.split_once(" uid=\"uid://"))
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(uid, _)| uid)
+        .filter(|uid| {
+            !uid.is_empty()
+                && uid.len() <= 16
+                && uid
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+        .map(str::to_owned))
+}
+
+fn previous_unity_meta(previous_path: &Path) -> Result<String, String> {
+    const MAX_UNITY_META_BYTES: usize = 64 * 1024 * 1024;
+    let meta_path = SheetEngine::Unity.sidecar(previous_path);
+    let mut previous = String::new();
+    if companion_exists(&meta_path)? {
+        let source = mcp_io::open(&meta_path).map_err(|e| e.to_string())?;
+        let too_large = || "Previous Unity metadata exceeds 64 MiB".to_string();
+        if source.metadata().map_err(|e| e.to_string())?.len() > MAX_UNITY_META_BYTES as u64 {
+            return Err(too_large());
+        }
+        source
+            .take(MAX_UNITY_META_BYTES as u64 + 1)
+            .read_to_string(&mut previous)
+            .map_err(|e| e.to_string())?;
+        if previous.len() > MAX_UNITY_META_BYTES {
+            return Err(too_large());
+        }
+    }
+    Ok(previous)
 }
 
 fn companion_exists(path: &Path) -> Result<bool, String> {

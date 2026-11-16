@@ -458,6 +458,11 @@ pub struct SheetOptions {
     pub tag_template: String,
     pub preset: String,
 }
+
+impl SheetOptions {
+    pub const PRESETS: [&str; 4] = ["Generic", "Godot", "Unity", "Unity + Godot"];
+}
+
 impl Default for SheetOptions {
     fn default() -> Self {
         Self {
