@@ -30,7 +30,11 @@
 </p>
 
 <p align="center">
-  <img src="shots/pixelcraft.png" alt="PixelCraft's current interface at 1920×1080, showing sprite tabs, the compact Colors selector, dominant-color swatches, mushroom garden artwork, the bottom-left sprite preview, drawing tools and animation timeline" width="100%">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft.png">
+    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-light.png">
+    <img src="shots/pixelcraft-light.png" alt="PixelCraft at 1920×1080 showing the mushroom garden sprite, color swatches, drawing tools, sprite preview, layers, and animation timeline" width="100%">
+  </picture>
   <br>
   <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
 </p>
@@ -112,7 +116,13 @@ The **Colors** panel now supports renaming and deleting entries, and saving/load
 
 **File → Export sprite sheet** opens a packing dialog: choose columns, transparent padding, border trimming, a named animation range, and an engine preset. Exports include PNG and JSON frame rectangles, original canvas sizes, trim offsets, millisecond durations and tags. Compact packing uses rows of trimmed frames without rotating them. Open the exported JSON to reconstruct full animation canvases, or use **File → Import PNG sequence** for naturally ordered numbered images of equal dimensions.
 
-The **Godot** preset adds a Godot 4 SpriteFrames `.tres` with AtlasTexture frames, source margins, tag directions and per-frame timing. Put the PNG and resource together at the Godot project's `res://` root (adjust the texture path when placing them elsewhere). The **Unity** preset adds a multiple-sprite `.png.meta` importer with point filtering and stable sprite IDs; re-export retains an existing asset GUID. Copy the PNG and `.meta` together into Assets. Timing and tags remain in the JSON sidecar for Unity animation tooling. Generated files have automated structural coverage; a live Godot/Unity editor import has not been validated here.
+Choose **All frames and tags** to export one sheet with every tag. Keep **Trim transparent borders** off and reuse the same columns, padding, and scale when replacing artwork in an existing engine project. An artwork-only redraw then keeps each cell rectangle fixed. Inserting a frame can move later rectangles, but surviving frames retain their export names and IDs when you edit and save the same native project.
+
+The **Unity** preset writes a multiple-sprite `.png.meta` with point filtering and retains an existing texture GUID on re-export. Keep the PNG, JSON, and meta file together in Assets. The Unity Editor importer uses the JSON's tags and millisecond durations to create and refresh clips in place. See the [Unity import walkthrough and test procedure](integrations/unity/README.md). Older PixelCraft exports of only one tag used sheet positions for Unity IDs, so test those references before replacing their metadata.
+
+The **Godot** preset writes a Godot 4 SpriteFrames `.tres` with AtlasTexture frames, source margins, tag directions, and per-frame timing. Keep the PNG and resource at the same paths on re-export. The generated texture path points to the Godot project's `res://` root. Existing Godot resource UIDs and surviving AtlasTexture IDs are preserved when replacing the same resource file.
+
+The **Unreal Engine** editor integration uses Paper2D sprite sheet imports to create Flipbooks for every named tag, including custom tags. Reimporting the same sheet refreshes those Flipbooks in place with the exported durations. See the [Paper2D Flipbook walkthrough](integrations/unreal/README.md).
 
 **Sprite → Tileset browser** shows clickable tile thumbnails and selects the corresponding tile layer for painting. **View → Seamless preview** repeats the active frame in a 3×3 grid. Open finite orthogonal Tiled `.tmj` maps or `.tsj` image tilesets, and export the active frame through **File → Export Tiled map**; the export writes the map, external tilesets and PNG atlases with tile flips. Tiled image collections, infinite maps, object/group layers and compressed tile arrays are rejected explicitly. JSON array tile layers, tilesheet margins/spacing, layer offsets and opacity are supported.
 

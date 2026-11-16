@@ -803,7 +803,7 @@ impl PixelCraft {
         }
         if self.studio.sheet_open {
             let mut open = true;
-            egui::Window::new("Export sprite sheet").open(&mut open).default_width(390.).show(ctx,|ui|{ui.label("Pack frames into rows with transparent padding.");self.export_scale_ui(ui);ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.studio.sheet.columns).range(1..=256).prefix("Columns "));ui.add(egui::DragValue::new(&mut self.studio.sheet.padding).range(0..=256).prefix("Padding "));});ui.pc_checkbox(&mut self.studio.sheet.trim,"Trim transparent borders (compact packing)");egui::ComboBox::from_label("Frames").selected_text(self.studio.sheet.tag.and_then(|i|self.doc.tags.get(i)).map_or("All frames",|t|t.name.as_str())).show_ui(ui,|ui|{ui.pc_selectable_value(&mut self.studio.sheet.tag,None,"All frames");for(i,t)in self.doc.tags.iter().enumerate(){ui.pc_selectable_value(&mut self.studio.sheet.tag,Some(i),&t.name);}});egui::ComboBox::from_label("Engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.small("PNG + JSON with frame positions, durations and tags. Godot adds SpriteFrames (.tres); Unity adds multiple-sprite importer (.png.meta). Place the Godot files together at res://.");if let Ok((im,meta))=workflows::pack_sheet(&self.doc,&self.studio.sheet){ui.label(format!("{} × {} · {} frames",im.width(),im.height(),meta["frames"].as_array().unwrap().len()));}
+            egui::Window::new("Export sprite sheet").open(&mut open).default_width(390.).show(ctx,|ui|{ui.label("Pack frames into rows with transparent padding.");self.export_scale_ui(ui);ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.studio.sheet.columns).range(1..=256).prefix("Columns "));ui.add(egui::DragValue::new(&mut self.studio.sheet.padding).range(0..=256).prefix("Padding "));});ui.pc_checkbox(&mut self.studio.sheet.trim,"Trim transparent borders (compact packing)");egui::ComboBox::from_label("Frames").selected_text(self.studio.sheet.tag.and_then(|i|self.doc.tags.get(i)).map_or("All frames and tags",|t|t.name.as_str())).show_ui(ui,|ui|{ui.pc_selectable_value(&mut self.studio.sheet.tag,None,"All frames and tags");for(i,t)in self.doc.tags.iter().enumerate(){ui.pc_selectable_value(&mut self.studio.sheet.tag,Some(i),&t.name);}});egui::ComboBox::from_label("Engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.small("PNG + JSON with frame positions, durations and tags. Godot adds SpriteFrames (.tres); Unity adds multiple-sprite importer (.png.meta). Place the Godot files together at res://.");if let Ok((im,meta))=workflows::pack_sheet(&self.doc,&self.studio.sheet){ui.label(format!("{} × {} · {} frames",im.width(),im.height(),meta["frames"].as_array().unwrap().len()));}
 if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG sheet",&["png"]).set_file_name("sprite.png").save_file(){self.status=match interchange::export_sheet(&path,&self.doc,&self.studio.sheet){Ok(())=>"Exported sprite sheet and metadata".into(),Err(e)=>format!("Export failed: {e}")};}ui.small("To import an atlas, open its JSON metadata. Use File → Import PNG sequence for numbered frames.");});
             self.studio.sheet_open = open;
         }
@@ -817,16 +817,19 @@ if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::File
                 .default_width(350.)
                 .show(ctx, |ui| {
                     let tex = self.frame_texture(ctx, self.frame);
-                    let side = (ui.available_width() / 3.).min(180.);
+                    let aspect = self.doc.width as f32 / self.doc.height as f32;
+                    // Reserve room for the title, padding, and Close button.
+                    let grid_height = (ctx.content_rect().height() - 96.).max(3.);
+                    let tile_width = (ui.available_width() / 3.)
+                        .min(180.)
+                        .min(grid_height * aspect / 3.);
+                    let tile_size = Vec2::new(tile_width, tile_width / aspect);
                     ui.spacing_mut().item_spacing = Vec2::ZERO;
                     for _ in 0..3 {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing = Vec2::ZERO;
                             for _ in 0..3 {
-                                ui.add(egui::Image::new(&tex).fit_to_exact_size(Vec2::new(
-                                    side,
-                                    side * self.doc.height as f32 / self.doc.width as f32,
-                                )));
+                                ui.add(egui::Image::new(&tex).fit_to_exact_size(tile_size));
                             }
                         });
                     }

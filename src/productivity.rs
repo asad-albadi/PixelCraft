@@ -543,6 +543,8 @@ pub fn tag_document(d: &Document, index: usize) -> Result<Document, String> {
     let frames = tag_frames(t);
     let mut out = d.clone();
     out.durations = frames.iter().map(|&f| d.durations[f]).collect();
+    // A derived clip can contain the same source frame more than once.
+    out.frame_export_ids = Default::default();
     out.frame_palettes = frames.iter().map(|&f| d.palette_for(f).to_vec()).collect();
     for (l, s) in out.layers.iter_mut().zip(&d.layers) {
         l.cels = frames.iter().map(|&f| s.cels[f].clone()).collect();

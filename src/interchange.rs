@@ -2,7 +2,8 @@ use crate::{model::*, workflows::*};
 use image::AnimationDecoder;
 use serde_json::{Value, json};
 use std::{
-    io::BufReader,
+    fs::{self, File},
+    io::{BufRead, BufReader, ErrorKind, Read},
     path::{Path, PathBuf},
 };
 
@@ -117,27 +118,92 @@ pub fn export_sheet(path: &Path, d: &Document, o: &SheetOptions) -> Result<(), S
         .ok_or("Invalid filename")?
         .to_string_lossy();
     meta["meta"]["image"] = json!(name);
-    im.save(path).map_err(|e| e.to_string())?;
-    write_json(&path.with_extension("json"), &meta)?;
-    if o.preset == "Godot" {
-        std::fs::write(path.with_extension("tres"), godot(&meta, &name)?)
-            .map_err(|e| e.to_string())?;
-    }
     if o.preset == "Unity" {
-        let meta_path = PathBuf::from(format!("{}.meta", path.display()));
-        let mut output = unity(&meta, &path.to_string_lossy(), im.height());
-        if let Ok(previous) = std::fs::read_to_string(&meta_path)
-            && let Some(guid) = previous
-                .lines()
-                .find_map(|l| l.strip_prefix("guid: "))
-                .filter(|v| v.len() == 32 && v.bytes().all(|b| b.is_ascii_hexdigit()))
-            && let Some(line) = output.lines().find(|l| l.starts_with("guid: "))
-        {
-            output = output.replace(line, &format!("guid: {guid}"));
+        let mut names = std::collections::HashSet::new();
+        for tag in meta["meta"]["frameTags"].as_array().unwrap() {
+            let name = tag["name"].as_str().unwrap();
+            if name.trim().is_empty() || !names.insert(name) {
+                return Err(
+                    "Give each exported Unity animation tag a unique, non-empty name".into(),
+                );
+            }
         }
-        std::fs::write(meta_path, output).map_err(|e| e.to_string())?;
+    }
+    let json_path = path.with_extension("json");
+    companion_exists(&json_path)?;
+    let sidecar = if o.preset == "Godot" {
+        let resource = path.with_extension("tres");
+        let mut header = String::new();
+        if companion_exists(&resource)? {
+            const MAX_HEADER_BYTES: usize = 4096;
+            let source = File::open(&resource).map_err(|e| e.to_string())?;
+            BufReader::new(source.take(MAX_HEADER_BYTES as u64 + 1))
+                .read_line(&mut header)
+                .map_err(|e| e.to_string())?;
+            if header.len() > MAX_HEADER_BYTES {
+                return Err("Previous Godot resource header exceeds 4 KiB".into());
+            }
+        }
+        let uid = header
+            .lines()
+            .next()
+            .and_then(|header| header.strip_prefix("[gd_resource "))
+            .and_then(|header| header.split_once(" uid=\"uid://"))
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(uid, _)| uid)
+            .filter(|uid| {
+                !uid.is_empty()
+                    && uid.len() <= 16
+                    && uid
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            });
+        Some((resource, godot(&meta, &name, uid)?))
+    } else if o.preset == "Unity" {
+        const MAX_UNITY_META_BYTES: usize = 64 * 1024 * 1024;
+        let mut meta_name = path.as_os_str().to_owned();
+        meta_name.push(".meta");
+        let meta_path = PathBuf::from(meta_name);
+        let mut previous = String::new();
+        if companion_exists(&meta_path)? {
+            let source = File::open(&meta_path).map_err(|e| e.to_string())?;
+            let too_large = || "Previous Unity metadata exceeds 64 MiB".to_string();
+            if source.metadata().map_err(|e| e.to_string())?.len() > MAX_UNITY_META_BYTES as u64 {
+                return Err(too_large());
+            }
+            source
+                .take(MAX_UNITY_META_BYTES as u64 + 1)
+                .read_to_string(&mut previous)
+                .map_err(|e| e.to_string())?;
+            if previous.len() > MAX_UNITY_META_BYTES {
+                return Err(too_large());
+            }
+        }
+        Some((
+            meta_path,
+            unity(&meta, &path.to_string_lossy(), im.height(), &previous)?,
+        ))
+    } else {
+        None
+    };
+    im.save(path).map_err(|e| e.to_string())?;
+    write_json(&json_path, &meta)?;
+    if let Some((companion, contents)) = sidecar {
+        fs::write(companion, contents).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn companion_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(true),
+        Ok(_) => Err(format!(
+            "Sprite-sheet companion is not a regular file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("Could not inspect {}: {error}", path.display())),
+    }
 }
 pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     std::fs::write(
@@ -146,17 +212,43 @@ pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())
 }
-fn godot(meta: &Value, name: &str) -> Result<String, String> {
+fn godot(meta: &Value, name: &str, uid: Option<&str>) -> Result<String, String> {
+    use std::fmt::Write;
+
     let frames = meta["frames"].as_array().unwrap();
+    let default =
+        vec![json!({"name":"default","from":0,"to":frames.len()-1,"direction":"forward"})];
+    let tags = meta["meta"]["frameTags"]
+        .as_array()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(&default);
+    let mut remaining = 1_000_000u64;
+    for tag in tags {
+        let span = tag["to"].as_u64().unwrap() - tag["from"].as_u64().unwrap() + 1;
+        let turn = if tag["direction"]
+            .as_str()
+            .is_some_and(|d| d.starts_with("pingpong"))
+        {
+            span.saturating_sub(2)
+        } else {
+            0
+        };
+        let entries = (span + turn) * tag["repeat"].as_u64().unwrap_or(0).max(1);
+        remaining = remaining
+            .checked_sub(entries)
+            .ok_or("Godot animations exceed one million entries in total")?;
+    }
     let quoted = serde_json::to_string(&format!("res://{name}")).unwrap();
+    let uid = uid.map_or_else(String::new, |uid| format!(" uid=\"uid://{uid}\""));
     let mut s = format!(
-        "[gd_resource type=\"SpriteFrames\" load_steps={} format=3]\n\n[ext_resource type=\"Texture2D\" path={quoted} id=\"1\"]\n",
+        "[gd_resource type=\"SpriteFrames\" load_steps={} format=3{uid}]\n\n[ext_resource type=\"Texture2D\" path={quoted} id=\"1\"]\n",
         frames.len() + 2
     );
-    for (i, f) in frames.iter().enumerate() {
+    for f in frames {
+        let id = &f["frameId"];
         let r = &f["frame"];
         s += &format!(
-            "\n[sub_resource type=\"AtlasTexture\" id=\"Atlas_{i}\"]\natlas = ExtResource(\"1\")\nregion = Rect2({}, {}, {}, {})\nmargin = Rect2({}, {}, {}, {})\n",
+            "\n[sub_resource type=\"AtlasTexture\" id=\"Atlas_{id}\"]\natlas = ExtResource(\"1\")\nregion = Rect2({}, {}, {}, {})\nmargin = Rect2({}, {}, {}, {})\n",
             r["x"],
             r["y"],
             r["w"],
@@ -167,15 +259,10 @@ fn godot(meta: &Value, name: &str) -> Result<String, String> {
             f["sourceSize"]["h"].as_i64().unwrap() - r["h"].as_i64().unwrap()
         );
     }
-    let default =
-        vec![json!({"name":"default","from":0,"to":frames.len()-1,"direction":"forward"})];
-    let tags = meta["meta"]["frameTags"]
-        .as_array()
-        .filter(|v| !v.is_empty())
-        .unwrap_or(&default);
-    let mut animations = vec![];
+    s.push_str("\n[resource]\nanimations = [");
     let mut names = std::collections::HashSet::new();
-    for t in tags {
+    let mut next_suffix = std::collections::HashMap::new();
+    for (index, t) in tags.iter().enumerate() {
         let mut order: Vec<usize> =
             (t["from"].as_u64().unwrap() as usize..=t["to"].as_u64().unwrap() as usize).collect();
         let direction = t["direction"].as_str().unwrap_or("forward");
@@ -187,71 +274,193 @@ fn godot(meta: &Value, name: &str) -> Result<String, String> {
             order.extend(back)
         }
         let repeat = t["repeat"].as_u64().unwrap_or(0);
-        if order.len().saturating_mul(repeat.max(1) as usize) > 1_000_000 {
-            return Err("Godot finite animation exceeds one million entries".into());
-        }
-        if repeat > 0 {
-            // SpriteFrames has a boolean loop flag: finite repeats are expanded.
-            let cycle = order.clone();
-            for _ in 1..repeat {
-                order.extend_from_slice(&cycle);
-            }
-        }
         let base = t["name"]
             .as_str()
             .filter(|s| !s.is_empty())
             .unwrap_or("Animation");
         let mut name = base.to_string();
-        let mut suffix = 2;
-        while !names.insert(name.clone()) {
-            name = format!("{base}_{suffix}");
-            suffix += 1;
+        if !names.insert(name.clone()) {
+            let suffix = next_suffix.entry(base).or_insert(2);
+            loop {
+                name = format!("{base}_{suffix}");
+                *suffix += 1;
+                if names.insert(name.clone()) {
+                    break;
+                }
+            }
         }
-        let fs: Vec<String> = order
+        if index > 0 {
+            s.push_str(",\n");
+        }
+        s.push_str("{\"frames\": [");
+        // SpriteFrames has a boolean loop flag: finite repeats are expanded.
+        for (entry, &frame) in order
             .iter()
-            .map(|i| {
-                format!(
-                    "{{\"duration\": {}, \"texture\": SubResource(\"Atlas_{i}\")}}",
-                    frames[*i]["duration"].as_f64().unwrap() / 1000.
-                )
-            })
-            .collect();
-        animations.push(format!(
-            "{{\"frames\": [{}], \"loop\": {}, \"name\": &{}, \"speed\": 1.0}}",
-            fs.join(", "),
+            .cycle()
+            .take(order.len() * repeat.max(1) as usize)
+            .enumerate()
+        {
+            if entry > 0 {
+                s.push_str(", ");
+            }
+            write!(
+                s,
+                "{{\"duration\": {}, \"texture\": SubResource(\"Atlas_{}\")}}",
+                frames[frame]["duration"].as_f64().unwrap() / 1000.,
+                frames[frame]["frameId"]
+            )
+            .unwrap();
+        }
+        write!(
+            s,
+            "], \"loop\": {}, \"name\": &{}, \"speed\": 1.0}}",
             repeat == 0,
             serde_json::to_string(&name).unwrap()
-        ));
+        )
+        .unwrap();
     }
-    s += &format!("\n[resource]\nanimations = [{}]\n", animations.join(",\n"));
+    s.push_str("]\n");
     Ok(s)
 }
-fn unity(meta: &Value, name: &str, height: u32) -> String {
-    // Stable asset identity; export_sheet retains a pre-existing Unity GUID.
-    let mut hash = 0xcbf29ce484222325u64;
-    for b in name.bytes() {
-        hash = (hash ^ b as u64).wrapping_mul(0x100000001b3)
+#[derive(Default)]
+struct UnitySpriteIdentity<'a> {
+    file_id: Option<i64>,
+    sprite_id: Option<&'a str>,
+}
+
+fn unity_guid(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn unity_sprite_ids(
+    previous: &str,
+) -> Result<std::collections::HashMap<&str, UnitySpriteIdentity<'_>>, String> {
+    let mut sprites = std::collections::HashMap::<_, UnitySpriteIdentity<'_>>::new();
+    let mut current = None;
+    let mut in_sprites = false;
+    let mut in_table = false;
+    for line in previous.lines() {
+        if line.starts_with("    ") && !line.starts_with("     ") {
+            match line.trim() {
+                "sprites:" => in_sprites = true,
+                entry if in_sprites && entry.starts_with("- serializedVersion:") => current = None,
+                "nameFileIdTable:" => {
+                    in_sprites = false;
+                    in_table = true;
+                }
+                _ => {
+                    in_sprites = false;
+                    in_table = false;
+                }
+            }
+        }
+        if in_sprites {
+            if let Some(name) = line.strip_prefix("      name: ") {
+                current = Some(name.trim().trim_matches(['\'', '"']));
+            } else if let Some(name) = current {
+                if let Some(id) = line.strip_prefix("      internalID: ") {
+                    sprites.entry(name).or_default().file_id =
+                        id.trim().parse().ok().filter(|id| *id != 0);
+                }
+                if let Some(id) = line.strip_prefix("      spriteID: ").map(str::trim)
+                    && unity_guid(id)
+                {
+                    sprites.entry(name).or_default().sprite_id = Some(id);
+                }
+            }
+        } else if in_table
+            && let Some((name, id)) = line.strip_prefix("      ").and_then(|v| v.split_once(':'))
+            && let Ok(id) = id.trim().parse::<i64>()
+            && id != 0
+        {
+            sprites
+                .entry(name.trim().trim_matches(['\'', '"']))
+                .or_default()
+                .file_id = Some(id);
+        }
+        if sprites.len() > u16::MAX as usize {
+            return Err("Previous Unity metadata exceeds the sprite count limit".into());
+        }
     }
-    let mut s = format!(
-        "fileFormatVersion: 2\nguid: {hash:016x}{:016x}\nTextureImporter:\n  serializedVersion: 12\n  mipmaps:\n    enableMipMap: 0\n  isReadable: 0\n  filterMode: 0\n  textureSettings:\n    serializedVersion: 2\n    filterMode: 0\n    aniso: 1\n    mipBias: 0\n    wrapU: 1\n    wrapV: 1\n  textureType: 8\n  spriteMode: 2\n  spritePixelsToUnits: 100\n  alphaIsTransparency: 1\n  textureCompression: 0\n  spriteSheet:\n    serializedVersion: 2\n    sprites:\n",
-        hash.rotate_left(29)
-    );
-    for (i, f) in meta["frames"].as_array().unwrap().iter().enumerate() {
-        let r = &f["frame"];
+    Ok(sprites)
+}
+
+fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+
+    let generated_guid = || {
+        let digest = Sha256::digest(name.as_bytes());
+        format!(
+            "{:032x}",
+            u128::from_be_bytes(digest[..16].try_into().unwrap())
+        )
+    };
+    let guid = previous
+        .lines()
+        .find_map(|line| line.strip_prefix("guid: ").map(str::trim))
+        .filter(|value| unity_guid(value))
+        .map_or_else(generated_guid, str::to_owned);
+    let previous = unity_sprite_ids(previous)?;
+    let frames = meta["frames"].as_array().unwrap();
+    let mut reserved_ids: std::collections::HashSet<_> =
+        previous.values().filter_map(|id| id.file_id).collect();
+    let mut assigned = std::collections::HashSet::new();
+    let mut spare = -1;
+    let ids: Vec<_> = frames
+        .iter()
+        .map(|frame| {
+            let name = frame["filename"].as_str().unwrap();
+            let old = previous.get(name);
+            let default = 21300000 + 2 * frame["frameId"].as_i64().unwrap();
+            let id = old
+                .and_then(|old| old.file_id)
+                .filter(|id| assigned.insert(*id))
+                .or_else(|| {
+                    (reserved_ids.insert(default) && assigned.insert(default)).then_some(default)
+                })
+                .unwrap_or_else(|| {
+                    while reserved_ids.contains(&spare) {
+                        spare -= 1;
+                    }
+                    reserved_ids.insert(spare);
+                    assigned.insert(spare);
+                    spare
+                });
+            let sprite_id = old.and_then(|old| old.sprite_id).map_or_else(
+                || {
+                    let digest = Sha256::digest(format!("{guid}:{name}").as_bytes());
+                    format!(
+                        "{:032x}",
+                        u128::from_be_bytes(digest[..16].try_into().unwrap())
+                    )
+                },
+                str::to_owned,
+            );
+            (name, id, sprite_id)
+        })
+        .collect();
+
+    let mut s =
+        format!("fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  internalIDToNameTable:\n");
+    for (name, id, _) in &ids {
+        s += &format!("  - first:\n      213: {id}\n    second: {name}\n");
+    }
+    s += "  serializedVersion: 12\n  mipmaps:\n    enableMipMap: 0\n  isReadable: 0\n  filterMode: 0\n  textureSettings:\n    serializedVersion: 2\n    filterMode: 0\n    aniso: 1\n    mipBias: 0\n    wrapU: 1\n    wrapV: 1\n  maxTextureSize: 16384\n  textureType: 8\n  spriteMode: 2\n  spritePixelsToUnits: 100\n  alphaIsTransparency: 1\n  textureCompression: 0\n  spriteSheet:\n    serializedVersion: 2\n    sprites:\n";
+    for (frame, (name, id, sprite_id)) in frames.iter().zip(&ids) {
+        let r = &frame["frame"];
         s += &format!(
-            "    - serializedVersion: 2\n      name: frame_{i}\n      rect:\n        serializedVersion: 2\n        x: {}\n        y: {}\n        width: {}\n        height: {}\n      alignment: 0\n      pivot: {{x: 0.5, y: 0.5}}\n      border: {{x: 0, y: 0, z: 0, w: 0}}\n      internalID: {}\n",
+            "    - serializedVersion: 2\n      name: {name}\n      rect:\n        serializedVersion: 2\n        x: {}\n        y: {}\n        width: {}\n        height: {}\n      alignment: 0\n      pivot: {{x: 0.5, y: 0.5}}\n      border: {{x: 0, y: 0, z: 0, w: 0}}\n      spriteID: {sprite_id}\n      internalID: {id}\n",
             r["x"],
             height as u64 - r["y"].as_u64().unwrap() - r["h"].as_u64().unwrap(),
             r["w"],
             r["h"],
-            21300000 + i * 2
         );
     }
     s += "    nameFileIdTable:\n";
-    for (i, _) in meta["frames"].as_array().unwrap().iter().enumerate() {
-        s += &format!("      frame_{i}: {}\n", 21300000 + i * 2);
+    for (name, id, _) in ids {
+        s += &format!("      {name}: {id}\n");
     }
-    s
+    Ok(s)
 }
 pub fn load_ora(path: &Path) -> Result<Document, String> {
     let root = std::env::temp_dir().join(format!(
