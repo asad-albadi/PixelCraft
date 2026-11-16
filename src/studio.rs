@@ -43,6 +43,7 @@ pub(super) struct Studio {
     rotation_preview: bool,
     rotation_texture: Option<RotationPreview>,
     canvas_resize: Option<CanvasResize>,
+    sprite_job: Option<SpriteJob>,
     adjustment_input: Adjustment,
     recovery_root: PathBuf,
     last_save: Instant,
@@ -59,9 +60,16 @@ pub(super) struct Studio {
 
 struct CanvasResize {
     document: String,
+    resample: bool,
     size: [usize; 2],
     anchor: usize,
     offset: [i32; 2],
+}
+
+struct SpriteJob {
+    source: Document,
+    title: &'static str,
+    worker: std::thread::JoinHandle<Result<Document, String>>,
 }
 
 const CANVAS_ANCHORS: [&str; 10] = [
@@ -135,6 +143,7 @@ impl Default for Studio {
             rotation_preview: false,
             rotation_texture: None,
             canvas_resize: None,
+            sprite_job: None,
             adjustment_input: Adjustment::Levels {
                 black: 0,
                 white: 255,
@@ -709,12 +718,34 @@ impl PixelCraft {
             "rotate" => self.transform_selection(Transform::Rotate),
             "selectionflipx" => self.transform_selection(Transform::FlipX),
             "selectionflipy" => self.transform_selection(Transform::FlipY),
-            "resizecanvas" => {
+            "resizecanvas" | "spritesize" => {
                 self.studio.canvas_resize = Some(CanvasResize {
                     document: self.doc.editor_id.to_string(),
+                    resample: s == "spritesize",
                     size: [self.doc.width, self.doc.height],
                     anchor: 4,
                     offset: [0, 0],
+                });
+            }
+            "duplicatesprite" => {
+                let duplicate = workflows::duplicate_sprite(&self.doc);
+                let baseline = Document::new(duplicate.width, duplicate.height);
+                self.open_document(duplicate, None);
+                self.saved = baseline;
+                self.status = "Opened a duplicate sprite".into();
+            }
+            "trimsprite" => self.start_sprite_job("Auto-trim sprite", workflows::trim_sprite),
+            "rotatespriteright" | "rotatespriteleft" | "rotatespritehalf" | "flipspritex"
+            | "flipspritey" => {
+                let orientation = match s {
+                    "rotatespriteright" => workflows::Orientation::TurnRight,
+                    "rotatespriteleft" => workflows::Orientation::TurnLeft,
+                    "rotatespritehalf" => workflows::Orientation::TurnHalf,
+                    "flipspritex" => workflows::Orientation::FlipHorizontal,
+                    _ => workflows::Orientation::FlipVertical,
+                };
+                self.start_sprite_job("Transform sprite", move |doc| {
+                    workflows::orient_sprite(doc, orientation)
                 });
             }
             "crop" => {
@@ -1111,14 +1142,74 @@ impl PixelCraft {
         }
         let mut resized = self.doc.clone();
         workflows::resize_canvas(&mut resized, resize.size, offset)?;
+        self.apply_sprite_geometry(resized);
+        self.status = format!("Canvas resized to {} × {}", self.doc.width, self.doc.height);
+        Ok(())
+    }
+
+    fn apply_sprite_geometry(&mut self, doc: Document) {
+        self.cancel_gesture();
         self.remember();
-        self.doc = resized;
+        self.doc = doc;
         self.selection = None;
         self.studio.mask = None;
         self.studio.move_mask = None;
         self.studio.polygon.clear();
-        self.status = format!("Canvas resized to {} × {}", self.doc.width, self.doc.height);
-        Ok(())
+    }
+
+    fn start_sprite_job(
+        &mut self,
+        title: &'static str,
+        operation: impl FnOnce(&Document) -> Result<Document, String> + Send + 'static,
+    ) {
+        if self.studio.sprite_job.is_some() {
+            self.status = "A sprite operation is already running".into();
+            return;
+        }
+        self.cancel_gesture();
+        let source = self.doc.clone();
+        let snapshot = source.clone();
+        let worker = std::thread::spawn(move || operation(&snapshot));
+        self.studio.sprite_job = Some(SpriteJob {
+            source,
+            title,
+            worker,
+        });
+        self.status = format!("{title} in progress…");
+    }
+
+    fn poll_sprite_job(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.studio.sprite_job else {
+            return;
+        };
+        if !job.worker.is_finished()
+            || self.save_job.is_some()
+            || self.script_job.is_some()
+            || self.start.is_some()
+        {
+            ctx.request_repaint_after(Duration::from_millis(25));
+            return;
+        }
+        let job = self.studio.sprite_job.take().unwrap();
+        match job.worker.join() {
+            Ok(Ok(doc)) => {
+                if !self.doc.same_editor_targets(&job.source)
+                    || self.doc.differs_from_saved(&job.source)
+                {
+                    self.status = format!(
+                        "{} canceled because the original sprite changed or is no longer active",
+                        job.title
+                    );
+                } else {
+                    if self.doc.differs_from_saved(&doc) {
+                        self.apply_sprite_geometry(doc);
+                    }
+                    self.status = format!("{} complete", job.title);
+                }
+            }
+            Ok(Err(error)) => self.status = error,
+            Err(_) => self.status = format!("{} worker stopped unexpectedly", job.title),
+        }
     }
 
     fn canvas_resize_dialog(&mut self, ctx: &egui::Context) {
@@ -1132,7 +1223,12 @@ impl PixelCraft {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        egui::Window::new("Canvas size")
+        let title = if resize.resample {
+            "Sprite size"
+        } else {
+            "Canvas size"
+        };
+        egui::Window::new(title)
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
@@ -1142,36 +1238,45 @@ impl PixelCraft {
                     ui.label("Height");
                     ui.add(egui::DragValue::new(&mut resize.size[1]).range(1..=MAX_DIMENSION));
                 });
-                let old_anchor = resize.anchor;
-                let old_offset = resize.offset_from(old);
-                egui::ComboBox::from_label("Anchor")
-                    .selected_text(CANVAS_ANCHORS[resize.anchor])
-                    .show_ui(ui, |ui| {
-                        for (anchor, name) in CANVAS_ANCHORS.into_iter().enumerate() {
-                            ui.pc_selectable_value(&mut resize.anchor, anchor, name);
+                if resize.resample {
+                    ui.small("Nearest-neighbor resampling scales the artwork and tilesets.");
+                } else {
+                    let old_anchor = resize.anchor;
+                    let old_offset = resize.offset_from(old);
+                    egui::ComboBox::from_label("Anchor")
+                        .selected_text(CANVAS_ANCHORS[resize.anchor])
+                        .show_ui(ui, |ui| {
+                            for (anchor, name) in CANVAS_ANCHORS.into_iter().enumerate() {
+                                ui.pc_selectable_value(&mut resize.anchor, anchor, name);
+                            }
+                        });
+                    if resize.anchor == 9 && old_anchor != 9 {
+                        resize.offset = old_offset;
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Offset");
+                        if resize.anchor == 9 {
+                            ui.add(egui::DragValue::new(&mut resize.offset[0]).prefix("X "));
+                            ui.add(egui::DragValue::new(&mut resize.offset[1]).prefix("Y "));
+                        } else {
+                            let [x, y] = resize.offset_from(old);
+                            ui.label(format!("X {x}, Y {y}"));
                         }
                     });
-                if resize.anchor == 9 && old_anchor != 9 {
-                    resize.offset = old_offset;
+                    ui.small("Pixels and whole tiles outside the new canvas are cropped.");
                 }
-                ui.horizontal(|ui| {
-                    ui.label("Offset");
-                    if resize.anchor == 9 {
-                        ui.add(egui::DragValue::new(&mut resize.offset[0]).prefix("X "));
-                        ui.add(egui::DragValue::new(&mut resize.offset[1]).prefix("Y "));
-                    } else {
-                        let [x, y] = resize.offset_from(old);
-                        ui.label(format!("X {x}, Y {y}"));
-                    }
-                });
-                ui.small("Pixels and whole tiles outside the new canvas are cropped.");
                 ui.horizontal(|ui| {
                     apply = ui.pc_button("Resize").clicked();
                     cancel = ui.pc_button("Cancel").clicked();
                 });
             });
         if apply {
-            if let Err(error) = self.apply_canvas_resize(&resize) {
+            if resize.resample {
+                let size = resize.size;
+                self.start_sprite_job("Resize sprite", move |doc| {
+                    workflows::resample_sprite(doc, size)
+                });
+            } else if let Err(error) = self.apply_canvas_resize(&resize) {
                 self.status = error;
                 self.studio.canvas_resize = Some(resize);
             }
@@ -1181,6 +1286,7 @@ impl PixelCraft {
     }
 
     pub(super) fn studio_dialogs(&mut self, ctx: &egui::Context) {
+        self.poll_sprite_job(ctx);
         self.canvas_resize_dialog(ctx);
         if self.studio.open {
             let mut open = true;
@@ -1528,6 +1634,52 @@ fn write_recovery_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_sprite_actions_apply_as_one_edit_and_duplicate_in_a_new_tab() {
+        let mut app = app();
+        let mut source = Document::new(2, 3);
+        let ink = [190, 75, 20, 255];
+        source.set_pixel(0, 0, 0, ink);
+        app.replace(source.clone(), None);
+        assert!(app.studio_action("rotatespriteright"));
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.studio.sprite_job.is_some() {
+            assert!(Instant::now() < deadline);
+            app.poll_sprite_job(&ctx);
+            std::thread::yield_now();
+        }
+        assert_eq!([app.doc.width, app.doc.height], [3, 2]);
+        assert_eq!(app.doc.composite(0)[2], ink);
+        app.undo();
+        assert_eq!(app.doc, source);
+        assert!(app.studio_action("duplicatesprite"));
+        assert_eq!(app.tabs.len(), 2);
+        assert!(app.dirty());
+        assert!(!app.doc.same_editor_targets(&source));
+        app.doc.set_pixel(0, 0, 0, CLEAR);
+        app.switch_tab(0);
+        assert_eq!(app.doc.composite(0)[0], ink);
+    }
+
+    #[test]
+    fn background_sprite_transform_keeps_edits_made_while_it_runs() {
+        let mut app = app();
+        app.replace(Document::new(2, 3), None);
+        assert!(app.studio_action("rotatespriteright"));
+        let ink = [190, 75, 20, 255];
+        app.doc.set_pixel(0, 0, 0, ink);
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.studio.sprite_job.is_some() {
+            assert!(Instant::now() < deadline);
+            app.poll_sprite_job(&ctx);
+            std::thread::yield_now();
+        }
+        assert_eq!([app.doc.width, app.doc.height], [2, 3]);
+        assert_eq!(app.doc.composite(0)[0], ink);
+    }
 
     #[test]
     fn canvas_size_action_uses_an_anchor_and_undo_restores_the_sprite() {

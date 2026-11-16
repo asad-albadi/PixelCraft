@@ -31,6 +31,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 11 complete. Sprite → Canvas size supports nine anchors and custom offsets across all layers and frames. Tile grids retain phase and flip flags and cover the resized canvas. Tests cover exact indexed slots, animation timing and IDs, tile expansion and shrink, exposed off-canvas pixels, masks, slice translation, invalid input atomicity and editor undo/redo. Formatting, strict Clippy, and 431 Windows all-target tests passed.
 
+- Item 12 complete. Sprite-wide nearest-neighbor resampling, visible-frame auto-trim, orthogonal rotation and flips, and independent duplication are available from the Sprite menu. Tilemaps stay editable. For rotation and flips, rectangular tile placements with diagonal flags use an equivalent generated tile. Tests cover exact indexed slots, slice geometry, tilemap appearance and resampling, active-tab isolation, undo, and edits made during a background transform. Formatting, strict Clippy, and 438 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -47,7 +49,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **9. Add on-canvas scale and skew handles.** Support interactive transforms on a selection and across the selected timeline cels.
 - [ ] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.
 - [x] **11. Resize the canvas with anchors and offsets.** Apply resizing across layers and frames, including tilemaps.
-- [ ] **12. Add whole-sprite operations.** Resample, auto-trim, duplicate, rotate, and flip sprites across layers and frames.
+- [x] **12. Add whole-sprite operations.** Resample, auto-trim, duplicate, rotate, and flip sprites across layers and frames.
 - [ ] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.
 - [ ] **14. Generate palettes and improve indexed conversion.** Build an editable palette from artwork and expose conversion dithering and transparent-index controls.
 - [ ] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.

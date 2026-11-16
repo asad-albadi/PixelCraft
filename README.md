@@ -112,6 +112,8 @@ Open tabs and unsaved documents are backed up locally every 15 seconds and at a 
 
 **Sprite → Canvas size…** changes the bounds of every layer and frame. Choose one of nine anchors or enter X and Y offsets. Reducing the canvas crops pixels and whole tiles outside its bounds. Partial tiles retain their grid alignment and flip flags. Undo restores the original canvas.
 
+In **Sprite**, use **Sprite size…** to resample artwork and tilesets with nearest-neighbor filtering. **Auto-trim sprite** crops to the combined visible bounds of every frame. The whole-sprite rotate and flip commands transform all layers, frames and tile grids. **Duplicate sprite** opens an independent copy in a new tab. Resampling, trimming, rotation and flips run in the background and apply as one undoable edit.
+
 **Edit → Drawing & selection studio** contains symmetry on either axis, a one-pixel pixel-perfect pencil, pressure-controlled brush size, numeric selection movement and nearest-neighbor resizing, 90° rotation, flips, crop, shading ramps and basic invert/grayscale/lighten/darken effects. Lasso **Q**, move **V** and gradient **D** also appear in the toolbar. Drag a gradient from the active color to the alternate color; both colors are editable in the studio. Pressure is applied when the window-system/tablet backend supplies force events; mouse strokes retain full brush size. Selection transforms and effects are undoable. Crop affects all image layers and frames; tile layers must be rasterized before cropping.
 
 The **Colors** panel now supports renaming and deleting entries, and saving/loading named JSON palettes. Drawing colors and names are also preserved by session recovery. Shading ramps add named colors between the active and alternate colors.

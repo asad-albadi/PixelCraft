@@ -5,8 +5,12 @@ use serde_json::{Value, json};
 
 mod canvas_resize;
 mod rotsprite;
+mod sprite_resize;
+mod sprite_transform;
 
 pub use canvas_resize::resize_canvas;
+pub use sprite_resize::{resample_sprite, trim_sprite};
+pub use sprite_transform::{Orientation, duplicate_sprite, orient_sprite};
 
 #[derive(Clone, Copy)]
 pub enum Transform {
