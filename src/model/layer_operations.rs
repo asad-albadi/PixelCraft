@@ -442,7 +442,7 @@ impl Document {
     }
 }
 
-fn layer_owner(owner: &str) -> Option<(&'static str, usize)> {
+pub(super) fn layer_owner(owner: &str) -> Option<(&'static str, usize)> {
     ["layer:", "cel:"].into_iter().find_map(|prefix| {
         let index = owner.strip_prefix(prefix)?.parse().ok()?;
         Some((prefix, index))

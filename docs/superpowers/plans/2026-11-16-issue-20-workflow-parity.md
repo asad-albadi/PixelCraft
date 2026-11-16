@@ -43,6 +43,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 21 in progress. Shift selects cel rectangles and Ctrl or Command toggles individual cels. Dragging moves the selected artwork and metadata while retaining gaps and the grabbed cel offset. The same selection works with the clear, link, timing, move, and duplicate controls. Tests cover pointer gestures, overlapping drops, locked and unselected gaps, links, metadata, and Undo. Formatting, strict Clippy, and 457 Windows all-target tests passed. Layer range dragging and nonadjacent layer selection remain open.
 
+- Item 21 complete. Layer headers support interval and nonadjacent selection. Drops restack selection branches above or below a sibling or inside a group, keeping children, editor IDs, and layer/cel metadata together. The background stays at the bottom and invalid cycles are rejected. Tests exercise pointer selection and dragging, Undo, grouping, metadata, and project save/reopen. Formatting, strict Clippy, and 460 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -71,7 +73,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - [x] **19. Duplicate and merge layers.** Duplicate complete layers and group trees across frames and merge layers down with correct blending and opacity.
 - [x] **20. Expand layer organization.** Add flatten all or visible, layer via copy or cut, compatible layer type conversions, and collapsible groups.
-- [ ] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
+- [x] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
 - [ ] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.
 - [ ] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.
 - [ ] **24. Expand playback and onion skin controls.** Add selected-range playback, play once, subtags, rewind on stop, and draggable onion ranges.

@@ -617,7 +617,8 @@ impl PixelCraft {
                 active_tag: None,
                 timeline_anchor: None,
                 selected_cels: None,
-                timeline_frames: TimelineFrames::default(),
+                timeline_frames: TimelineHeaders::default(),
+                timeline_layers: TimelineHeaders::default(),
             }));
         }
         self.switch_tab(restored_active);
@@ -1303,7 +1304,8 @@ impl PixelCraft {
                             self.layer = layer;
                             self.timeline_anchor = None;
                             self.selected_cels = None;
-                            self.timeline_frames = TimelineFrames::default();
+                            self.timeline_frames = TimelineHeaders::default();
+                            self.timeline_layers = TimelineHeaders::default();
                             self.timeline_destination = None;
                         }
                     }
