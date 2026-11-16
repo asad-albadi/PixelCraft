@@ -288,6 +288,133 @@ impl PowerTools {
     }
 }
 impl PixelCraft {
+    pub(super) fn set_onion_range(&mut self, previous: bool, count: usize) -> bool {
+        let onion = &mut self.power.preferences.onion;
+        let setting = if previous {
+            &mut onion.previous
+        } else {
+            &mut onion.next
+        };
+        let count = count.min(8);
+        std::mem::replace(setting, count) != count
+    }
+
+    pub(super) fn timeline_onion_range(
+        &mut self,
+        ui: &mut egui::Ui,
+        track: Rect,
+        first_header: Rect,
+    ) {
+        let options = self.power.preferences_onion();
+        let frame = self.frame;
+        let prev = options.previous.min(8).min(frame);
+        let next = options
+            .next
+            .min(8)
+            .min(self.doc.durations.len() - 1 - frame);
+        let boundary = |index: usize| first_header.left() + index as f32 * first_header.width();
+        let y = track.center().y;
+        let painter = ui.painter();
+        painter.text(
+            Pos2::new(track.left() + 8., y),
+            egui::Align2::LEFT_CENTER,
+            "Onion range",
+            egui::FontId::proportional(11.),
+            ui.visuals().text_color(),
+        );
+        painter.hline(
+            boundary(frame)..=boundary(frame + 1),
+            y,
+            Stroke::new(2., ui.visuals().selection.stroke.color),
+        );
+
+        for (previous, count, origin, available, tint, label) in [
+            (
+                true,
+                prev,
+                frame,
+                frame,
+                options.previous_tint,
+                "Previous onion frames",
+            ),
+            (
+                false,
+                next,
+                frame + 1,
+                self.doc.durations.len() - 1 - frame,
+                options.next_tint,
+                "Next onion frames",
+            ),
+        ] {
+            let direction = if previous { -1 } else { 1 };
+            let end = origin.saturating_add_signed(direction * count as isize);
+            let x = boundary(end);
+            let handle = Rect::from_center_size(Pos2::new(x, y), Vec2::new(12., 18.));
+            let color = Color32::from_rgb(tint[0], tint[1], tint[2]);
+            painter.hline(
+                x.min(boundary(origin))..=x.max(boundary(origin)),
+                y,
+                Stroke::new(3., color),
+            );
+
+            let id = ui.id().with(("onion-range", self.active_tab, previous));
+            let response = ui.interact(handle, id, egui::Sense::click_and_drag());
+            let response = response.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), count as f64, label));
+            let change_id = id.with("changed");
+            let dragging = response.dragged_by(egui::PointerButton::Primary);
+            let released = response.drag_stopped_by(egui::PointerButton::Primary);
+            if dragging || response.clicked() {
+                response.request_focus();
+            }
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        ..Default::default()
+                    },
+                );
+            });
+
+            if (dragging || released)
+                && let Some(pointer) = ui.input(|input| input.pointer.interact_pos())
+            {
+                let delta =
+                    ((pointer.x - boundary(origin)) / first_header.width()).round() as isize;
+                let count = (delta * direction).clamp(0, available.min(8) as isize) as usize;
+                if self.set_onion_range(previous, count) {
+                    ui.data_mut(|data| data.insert_temp(change_id, true));
+                    ui.ctx().request_repaint();
+                }
+            }
+            let mut save = released
+                && ui.data_mut(|data| data.remove_temp::<bool>(change_id).unwrap_or(false));
+            if response.has_focus() {
+                let key_delta = ui.input_mut(|input| {
+                    isize::from(input.consume_key(egui::Modifiers::NONE, Key::ArrowRight))
+                        - isize::from(input.consume_key(egui::Modifiers::NONE, Key::ArrowLeft))
+                });
+                if key_delta != 0 {
+                    let count = count
+                        .saturating_add_signed(key_delta * direction)
+                        .min(available.min(8));
+                    save |= self.set_onion_range(previous, count);
+                }
+            }
+            if save && self.shot.is_none() && !cfg!(test) {
+                self.save_workflow_preferences();
+            }
+            ui.painter()
+                .rect_filled(handle.shrink2(Vec2::new(3., 2.)), 2., color);
+            response.on_hover_text(format!("{label}: {count}"));
+            #[cfg(test)]
+            ui.data_mut(|data| {
+                data.insert_temp(egui::Id::new(("onion-handle-test", previous)), handle)
+            });
+        }
+    }
+
     pub(super) fn rewind_on_stop(&self) -> bool {
         self.power.preferences.rewind_on_stop
     }

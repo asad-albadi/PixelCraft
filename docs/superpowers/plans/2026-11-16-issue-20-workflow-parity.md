@@ -53,6 +53,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 24 in progress. The timeline plays a frame or cel selection in order, skips gaps, supports play once for selection/tag/sprite, and optionally rewinds to the pre-playback frame on stop. Tests exercise a short final frame, reverse ping-pong, selection gaps and rewind. Formatting, strict Clippy, and 472 Windows all-target tests passed. Subtags and draggable onion ranges remain open.
 
+- Item 24 in progress. The timeline has draggable previous/next onion range handles aligned to frames, with arrow-key adjustment and preference persistence. Tests cover both pointer handles, keyboard input, the resulting onion image, and artwork history. Formatting, strict Clippy, and 473 Windows all-target tests passed. Subtag playback remains open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

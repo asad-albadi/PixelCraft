@@ -3642,6 +3642,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .id_salt("timeline_scroll")
             .max_height((ui.available_height() - 36.).max(0.))
             .show(ui, |ui| {
+                let onion_track =
+                    (self.onion && !self.playing).then(|| ui.allocate_space(Vec2::new(0., 20.)).1);
+                let mut first_header = None;
                 egui::Grid::new("cels")
                     .spacing(Vec2::ZERO)
                     .min_row_height(row_height)
@@ -3666,6 +3669,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     .selected(selected)
                                     .sense(egui::Sense::click_and_drag()),
                             );
+                            if f == 0 {
+                                first_header = Some(response.rect);
+                            }
                             if response.clicked() || response.double_clicked() {
                                 header_selection = Some((f, ui.input(|input| input.modifiers)));
                             }
@@ -4079,6 +4085,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             }
                         }
                     });
+                if let (Some(track), Some(header)) = (onion_track, first_header) {
+                    self.timeline_onion_range(ui, track, header);
+                }
             });
         if let Some((layer, frame, extend)) = selection {
             self.timeline_select(layer, frame, extend);
@@ -7141,6 +7150,83 @@ mod tests {
         a.undo();
         assert_eq!(a.doc.tags[0].repeat, 0);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn timeline_onion_handles_drag_both_ranges_without_editing_the_document() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(2, 1), None);
+        for frame in 0..6 {
+            a.doc.add_frame(frame, false);
+        }
+        a.frame = 3;
+        a.doc.set_pixel(0, 1, 0, [250, 10, 20, 255]);
+        a.doc.set_pixel(0, 5, 1, [10, 200, 20, 255]);
+        let before = a.doc.clone();
+        a.onion = true;
+        a.set_onion_range(true, 1);
+        a.set_onion_range(false, 0);
+        let draw = |a: &mut PixelCraft, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(950., 650.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| a.timeline(ui));
+                },
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut a, vec![]);
+        let handle = |previous| {
+            ctx.data_mut(|data| {
+                data.get_temp::<Rect>(egui::Id::new(("onion-handle-test", previous)))
+            })
+            .unwrap()
+            .center()
+        };
+        let width = ctx
+            .data_mut(|data| data.get_temp::<Rect>(egui::Id::new(("frame-header", 2usize))))
+            .unwrap()
+            .width();
+        let drag = |a: &mut PixelCraft, from, to| {
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            draw(a, vec![egui::Event::PointerMoved(from), button(from, true)]);
+            draw(a, vec![egui::Event::PointerMoved(to)]);
+            draw(a, vec![button(to, false)]);
+        };
+        drag(&mut a, handle(true), handle(true) - Vec2::new(width, 0.));
+        drag(
+            &mut a,
+            handle(false),
+            handle(false) + Vec2::new(2. * width, 0.),
+        );
+        let options = a.power.preferences_onion();
+        assert_eq!((options.previous, options.next), (2, 2));
+        let pixels = pixelcraft::productivity::onion_pixels(&a.doc, a.frame, &options);
+        assert!(pixels[0][3] > 0 && pixels[1][3] > 0);
+        draw(
+            &mut a,
+            vec![egui::Event::Key {
+                key: Key::ArrowLeft,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(a.power.preferences_onion().next, 1);
+        assert_eq!(a.frame, 3);
+        assert_eq!(a.doc, before);
+        assert!(a.undo.is_empty());
     }
 
     #[test]
