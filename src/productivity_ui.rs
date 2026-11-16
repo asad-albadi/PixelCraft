@@ -1689,7 +1689,7 @@ mod bridge_tests {
         }
         rx.recv().unwrap()
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn live_save_preserves_the_restriction_of_its_saved_as_path() {
         use serde_json::json;
@@ -1734,7 +1734,7 @@ mod bridge_tests {
         assert!(!outside_created);
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn restricted_live_sequence_rejects_redirected_parent_at_publish() {
         use std::os::unix::fs::symlink;

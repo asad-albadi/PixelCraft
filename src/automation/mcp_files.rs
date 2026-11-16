@@ -43,7 +43,10 @@ fn same_component(a: Component<'_>, b: Component<'_>) -> bool {
     a == b
 }
 
-fn project_suffix<'a>(root: &Path, path: &'a Path) -> Result<std::path::Components<'a>, String> {
+pub(super) fn project_suffix<'a>(
+    root: &Path,
+    path: &'a Path,
+) -> Result<std::path::Components<'a>, String> {
     let outside = || format!("Path escapes the project root: {}", path.display());
     let mut suffix = path.components();
     for part in root.components() {
@@ -299,7 +302,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn restricted_cleanup_leaves_redirected_external_staging_untouched() {
         use std::os::unix::fs::symlink;
@@ -335,7 +338,7 @@ mod tests {
         assert_eq!(contents.unwrap(), b"unrelated content");
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn restricted_cleanup_does_not_delete_a_replacement_directory_inside_the_project() {
         let root = std::env::temp_dir().join(format!(
@@ -364,7 +367,7 @@ mod tests {
 
     #[cfg(any(target_os = "linux", windows))]
     #[test]
-    fn restricted_cleanup_preserves_an_unrelated_directory_moved_into_staging() {
+    fn restricted_cleanup_preserves_unrelated_items_moved_into_staging() {
         let root =
             std::env::temp_dir().join(format!("pixelcraft-staging-graft-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
@@ -375,12 +378,22 @@ mod tests {
                 true,
                 Some(&canonical),
                 true,
-                |_| Ok(Value::Null),
+                |temporary| {
+                    mcp_io::write(temporary.join("owned.png"), b"temporary output")
+                        .map_err(|e| e.to_string())?;
+                    mcp_io::write(temporary.join("replaced.png"), b"other temporary output")
+                        .map_err(|e| e.to_string())?;
+                    Ok(Value::Null)
+                },
             )
         })
         .unwrap();
         let known = prepared.temporary.join("owned.png");
-        fs::write(&known, b"temporary output").unwrap();
+        let replaced = prepared.temporary.join("replaced.png");
+        fs::rename(&replaced, canonical.join("moved-output.png")).unwrap();
+        fs::write(&replaced, b"replacement, keep").unwrap();
+        let injected = prepared.staging.join("injected.png");
+        fs::write(&injected, b"untracked, keep").unwrap();
         let unrelated = canonical.join("unrelated");
         fs::create_dir(&unrelated).unwrap();
         fs::write(unrelated.join("keep"), b"keep").unwrap();
@@ -388,10 +401,54 @@ mod tests {
         fs::rename(unrelated, &moved).unwrap();
         drop(prepared);
         let contents = fs::read(moved.join("keep"));
+        let replacement_contents = fs::read(replaced);
+        let injected_contents = fs::read(injected);
         let owned_gone = !known.exists();
         fs::remove_dir_all(&root).unwrap();
         assert_eq!(contents.unwrap(), b"keep");
+        assert_eq!(replacement_contents.unwrap(), b"replacement, keep");
+        assert_eq!(injected_contents.unwrap(), b"untracked, keep");
         assert!(owned_gone);
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn restricted_publication_rejects_a_replaced_staged_file() {
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-staged-file-replacement-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let prepared = super::super::mcp_access::run(Some(&canonical), None, || {
+            prepare_output_under(
+                canonical.join("file.png"),
+                true,
+                Some(&canonical),
+                false,
+                |temporary| {
+                    mcp_io::write(temporary, b"original export")
+                        .map_err(|error| error.to_string())?;
+                    Ok(Value::Null)
+                },
+            )
+        })
+        .unwrap();
+        fs::rename(&prepared.temporary, canonical.join("moved.png")).unwrap();
+        fs::write(&prepared.temporary, b"unrelated content").unwrap();
+        let result = prepared.access.as_ref().unwrap().run(|| {
+            mcp_io::publish_new(&prepared.temporary, &prepared.output)
+                .map_err(|error| error.to_string())
+        });
+        let temporary = prepared.temporary.clone();
+        let output = prepared.output.clone();
+        drop(prepared);
+        let kept = fs::read(temporary);
+        let output_exists = output.exists();
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.unwrap_err().contains("changed"));
+        assert!(!output_exists);
+        assert_eq!(kept.unwrap(), b"unrelated content");
     }
 
     #[test]

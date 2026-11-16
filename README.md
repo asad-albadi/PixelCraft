@@ -283,6 +283,8 @@ Configure an MCP client to launch the executable with `--mcp`. The newline-delim
 
 Add `--project-root DIRECTORY` to restrict file tools and explicit live output paths to a project directory. Relative paths resolve from that directory. Absolute paths must be under the canonical root, including companion files referenced by imports. Linux requires `openat2` and Landlock ABI 3 or newer (Linux 6.2 or newer with Landlock enabled). Linux resolves relative symlinks beneath the root and blocks publication if a destination directory moves outside the root. Windows uses directory-relative handles and rejects junctions and other reparse points. If the platform or filesystem cannot enforce the restriction, the operation fails. This option works with `--live BRIDGE_CONFIG` from the same version of PixelCraft.
 
+Restricted imports reject files with multiple hard links. Copy those inputs into the project as regular files. A separate process with write access inside a Linux project can still change the final filename between PixelCraft's identity check and a rename or removal.
+
 MCP file writes require `"overwrite": true` to replace an existing file. This applies to every generated atlas, sprite-sheet, and batch sidecar.
 
 Live access starts **disabled** and is never restored from preferences. Enable **Workflow tools → Assistants & headless tools → Allow assistants to access this live editor**. The editor displays an MCP command with `--live BRIDGE_CONFIG`. That instance adds `live-inspect`, `live-render`, `live-edit` and `live-undo`. The bridge listens on loopback with a random token in a private file, which is removed when access is disabled or the editor closes. Disable the checkbox to revoke access.

@@ -1,8 +1,9 @@
 use pixelcraft::{automation, formats, model::Document};
 use serde_json::{Value, json};
+#[cfg(any(target_os = "linux", windows))]
+use std::io::Write;
 use std::{
     fs,
-    io::Write,
     path::PathBuf,
     process::{Command, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
@@ -28,6 +29,7 @@ impl Workspace {
         self.0.join("project")
     }
 
+    #[cfg(any(target_os = "linux", windows))]
     fn call(&self, op: &str, args: Value) -> Value {
         let mut server = Command::new(env!("CARGO_BIN_EXE_pixelcraft"))
             .arg("--mcp")
@@ -80,6 +82,7 @@ fn file_call(op: &str, args: Value) -> Value {
         .clone()
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn project_root_resolves_relative_paths_and_checks_each_array_entry() {
     let w = Workspace::new();
@@ -102,7 +105,7 @@ fn project_root_resolves_relative_paths_and_checks_each_array_entry() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn project_root_checks_parent_and_final_symlink_targets() {
     use std::os::unix::fs::symlink;
     let w = Workspace::new();
@@ -136,6 +139,21 @@ fn project_root_checks_parent_and_final_symlink_targets() {
     assert_eq!(fs::read(&sidecar).unwrap(), b"outside");
 }
 
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn project_root_rejects_hard_linked_inputs() {
+    let w = Workspace::new();
+    let outside = w.0.join("outside.pixel");
+    let linked = w.project().join("linked.pixel");
+    fs::hard_link(&outside, &linked).unwrap();
+    assert_error(
+        &w.call("render", json!({"input":"linked.pixel"})),
+        "hard link",
+    );
+    assert!(formats::load(&linked).is_ok());
+}
+
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn project_root_checks_images_referenced_by_input_documents() {
     let w = Workspace::new();
@@ -174,6 +192,41 @@ fn project_root_checks_images_referenced_by_input_documents() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn project_root_accepts_ordinary_absolute_tiled_companion_paths() {
+    let workspace = Workspace::new();
+    let sibling = workspace.0.join("project-other");
+    fs::create_dir(&sibling).unwrap();
+    for (index, directory) in [workspace.project(), sibling].into_iter().enumerate() {
+        let image_path = directory.join("tiles.png");
+        image::RgbaImage::new(1, 1).save(&image_path).unwrap();
+        let canonical = image_path.canonicalize().unwrap();
+        let spelling = canonical.to_str().unwrap();
+        let ordinary = if let Some(unc) = spelling.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            spelling.strip_prefix(r"\\?\").unwrap().to_owned()
+        };
+        fs::write(
+            workspace.project().join("tiles.tsj"),
+            json!({
+                "type":"tileset", "tilewidth":1, "tileheight":1, "tilecount":1,
+                "columns":1, "image":ordinary.replace('\\', "/")
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let result = workspace.call("inspect", json!({"input":"tiles.tsj"}));
+        if index == 0 {
+            assert!(result["isError"].is_null(), "{result}");
+        } else {
+            assert_error(&result, "project root");
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn malformed_tiled_geometry_returns_mcp_error() {
     let w = Workspace::new();
@@ -340,6 +393,7 @@ fn mcp_requires_overwrite_and_a_matching_revision_for_file_save() {
     assert!(saved["isError"].is_null(), "{saved}");
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn mcp_preflights_engine_sidecars_and_preserves_unity_identity_on_overwrite() {
     let w = Workspace::new();
@@ -358,6 +412,7 @@ fn mcp_preflights_engine_sidecars_and_preserves_unity_identity_on_overwrite() {
     );
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn mcp_sequence_overwrite_replaces_only_generated_frames() {
     let w = Workspace::new();
@@ -375,6 +430,7 @@ fn mcp_sequence_overwrite_replaces_only_generated_frames() {
     assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"keep");
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn mcp_preflights_atlas_metadata_before_writing_atlas_image() {
     let w = Workspace::new();
@@ -386,6 +442,7 @@ fn mcp_preflights_atlas_metadata_before_writing_atlas_image() {
     assert_eq!(fs::read(metadata).unwrap(), b"keep");
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn restricted_mcp_rejects_outside_paths_before_probing_them() {
     let w = Workspace::new();
@@ -397,7 +454,7 @@ fn restricted_mcp_rejects_outside_paths_before_probing_them() {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn restricted_mcp_rejects_special_files_as_inputs() {
     let w = Workspace::new();
@@ -405,6 +462,33 @@ fn restricted_mcp_rejects_special_files_as_inputs() {
     assert_error(
         &w.call("inspect", json!({"input":"socket.pixel"})),
         "Input must be a regular file",
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn restricted_atlas_folder_skips_junctions_but_direct_access_rejects_them() {
+    let workspace = Workspace::new();
+    let outside = workspace.0.join("outside");
+    fs::create_dir(&outside).unwrap();
+    formats::save(&outside.join("other.pixel"), &Document::new(1, 1)).unwrap();
+    let junction = Command::new("cmd")
+        .current_dir(&workspace.0)
+        .args(["/d", "/c", "mklink", "/j", r"project\junction", "outside"])
+        .output()
+        .unwrap();
+    assert!(junction.status.success(), "{junction:?}");
+
+    let result = workspace.call("atlas", json!({"inputs":["."],"output":"atlas.png"}));
+    assert!(result["isError"].is_null(), "{result}");
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(workspace.project().join("atlas.json")).unwrap()).unwrap();
+    let sources = metadata["meta"]["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["name"], "art.pixel");
+    assert_error(
+        &workspace.call("inspect", json!({"input":"junction/other.pixel"})),
+        "project root",
     );
 }
 
@@ -423,6 +507,7 @@ fn restricted_mcp_rejects_external_unc_roots_before_probing_them() {
     }
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn restricted_mp4_export_passes_an_open_destination_to_ffmpeg() {
     if !Command::new("ffmpeg")
@@ -443,6 +528,7 @@ fn restricted_mp4_export_passes_an_open_destination_to_ffmpeg() {
     assert!(video.windows(4).any(|part| part == b"moof"));
 }
 
+#[cfg(any(target_os = "linux", windows))]
 #[test]
 fn restricted_webp_import_keeps_the_shipped_decoder_available() {
     let w = Workspace::new();
@@ -457,4 +543,20 @@ fn restricted_webp_import_keeps_the_shipped_decoder_available() {
     let sprite: Value =
         serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(sprite["frames"].as_array().unwrap().len(), 2);
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+#[test]
+fn restricted_mcp_refuses_to_start_when_containment_is_unsupported() {
+    let workspace = Workspace::new();
+    let result = Command::new(env!("CARGO_BIN_EXE_pixelcraft"))
+        .arg("--mcp")
+        .arg("--project-root")
+        .arg(workspace.project())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "{error}");
+    assert!(error.contains("unavailable on this platform"), "{error}");
 }

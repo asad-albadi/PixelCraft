@@ -40,7 +40,7 @@ const OBJ_CASE_INSENSITIVE: u32 = 0x0040;
 const OBJ_DONT_REPARSE: u32 = 0x1000;
 const FILE_RENAME_INFORMATION: u32 = 10;
 const FILE_LINK_INFORMATION: u32 = 11;
-const FILE_NAMES_INFORMATION: u32 = 12;
+const FILE_DIRECTORY_INFORMATION: u32 = 1;
 const FILE_DISPOSITION_INFORMATION: u32 = 13;
 const STATUS_NO_MORE_FILES: i32 = 0x8000_0006u32 as i32;
 const STATUS_NO_SUCH_FILE: i32 = 0xc000_000fu32 as i32;
@@ -151,13 +151,13 @@ fn reject_hard_links(file: &File) -> io::Result<()> {
     if file_information(file)?.number_of_links != 1 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "Cannot replace a file with multiple hard links",
+            "Restricted MCP requires a file with a single hard link",
         ));
     }
     Ok(())
 }
 
-fn directory_identity(file: &File) -> io::Result<(u64, u64)> {
+pub(super) fn file_identity(file: &File) -> io::Result<(u64, u64)> {
     let info = file_information(file)?;
     let index = u64::from(info.index_high) << 32 | u64::from(info.index_low);
     Ok((u64::from(info.volume_serial), index))
@@ -284,9 +284,12 @@ fn open_directory(parent: &File, name: &OsStr, create: bool) -> io::Result<File>
 }
 
 fn directory_names(directory: &File) -> io::Result<Vec<OsString>> {
+    const ATTRIBUTES_OFFSET: usize = 56;
+    const NAME_LENGTH_OFFSET: usize = 60;
+    const NAME_OFFSET: usize = 64;
     let mut names = Vec::new();
     let mut restart = true;
-    // The native FILE_NAMES_INFORMATION records require aligned storage.
+    // The native FILE_DIRECTORY_INFORMATION records require aligned storage.
     let mut buffer = [0u64; 1024];
     loop {
         let mut io_status = IoStatusBlock::default();
@@ -301,7 +304,7 @@ fn directory_names(directory: &File) -> io::Result<Vec<OsString>> {
                 &mut io_status,
                 buffer.as_mut_ptr().cast(),
                 size_of_val(&buffer) as u32,
-                FILE_NAMES_INFORMATION,
+                FILE_DIRECTORY_INFORMATION,
                 0,
                 ptr::null(),
                 u8::from(restart),
@@ -323,34 +326,43 @@ fn directory_names(directory: &File) -> io::Result<Vec<OsString>> {
             std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), io_status.information)
         };
         loop {
-            if data.len() < 12 {
+            if data.len() < NAME_OFFSET {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Invalid directory entry",
                 ));
             }
             let next = u32::from_le_bytes(data[..4].try_into().unwrap()) as usize;
-            let length = u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize;
+            let attributes = u32::from_le_bytes(
+                data[ATTRIBUTES_OFFSET..NAME_LENGTH_OFFSET]
+                    .try_into()
+                    .unwrap(),
+            );
+            let length =
+                u32::from_le_bytes(data[NAME_LENGTH_OFFSET..NAME_OFFSET].try_into().unwrap())
+                    as usize;
             if !length.is_multiple_of(2)
-                || length > data.len() - 12
-                || (next != 0 && (next < 12 + length || next >= data.len()))
+                || length > data.len() - NAME_OFFSET
+                || (next != 0 && (next < NAME_OFFSET + length || next >= data.len()))
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Invalid directory entry",
                 ));
             }
-            let wide: Vec<u16> = data[12..12 + length]
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .copied()
-                .map(u16::from_le_bytes)
-                .collect();
-            let name = OsString::from_wide(&wide);
-            if name != "." && name != ".." {
-                valid_component(&name)?;
-                names.push(name);
+            if attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+                let wide: Vec<u16> = data[NAME_OFFSET..NAME_OFFSET + length]
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(u16::from_le_bytes)
+                    .collect();
+                let name = OsString::from_wide(&wide);
+                if name != "." && name != ".." {
+                    valid_component(&name)?;
+                    names.push(name);
+                }
             }
             if next == 0 {
                 break;
@@ -452,11 +464,11 @@ impl Guard {
     }
 
     pub(super) fn identity(&self) -> io::Result<(u64, u64)> {
-        directory_identity(&self.directory)
+        file_identity(&self.directory)
     }
 
     pub(super) fn directory_identity(&self, path: &Path) -> io::Result<(u64, u64)> {
-        directory_identity(&self.walk(path, false)?.file)
+        file_identity(&self.walk(path, false)?.file)
     }
 
     fn suffix<'a>(&self, path: &'a Path) -> io::Result<&'a Path> {
@@ -466,13 +478,14 @@ impl Guard {
                 format!("Path escapes the project root: {}", path.display()),
             )
         };
-        let suffix = path.strip_prefix(&self.root).map_err(|_| outside())?;
-        for part in suffix.components() {
+        let suffix = super::mcp_files::project_suffix(&self.root, path)
+            .map_err(|message| io::Error::new(io::ErrorKind::PermissionDenied, message))?;
+        for part in suffix.clone() {
             if !matches!(part, Component::Normal(name) if valid_component(name).is_ok()) {
                 return Err(outside());
             }
         }
-        Ok(suffix)
+        Ok(suffix.as_path())
     }
 
     fn walk(&self, path: &Path, create: bool) -> io::Result<Directory> {
@@ -509,14 +522,30 @@ impl Guard {
 
     pub(super) fn open_read(&self, path: &Path) -> io::Result<File> {
         let (parent, name) = self.parent(path)?;
-        open_child(
+        let file = open_child(
             &parent.file,
             name,
             READ_ACCESS,
             FILE_SHARE_READ,
             FILE_OPEN,
             FILE_NON_DIRECTORY_FILE,
-        )
+        )?;
+        reject_hard_links(&file)?;
+        Ok(file)
+    }
+
+    #[cfg(test)]
+    fn file_identity(&self, path: &Path) -> io::Result<(u64, u64)> {
+        let (parent, name) = self.parent(path)?;
+        let file = open_child(
+            &parent.file,
+            name,
+            READ_ACCESS,
+            FILE_SHARE_READ,
+            FILE_OPEN,
+            FILE_NON_DIRECTORY_FILE,
+        )?;
+        file_identity(&file)
     }
 
     pub(super) fn ensure_directory(&self, path: &Path) -> io::Result<()> {
@@ -524,6 +553,14 @@ impl Guard {
     }
 
     pub(super) fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.create_directory_handle(path).map(drop)
+    }
+
+    pub(super) fn create_directory_identity(&self, path: &Path) -> io::Result<(u64, u64)> {
+        file_identity(&self.create_directory_handle(path)?)
+    }
+
+    fn create_directory_handle(&self, path: &Path) -> io::Result<File> {
         let (parent, name) = self.parent(path)?;
         open_child(
             &parent.file,
@@ -533,7 +570,6 @@ impl Guard {
             FILE_CREATE,
             FILE_DIRECTORY_FILE,
         )
-        .map(drop)
     }
 
     pub(super) fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
@@ -620,7 +656,7 @@ impl Guard {
     #[cfg(test)]
     fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
         let expected = self.directory_identity(path)?;
-        self.remove_owned_dir_all(path, expected, None)
+        self.remove_owned_dir_all(path, expected, None, &[])
     }
 
     pub(super) fn remove_owned_dir_all(
@@ -628,6 +664,7 @@ impl Guard {
         path: &Path,
         expected: (u64, u64),
         known_child: Option<(&OsStr, (u64, u64))>,
+        files: &[(PathBuf, (u64, u64))],
     ) -> io::Result<()> {
         let (parent, name) = self.parent(path)?;
         let directory = open_child(
@@ -638,43 +675,54 @@ impl Guard {
             FILE_OPEN,
             FILE_DIRECTORY_FILE,
         )?;
-        if directory_identity(&directory)? != expected {
+        if file_identity(&directory)? != expected {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "The restricted export's staging directory changed",
             ));
         }
-        let names = directory_names(&directory)?;
-        let mut directories = vec![(directory, names.into_iter())];
-        while let Some((directory, names)) = directories.last_mut() {
-            if let Some(name) = names.next() {
-                let child = open_child(
+        let remove_files = |directory: &File, prefix: &Path| -> io::Result<()> {
+            for (path, identity) in files {
+                let Ok(relative) = path.strip_prefix(prefix) else {
+                    continue;
+                };
+                let (Some(Component::Normal(name)), None) =
+                    (relative.components().next(), relative.components().nth(1))
+                else {
+                    continue;
+                };
+                let Ok(file) = open_child(
                     directory,
-                    &name,
-                    DIRECTORY_ACCESS | DELETE,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    name,
+                    READ_ACCESS | DELETE,
+                    FILE_SHARE_READ,
                     FILE_OPEN,
-                    0,
-                )?;
-                if child.metadata()?.is_dir() {
-                    let Some((allowed_name, expected)) =
-                        known_child.filter(|_| directories.len() == 1)
-                    else {
-                        continue;
-                    };
-                    if name != allowed_name || directory_identity(&child)? != expected {
-                        continue;
-                    }
-                    let names = directory_names(&child)?;
-                    directories.push((child, names.into_iter()));
-                } else {
-                    delete(child)?;
+                    FILE_NON_DIRECTORY_FILE,
+                ) else {
+                    continue;
+                };
+                if file_identity(&file)? == *identity {
+                    delete(file)?;
                 }
-            } else {
-                delete(directories.pop().unwrap().0)?;
             }
+            Ok(())
+        };
+        remove_files(&directory, Path::new(""))?;
+        if let Some((name, expected)) = known_child
+            && let Ok(child) = open_child(
+                &directory,
+                name,
+                DIRECTORY_ACCESS | DELETE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_OPEN,
+                FILE_DIRECTORY_FILE,
+            )
+            && file_identity(&child)? == expected
+        {
+            remove_files(&child, Path::new(name))?;
+            delete(child)?;
         }
-        Ok(())
+        delete(directory)
     }
 
     pub(super) fn rename(
@@ -682,12 +730,24 @@ impl Guard {
         source: &Path,
         destination: &Path,
         replace: bool,
-    ) -> io::Result<()> {
-        self.publish(source, destination, FILE_RENAME_INFORMATION, replace)
+        expected: Option<(u64, u64)>,
+    ) -> io::Result<(u64, u64)> {
+        self.publish(
+            source,
+            destination,
+            FILE_RENAME_INFORMATION,
+            replace,
+            expected,
+        )
     }
 
-    pub(super) fn hard_link(&self, source: &Path, destination: &Path) -> io::Result<()> {
-        self.publish(source, destination, FILE_LINK_INFORMATION, false)
+    pub(super) fn hard_link(
+        &self,
+        source: &Path,
+        destination: &Path,
+        expected: Option<(u64, u64)>,
+    ) -> io::Result<(u64, u64)> {
+        self.publish(source, destination, FILE_LINK_INFORMATION, false, expected)
     }
 
     fn publish(
@@ -696,7 +756,8 @@ impl Guard {
         destination: &Path,
         information_class: u32,
         replace: bool,
-    ) -> io::Result<()> {
+        expected: Option<(u64, u64)>,
+    ) -> io::Result<(u64, u64)> {
         // Validate both paths before opening either of them.
         self.suffix(destination)?;
         let (source_parent, source_name) = self.parent(source)?;
@@ -715,6 +776,12 @@ impl Guard {
             FILE_OPEN,
             FILE_NON_DIRECTORY_FILE,
         )?;
+        let identity = file_identity(&file)?;
+        if expected.is_some_and(|expected| expected != identity) {
+            return Err(io::Error::other(
+                "The staged source file changed before publication",
+            ));
+        }
 
         let wide: Vec<u16> = destination_name.encode_wide().collect();
         let name_bytes = wide.len() * size_of::<u16>();
@@ -745,8 +812,9 @@ impl Guard {
                 request.cast(),
                 size as u32,
                 information_class,
-            ))
+            ))?;
         }
+        Ok(identity)
     }
 }
 
@@ -827,7 +895,7 @@ mod tests {
         let target = dir.join("old.pixel");
         fs::write(&source, "new").unwrap();
         fs::write(&target, "old").unwrap();
-        assert!(guard.rename(&source, &target, false).is_err());
+        assert!(guard.rename(&source, &target, false, None).is_err());
 
         let mut previous = String::new();
         guard
@@ -836,7 +904,7 @@ mod tests {
             .read_to_string(&mut previous)
             .unwrap();
         assert_eq!(previous, "old");
-        guard.rename(&source, &target, true).unwrap();
+        guard.rename(&source, &target, true, None).unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         assert!(!source.exists());
     }
@@ -875,7 +943,7 @@ mod tests {
             .write_all(b"new")
             .unwrap();
         let output = root.join("published.pixel");
-        request.hard_link(&source, &output).unwrap();
+        request.hard_link(&source, &output, None).unwrap();
         assert_eq!(
             request.create_file(&source, false).unwrap_err().kind(),
             io::ErrorKind::PermissionDenied,
@@ -901,6 +969,10 @@ mod tests {
                     OsStr::new("assets"),
                     request.directory_identity(&assets).unwrap(),
                 )),
+                &[(
+                    PathBuf::from("assets").join("source.pixel"),
+                    request.file_identity(&source).unwrap(),
+                )],
             )
             .unwrap();
         assert!(!stage.exists());
