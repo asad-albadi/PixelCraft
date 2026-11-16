@@ -50,6 +50,97 @@ fn headless_lua_passes_params_and_writes_only_a_successful_result() {
 }
 
 #[test]
+fn headless_lua_console_keeps_state_and_saves_on_request() {
+    use pixelcraft::formats;
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+    let folder =
+        std::env::temp_dir().join(format!("pixelcraft-lua-console-{}", std::process::id()));
+    fs::create_dir_all(&folder).unwrap();
+    let output = folder.join("console.pixel");
+    let _ = fs::remove_file(&output);
+
+    let run = |width: &str, height: &str, commands: &str| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pixelcraft"))
+            .args([
+                "--cli",
+                "lua-console",
+                "--width",
+                width,
+                "--height",
+                height,
+                "--output",
+            ])
+            .arg(&output)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(commands.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let result = run(
+        "2",
+        "1",
+        r#"
+        assert(not app.isUIAvailable and io == nil)
+        value = 41
+        function paint(n)
+            app.activeImage:drawPixel(1, 0, Color{r=n,g=32,b=16})
+            return n
+        end
+        error("ordinary error")
+        while true do end
+        =paint(value + 1)
+        :save
+    "#,
+    );
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stdout)
+            .lines()
+            .any(|line| line == "42")
+    );
+    let errors = String::from_utf8_lossy(&result.stderr);
+    assert!(errors.contains("ordinary error"));
+    assert!(errors.contains("Script instruction/time budget exceeded"));
+    assert_eq!(
+        formats::load(&output).unwrap().layers[0].cels[0][1],
+        [42, 32, 16, 255]
+    );
+
+    fs::remove_file(&output).unwrap();
+    let result = run("2", "1", "value = 23\n:quit\n");
+    assert!(result.status.success());
+    assert!(!output.exists());
+    let result = run("2", "1", "function unfinished()\n");
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Incomplete Lua command"));
+    assert!(!output.exists());
+    let result = run("1000", "1000", ":save\n");
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let saved = formats::load(&output).unwrap();
+    assert_eq!((saved.width, saved.height), (1000, 1000));
+    fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
 fn lua_gray_assignment_preserves_signed_state_and_alpha() {
     // Saturating gray before packing loses the native low byte.
     for (value, gray, expected) in [

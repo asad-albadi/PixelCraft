@@ -315,6 +315,14 @@ pixelcraft --cli lua --script recolor.lua --input hero.pixel --output recolored.
 
 The JSON result includes captured `print` output in `stdout`. Omit `--output` for inspection scripts. An output can be a `.pixel`, `.ase`, `.aseprite`, or `.png` file. Use `--scale` to scale PNG output and `--overwrite true` to allow replacing an existing output after the script succeeds. Script execution uses the native extension sandbox.
 
+For a persistent terminal session, use `lua-console`. Globals and artwork edits are shared across commands, and the console accepts multiline Lua. Prefix a single-line expression with `=` to print its value. Use `:cancel` to clear pending input or `:help` to see the controls. A failed command reports its error and leaves any edits it made before failing in the session.
+
+```sh
+pixelcraft --cli lua-console --input hero.pixel --output sketch.pixel
+```
+
+Use `:save` to write the configured output and exit. Use `:quit` or close standard input to exit without saving. The console accepts the same canvas, parameter, and output options as `lua`, with commands entered through standard input.
+
 ### MCP and live editor access
 
 Configure an MCP client to launch the executable with `--mcp`. The newline-delimited stdio JSON-RPC server advertises file inspection, PNG rendering, revision-checked edits, import/export, palettes, tag batches and atlases. Rendering returns an MCP image. File tools operate on explicitly supplied local paths and do not require the editor to be open.

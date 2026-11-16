@@ -6401,7 +6401,14 @@ fn main() -> eframe::Result {
         .is_some_and(|a| a == "--cli" || a == "--mcp")
     {
         let result = if headless_args[0] == "--cli" {
-            pixelcraft::automation::run_cli(&headless_args[1..]).map(|v| println!("{v}"))
+            if headless_args
+                .get(1)
+                .is_some_and(|operation| operation == "lua-console")
+            {
+                pixelcraft::automation::run_cli_console(&headless_args[2..])
+            } else {
+                pixelcraft::automation::run_cli(&headless_args[1..]).map(|v| println!("{v}"))
+            }
         } else {
             let mut live = None;
             let mut root = None;

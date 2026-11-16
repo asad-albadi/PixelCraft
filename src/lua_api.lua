@@ -3,7 +3,13 @@
 local clock,hook,fail=os.clock,debug.sethook,error
 local raw_pcall,raw_xpcall=pcall,xpcall
 local start,instructions,expired=clock(),0,false
-hook(function() instructions=instructions+10000;if instructions>20000000 or clock()-start>3 then expired=true;fail('Script instruction/time budget exceeded') end end,'',10000)
+local function installBudget(instructionLimit,timeLimit)
+ instructionLimit,timeLimit=instructionLimit or 20000000,timeLimit or 3
+ start,instructions,expired=clock(),0,false
+ hook(function() instructions=instructions+10000;if instructions>instructionLimit or clock()-start>timeLimit then expired=true;fail('Script instruction/time budget exceeded') end end,'',10000)
+end
+installBudget()
+_pw_reset_budget=installBudget
 pcall=function(...)local result=table.pack(raw_pcall(...));if expired then fail('Script instruction/time budget exceeded') end;return table.unpack(result,1,result.n)end
 xpcall=function(...)local result=table.pack(raw_xpcall(...));if expired then fail('Script instruction/time budget exceeded') end;return table.unpack(result,1,result.n)end
 io=nil;os={clock=clock,time=os.time,date=os.date,difftime=os.difftime};package=nil;require=nil;dofile=nil;loadfile=nil;debug=nil;collectgarbage=nil;coroutine=nil
@@ -626,13 +632,82 @@ _pw_plugin={preferences={}}
 function _pw_plugin:newCommand(c) assert(type(c.id)=='string' and type(c.onclick)=='function','Command requires id and onclick');commands[c.id]=c end
 function _pw_plugin:newMenuGroup(_) end
 function _pw_plugin:newMenuSeparator(_) end
+local encodeJson
+do
+ local kind, walk, length, at, stringify = type, next, rawlen, rawget, tostring
+ local substitute, format, ascii, join = string.gsub, string.format, string.byte, table.concat
+ local function escape(text)
+  return '"' .. substitute(text, '[%z\1-\31\\"]', function(char)
+   return format('\\u%04x', ascii(char))
+  end) .. '"'
+ end
+
+ function encodeJson(value)
+  -- Bound transient allocations when encoding millions of scalar pixel channels.
+  local batch, chunks, size = {}, {}, 0
+  local function append(text)
+   size = size + 1
+   batch[size] = text
+   if size == 2048 then
+    chunks[#chunks + 1] = join(batch)
+    size = 0
+   end
+  end
+
+  local function write(item, depth)
+   local t = kind(item)
+   if t == 'nil' then
+    append('null')
+   elseif t == 'boolean' or t == 'number' then
+    append(stringify(item))
+   elseif t == 'string' then
+    append(escape(item))
+   elseif t == 'table' then
+    if depth >= 128 then fail('Script result exceeds the nesting limit') end
+    local array = true
+    for key in walk, item do
+     if kind(key) ~= 'number' then array = false; break end
+    end
+    if array then
+     append('[')
+     for i = 1, length(item) do
+      if i > 1 then append(',') end
+      write(at(item, i), depth + 1)
+     end
+     append(']')
+    else
+     append('{')
+     local first = true
+     for key, entry in walk, item do
+      if not first then append(',') end
+      append(escape(key))
+      append(':')
+      write(entry, depth + 1)
+      first = false
+     end
+     append('}')
+    end
+   else
+    fail('Cannot serialize ' .. t)
+   end
+  end
+
+  write(value, 0)
+  chunks[#chunks + 1] = join(batch, '', 1, size)
+  return join(chunks)
+ end
+end
+
+function _pw_snapshot()
+ -- Encoding the full document needs a larger allowance than one console command.
+ installBudget(1000000000,5)
+ return encodeJson(doc)
+end
 function _pw_finish(command,discover)
  if type(init)=='function' then init(_pw_plugin) end
  local list={} for id,c in pairs(commands) do list[#list+1]={id=id,title=c.title or id} end
  if command and command~='' then assert(commands[command],'Plugin command was not registered: '..command);commands[command].onclick() end
  if not discover and _pw_loop then _pw_loop() end
  hook()
- local function escape(s) return '"'..s:gsub('[%z\1-\31\\"]',function(c)return string.format('\\u%04x',string.byte(c))end)..'"' end
- local function json(v) local t=type(v);if t=='nil' then return 'null' elseif t=='boolean' or t=='number' then return tostring(v) elseif t=='string' then return escape(v) elseif t=='table' then local array=true;local n=0;for k in pairs(v)do if type(k)~='number' then array=false end;n=n+1 end;local out={};if array then for i=1,#v do out[i]=json(v[i]) end return '['..table.concat(out,',')..']' end;for k,val in pairs(v)do out[#out+1]=escape(k)..':'..json(val) end;return '{'..table.concat(out,',')..'}' else error('Cannot serialize '..t) end end
- _pw_result=json(discover and list or doc)
+ _pw_result=encodeJson(discover and list or doc)
 end

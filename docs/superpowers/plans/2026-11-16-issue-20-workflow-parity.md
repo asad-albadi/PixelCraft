@@ -69,6 +69,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 31 in progress. The CLI runs sandboxed Lua files with typed JSON parameters, a selected starting cel, and bounded print capture. It can edit an existing sprite or start a new canvas, and stages its output only after successful execution. The focused regression covers input preservation, overwrite protection, and script failure. The built executable also produced a scaled PNG from named CLI flags. Formatting, strict Clippy, and 489 Windows all-target tests passed. The interactive console remains open.
 
+- Item 31 complete. The terminal Lua console retains script variables and sprite edits, supports multiline input, and applies a fresh execution budget per command. Saving is explicit and uses the same staged output path as script files. Buffered serialization supports the full one-million-pixel canvas limit. The executable test covers runtime errors, runaway scripts, an incomplete command, save/discard behavior, and a maximum-size project reopen. Formatting, strict Clippy, and 490 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -110,7 +112,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **28. Accept string-valued tag repeat counts.** The Windows CLI imported `"repeat": "3"` as infinite. Verify that both string and numeric forms preserve a finite count of three.
 - [x] **29. Import object-valued JSON slice geometry.** Accept named fields in slice bounds, center, and pivot. The Windows CLI currently rejects a valid sheet with that geometry.
 - [x] **30. Export a standalone tileset atlas.** Export authored tilesets from selected or visible tilemap layers.
-- [ ] **31. Expand batch export automation.** Compose multiple operations in one invocation, preview outputs without writing files, and support headless Lua with parameters and an interactive console.
+- [x] **31. Expand batch export automation.** Compose multiple operations in one invocation, preview outputs without writing files, and support headless Lua with parameters and an interactive console.
 - [ ] **32. Expand export filtering, splitting, and naming.** Include layer and group filters, per-layer and grid splits, named slices and frame ranges, and filename and tag templates.
 - [ ] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
 - [ ] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.

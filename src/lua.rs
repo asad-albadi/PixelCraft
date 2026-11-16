@@ -168,6 +168,11 @@ impl Runtime {
         })
     }
     fn eval(&self, source: &str) -> Result<(), String> {
+        self.load_chunk(source)?;
+        self.call(0, 0)
+    }
+
+    fn load_chunk(&self, source: &str) -> Result<(), String> {
         unsafe {
             let load = self
                 .library
@@ -179,7 +184,6 @@ impl Runtime {
                     *const c_char,
                 ) -> c_int>(b"luaL_loadbufferx\0")
                 .map_err(|e| e.to_string())?;
-            let call=self.library.get::<unsafe extern "C" fn(State,c_int,c_int,c_int,isize,*const c_void)->c_int>(b"lua_pcallk\0").map_err(|e|e.to_string())?;
             if load(
                 self.state,
                 source.as_ptr().cast(),
@@ -187,13 +191,13 @@ impl Runtime {
                 c"PixelCraft".as_ptr(),
                 c"t".as_ptr(),
             ) != 0
-                || call(self.state, 0, 0, 0, 0, std::ptr::null()) != 0
             {
                 return Err(self.take_string()?);
             }
             Ok(())
         }
     }
+
     fn take_string(&self) -> Result<String, String> {
         unsafe {
             let mut length = 0;
@@ -236,13 +240,20 @@ impl Runtime {
                 .library
                 .get::<unsafe extern "C" fn(State, c_int) -> c_int>(b"luaL_ref\0")
                 .map_err(|e| e.to_string())?(self.state, -1001000);
+            self.hide_global(name)?;
+            Ok(reference)
+        }
+    }
+
+    fn hide_global(&self, name: &CStr) -> Result<(), String> {
+        unsafe {
             self.library
                 .get::<unsafe extern "C" fn(State)>(b"lua_pushnil\0")
                 .map_err(|e| e.to_string())?(self.state);
             self.library
                 .get::<unsafe extern "C" fn(State, *const c_char)>(b"lua_setglobal\0")
                 .map_err(|e| e.to_string())?(self.state, name.as_ptr());
-            Ok(reference)
+            Ok(())
         }
     }
 
@@ -350,6 +361,7 @@ pub fn execute_with_host(
     host: Option<HostCallback>,
 ) -> Result<String, String> {
     let runtime = ScriptRuntime::new(doc, (frame, layer), colors, options, host, false)?;
+    runtime.hide_console_handlers()?;
     runtime.runtime.eval(source)?;
     runtime.finish(command, discover)
 }
@@ -363,9 +375,66 @@ pub(crate) fn execute_headless(
     options: serde_json::Value,
 ) -> Result<(String, String), String> {
     let runtime = ScriptRuntime::new(doc, context, None, options, None, true)?;
+    runtime.hide_console_handlers()?;
     runtime.runtime.eval(source)?;
     let document = runtime.finish(None, false)?;
     Ok((document, runtime.take_output()?))
+}
+
+/// One sandbox and one document shared by all chunks in a terminal console.
+pub(crate) struct Console {
+    script: ScriptRuntime,
+    reset_reference: c_int,
+    snapshot_reference: c_int,
+}
+
+pub(crate) enum ConsoleChunk {
+    Incomplete,
+    Complete {
+        output: String,
+        error: Option<String>,
+    },
+}
+
+impl Console {
+    pub(crate) fn new(
+        doc: &Document,
+        context: (usize, usize),
+        options: serde_json::Value,
+    ) -> Result<Self, String> {
+        let script = ScriptRuntime::new(doc, context, None, options, None, true)?;
+        let reset_reference = script.runtime.take_global_function(c"_pw_reset_budget")?;
+        let snapshot_reference = script.runtime.take_global_function(c"_pw_snapshot")?;
+        Ok(Self {
+            script,
+            reset_reference,
+            snapshot_reference,
+        })
+    }
+
+    pub(crate) fn eval(&self, source: &str) -> Result<ConsoleChunk, String> {
+        self.reset_budget()?;
+        let error = match self.script.runtime.load_chunk(source) {
+            Ok(()) => self.script.runtime.call(0, 0).err(),
+            Err(error) if error.ends_with("near <eof>") => return Ok(ConsoleChunk::Incomplete),
+            Err(error) => Some(error),
+        };
+        self.reset_budget()?;
+        let output = self.script.take_output()?;
+        Ok(ConsoleChunk::Complete { output, error })
+    }
+
+    pub(crate) fn snapshot(&self) -> Result<String, String> {
+        self.reset_budget()?;
+        self.script.runtime.push_function(self.snapshot_reference)?;
+        self.script.runtime.call(0, 1)?;
+        self.script.runtime.take_string()
+    }
+
+    fn reset_budget(&self) -> Result<(), String> {
+        self.script.runtime.push_function(self.reset_reference)?;
+        self.script.runtime.call(0, 0)
+    }
 }
 
 struct ScriptRuntime {
@@ -418,6 +487,11 @@ impl ScriptRuntime {
             finish_reference,
             output_reference,
         })
+    }
+
+    fn hide_console_handlers(&self) -> Result<(), String> {
+        self.runtime.hide_global(c"_pw_reset_budget")?;
+        self.runtime.hide_global(c"_pw_snapshot")
     }
 
     fn finish(&self, command: Option<&str>, discover: bool) -> Result<String, String> {
