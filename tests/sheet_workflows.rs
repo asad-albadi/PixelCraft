@@ -276,6 +276,99 @@ fn grid_import_keeps_indexed_png_slots_and_pads_partial_cells() {
 }
 
 #[test]
+fn packed_atlas_tags_use_global_frame_order_and_keep_source_metadata() {
+    use pixelcraft::{
+        atlas::{AtlasMetadata, save_packed_atlas_with_metadata},
+        model::FrameTag,
+    };
+    let mut first = Document::new(1, 1);
+    first.layers[0].cels[0].set(0, [71, 20, 95, 255]);
+    for previous in 0..11 {
+        first.add_frame(previous, true);
+    }
+    first.tags.push(FrameTag {
+        name: "Idle".into(),
+        from: 2,
+        to: 10,
+        direction: 3,
+        repeat: 2,
+        color: [93, 20, 61],
+    });
+    let mut second = Document::new(1, 1);
+    second.layers[0].cels[0].set(0, [71, 20, 95, 255]);
+    second.add_frame(0, true);
+    second.tags.push(FrameTag {
+        name: "Idle".into(),
+        from: 0,
+        to: 1,
+        direction: 1,
+        repeat: 3,
+        color: [11, 52, 89],
+    });
+    let options = AtlasOptions {
+        width: 8,
+        padding: 0,
+        deduplicate: true,
+        ..AtlasOptions::default()
+    };
+    let packed = pack_atlas(
+        &[
+            ("hero".into(), first.clone()),
+            ("enemy".into(), second.clone()),
+        ],
+        &options,
+    )
+    .unwrap();
+    let metadata = &packed.1;
+    assert_eq!(
+        metadata["frames"][0]["frame"],
+        metadata["frames"][13]["frame"]
+    );
+    assert_eq!(metadata["meta"]["sources"][0]["tags"], json!(first.tags));
+    assert_eq!(metadata["meta"]["sources"][1]["tags"], json!(second.tags));
+    let global = json!([
+        {"name":"Idle","from":2,"to":10,"direction":"pingpong_reverse","repeat":2,"source":0},
+        {"name":"Idle","from":12,"to":13,"direction":"reverse","repeat":3,"source":1},
+    ]);
+    assert_eq!(metadata["meta"]["frameTags"], global);
+
+    let dir = std::env::temp_dir().join(format!("pixelcraft-atlas-tags-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (file, mode) in [
+        ("array.png", AtlasMetadata::Array),
+        ("hash.png", AtlasMetadata::Hash),
+    ] {
+        let path = dir.join(file);
+        save_packed_atlas_with_metadata(&path, &packed, mode).unwrap();
+        let json_path = path.with_extension("json");
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&json_path).unwrap()).unwrap();
+        assert_eq!(saved["meta"]["frameTags"], global);
+        let reopened = load(&json_path).unwrap();
+        assert_eq!(reopened.durations.len(), 14);
+        assert_eq!(
+            (
+                reopened.tags[0].from,
+                reopened.tags[0].to,
+                reopened.tags[0].direction,
+                reopened.tags[0].repeat
+            ),
+            (2, 10, 3, 2)
+        );
+        assert_eq!(
+            (
+                reopened.tags[1].from,
+                reopened.tags[1].to,
+                reopened.tags[1].direction,
+                reopened.tags[1].repeat
+            ),
+            (12, 13, 1, 3)
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn saving_atlas_preserves_previewed_pixels_and_placements() {
     let root =
         std::env::temp_dir().join(format!("pixelcraft-atlas-preview-{}", std::process::id()));

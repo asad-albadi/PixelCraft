@@ -1,4 +1,4 @@
-use crate::model::*;
+use crate::{model::*, workflows::sheet_frame_tag};
 use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -182,11 +182,13 @@ pub fn pack_atlas(
         return Err("Choose input sprites, a width from 1–16384, and padding from 0–256".into());
     }
     let mut entries = vec![];
+    let mut frame_tags = Vec::new();
     let mut unique: Vec<(usize, usize, Vec<Pixel>)> = vec![];
     let mut hashes: HashMap<u64, Vec<usize>> = HashMap::new();
     let mut total = 0usize;
     for (si, (name, d)) in sources.iter().enumerate() {
         d.validate()?;
+        let first_frame = entries.len();
         for f in 0..d.durations.len() {
             let pixels = d.composite(f);
             let (mut x0, mut y0, mut x1, mut y1) = (d.width, d.height, 0, 0);
@@ -245,6 +247,11 @@ pub fn pack_atlas(
                 d.durations[f],
             ));
         }
+        frame_tags.extend(d.tags.iter().map(|tag| {
+            let mut exported = sheet_frame_tag(tag, first_frame + tag.from, first_frame + tag.to);
+            exported["source"] = json!(si);
+            exported
+        }));
     }
     let pad = o.padding;
     let min_width = unique.iter().map(|s| s.0 + 2 * pad).max().unwrap_or(1);
@@ -346,7 +353,7 @@ pub fn pack_atlas(
         .enumerate()
         .map(|(i, (name, d))| json!({"id":i,"name":name,"tags":d.tags}))
         .collect();
-    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","image":"atlas.png","size":{"w":w,"h":h},"padding":pad,"layout":o.layout,"sources":sources}});
+    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","image":"atlas.png","size":{"w":w,"h":h},"padding":pad,"layout":o.layout,"sources":sources,"frameTags":frame_tags}});
     if let Some(next_frame_id) = next_frame_id {
         metadata["meta"]["nextFrameId"] = json!(next_frame_id);
     }

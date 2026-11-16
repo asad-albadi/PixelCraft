@@ -558,6 +558,21 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
     pack_sheet_with_extrusion(d, o, 0)
 }
 
+pub(crate) fn sheet_frame_tag(tag: &FrameTag, from: usize, to: usize) -> Value {
+    json!({
+        "name": tag.name,
+        "from": from,
+        "to": to,
+        "repeat": tag.repeat,
+        "direction": match tag.direction {
+            1 => "reverse",
+            2 => "pingpong",
+            3 => "pingpong_reverse",
+            _ => "forward",
+        },
+    })
+}
+
 pub(crate) fn pack_sheet_with_extrusion(
     d: &Document,
     o: &SheetOptions,
@@ -630,20 +645,7 @@ pub(crate) fn pack_sheet_with_extrusion(
         .filter_map(|tag| {
             let from = tag.from.max(first_frame);
             let to = tag.to.min(last_frame);
-            (from <= to).then(|| {
-                json!({
-                    "name": tag.name,
-                    "from": from - first_frame,
-                    "to": to - first_frame,
-                    "repeat": tag.repeat,
-                    "direction": match tag.direction {
-                        1 => "reverse",
-                        2 => "pingpong",
-                        3 => "pingpong_reverse",
-                        _ => "forward",
-                    },
-                })
-            })
+            (from <= to).then(|| sheet_frame_tag(tag, from - first_frame, to - first_frame))
         })
         .collect();
     let scale = o.scale;

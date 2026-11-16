@@ -123,6 +123,9 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 41 complete. File → Import as Layer opens raster images in the file loader, then creates one undoable top-level artwork layer on the requested frame. It clips from the canvas's top-left, leaves uncovered pixels transparent, uses frame zero of animated sources, and maps samples to the destination color mode. Nonempty destination profiles interpret the imported channel values in the destination color space. Stable document and frame identifiers keep queued imports attached to the original frame or reject a target that is gone. Tests verify crop/padding, naming, undo/redo, frame insertion during load, and a switched document. Formatting, strict Clippy, and 527 Windows all-target tests passed.
 
+- Item 42 complete. Packed atlas JSON now includes rebased global frameTags with per-source IDs, original names, directions, and repeat counts. Per-source tag records retain their original ranges and colors. Rebasing uses logical frame order across sources, independently of deduplicated rectangles. Array and hash atlas JSON both round-trip ranges and playback settings.
+- Item 43 complete. The atlas editor appends successive file or folder selections, accepts typed paths, and removes individual entries. Relative paths use the current project's directory. Input changes invalidate the preview and failed additions leave the existing list and preview intact. The regression checks successive selections, quoted paths, validation, and removal. Formatting, strict Clippy, and 529 Windows all-target tests passed for items 42 and 43.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -175,8 +178,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **39. Expand grid sheet import.** Add column-major order, optional trailing partial cells, and deriving cell dimensions from row and column counts.
 - [x] **40. Export Unity and Godot sidecars together.** Generate both engine sidecars and JSON from the same sheet export.
 - [x] **41. Import a raster file into the current document.** Add a direct Import as Layer action with defined crop and transparent-padding behavior.
-- [ ] **42. Include global frame tags in packed atlases.** Write rebased `meta.frameTags` while preserving per-source tags.
-- [ ] **43. Make atlas input lists editable.** Append files from successive selections, add paths manually, and remove individual inputs.
+- [x] **42. Include global frame tags in packed atlases.** Write rebased `meta.frameTags` while preserving per-source tags.
+- [x] **43. Make atlas input lists editable.** Append files from successive selections, add paths manually, and remove individual inputs.
 
 ## Lua and extensions
 

@@ -118,6 +118,7 @@ pub(super) struct PowerTools {
     grid_texture: Option<egui::TextureHandle>,
     atlas: AtlasOptions,
     atlas_files: Vec<PathBuf>,
+    atlas_path: String,
     atlas_preview: Option<Result<AtlasPreview, String>>,
     pub reference_edit: Option<usize>,
     reference_textures: Vec<(Pixels, egui::TextureHandle)>,
@@ -159,6 +160,7 @@ impl Default for PowerTools {
             grid_texture: None,
             atlas: AtlasOptions::default(),
             atlas_files: vec![],
+            atlas_path: String::new(),
             atlas_preview: None,
             reference_edit: None,
             reference_textures: vec![],
@@ -1275,28 +1277,119 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         }
     }
 
+    fn append_atlas_inputs(&mut self, paths: &[PathBuf]) -> Result<(), String> {
+        let mut additions = Vec::new();
+        for path in paths {
+            let files = if path.is_file()
+                && path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| {
+                        ATLAS_EXTENSIONS
+                            .iter()
+                            .any(|valid| valid.eq_ignore_ascii_case(ext))
+                    }) {
+                vec![path.clone()]
+            } else {
+                expand_atlas_inputs(std::slice::from_ref(path))?
+            };
+            if self.power.atlas_files.len() + additions.len() + files.len() > 4096 {
+                return Err("Atlas input limit is 4096 files".into());
+            }
+            additions.extend(files);
+        }
+        if !additions.is_empty() {
+            self.power.atlas_files.extend(additions);
+            self.power.atlas_preview = None;
+        }
+        Ok(())
+    }
+
+    fn add_typed_atlas_input(&mut self) -> Result<(), String> {
+        let text = self.power.atlas_path.trim();
+        let text = text
+            .strip_prefix('"')
+            .and_then(|text| text.strip_suffix('"'))
+            .unwrap_or(text);
+        if text.is_empty() {
+            return Err("Enter a sprite or folder path".into());
+        }
+        let path = Path::new(text);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.path
+                .as_deref()
+                .and_then(Path::parent)
+                .unwrap_or(Path::new("."))
+                .join(path)
+        };
+        self.append_atlas_inputs(&[path])?;
+        self.power.atlas_path.clear();
+        Ok(())
+    }
+
+    fn remove_atlas_input(&mut self, index: usize) {
+        if index < self.power.atlas_files.len() {
+            self.power.atlas_files.remove(index);
+            self.power.atlas_preview = None;
+        }
+    }
+
     fn atlas_export_ui(&mut self, ui: &mut egui::Ui) {
-        if ui.pc_button("Choose sprites…").clicked()
+        if ui.pc_button("Add sprites…").clicked()
             && let Some(paths) = rfd::FileDialog::new()
                 .add_filter("Sprites", ATLAS_EXTENSIONS)
                 .pick_files()
+            && let Err(error) = self.append_atlas_inputs(&paths)
         {
-            self.power.atlas_files = paths;
-            self.power.atlas_preview = None;
+            self.status = error;
         }
         if ui.pc_button("Add folder…").clicked()
             && let Some(dir) = rfd::FileDialog::new().pick_folder()
+            && let Err(error) = self.append_atlas_inputs(&[dir])
         {
-            match expand_atlas_inputs(&[dir]) {
-                Ok(paths) => {
-                    self.power.atlas_files.extend(paths);
-                    self.power.atlas_preview = None;
-                }
-                Err(error) => self.status = error,
-            }
+            self.status = error;
         }
-        for path in &self.power.atlas_files {
-            ui.small(path.display().to_string());
+        ui.horizontal(|ui| {
+            let input = ui.add(
+                egui::TextEdit::singleline(&mut self.power.atlas_path)
+                    .hint_text("Sprite or folder path")
+                    .desired_width(280.),
+            );
+            let add = ui.pc_button("Add path").clicked()
+                || (input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+            if add && let Err(error) = self.add_typed_atlas_input() {
+                self.status = error;
+            }
+        });
+        let mut remove = None;
+        egui::ScrollArea::vertical()
+            .id_salt("atlas-inputs")
+            .max_height(160.)
+            .show_rows(
+                ui,
+                ui.spacing().interact_size.y,
+                self.power.atlas_files.len(),
+                |ui, rows| {
+                    for index in rows {
+                        let path = &self.power.atlas_files[index];
+                        ui.push_id(index, |ui| {
+                            ui.horizontal(|ui| {
+                                let label = path.display().to_string();
+                                let tooltip = format!("Remove {label} from atlas inputs");
+                                if ui_icons::button(ui, "trash", &tooltip, false, false).clicked() {
+                                    remove = Some(index);
+                                }
+                                ui.add(egui::Label::new(label.as_str()).truncate())
+                                    .on_hover_text(label);
+                            });
+                        });
+                    }
+                },
+            );
+        if let Some(index) = remove {
+            self.remove_atlas_input(index);
         }
 
         let options = &mut self.power.atlas;
@@ -1972,6 +2065,42 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn atlas_inputs_append_manual_paths_and_invalidate_stale_previews() {
+        let dir =
+            std::env::temp_dir().join(format!("pixelcraft-atlas-inputs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hero = dir.join("Hero idle.pixel");
+        let enemy = dir.join("Enemy.pixel");
+        let effect = dir.join("Effect.png");
+        for path in [&hero, &enemy, &effect] {
+            std::fs::write(path, b"fixture").unwrap();
+        }
+        let mut app = PixelCraft::with_context(&egui::Context::default(), None);
+        app.replace(Document::new(2, 2), Some(hero.clone()));
+        app.append_atlas_inputs(std::slice::from_ref(&hero))
+            .unwrap();
+        app.power.atlas_preview = Some(Err("old preview".into()));
+        app.append_atlas_inputs(std::slice::from_ref(&enemy))
+            .unwrap();
+        assert_eq!(app.power.atlas_files, [hero.clone(), enemy.clone()]);
+        assert!(app.power.atlas_preview.is_none());
+
+        app.power.atlas_path = "\"Effect.png\"".into();
+        app.add_typed_atlas_input().unwrap();
+        assert_eq!(app.power.atlas_files, [hero.clone(), enemy, effect.clone()]);
+        assert!(app.power.atlas_path.is_empty());
+        app.power.atlas_path = "missing.png".into();
+        app.power.atlas_preview = Some(Err("still current".into()));
+        assert!(app.add_typed_atlas_input().is_err());
+        assert_eq!(app.power.atlas_path, "missing.png");
+        assert!(app.power.atlas_preview.is_some());
+        app.remove_atlas_input(1);
+        assert_eq!(app.power.atlas_files, [hero, effect]);
+        assert!(app.power.atlas_preview.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn editor_controls_whole_pixel_wheel_zoom_keeps_mouse_over_the_same_artwork() {
         let ctx = egui::Context::default();
