@@ -2107,7 +2107,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         "Project, sprite or image",
                         &[
                             "pixel", "aseprite", "ase", "png", "gif", "webp", "apng", "ora",
-                            "json", "tmj", "tsj",
+                            "json", "tmj", "tsj", "bmp", "jpg", "jpeg", "ico", "qoi", "tga",
                         ],
                     )
                     .set_directory(
@@ -2327,6 +2327,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "gif" => "gif",
             "mp4" => "mp4",
             "bmp" => "bmp",
+            "jpeg" => "jpg",
+            "ico" => "ico",
+            "qoi" => "qoi",
+            "tga" => "tga",
+            "webp" => "webp",
             _ => "png",
         };
         let sequence = kind == "png-sequence";
@@ -2522,7 +2527,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "saveas" => {
                 self.save(true);
             }
-            "png" | "bmp" | "sheet" => self.export(s),
+            "png" | "bmp" | "jpeg" | "ico" | "qoi" | "tga" | "webp" | "sheet" => self.export(s),
             "png-sequence" => {
                 self.sequence_name = self
                     .path
@@ -2989,6 +2994,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export tileset atlas…", "tileset-atlas"),
                         ("Export Tiled map…", "tiledexport"),
                         ("Export BMP…", "bmp"),
+                        ("Export JPEG…", "jpeg"),
+                        ("Export WebP…", "webp"),
+                        ("Export icon…", "ico"),
+                        ("Export QOI…", "qoi"),
+                        ("Export TGA…", "tga"),
                         ("Open sample garden", "demo"),
                     ],
                 ),

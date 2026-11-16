@@ -85,6 +85,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 34 complete. File and the toolbar export menu repeat the active tab’s last successful artwork export during the current session. The worker reuses the resolved destination and options with updated artwork. Raster export follows the original frame ID, and layer filters retain their original targets through reordering. PNG sequences replace the current numbered outputs without removing unrelated files. The tests exercise export failure, frame reorder, tab switching before worker completion, exact sprite-sheet settings, and sequence replacement. Formatting, strict Clippy, and 500 Windows all-target tests passed.
 
+- Item 35 in progress. ICO, QOI, and TGA read/write and lossless WebP and JPEG output are available in the editor and shared CLI/MCP paths. The static WebP decoder is built in. JPEG uses white for transparency, while the lossless formats preserve alpha. Raster decoders check canvas bounds before the main pixel allocation, and ICO enforces its 256-pixel axis limit after scaling. Tests cover file signatures, CLI reimport, scaled alpha pixels, live cropped output, and invalid output dimensions. Formatting, strict Clippy, and 501 Windows all-target tests passed. PSD/PSB, FLI/FLC, PCX, SVG, and CSS remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

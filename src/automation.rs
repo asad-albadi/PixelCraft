@@ -979,42 +979,49 @@ fn file_operation_mode(
                             }
                             save(&out, &d)?;
                         }
-                        "png" if v.get("layers").is_some() || v.get("region").is_some() => {
+                        kind if formats::raster_format(kind).is_some() => {
+                            let format = formats::raster_format(kind).unwrap();
+                            if formats::raster_format(extension(&out)) != Some(format) {
+                                return Err("Export format must match the output extension".into());
+                            }
                             let frame = v
                                 .get("frame")
                                 .map(|_| number(v, "frame"))
                                 .transpose()?
                                 .unwrap_or(0);
-                            if preview {
+                            let custom = v.get("layers").is_some() || v.get("region").is_some();
+                            if preview || custom {
                                 let sprite = filter_export_layers(&d, v)?;
-                                preview_geometry(&sprite, frame, v, MAX_PIXELS)?;
-                                return plan(&out, vec![out.clone()], false);
-                            }
-                            let (image, mut metadata) =
-                                preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
-                            write_operation_file(files, &out, |target| {
-                                mcp_io::write_image_as(target, &image, image::ImageFormat::Png)
-                                    .map_err(|e| e.to_string())
-                            })?;
-                            metadata["output"] = json!(out);
-                            return Ok(metadata);
-                        }
-                        "png" | "bmp" => {
-                            let f = v["frame"].as_u64().unwrap_or(0) as usize;
-                            if f >= d.durations.len() {
-                                return Err("Invalid frame".into());
-                            }
-                            if preview {
-                                preview_geometry(&d, f, v, MAX_PIXELS)?;
-                                return plan(&out, vec![out.clone()], false);
+                                let geometry = preview_geometry(&sprite, frame, v, MAX_PIXELS)?;
+                                formats::validate_raster_size(
+                                    format,
+                                    geometry.width,
+                                    geometry.height,
+                                    geometry.scale,
+                                )?;
+                                if preview {
+                                    return plan(&out, vec![out.clone()], false);
+                                }
+                                let (image, mut metadata) = preview_composite(
+                                    &sprite,
+                                    frame,
+                                    v,
+                                    &document_revision(&d),
+                                    MAX_PIXELS,
+                                )?;
+                                write_operation_file(files, &out, |target| {
+                                    formats::write_raster_image(target, &image, format)
+                                })?;
+                                metadata["output"] = json!(out);
+                                return Ok(metadata);
                             }
                             write_operation_file(files, &out, |target| {
                                 formats::export_raster_scaled(
                                     target,
                                     &d,
-                                    f,
+                                    frame,
                                     false,
-                                    v["scale"].as_u64().unwrap_or(1) as usize,
+                                    export_scale(v)?,
                                 )
                             })?;
                         }
@@ -1118,7 +1125,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|qoi|tga|jpeg|webp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let v = cli_arguments(&args[1..])?;
@@ -1277,7 +1284,7 @@ fn rpc_with_root(
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "batch" => "Run ordered file export steps, or set dry_run to list output paths without writing files.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
-                        "live-export" => "Export a revision-matched sprite as PNG, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to PNG and PNG sequences. Frame applies to single-frame PNG.",
+                        "live-export" => "Export a revision-matched sprite as PNG, BMP, ICO, QOI, TGA, JPEG, WebP, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to raster images and PNG sequences. Frame applies to single-frame raster exports.",
                         "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
                         "live-export-progress" => "Report the completed and total frames of a running live export by job_id.",
                         "live-cancel-export" => "Request cancellation of a running live export by job_id.",
@@ -2332,16 +2339,22 @@ fn prepare_live_export_inner(
         });
     }
     let kind = extension(&output).to_ascii_lowercase();
-    if args.get("format").is_some_and(|v| v != kind.as_str()) {
+    let raster = formats::raster_format(&kind);
+    if args.get("format").is_some_and(|value| {
+        value != kind.as_str()
+            && !(raster.is_some() && value.as_str().and_then(formats::raster_format) == raster)
+    }) {
         return Err("Export format must match the output extension".into());
     }
     prepare_output_under(output, replace, root, false, |temporary| {
         match kind.as_str() {
-            "png" => {
+            _ if let Some(format) = raster => {
                 progress(0, 1)?;
-                let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
-                mcp_io::write_image_as(temporary, &image, image::ImageFormat::Png)
-                    .map_err(|e| e.to_string())?;
+                let sprite = filter_export_layers(d, args)?;
+                let geometry = preview_geometry(&sprite, f, args, MAX_PIXELS)?;
+                formats::validate_raster_size(format, geometry.width, geometry.height, geometry.scale)?;
+                let (image, metadata) = preview_composite(&sprite, f, args, revision, MAX_PIXELS)?;
+                formats::write_raster_image(temporary, &image, format)?;
                 progress(1, 1)?;
                 Ok(metadata)
             }
@@ -2371,7 +2384,7 @@ fn prepare_live_export_inner(
                 )
             }
             _ => Err(
-                "Choose a .png, .gif or .mp4 path, or set format to png-sequence or tileset-atlas"
+                "Choose a supported raster, .gif or .mp4 path, or set format to png-sequence or tileset-atlas"
                     .into(),
             ),
         }

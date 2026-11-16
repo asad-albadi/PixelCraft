@@ -9,7 +9,7 @@ license = "MIT"
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu", "x11", "wayland"] }
 arboard = "3.6.1"
 sha2 = "0.10.9"
-image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg", "ico", "qoi", "tga", "webp"] }
 rfd = "0.17.2"
 flate2 = "1.1.10"
 base64 = "0.23.1"

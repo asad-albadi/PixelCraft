@@ -5,6 +5,9 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
+mod raster;
+pub(crate) use raster::{raster_format, validate_raster_size, write_raster_image};
+
 const PROJECT_MAGIC_V1: &[u8] = b"PIXEL-WORKSHOP\0\x01";
 const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x02";
 // Four 3-digit channels, commas and brackets can use 18 JSON bytes per pixel.
@@ -1512,7 +1515,7 @@ pub(crate) fn load_with_path_check(
     if ext == "ase" || ext == "aseprite" {
         return load_ase_path(path, &mut Vec::new(), check_path);
     }
-    if matches!(ext.as_str(), "gif" | "webp" | "apng") {
+    if matches!(ext.as_str(), "gif" | "apng") {
         return crate::interchange::load_animation(path);
     }
     if ext == "ora" {
@@ -1544,20 +1547,7 @@ pub(crate) fn load_with_path_check(
             return crate::interchange::load_animation(path);
         }
     }
-    let im = mcp_io::open_image(path)
-        .map_err(|e| e.to_string())?
-        .to_rgba8();
-    let (w, h) = im.dimensions();
-    if w == 0
-        || h == 0
-        || w as usize > MAX_DIMENSION
-        || h as usize > MAX_DIMENSION
-        || w as usize * h as usize > MAX_PIXELS
-    {
-        return Err("Image exceeds canvas or memory limits".into());
-    }
-    let mut d = Document::new(w as usize, h as usize);
-    d.layers[0].cels[0] = im.pixels().map(|p| p.0).collect();
+    let mut d = raster::load_static(path, &ext)?;
     if ext == "png" {
         read_png_metadata(path, &mut d)?;
     }
@@ -1616,6 +1606,12 @@ pub fn export_raster_scaled(
     {
         return Err("Export exceeds image limits".into());
     }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let format = raster_format(extension).ok_or("Unsupported raster export extension")?;
+    validate_raster_size(format, d.width * count, d.height, scale)?;
     let mut im = image::RgbaImage::new((d.width * count) as u32, d.height as u32);
     for n in 0..count {
         for (i, p) in d
@@ -1631,7 +1627,7 @@ pub fn export_raster_scaled(
         }
     }
     let im = crate::workflows::scale_image(&im, scale)?;
-    mcp_io::write_image(path, &im).map_err(|e| e.to_string())?;
+    write_raster_image(path, &im, format)?;
     if path
         .extension()
         .is_some_and(|s| s.eq_ignore_ascii_case("png"))

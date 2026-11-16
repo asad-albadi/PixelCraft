@@ -284,6 +284,8 @@ Double-click a timeline frame number or choose **Rename current frame** under **
 
 Choose **File → Repeat Last Export** to render a sprite again using its last successful export destination and settings. Each open tab keeps its own export history for the current editor session. Repeat reads the current artwork, and remembers the original frame for single-frame exports. PNG sequence repeats update the frame files for the current timeline and leave other files in the destination folder.
 
+The editor opens and exports ICO, QOI, and TGA. It also exports lossless WebP and JPEG. JPEG composites transparency on white. ICO accepts up to 256 × 256 pixels after scaling. Static WebP opens with the built-in decoder. Use the same extensions in CLI, file MCP, and live MCP raster export.
+
 ### Headless CLI
 
 No graphical display is needed. `pixelcraft --help` lists the operations and arguments. Run `--cli OPERATION` with a JSON argument object, or named flags; command errors go to stderr and exit with a nonzero status. Layer/frame indices are zero-based.

@@ -1387,6 +1387,82 @@ fn sheet_layouts_fit_fixed_canvases_and_keep_frame_order() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn raster_interchange_exports_real_formats_and_preserves_supported_alpha() {
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let source = root.join("art.pixel");
+    let mut sprite = Document::new(2, 1);
+    let ink = [13, 185, 71, 117];
+    sprite.set_pixel(0, 0, 0, ink);
+    sprite.set_pixel(0, 0, 1, [120, 20, 70, 255]);
+    formats::save(&source, &sprite).unwrap();
+    for (kind, signature) in [
+        ("ico", b"\0\0\x01\0".as_slice()),
+        ("qoi", b"qoif".as_slice()),
+        ("tga", b"".as_slice()),
+        ("webp", b"RIFF".as_slice()),
+    ] {
+        let filename = format!("sprite.{kind}");
+        let reply = workspace.call(
+            "export",
+            json!({"input":"art.pixel","output":filename,"format":kind,"scale":2}),
+        );
+        assert!(reply["isError"].is_null(), "{reply}");
+        let image = root.join(&filename);
+        assert!(fs::read(&image).unwrap().starts_with(signature));
+        if kind == "webp" {
+            assert_eq!(&fs::read(&image).unwrap()[8..12], b"WEBP");
+        }
+        let project = root.join(format!("{kind}.pixel"));
+        automation::run_cli(&[
+            "import".into(),
+            json!({"input":image,"output":project}).to_string(),
+        ])
+        .unwrap();
+        let decoded = formats::load(&project).unwrap();
+        assert_eq!((decoded.width, decoded.height), (4, 2));
+        assert_eq!(
+            decoded.composite(0),
+            [ink, ink, [120, 20, 70, 255], [120, 20, 70, 255]].repeat(2),
+            "{kind}"
+        );
+    }
+    let live_path = root.join("live-crop.qoi");
+    let request = json!({
+        "output":live_path,"format":"qoi","scale":2,
+        "region":{"x":0,"y":0,"width":1,"height":1}
+    });
+    automation::prepare_live_export(&sprite, 0, &request, "test-revision")
+        .unwrap()
+        .write()
+        .unwrap();
+    let live = formats::load(&live_path).unwrap();
+    assert_eq!((live.width, live.height), (2, 2));
+    assert_eq!(live.composite(0), vec![ink; 4]);
+
+    let reply = workspace.call(
+        "export",
+        json!({"input":"art.pixel","output":"oversized.ico","scale":200}),
+    );
+    assert_error(&reply, "256");
+    assert!(!root.join("oversized.ico").exists());
+
+    formats::save(&source, &Document::new(8, 8)).unwrap();
+    let reply = workspace.call(
+        "export",
+        json!({"input":"art.pixel","output":"sprite.jpg","format":"jpeg"}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let jpeg = root.join("sprite.jpg");
+    assert!(fs::read(&jpeg).unwrap().starts_with(b"\xff\xd8"));
+    assert_eq!(
+        formats::load(&jpeg).unwrap().composite(0)[0],
+        [255, 255, 255, 255]
+    );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(
