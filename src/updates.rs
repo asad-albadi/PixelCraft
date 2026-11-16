@@ -1,6 +1,13 @@
 //! GitHub release lookup; all network work runs off the editor thread.
 use semver::Version;
-use std::{sync::mpsc, time::Duration};
+use std::{
+    fs,
+    hash::{BuildHasher, RandomState},
+    io::{self, Read, Write},
+    path::Path,
+    sync::mpsc,
+    time::Duration,
+};
 
 pub const INSTALLED_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -198,6 +205,65 @@ impl Release {
         })
     }
 }
+fn publish_file(
+    destination: &Path,
+    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> io::Result<()> {
+    let directory = destination
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Missing update directory"))?;
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    for attempt in 0..16 {
+        let nonce = RandomState::new().hash_one(attempt);
+        let temporary = directory.join(format!(".pixelcraft-update-{nonce:016x}.tmp"));
+        let mut file = match options.open(&temporary) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = write(&mut file).and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| publish_rename(&temporary, destination));
+        if result.is_err() {
+            let _ = fs::remove_file(temporary);
+        }
+        return result;
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "Could not create a unique temporary update file",
+    ))
+}
+
+fn publish_rename(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        for _ in 0..5 {
+            match fs::rename(source, destination) {
+                Err(error) if error.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => return result,
+            }
+        }
+    }
+    fs::rename(source, destination)
+}
+
+fn cache_download(directory: &Path, name: &str, bytes: &[u8]) -> io::Result<std::path::PathBuf> {
+    fs::create_dir_all(directory)?;
+    let path = directory.join(name);
+    publish_file(&path, |file| file.write_all(bytes))?;
+    Ok(path)
+}
+
 pub fn download(
     release: Release,
     repository: String,
@@ -247,11 +313,7 @@ pub fn download(
                 .read_to_vec()
                 .map_err(|e| e.to_string())?;
             let digest = verify_checksum(&bytes, &checksum, name)?;
-            std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-            let path = directory.join(name);
-            let temp = directory.join(format!("{name}.partial"));
-            std::fs::write(&temp, &bytes).map_err(|e| e.to_string())?;
-            std::fs::rename(&temp, &path).map_err(|e| e.to_string())?;
+            let path = cache_download(&directory, name, &bytes).map_err(|e| e.to_string())?;
             Ok(VerifiedDownload {
                 path,
                 digest,
@@ -263,23 +325,56 @@ pub fn download(
     });
     rx
 }
+
+fn open_installer(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "The downloaded installer must be a regular file",
+            ));
+        }
+    }
+    Ok(file)
+}
+
 /// Call only after the person confirms installation. Recheck disk bytes before use.
 pub fn install(
     download: &VerifiedDownload,
     target: Option<&std::path::Path>,
 ) -> Result<(), String> {
     use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(&download.path).map_err(|e| e.to_string())?;
+    let mut installer = open_installer(&download.path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    installer
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
     if format!("{:x}", Sha256::digest(&bytes)) != download.digest {
         return Err("Downloaded installer changed; download it again".into());
     }
     #[cfg(target_os = "windows")]
     {
         let _ = target;
-        std::process::Command::new(&download.path)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-        Ok(())
+        // Keep the executable protected from writes and renames until the loader has opened it.
+        let launch = std::process::Command::new(&download.path).spawn();
+        drop(installer);
+        launch.map(|_| ()).map_err(|e| e.to_string())
     }
     #[cfg(target_os = "linux")]
     {
@@ -288,16 +383,23 @@ pub fn install(
         if target == download.path {
             return Err("Choose an installation path outside the download cache".into());
         }
-        let temp = target.with_extension("AppImage.installing");
-        std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-        std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))
-            .map_err(|e| e.to_string())?;
-        if target.exists() {
-            std::fs::copy(target, target.with_extension("AppImage.previous"))
+        match fs::File::open(target) {
+            Ok(mut old) => {
+                let permissions = old.metadata().map_err(|e| e.to_string())?.permissions();
+                publish_file(&target.with_extension("AppImage.previous"), |backup| {
+                    io::copy(&mut old, backup)?;
+                    backup.set_permissions(permissions)
+                })
                 .map_err(|e| e.to_string())?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
         }
-        std::fs::rename(temp, target).map_err(|e| e.to_string())?;
-        Ok(())
+        publish_file(target, |file| {
+            file.write_all(&bytes)?;
+            file.set_permissions(fs::Permissions::from_mode(0o755))
+        })
+        .map_err(|e| e.to_string())
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
@@ -308,6 +410,67 @@ pub fn install(
 
 #[cfg(test)]
 mod installation_regressions {
+    #[test]
+    fn concurrent_update_cache_writes_publish_complete_files() {
+        use std::{
+            fs,
+            sync::{Arc, Barrier},
+        };
+
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-update-race-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let name = "PixelCraft-test-x86_64.AppImage";
+        let barrier = Arc::new(Barrier::new(8));
+        let payloads: Vec<_> = (0..8).map(|value| vec![value; 512 * 1024]).collect();
+        let results = std::thread::scope(|scope| {
+            let threads: Vec<_> = payloads
+                .iter()
+                .map(|bytes| {
+                    let barrier = barrier.clone();
+                    let root = &root;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        super::cache_download(root, name, bytes)
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let entries = fs::read_dir(&root).unwrap().count();
+        let cached = fs::read(root.join(name)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(results.iter().all(Result::is_ok), "{results:?}");
+        assert!(payloads.contains(&cached));
+        assert_eq!(entries, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn update_cache_ignores_a_preexisting_partial_symlink() {
+        use std::{fs, os::unix::fs::symlink};
+
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-update-cache-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let other = root.join("other-file");
+        fs::write(&other, b"keep this file").unwrap();
+        let name = "PixelCraft-test-x86_64.AppImage";
+        symlink(&other, root.join(format!("{name}.partial"))).unwrap();
+
+        let result = super::cache_download(&root, name, b"verified update").unwrap();
+        let cached = fs::read(result).unwrap();
+        let unrelated = fs::read(other).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(cached, b"verified update");
+        assert_eq!(unrelated, b"keep this file");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_update_install_preserves_backup_and_rejects_tampering() {
@@ -342,6 +505,42 @@ mod installation_regressions {
         assert_eq!(std::fs::read(&target).unwrap(), bytes);
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_update_install_replaces_backup_without_writing_through_links() {
+        use super::{VerifiedDownload, install};
+        use sha2::{Digest, Sha256};
+        use std::{fs, os::unix::fs::symlink};
+
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-install-links-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("download.AppImage");
+        let target = root.join("PixelCraft.AppImage");
+        let other = root.join("other-file");
+        let backup = target.with_extension("AppImage.previous");
+        fs::write(&other, b"keep this file").unwrap();
+        symlink(&other, target.with_extension("AppImage.installing")).unwrap();
+        symlink(&other, &backup).unwrap();
+        fs::write(&source, b"verified update").unwrap();
+        fs::write(&target, b"old application").unwrap();
+        let download = VerifiedDownload {
+            path: source,
+            digest: format!("{:x}", Sha256::digest(b"verified update")),
+            name: "download.AppImage".into(),
+        };
+
+        install(&download, Some(&target)).unwrap();
+        let installed = fs::read(&target).unwrap();
+        let previous = fs::read(backup).unwrap();
+        let unrelated = fs::read(other).unwrap();
+        fs::remove_dir_all(root).unwrap();
+
+        assert_eq!(installed, b"verified update");
+        assert_eq!(previous, b"old application");
+        assert_eq!(unrelated, b"keep this file");
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -373,6 +572,10 @@ mod windows_installation_regressions {
                 .success()
         );
         let bytes = std::fs::read(&exe).unwrap();
+        let held = open_installer(&exe).unwrap();
+        assert!(std::fs::OpenOptions::new().write(true).open(&exe).is_err());
+        assert!(std::fs::rename(&exe, root.join("moved.exe")).is_err());
+        drop(held);
         let download = VerifiedDownload {
             path: exe.clone(),
             digest: format!("{:x}", Sha256::digest(&bytes)),
