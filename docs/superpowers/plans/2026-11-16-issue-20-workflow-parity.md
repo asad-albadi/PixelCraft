@@ -107,6 +107,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 36 complete. ASE reference cels retain their signed 16.16 position and size in native project state and write the precise-bounds chunk back to ASE. Older projects containing the opaque chunk are migrated on load. The editor compositor and reference-enabled eyedropper sample the scaled artwork at sprite-pixel centers. Raster exports omit reference layers. The regression verifies negative source coordinates, fractional placement, linked-frame geometry, both save formats, legacy metadata migration, and frame-cache invalidation. Formatting, strict Clippy, and 512 Windows all-target tests passed.
 
+- Item 37 in progress. Still indexed PNG input now decodes packed or 8-bit slots and retains exact slot identity, duplicate swatches, and per-entry transparency. Still grayscale input keeps Grayscale mode. Full-frame and horizontal sheet exports write an indexed palette or grayscale samples when pixels are representable, including integer scaling and alpha. A separately generated Adam7 indexed source decoded and re-exported through the CLI with all 891 output slots and palette alpha matching the independent reader. Tests cover packed rows, duplicate-swatch editing, partial alpha, scaled export, and grayscale luminance and transparency. Formatting, strict Clippy, and 514 Windows all-target tests passed. Remaining work includes mode-preserving cropped and live exports, PNG sequences, and PNG animation cases where the native mode can be preserved.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

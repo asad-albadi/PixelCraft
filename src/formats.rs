@@ -7,6 +7,7 @@ use std::{
 };
 pub(crate) mod flic;
 mod pcx;
+mod png_raster;
 mod psd;
 mod raster;
 mod vector;
@@ -1596,19 +1597,13 @@ pub(crate) fn load_with_path_check(
         return crate::workflows::unpack_sheet(&im, &meta);
     }
     if ext == "png" {
-        let dec = image::codecs::png::PngDecoder::new(std::io::BufReader::new(
-            mcp_io::open(path).map_err(|e| e.to_string())?,
-        ))
-        .map_err(|e| e.to_string())?;
-        if dec.is_apng().map_err(|e| e.to_string())? {
-            return crate::interchange::load_animation(path);
+        let mut doc = png_raster::load(path)?;
+        if doc.durations.len() == 1 {
+            read_png_metadata(path, &mut doc)?;
         }
+        return Ok(doc);
     }
-    let mut d = raster::load_static(path, &ext)?;
-    if ext == "png" {
-        read_png_metadata(path, &mut d)?;
-    }
-    Ok(d)
+    raster::load_static(path, &ext)
 }
 pub fn save(path: &Path, d: &Document) -> Result<(), String> {
     if path.extension().and_then(|s| s.to_str()) != Some("pixel") && d.has_frame_names() {
@@ -1673,12 +1668,9 @@ pub fn export_raster_scaled(
         return Ok(());
     }
     let mut im = image::RgbaImage::new((d.width * count) as u32, d.height as u32);
-    for n in 0..count {
-        for (i, p) in d
-            .composite(if sheet { n } else { f })
-            .into_iter()
-            .enumerate()
-        {
+    let frames: Vec<_> = if sheet { (0..count).collect() } else { vec![f] };
+    for (n, &frame) in frames.iter().enumerate() {
+        for (i, p) in d.composite(frame).into_iter().enumerate() {
             im.put_pixel(
                 (n * d.width + i % d.width) as u32,
                 (i / d.width) as u32,
@@ -1686,11 +1678,11 @@ pub fn export_raster_scaled(
             );
         }
     }
-    write_raster_image(path, &im, format, scale)?;
-    if path
-        .extension()
-        .is_some_and(|s| s.eq_ignore_ascii_case("png"))
-    {
+    let is_png = format == raster::RasterFormat::Standard(image::ImageFormat::Png);
+    if !is_png || !png_raster::write(path, d, &frames, &im, scale)? {
+        write_raster_image(path, &im, format, scale)?;
+    }
+    if is_png {
         write_png_metadata(path, d)?;
     }
     Ok(())
