@@ -207,6 +207,7 @@ impl CelDrag {
 
 #[derive(Clone)]
 struct HistoryEntry {
+    label: &'static str,
     doc: Document,
     selection: Option<(i32, i32, i32, i32)>,
     mask: Option<Vec<bool>>,
@@ -375,6 +376,7 @@ struct PixelCraft {
     playback_waiting_for_frame: bool,
     playback_run: Option<PlaybackRun>,
     undo: Vec<HistoryEntry>,
+    history_open: bool,
     redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
     replace_color: Option<ReplaceColor>,
@@ -542,6 +544,7 @@ impl PixelCraft {
             playback_waiting_for_frame: false,
             playback_run: None,
             undo: vec![],
+            history_open: false,
             redo: vec![],
             selection: None,
             replace_color: None,
@@ -1354,7 +1357,7 @@ impl PixelCraft {
                 if palette.is_empty() || palette.len() > 256 {
                     return Err("Palette must contain 1–256 colors".into());
                 }
-                self.remember();
+                self.remember_action("Install palette");
                 self.doc.import_palette(palette)?;
                 self.palette_index = 0;
             }
@@ -1400,7 +1403,7 @@ impl PixelCraft {
             }
             "dither" => {
                 let matrix = pixelcraft::contributions::DitheringMatrix::load(&path)?;
-                self.remember();
+                self.remember_action("Install dithering pattern");
                 self.doc.dithering = Some(matrix);
                 self.status =
                     "Dithering matrix selected; use Indexed color mode to apply it".into();
@@ -1421,7 +1424,12 @@ impl PixelCraft {
                 } else {
                     (self.selected_tile & !TILE_ID_MASK) | next_id
                 };
-                self.apply_document_edit(Ok(Some(next)));
+                let label = match edit {
+                    TileDefinitionEdit::Duplicate => "Duplicate tile",
+                    TileDefinitionEdit::Delete => "Delete tile",
+                    TileDefinitionEdit::MoveTo(_) => "Reorder tiles",
+                };
+                self.apply_document_edit(label, Ok(Some(next)));
                 self.selected_tile = selected;
             }
             Err(error) => self.status = error,
@@ -1460,7 +1468,7 @@ impl PixelCraft {
                 tiles.push(p.into());
             }
         }
-        self.remember();
+        self.remember_action("Import tileset");
         self.doc.tilesets.push(Tileset {
             name: path
                 .file_stem()
@@ -1618,21 +1626,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if edited != self.doc {
             match edited.validate() {
                 Ok(()) => {
-                    self.remember();
+                    self.remember_action("Edit sprite properties");
                     self.doc = edited;
                 }
                 Err(e) => self.status = e,
             }
         }
         if add_group {
-            self.remember();
+            self.remember_action("New group");
             match self.doc.add_group("Group") {
                 Ok(g) => self.layer = g,
                 Err(e) => self.status = e,
             }
         }
         if add_tile {
-            self.remember();
+            self.remember_action("New tile layer");
             if let Err(e) = self.doc.add_tile_layer(self.doc.tilesets.len() - 1) {
                 self.status = e;
             } else {
@@ -1654,7 +1662,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     p.push(pixels[y as usize * self.doc.width + x as usize]);
                 }
             }
-            self.remember();
+            self.remember_action("Capture selection as tile");
             self.doc.tilesets.push(Tileset {
                 name: "Captured tile".into(),
                 width: w,
@@ -1667,17 +1675,24 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.status = format!("Could not import tileset: {e}");
         }
     }
+    #[cfg(test)]
     fn remember(&mut self) {
-        self.power.bridge_generation += 1;
-        self.push_undo(self.doc.clone());
-        self.redo.clear();
+        self.remember_action("Edit");
     }
-    fn push_undo(&mut self, d: Document) {
-        self.undo.push(self.history_entry(d));
+
+    fn remember_action(&mut self, label: &'static str) {
+        self.power.bridge_generation += 1;
+        self.redo.clear();
+        self.push_undo(self.doc.clone(), label);
+    }
+
+    fn push_undo(&mut self, d: Document, label: &'static str) {
+        self.undo.push(self.history_entry(d, label));
         while self.undo.len() > 1 && (self.undo.len() > 64 || self.history_bytes() > 192_000_000) {
             self.undo.remove(0);
         }
     }
+
     fn history_bytes(&self) -> usize {
         let mut seen = std::collections::HashSet::new();
         let mut bytes = 0usize;
@@ -1764,8 +1779,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.power.reference_edit = None;
         self.studio.polygon.clear();
     }
-    fn history_entry(&self, doc: Document) -> HistoryEntry {
+    fn history_entry(&self, doc: Document, label: &'static str) -> HistoryEntry {
         HistoryEntry {
+            label,
             doc,
             selection: self.selection,
             mask: self.studio.mask.clone(),
@@ -1779,10 +1795,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             timeline_layers: self.timeline_layers.clone(),
         }
     }
-    fn restore_history(&mut self, mut entry: HistoryEntry) {
+    fn restore_history(&mut self, mut entry: HistoryEntry) -> HistoryEntry {
         self.cancel_gesture();
         entry.doc.retain_frame_export_id_counter(&self.doc);
-        self.doc = entry.doc;
+        let previous = std::mem::replace(&mut self.doc, entry.doc);
+        let current = self.history_entry(previous, entry.label);
         self.clamp();
         self.layer = entry.layer.min(self.doc.layers.len() - 1);
         self.frame = entry.frame.min(self.doc.durations.len() - 1);
@@ -1794,23 +1811,111 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.selection = entry.selection;
         self.studio.mask = entry.mask;
         self.studio.polygon = entry.polygon;
+        current
     }
+
+    fn history_label(&self, position: usize) -> Option<&'static str> {
+        if position == 0 {
+            Some("Oldest retained state")
+        } else if position <= self.undo.len() {
+            self.undo.get(position - 1).map(|entry| entry.label)
+        } else {
+            let index = (self.undo.len() + self.redo.len()).checked_sub(position)?;
+            self.redo.get(index).map(|entry| entry.label)
+        }
+    }
+
+    fn jump_history(&mut self, position: usize) -> bool {
+        if position == self.undo.len() || position > self.undo.len() + self.redo.len() {
+            return false;
+        }
+        self.power.bridge_generation += 1;
+        self.stop_playback(false);
+        while self.undo.len() > position {
+            let entry = self.undo.pop().expect("history target is valid");
+            let previous = self.restore_history(entry);
+            self.redo.push(previous);
+        }
+        while self.undo.len() < position {
+            let entry = self.redo.pop().expect("history target is valid");
+            let previous = self.restore_history(entry);
+            self.undo.push(previous);
+        }
+        true
+    }
+
     fn undo(&mut self) {
-        self.power.bridge_generation += 1;
-        if let Some(d) = self.undo.pop() {
-            self.redo.push(self.history_entry(self.doc.clone()));
-            self.restore_history(d);
+        if self.jump_history(self.undo.len().saturating_sub(1)) {
             self.status = "Undo".into();
+        } else {
+            self.power.bridge_generation += 1;
         }
     }
+
     fn redo(&mut self) {
-        self.power.bridge_generation += 1;
-        if let Some(d) = self.redo.pop() {
-            self.push_undo(self.doc.clone());
-            self.restore_history(d);
+        if self.jump_history(self.undo.len() + 1) {
             self.status = "Redo".into();
+        } else {
+            self.power.bridge_generation += 1;
         }
     }
+
+    fn history_panel(&mut self, ctx: &egui::Context) {
+        if !self.history_open {
+            return;
+        }
+        let mut open = true;
+        let mut jump = None;
+        let can_jump = !self.dialog_open() && self.script_job.is_none();
+        let current = self.undo.len();
+        let total = current + self.redo.len();
+        egui::Window::new("Undo History")
+            .open(&mut open)
+            .default_width(275.)
+            .show(ctx, |ui| {
+                ui.set_min_width(220.);
+                let scroll_key = ui.id().with("current-history-entry");
+                let view = (self.active_tab, current, total);
+                let scroll_to_current = ui.data_mut(|data| {
+                    let changed = data.get_temp::<(usize, usize, usize)>(scroll_key) != Some(view);
+                    data.insert_temp(scroll_key, view);
+                    changed
+                });
+                egui::ScrollArea::vertical()
+                    .max_height(360.)
+                    .show(ui, |ui| {
+                        for position in 0..=total {
+                            let label = self
+                                .history_label(position)
+                                .expect("history position is valid");
+                            let response = ui.add_enabled(
+                                can_jump,
+                                egui::Button::selectable(position == current, label),
+                            );
+                            #[cfg(test)]
+                            ui.data_mut(|data| {
+                                data.insert_temp(
+                                    egui::Id::new(("history-row", position)),
+                                    response.rect,
+                                )
+                            });
+                            if position == current && scroll_to_current {
+                                response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if response.clicked() && position != current {
+                                jump = Some((position, label));
+                            }
+                        }
+                    });
+            });
+        self.history_open = open;
+        if let Some((position, label)) = jump
+            && self.jump_history(position)
+        {
+            self.status = format!("Restored history entry · {label}");
+        }
+    }
+
     fn replace(&mut self, d: Document, path: Option<PathBuf>) {
         self.power.bridge_generation += 1;
         self.extension_session = None;
@@ -2131,7 +2236,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         match formats::save(&path, &saving) {
             Ok(()) => {
                 if self.doc != saving {
-                    self.remember();
+                    self.remember_action("Apply save format conversion");
                     self.doc = saving;
                 }
                 self.status = format!(
@@ -2345,7 +2450,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         if let Some(c) = self.clipboard.clone() {
-            self.remember();
+            self.remember_action("Paste");
             let (x, y, _, _) = self.selection.unwrap_or((0, 0, 0, 0));
             for cy in 0..c.h {
                 for cx in 0..c.w {
@@ -2363,7 +2468,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
             return;
         }
-        self.remember();
+        self.remember_action("Clear pixels");
         let (x0, y0, x1, y1) =
             self.selection
                 .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
@@ -2408,6 +2513,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "gif" => self.animation_export = Some("gif"),
             "mp4" => self.animation_export = Some("mp4"),
             "undo" => self.undo(),
+            "undo-history" => self.history_open = !self.history_open,
             "redo" => self.redo(),
             "copy" => self.copy(),
             "paste" => self.paste(),
@@ -2438,7 +2544,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "layer" => {
                 if self.doc.can_add_layer() {
-                    self.remember();
+                    self.remember_action("New layer");
                     self.doc.add_layer();
                     self.layer = self.doc.layers.len() - 1;
                     self.timeline_anchor = None;
@@ -2451,7 +2557,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
             "deletelayer" if self.doc.layers.len() > 1 => {
-                self.remember();
+                self.remember_action("Delete layer");
                 self.doc.remove_layer(self.layer);
                 self.clamp();
             }
@@ -2463,7 +2569,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.layer.saturating_sub(1)
                 };
                 if to != self.layer {
-                    self.remember();
+                    self.remember_action("Move layer");
                     self.doc.swap_layers(self.layer, to);
                     self.layer = to;
                     self.timeline_layers = TimelineHeaders::default();
@@ -2474,7 +2580,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "frame" | "blank" => {
                 if self.doc.can_add_frame(self.frame, s == "frame") {
-                    self.remember();
+                    self.remember_action(if s == "frame" {
+                        "Duplicate frame"
+                    } else {
+                        "New empty frame"
+                    });
                     self.doc.add_frame(self.frame, s == "frame");
                     self.frame += 1;
                     self.timeline_anchor = None;
@@ -2487,7 +2597,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
             "deleteframe" if self.doc.durations.len() > 1 => {
-                self.remember();
+                self.remember_action("Delete frame");
                 self.doc.remove_frame(self.frame);
                 self.clamp();
             }
@@ -2510,7 +2620,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.selected_cels = None;
             }
             "flipx" | "flipy" => {
-                self.remember();
+                self.remember_action(if s == "flipx" {
+                    "Flip horizontally"
+                } else {
+                    "Flip vertically"
+                });
                 self.doc.flip(self.layer, self.frame, s == "flipx")
             }
             "settings" => self.settings_open = true,
@@ -2563,7 +2677,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .ok_or("No script result is available")?;
         let doc = session.load_result()?;
         if doc != self.doc {
-            self.remember();
+            self.remember_action("Run extension");
             self.doc = doc;
             self.clamp();
         }
@@ -2833,6 +2947,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     vec![
                         ("Undo   Ctrl+Z", "undo"),
                         ("Redo   Ctrl+Y", "redo"),
+                        ("Undo History…", "undo-history"),
                         ("Copy   Ctrl+C", "copy"),
                         ("Cut   Ctrl+X", "cut"),
                         ("Paste   Ctrl+V", "paste"),
@@ -3323,7 +3438,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let next = self
             .doc
             .with_moved_cels(selection, target.0, target.1, duplicate);
-        if self.apply_document_edit(next) {
+        if self.apply_document_edit(
+            if duplicate {
+                "Duplicate cels"
+            } else {
+                "Move cels"
+            },
+            next,
+        ) {
             let active = if selection.contains(self.layer, self.frame) {
                 (self.layer, self.frame)
             } else {
@@ -3391,7 +3513,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn drop_layers(&mut self, drag: &LayerHeaderDrag, drop: LayerDrop) {
         match self.doc.with_layers_restacked(&drag.layers, drop) {
             Ok(Some((next, positions))) => {
-                if self.apply_document_edit(Ok(Some(next))) {
+                if self.apply_document_edit("Restack layers", Ok(Some(next))) {
                     let active = if drag.layers.binary_search(&self.layer).is_ok() {
                         self.layer
                     } else {
@@ -3441,7 +3563,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         } else {
             vec![from]
         };
-        if self.edit_timeline(|doc| doc.move_frames(&selected, before).map(|_| ())) {
+        if self.edit_timeline("Move frames", |doc| {
+            doc.move_frames(&selected, before).map(|_| ())
+        }) {
             let insertion = before - selected.partition_point(|&frame| frame < before);
             let active = selected.binary_search(&self.frame).unwrap_or(0);
             self.frame = insertion + active;
@@ -3462,27 +3586,37 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         } else {
             self.timeline_frames.selected.clone()
         };
-        if self.edit_timeline(|doc| doc.reverse_frames(&selected).map(|_| ())) {
+        if self.edit_timeline("Reverse frames", |doc| {
+            doc.reverse_frames(&selected).map(|_| ())
+        }) {
             self.timeline_duration = self.doc.durations[self.frame];
             self.stop_playback(false);
         }
     }
 
-    fn edit_timeline(&mut self, edit: impl FnOnce(&mut Document) -> Result<(), String>) -> bool {
+    fn edit_timeline(
+        &mut self,
+        label: &'static str,
+        edit: impl FnOnce(&mut Document) -> Result<(), String>,
+    ) -> bool {
         let mut next = self.doc.clone();
         let result = edit(&mut next)
             .and_then(|()| next.validate())
             .map(|()| Some(next));
-        self.apply_document_edit(result)
+        self.apply_document_edit(label, result)
     }
 
-    fn apply_document_edit(&mut self, next: Result<Option<Document>, String>) -> bool {
+    fn apply_document_edit(
+        &mut self,
+        label: &'static str,
+        next: Result<Option<Document>, String>,
+    ) -> bool {
         match next {
             Ok(Some(next)) if next != self.doc || !next.same_editor_targets(&self.doc) => {
                 self.power.bridge_generation += 1;
                 let previous = std::mem::replace(&mut self.doc, next);
-                self.push_undo(previous);
                 self.redo.clear();
+                self.push_undo(previous, label);
                 true
             }
             Ok(_) => false,
@@ -3495,7 +3629,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
     fn set_tag_repeat(&mut self, tag: usize, repeat: u16) {
         if self.doc.tags[tag].repeat != repeat {
-            self.remember();
+            self.remember_action("Change tag repeats");
             self.doc.tags[tag].repeat = repeat;
         }
     }
@@ -3668,7 +3802,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
                     .changed()
             {
-                self.remember();
+                self.remember_action("Change frame duration");
                 self.doc.durations[self.frame] = ms;
             }
             ui.separator();
@@ -4215,7 +4349,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     range.last_frame + 1
                 ));
                 if ui.pc_button("Clear cels").clicked() {
-                    self.edit_timeline(|doc| doc.clear_selected_cels(&selection));
+                    self.edit_timeline("Clear cels", |doc| doc.clear_selected_cels(&selection));
                     ui.close();
                 }
                 for (name, linked) in [
@@ -4223,7 +4357,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     ("Unlink selected cels", false),
                 ] {
                     if ui.pc_button(name).clicked() {
-                        self.edit_timeline(|doc| doc.set_selected_cels_linked(&selection, linked));
+                        self.edit_timeline(
+                            if linked { "Link cels" } else { "Unlink cels" },
+                            |doc| doc.set_selected_cels_linked(&selection, linked),
+                        );
                         ui.close();
                     }
                 }
@@ -4235,7 +4372,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     );
                     if ui.pc_button("Set duration").clicked() {
                         let duration = self.timeline_duration;
-                        self.edit_timeline(|doc| {
+                        self.edit_timeline("Change frame durations", |doc| {
                             doc.set_selected_cel_duration(&selection, duration)
                         });
                         ui.close();
@@ -4307,12 +4444,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .pc_checkbox(&mut key.hold, "Hold until next keyframe")
                     .changed();
                 if ui.pc_button("Set keyframe at current frame").clicked() || changed {
-                    self.edit_timeline(|doc| doc.set_cel_keyframe(layer, frame, Some(key)));
+                    self.edit_timeline("Set cel keyframe", |doc| {
+                        doc.set_cel_keyframe(layer, frame, Some(key))
+                    });
                 }
                 if self.doc.layers[layer].cel_meta[frame].keyframe.is_some()
                     && ui.pc_button("Remove keyframe").clicked()
                 {
-                    self.edit_timeline(|doc| doc.set_cel_keyframe(layer, frame, None));
+                    self.edit_timeline("Remove cel keyframe", |doc| {
+                        doc.set_cel_keyframe(layer, frame, None)
+                    });
                 }
             });
             let mut onion_included = !self.doc.layers[self.layer].exclude_from_onion;
@@ -4320,7 +4461,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .pc_checkbox(&mut onion_included, "Include layer in onion skin")
                 .changed()
             {
-                self.remember();
+                self.remember_action("Change onion-skin layer visibility");
                 self.doc.layers[self.layer].exclude_from_onion = !onion_included;
             }
 
@@ -4330,7 +4471,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
                     .changed()
                 {
-                    self.remember();
+                    self.remember_action("Change frame duration");
                     self.doc.durations[self.frame] = ms;
                 }
                 for (command, label) in [("frame", "+ Frame"), ("layer", "+ Layer")] {
@@ -4345,7 +4486,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .pc_checkbox(&mut link_duplicates, "Link duplicated cels")
                 .changed()
             {
-                self.remember();
+                self.remember_action("Change cel linking preference");
                 self.doc.layers[self.layer].link_duplicates = link_duplicates;
             }
             if self.doc.editable(self.layer) {
@@ -4354,7 +4495,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         if frame != self.frame
                             && ui.pc_button(format!("Frame {}", frame + 1)).clicked()
                         {
-                            self.remember();
+                            self.remember_action("Link cel");
                             if let Err(error) = self.doc.link_cel(self.layer, self.frame, frame) {
                                 self.status = error;
                             }
@@ -4367,7 +4508,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .is_some()
                     && ui.pc_button("Unlink cel").clicked()
                 {
-                    self.remember();
+                    self.remember_action("Unlink cel");
                     if let Err(error) = self.doc.unlink_cel(self.layer, self.frame) {
                         self.status = error;
                     }
@@ -4396,11 +4537,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         });
         if let Some(li) = toggle {
-            self.remember();
+            self.remember_action("Change layer visibility");
             self.doc.layers[li].visible = !self.doc.layers[li].visible
         }
         if let Some(li) = lock {
-            self.remember();
+            self.remember_action("Change layer lock");
             self.doc.layers[li].locked = !self.doc.layers[li].locked
         }
         if let Some(s) = rename {
@@ -4775,7 +4916,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             } else if !self.doc.editable(self.layer) {
                 self.status = "This layer is locked. Unlock it in the timeline to draw.".into();
             } else {
-                self.remember();
+                self.remember_action(match self.tool {
+                    Tool::Pencil => "Pencil stroke",
+                    Tool::Eraser => "Eraser stroke",
+                    Tool::Fill => "Fill",
+                    Tool::Move => "Move selection",
+                    Tool::Gradient => "Gradient",
+                    Tool::Line => "Line",
+                    Tool::Rect => "Rectangle",
+                    Tool::Ellipse => "Ellipse",
+                    _ => "Paint",
+                });
                 self.start = Some(p);
                 self.last = Some(p);
                 self.stroke_base = Some(self.doc.clone());
@@ -5038,7 +5189,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         } else if let Err(error) = next.validate() {
             self.status = error;
         } else {
-            self.remember();
+            self.remember_action("Replace color");
             self.doc = next;
             self.status = format!("Replaced color in {count} pixels");
         }
@@ -5218,7 +5369,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             });
             if done {
                 if !name.trim().is_empty() {
-                    self.remember();
+                    self.remember_action("Rename layer");
                     self.doc.layers[self.layer].name = name;
                 }
                 self.rename = None;
@@ -5251,7 +5402,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 done || cancel
             });
             if done {
-                self.edit_timeline(|doc| doc.set_frame_name(frame, &name));
+                self.edit_timeline("Rename frame", |doc| doc.set_frame_name(frame, &name));
             } else if !cancel && !dismissed {
                 self.rename_frame = Some((document, frame_id, name));
             }
@@ -5684,6 +5835,7 @@ impl PixelCraft {
             .frame(egui::Frame::NONE.fill(self.colors().canvas))
             .show(ui, |ui| self.canvas(ui));
         self.dialogs(&ctx);
+        self.history_panel(&ctx);
         self.workspace_recovery_dialog(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
@@ -6538,6 +6690,96 @@ mod tests {
     }
 
     #[test]
+    fn undo_history_panel_clicks_restore_only_the_active_tab() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(4, 4), None);
+        a.action("layer");
+        let draw = |a: &mut PixelCraft, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800., 600.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| a.history_panel(ui.ctx()),
+            );
+            output.textures_delta.clear();
+        };
+        a.action("undo-history");
+        draw(&mut a, vec![]);
+        draw(&mut a, vec![]);
+        let row = |index| {
+            ctx.data_mut(|data| data.get_temp::<Rect>(egui::Id::new(("history-row", index))))
+                .unwrap()
+                .center()
+        };
+        let click = |a: &mut PixelCraft, pos| {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            draw(a, vec![egui::Event::PointerMoved(pos), button(true)]);
+            draw(a, vec![button(false)]);
+        };
+        click(&mut a, row(0usize));
+        assert_eq!(a.doc.layers.len(), 1);
+        assert_eq!(a.redo.len(), 1);
+
+        a.open_document(Document::new(9, 2), None);
+        draw(&mut a, vec![]);
+        click(&mut a, row(0usize));
+        assert_eq!(a.doc.width, 9);
+        assert!(a.redo.is_empty());
+        a.switch_tab(0);
+        draw(&mut a, vec![]);
+        click(&mut a, row(1usize));
+        assert_eq!(a.doc.width, 4);
+        assert_eq!(a.doc.layers.len(), 2);
+
+        a.switch_tab(1);
+        assert_eq!(a.doc.width, 9);
+        assert_eq!(a.doc.layers.len(), 1);
+    }
+
+    #[test]
+    fn labeled_history_jumps_both_ways_and_branches_at_the_chosen_entry() {
+        let mut a = app();
+        let red = [180, 30, 50, 255];
+        a.remember_action("Pencil stroke");
+        a.doc.set_pixel(0, 0, 0, red);
+        a.action("frame");
+        a.selection = Some((0, 0, 2, 2));
+        a.remember_action("Clear selection");
+        a.selection = None;
+        assert_eq!(a.history_label(1), Some("Pencil stroke"));
+        assert_eq!(a.history_label(2), Some("Duplicate frame"));
+        assert_eq!(a.history_label(3), Some("Clear selection"));
+
+        let revision = a.power.bridge_generation;
+        assert!(a.jump_history(0));
+        assert_eq!(a.power.bridge_generation, revision + 1);
+        assert_eq!(a.doc.layers[0].cels[0][0], CLEAR);
+        assert_eq!(a.history_label(2), Some("Duplicate frame"));
+        assert!(a.jump_history(2));
+        assert_eq!(a.doc.layers[0].cels[0][0], red);
+        assert_eq!(a.frame, 1);
+        assert_eq!(a.selection, Some((0, 0, 2, 2)));
+        assert_eq!(a.history_label(3), Some("Clear selection"));
+
+        a.action("layer");
+        assert!(a.redo.is_empty());
+        assert_eq!(a.history_label(3), Some("New layer"));
+        assert!(!a.jump_history(4));
+        assert!(a.jump_history(1));
+        assert_eq!(a.doc.durations.len(), 1);
+        assert!(a.jump_history(3));
+        assert_eq!(a.doc.layers.len(), 2);
+    }
+
+    #[test]
     fn undo_redo_restores_pixels_and_structural_edits() {
         let mut a = app();
         a.remember();
@@ -7171,8 +7413,12 @@ mod tests {
         )
         .unwrap();
 
-        assert!(a.edit_timeline(|doc| doc.move_cel_range(selection, 0, 2, true)));
-        assert!(a.edit_timeline(|doc| doc.move_cel_range(selection, 0, 1, false)));
+        assert!(a.edit_timeline("Duplicate cels", |doc| {
+            doc.move_cel_range(selection, 0, 2, true)
+        }));
+        assert!(a.edit_timeline("Move cels", |doc| {
+            doc.move_cel_range(selection, 0, 1, false)
+        }));
         assert_eq!(a.doc, expected);
         assert_eq!(a.doc.tags, before.tags);
         a.undo();

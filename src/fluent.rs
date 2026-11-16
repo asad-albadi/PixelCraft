@@ -887,7 +887,7 @@ impl PixelCraft {
                         .add(egui::Slider::new(&mut opacity, 0..=255).show_value(false))
                         .changed()
                     {
-                        self.remember();
+                        self.remember_action("Change layer opacity");
                         self.doc.layers[self.layer].opacity = opacity;
                     }
                 });
@@ -904,7 +904,7 @@ impl PixelCraft {
                             }
                         });
                     if blend != self.doc.layers[self.layer].blend {
-                        self.remember();
+                        self.remember_action("Change layer blend mode");
                         self.doc.layers[self.layer].blend = blend;
                     }
                 });
@@ -1008,7 +1008,7 @@ impl PixelCraft {
                 }
             });
         if shape != self.doc.brush_shape {
-            self.remember();
+            self.remember_action("Change brush shape");
             self.doc.brush_shape = shape;
         }
         self.brush_mode_ui(ui);

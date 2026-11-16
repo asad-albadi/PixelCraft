@@ -687,7 +687,7 @@ impl PixelCraft {
         };
         match result {
             Ok((b, rotated_selection)) => {
-                self.remember();
+                self.remember_action("Rotate selection");
                 self.doc = next;
                 self.selection = Some((
                     b[0].max(0),
@@ -858,7 +858,7 @@ impl PixelCraft {
                 let mut d = self.doc.clone();
                 match workflows::crop(&mut d, self.selection_bounds()) {
                     Ok(()) => {
-                        self.remember();
+                        self.remember_action("Crop to selection");
                         self.doc = d;
                         self.selection = None;
                         self.studio.mask = None;
@@ -934,7 +934,7 @@ impl PixelCraft {
         }
         true
     }
-    pub(super) fn effects(&mut self, kind: &str) {
+    pub(super) fn effects(&mut self, kind: &'static str) {
         if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
             self.status = "Select an unlocked image layer".into();
             return;
@@ -965,7 +965,7 @@ impl PixelCraft {
             };
             match result {
                 Ok(()) => {
-                    self.remember();
+                    self.remember_action(kind);
                     self.doc = next;
                     self.status = format!("Applied {kind}");
                 }
@@ -973,7 +973,7 @@ impl PixelCraft {
             }
             return;
         }
-        self.remember();
+        self.remember_action(kind);
         for i in 0..self.doc.width * self.doc.height {
             if !self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
                 continue;
@@ -1165,10 +1165,12 @@ impl PixelCraft {
                         mask.set(i, [0, 0, 0, 255]);
                     }
                 }
-                self.edit_timeline(|doc| doc.set_layer_mask(layer, Some(mask)));
+                self.edit_timeline("Set layer mask", |doc| {
+                    doc.set_layer_mask(layer, Some(mask))
+                });
             }
             if ui.pc_button("Remove layer mask").clicked() {
-                self.edit_timeline(|doc| doc.set_layer_mask(layer, None));
+                self.edit_timeline("Remove layer mask", |doc| doc.set_layer_mask(layer, None));
             }
             let mut adjustment = self.studio.adjustment_input.clone();
             ui.horizontal(|ui| {
@@ -1230,12 +1232,14 @@ impl PixelCraft {
             }
             self.studio.adjustment_input = adjustment.clone();
             if ui.pc_button("Set layer adjustment").clicked() {
-                self.edit_timeline(|doc| doc.set_adjustment(layer, Some(adjustment)));
+                self.edit_timeline("Set adjustment", |doc| {
+                    doc.set_adjustment(layer, Some(adjustment))
+                });
             }
             if self.doc.layers[layer].adjustment.is_some()
                 && ui.pc_button("Remove adjustment").clicked()
             {
-                self.edit_timeline(|doc| doc.set_adjustment(layer, None));
+                self.edit_timeline("Remove adjustment", |doc| doc.set_adjustment(layer, None));
             }
         });
     }
@@ -1248,14 +1252,14 @@ impl PixelCraft {
         }
         let mut resized = self.doc.clone();
         workflows::resize_canvas(&mut resized, resize.size, offset)?;
-        self.apply_sprite_geometry(resized);
+        self.apply_sprite_geometry("Resize sprite", resized);
         self.status = format!("Canvas resized to {} × {}", self.doc.width, self.doc.height);
         Ok(())
     }
 
-    fn apply_sprite_geometry(&mut self, doc: Document) {
+    fn apply_sprite_geometry(&mut self, label: &'static str, doc: Document) {
         self.cancel_gesture();
-        self.remember();
+        self.remember_action(label);
         self.doc = doc;
         self.selection = None;
         self.studio.mask = None;
@@ -1318,7 +1322,7 @@ impl PixelCraft {
                     );
                 } else {
                     if self.doc.differs_from_saved(&doc) {
-                        self.apply_sprite_geometry(doc);
+                        self.apply_sprite_geometry(job.title, doc);
                         if let Some(layer) = layer {
                             self.layer = layer;
                             self.timeline_anchor = None;
@@ -1500,7 +1504,7 @@ impl PixelCraft {
                         let layer = self.doc.layers.iter().position(|layer| layer.tileset == Some(tileset));
                         if let Some(layer) = layer {
                             self.timeline_select(layer, self.frame, false);
-                        } else if self.edit_timeline(|doc| doc.add_tile_layer(tileset)) {
+                        } else if self.edit_timeline("New tile layer", |doc| doc.add_tile_layer(tileset)) {
                             self.timeline_select(self.doc.layers.len() - 1, self.frame, false);
                         }
                     }

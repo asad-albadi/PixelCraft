@@ -163,6 +163,8 @@ Canvases support up to 16384 pixels per side and 64 million pixels per canvas an
 
 ### Timeline and scene editing
 
+Open **Edit → Undo History** to jump to a named edit in the active sprite. You can move forward again until you make a new edit. The panel shows the history retained within the editor's Undo limits.
+
 Use **Playback** on the timeline to loop selected frames, or play the selection, active tag, or whole sprite once. Nonadjacent selections skip unselected frames. **Play subtags** and **Play subtags once** start at the beginning of the active tag or sprite and follow the directions and repeat counts of nested tags. A nested tag with an unlimited repeat setting plays once per visit so playback can continue. **Rewind on stop** returns to the frame you were editing before playback started. With onion skin enabled, drag either end of the **Onion range** strip to change how many earlier or later frames appear. A focused handle also responds to the left and right arrow keys.
 
 Use **Play preview animation** in the Preview panel to play the authored frame timings while the timeline stays on your editing frame. The timeline’s playback speed applies to both the canvas and the preview. Export uses the frame durations you authored. The preview shows the main canvas viewport. Click the artwork in the preview to center the canvas there. The timeline marks tagged frames, and **Sprite → Properties, layers, tiles & ranges** edits a tag’s repeat count for batch and engine exports.

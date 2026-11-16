@@ -574,7 +574,7 @@ impl PixelCraft {
             self.status = error;
             return;
         }
-        self.remember();
+        self.remember_action("Reorder palette");
         self.doc = next;
         self.palette_index = match self.palette_index {
             index if index == from => to,
@@ -613,7 +613,7 @@ impl PixelCraft {
                     self.power.ramp_steps,
                 ) {
                     Ok(()) => {
-                        self.remember();
+                        self.remember_action("Add palette ramp");
                         self.doc = next;
                     }
                     Err(e) => self.status = e,
@@ -949,15 +949,15 @@ impl PixelCraft {
         egui::Window::new("Workflow tools").open(&mut open).default_width(530.).default_height(650.).show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{
  self.palette_arrangement_ui(ui);
  ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
- ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember();self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("The seamless canvas uses the axes selected under View.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
+ ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember_action("Change drawing options");self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("The seamless canvas uses the axes selected under View.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
 if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
  ui.collapsing("Reference images",|ui|{if ui.pc_checkbox(&mut self.power.preferences.sample_references,"Sample reference colors").changed(){self.save_workflow_preferences();}
-if ui.pc_button("Import PNG / JPEG overlay…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("Reference image",&["png","jpg","jpeg"]).pick_file(){match import_reference(&path){Ok(r)=>{let mut next=self.doc.clone();next.references.push(r);match next.validate(){Ok(())=>{self.remember();self.doc=next;},Err(e)=>self.status=e}},Err(e)=>self.status=e}}ui.small("Saved inside .pixel projects; excluded from artwork exports. Enable Move to drag; Shift-drag scales.");let mut remove=None;for i in 0..self.doc.references.len(){let mut r=self.doc.references[i].clone();ui.separator();ui.horizontal(|ui|{ui_icons::checkbox(ui,&mut r.visible,"eye",&r.name);if ui_icons::button_as(ui,"move","reference-move","Move / scale",self.power.reference_edit==Some(i),false).clicked(){self.power.reference_edit=if self.power.reference_edit==Some(i){None}else{Some(i)};}
+if ui.pc_button("Import PNG / JPEG overlay…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("Reference image",&["png","jpg","jpeg"]).pick_file(){match import_reference(&path){Ok(r)=>{let mut next=self.doc.clone();next.references.push(r);match next.validate(){Ok(())=>{self.remember_action("Import reference image");self.doc=next;},Err(e)=>self.status=e}},Err(e)=>self.status=e}}ui.small("Saved inside .pixel projects; excluded from artwork exports. Enable Move to drag; Shift-drag scales.");let mut remove=None;for i in 0..self.doc.references.len(){let mut r=self.doc.references[i].clone();ui.separator();ui.horizontal(|ui|{ui_icons::checkbox(ui,&mut r.visible,"eye",&r.name);if ui_icons::button_as(ui,"move","reference-move","Move / scale",self.power.reference_edit==Some(i),false).clicked(){self.power.reference_edit=if self.power.reference_edit==Some(i){None}else{Some(i)};}
 if ui.pc_small_button("Remove").clicked(){remove=Some(i);}});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut r.x).prefix("X ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.y).prefix("Y ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.scale).prefix("Scale ").speed(0.01).range(0.01..=1000.));});ui.add(egui::Slider::new(&mut r.opacity,0..=255).text("Opacity"));
 ui.horizontal(|ui|{ui.pc_checkbox(&mut r.behind,"Behind artwork");ui.pc_checkbox(&mut r.floating,"Floating window");});
 ui.horizontal(|ui|{if ui.pc_button("Fit to canvas").clicked(){r.scale=(self.doc.width as f32/r.width as f32).min(self.doc.height as f32/r.height as f32).clamp(0.01,1000.);r.x=(self.doc.width as f32-r.width as f32*r.scale)/2.;r.y=(self.doc.height as f32-r.height as f32*r.scale)/2.;}
-if ui.pc_button("Copy to layer").clicked(){let mut d=self.doc.clone();match reference_to_layer(&mut d,&r,self.frame){Ok(())=>{self.remember();self.doc=d;self.layer=self.doc.layers.len()-1;},Err(e)=>self.status=e}}});if r!=self.doc.references[i]{self.remember();self.doc.references[i]=r;}}
-if let Some(i)=remove{self.remember();self.doc.references.remove(i);self.power.reference_edit=None;}
+if ui.pc_button("Copy to layer").clicked(){let mut d=self.doc.clone();match reference_to_layer(&mut d,&r,self.frame){Ok(())=>{self.remember_action("Copy reference to layer");self.doc=d;self.layer=self.doc.layers.len()-1;},Err(e)=>self.status=e}}});if r!=self.doc.references[i]{self.remember_action("Edit reference image");self.doc.references[i]=r;}}
+if let Some(i)=remove{self.remember_action("Remove reference image");self.doc.references.remove(i);self.power.reference_edit=None;}
 if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
  ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
  ui.collapsing("Grid sprite-sheet import", |ui| self.grid_import_ui(ui));
@@ -1269,7 +1269,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         .map_err(|e| e.to_string())?;
                 } else {
                     let p = parse_palette(&std::fs::read(&path).map_err(|e| e.to_string())?, ext)?;
-                    self.remember();
+                    self.remember_action("Import palette");
                     self.doc.import_palette(p)?;
                     self.doc.palette_names.clear();
                 }
@@ -1386,7 +1386,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                             }
                         });
                     if !open {
-                        self.remember();
+                        self.remember_action("Dock reference image");
                         self.doc.references[i].floating = false;
                     }
                 }
@@ -1415,7 +1415,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     egui::StrokeKind::Inside,
                 );
                 if response.drag_started() {
-                    self.remember();
+                    self.remember_action("Move reference image");
                     self.power.reference_drag = ui
                         .input(|i| i.pointer.press_origin())
                         .map(|origin| (r.x, r.y, r.scale, origin));
@@ -1786,10 +1786,10 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             if prepared.request.operation == "live-create" {
                 let previous = self.doc.clone();
                 self.open_document(next, None);
-                self.push_undo(previous);
+                self.push_undo(previous, "MCP new sprite");
                 self.status = "Assistant created an untitled sprite — Ctrl+Z to undo".into();
             } else if next != self.doc || !next.same_editor_targets(&self.doc) {
-                self.remember();
+                self.remember_action("MCP edit");
                 self.doc = next;
                 self.clamp();
                 self.status = "Assistant edited the sprite — Ctrl+Z to undo".into();
