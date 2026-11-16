@@ -16,6 +16,7 @@ struct RecoveryWrite {
 
 pub(super) struct Studio {
     pub recovery_enabled: bool,
+    pub(super) collapsed_groups: std::collections::HashSet<String>,
     pub open: bool,
     pub sheet_open: bool,
     pub tiles_open: bool,
@@ -121,6 +122,7 @@ impl Default for Studio {
     fn default() -> Self {
         Self {
             recovery_enabled: false,
+            collapsed_groups: std::collections::HashSet::new(),
             open: false,
             sheet_open: false,
             tiles_open: false,
@@ -754,6 +756,43 @@ impl PixelCraft {
                     } else {
                         doc.merge_down(layer)?
                     };
+                    Ok(SpriteJobOutput {
+                        doc,
+                        layer: Some(layer),
+                    })
+                });
+            }
+            "flatten-layers" | "flatten-visible" => {
+                let visible_only = s == "flatten-visible";
+                self.start_document_job("Flatten layers", move |source| {
+                    let mut doc = source.clone();
+                    let layer = doc.flatten_layers(visible_only)?;
+                    Ok(SpriteJobOutput {
+                        doc,
+                        layer: Some(layer),
+                    })
+                });
+            }
+            "layer-via-copy" | "layer-via-cut" => {
+                let layer = self.layer;
+                let frame = self.frame;
+                let cut = s == "layer-via-cut";
+                let mask: Vec<_> = (0..self.doc.width * self.doc.height)
+                    .map(|index| {
+                        self.selected(
+                            (index % self.doc.width) as i32,
+                            (index / self.doc.width) as i32,
+                        )
+                    })
+                    .collect();
+                let title = if cut {
+                    "Layer via cut"
+                } else {
+                    "Layer via copy"
+                };
+                self.start_document_job(title, move |source| {
+                    let mut doc = source.clone();
+                    let layer = doc.layer_from_selection(layer, frame, &mask, cut)?;
                     Ok(SpriteJobOutput {
                         doc,
                         layer: Some(layer),

@@ -1,6 +1,223 @@
 use super::*;
 
 impl Document {
+    pub fn flatten_layers(&mut self, visible_only: bool) -> Result<usize, String> {
+        self.validate()?;
+        let included: Vec<_> = (0..self.layers.len())
+            .map(|layer| !visible_only || self.layer_effectively_visible(layer))
+            .collect();
+        if !included.iter().any(|included| *included) {
+            return Err("There are no visible layers to flatten".into());
+        }
+
+        let mut scene = self.clone();
+        if !visible_only {
+            for layer in &mut scene.layers {
+                layer.visible = true;
+            }
+        }
+        scene.references.clear();
+        scene.slices.clear();
+        scene.metadata.clear();
+        let [left, top, width, height] = merge_region(&scene)?;
+        let original_bounds = [0, 0, self.width as i32, self.height as i32];
+        let bounds = [left, top, width, height];
+        let expanded = if bounds != original_bounds {
+            let mut expanded = scene.clone();
+            crate::workflows::resize_canvas(
+                &mut expanded,
+                [width as usize, height as usize],
+                [-left, -top],
+            )?;
+            Some(expanded)
+        } else {
+            None
+        };
+        let mut flattened = Layer::new(
+            "Flattened".into(),
+            self.width,
+            self.height,
+            self.durations.len(),
+        );
+        let mut budget = MAX_DOCUMENT_PIXELS;
+        for frame in 0..self.durations.len() {
+            let palette = self.palette_for(frame);
+            let mut rendered = expanded.as_ref().unwrap_or(&scene).composite(frame);
+            if expanded.is_some() {
+                // Preserve the original canvas clipping of nested groups, even
+                // when expanding the temporary scene to recover off-canvas cels.
+                let original = scene.composite(frame);
+                for (row, pixels) in original.chunks_exact(self.width).enumerate() {
+                    let first = (row + (-top) as usize) * width as usize + (-left) as usize;
+                    rendered[first..first + self.width].copy_from_slice(pixels);
+                }
+            }
+            let mut palette = palette.to_vec();
+            if let Some(color) = palette.get_mut(self.transparent_index) {
+                color[3] = 0;
+            }
+            let (pixels, meta) =
+                self.bake_merged_frame(rendered, bounds, &palette, false, &mut budget)?;
+            flattened.cels[frame] = pixels;
+            flattened.cel_meta[frame] = meta;
+        }
+
+        let mut result = self.clone();
+        let mut remapped = vec![None; self.layers.len()];
+        result.layers.clear();
+        for (index, layer) in self
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !included[*index])
+        {
+            remapped[index] = Some(result.layers.len());
+            result.layers.push(layer.clone());
+        }
+        for (index, source) in self
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !included[*index])
+        {
+            let mut ancestor = source.parent;
+            while let Some(parent) = ancestor {
+                if !included[parent] {
+                    break;
+                }
+                ancestor = self.layers[parent].parent;
+            }
+            result.layers[remapped[index].unwrap()].parent =
+                ancestor.and_then(|parent| remapped[parent]);
+        }
+        result.metadata.retain_mut(|meta| {
+            let Some((prefix, old)) = layer_owner(&meta.owner) else {
+                return true;
+            };
+            let Some(Some(index)) = remapped.get(old) else {
+                return false;
+            };
+            meta.owner = format!("{prefix}{index}");
+            true
+        });
+        let layer = result.layers.len();
+        result.layers.push(flattened);
+        result.validate()?;
+        *self = result;
+        Ok(layer)
+    }
+
+    fn layer_effectively_visible(&self, layer: usize) -> bool {
+        let mut current = Some(layer);
+        while let Some(index) = current {
+            let layer = &self.layers[index];
+            if !layer.visible {
+                return false;
+            }
+            current = layer.parent;
+        }
+        true
+    }
+
+    pub fn layer_from_selection(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        mask: &[bool],
+        cut: bool,
+    ) -> Result<usize, String> {
+        let source = self.layers.get(layer).ok_or("Invalid layer")?;
+        let area = self.width * self.height;
+        if source.group
+            || source.adjustment.is_some()
+            || source.tileset.is_some()
+            || (cut && !self.editable(layer))
+            || frame >= self.durations.len()
+            || mask.len() != area
+        {
+            return Err(
+                "Choose a raster cel and a valid selection. Cutting requires an unlocked layer."
+                    .into(),
+            );
+        }
+        if !self.can_add_layer() {
+            return Err("Adding a layer would exceed the document limits".into());
+        }
+
+        let source_pixels = &source.cels[frame];
+        let source_indices = source.cel_meta[frame].indices.as_deref();
+        let mut result = self.clone();
+        let mut target = Layer::new(
+            if cut {
+                "Layer via cut"
+            } else {
+                "Layer via copy"
+            }
+            .into(),
+            self.width,
+            self.height,
+            self.durations.len(),
+        );
+        target.parent = source.parent;
+        target.opacity = source.opacity;
+        target.blend = source.blend;
+        target.visible = source.visible;
+        target.mask = source.mask.clone();
+        target.cel_meta[frame].opacity = source.cel_meta[frame].opacity;
+        target.cel_meta[frame].z_index = source.cel_meta[frame].z_index;
+        target.cel_meta[frame].keyframe = Some(self.sampled_cel_key(layer, frame));
+        let mut target_indices = source_indices.map(|_| vec![self.transparent_index as u8; area]);
+        let mut copied = false;
+        for (index, selected) in mask.iter().copied().enumerate() {
+            if !selected {
+                continue;
+            }
+            let pixel = source_pixels[index];
+            let slot = source_indices.map(|indices| indices[index]);
+            if pixel == CLEAR && slot.is_none_or(|slot| usize::from(slot) == self.transparent_index)
+            {
+                continue;
+            }
+            target.cels[frame].set(index, pixel);
+            if let (Some(indices), Some(slot)) = (&mut target_indices, slot) {
+                indices[index] = slot;
+            }
+            if cut {
+                result.restore_pixel(
+                    layer,
+                    frame,
+                    index,
+                    CLEAR,
+                    Some(self.transparent_index as u8),
+                );
+            }
+            copied = true;
+        }
+        if !copied {
+            return Err("The selection contains no artwork".into());
+        }
+        target.cel_meta[frame].indices = target_indices.map(Arc::new);
+        let index = layer + 1;
+        for existing in &mut result.layers {
+            if let Some(parent) = existing.parent.as_mut().filter(|parent| **parent >= index) {
+                *parent += 1;
+            }
+        }
+        if let Some(parent) = target.parent.as_mut().filter(|parent| **parent >= index) {
+            *parent += 1;
+        }
+        for meta in &mut result.metadata {
+            if let Some((prefix, old)) = layer_owner(&meta.owner)
+                && (index..self.layers.len()).contains(&old)
+            {
+                meta.owner = format!("{prefix}{}", old + 1);
+            }
+        }
+        result.layers.insert(index, target);
+        result.validate()?;
+        *self = result;
+        Ok(index)
+    }
     /// Insert a complete copy of the selected layer or group immediately above its root.
     pub fn duplicate_layer(&mut self, root: usize) -> Result<usize, String> {
         if root >= self.layers.len() {
@@ -273,8 +490,18 @@ fn merge_region(pair: &Document) -> Result<[i32; 4], String> {
         bottom = bottom.max(y + 1).max(y + key.y + 1);
     };
     for (index, layer) in pair.layers.iter().enumerate() {
+        if !pair.layer_effectively_visible(index) {
+            continue;
+        }
         for (frame, meta) in layer.cel_meta.iter().enumerate() {
-            let key = pair.sampled_cel_key(index, frame);
+            let mut key = pair.sampled_cel_key(index, frame);
+            let mut ancestor = layer.parent;
+            while let Some(group) = ancestor {
+                let offset = pair.sampled_cel_key(group, frame);
+                key.x += offset.x;
+                key.y += offset.y;
+                ancestor = pair.layers[group].parent;
+            }
             for pixel in &meta.outside {
                 include(pixel.x, pixel.y, key);
             }
@@ -321,6 +548,69 @@ fn merge_region(pair: &Document) -> Result<[i32; 4], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flatten_visible_bakes_every_frame_and_retains_hidden_subtrees() {
+        let mut doc = Document::new(2, 2);
+        let visible = doc.add_group("Visible").unwrap();
+        doc.layers[0].parent = Some(visible);
+        let hidden = doc.add_group("Hidden").unwrap();
+        doc.layers[hidden].visible = false;
+        doc.add_layer();
+        doc.layers[3].parent = Some(hidden);
+        doc.add_frame(0, false);
+        let ink = [201, 44, 12, 255];
+        doc.layers[0].cels[0].set(0, ink);
+        doc.layers[0].cels[1].set(3, ink);
+        doc.layers[3].cels[1].set(0, [99, 88, 77, 255]);
+        let frames = [doc.composite(0), doc.composite(1)];
+
+        let flat = doc.flatten_layers(true).unwrap();
+
+        assert_eq!(doc.layers.len(), 3);
+        assert_eq!(doc.layers[flat].name, "Flattened");
+        assert!(!doc.layers[0].visible);
+        assert_eq!(doc.layers[1].parent, Some(0));
+        assert_eq!(doc.layers[1].cels[1][0], [99, 88, 77, 255]);
+        assert_eq!(doc.composite(0), frames[0]);
+        assert_eq!(doc.composite(1), frames[1]);
+
+        doc.flatten_layers(false).unwrap();
+        assert_eq!(doc.layers.len(), 1);
+        assert_eq!(doc.composite(1)[0], [99, 88, 77, 255]);
+    }
+
+    #[test]
+    fn cut_to_layer_uses_the_current_frame_mask_and_exact_palette_slots() {
+        let mut doc = Document::new(2, 2);
+        let color = [201, 44, 12, 255];
+        doc.palette = vec![CLEAR, color, color];
+        doc.set_color_mode(ColorMode::Indexed);
+        doc.add_frame(0, false);
+        doc.layers[0].cels[0].set(0, color);
+        doc.layers[0].cels[1].set(1, color);
+        doc.layers[0].cels[1].set(2, color);
+        doc.layers[0].cel_meta[1].indices = Some(Arc::new(vec![0, 2, 1, 0]));
+
+        let copied = doc
+            .layer_from_selection(0, 1, &[false, true, false, false], false)
+            .unwrap();
+        assert_eq!(doc.layers[0].cels[1][1], color);
+        assert_eq!(
+            doc.layers[copied].cel_meta[1].indices.as_ref().unwrap()[1],
+            2
+        );
+        let cut = doc
+            .layer_from_selection(0, 1, &[false, true, false, false], true)
+            .unwrap();
+
+        assert_eq!(doc.layers[0].cels[0][0], color);
+        assert_eq!(doc.layers[0].cels[1][1], CLEAR);
+        assert_eq!(doc.layers[0].cels[1][2], color);
+        assert_eq!(doc.layers[cut].cels[0][0], CLEAR);
+        assert_eq!(doc.layers[cut].cels[1][1], color);
+        assert_eq!(doc.layers[cut].cel_meta[1].indices.as_ref().unwrap()[1], 2);
+    }
 
     #[test]
     fn duplicates_nested_groups_across_frames_with_fresh_targets_and_mapped_owners() {

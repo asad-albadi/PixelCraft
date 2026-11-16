@@ -2532,6 +2532,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("New layer", "layer"),
                         ("Duplicate layer or group", "layer-duplicate"),
                         ("Merge down", "layer-merge"),
+                        ("Flatten visible layers", "flatten-visible"),
+                        ("Flatten all layers", "flatten-layers"),
+                        ("Layer via copy", "layer-via-copy"),
+                        ("Layer via cut", "layer-via-cut"),
                         ("Delete layer", "deletelayer"),
                         ("Move layer up", "up"),
                         ("Move layer down", "down"),
@@ -2979,7 +2983,40 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         ));
     }
 
+    fn collapsed_parent(&self, mut layer: usize) -> Option<usize> {
+        let mut collapsed = None;
+        if self.studio.collapsed_groups.is_empty() {
+            return collapsed;
+        }
+        while let Some(parent) = self.doc.layers[layer].parent {
+            if self
+                .studio
+                .collapsed_groups
+                .contains(&self.doc.layers[parent].editor_id.to_string())
+            {
+                collapsed = Some(parent);
+            }
+            layer = parent;
+        }
+        collapsed
+    }
+
+    fn toggle_timeline_group(&mut self, layer: usize) {
+        let id = self.doc.layers[layer].editor_id.to_string();
+        if !self.studio.collapsed_groups.remove(&id) {
+            self.studio.collapsed_groups.insert(id);
+            if let Some(visible) = self.collapsed_parent(self.layer) {
+                self.timeline_select(visible, self.frame, false);
+                self.timeline_destination = None;
+            }
+        }
+    }
+
     fn timeline(&mut self, ui: &mut egui::Ui) {
+        let visible_rows: Vec<_> = (0..self.doc.layers.len())
+            .rev()
+            .filter(|&layer| self.collapsed_parent(layer).is_none())
+            .collect();
         // The timeline must not composite every frame when a single cel changes.
         // Show thumbnails for frames the canvas or playback has already rendered.
         let _ = self.frame_texture(ui.ctx(), self.frame);
@@ -3074,6 +3111,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         });
         ui.separator();
         let mut toggle = None;
+        let mut collapse = None;
         let mut lock = None;
         let mut rename = None;
         let mut selection = None;
@@ -3160,7 +3198,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             response.on_hover_text(description);
                         }
                         ui.end_row();
-                        for li in (0..self.doc.layers.len()).rev() {
+                        for (row, &li) in visible_rows.iter().enumerate() {
                             let l = &self.doc.layers[li];
                             ui.horizontal(|ui| {
                                 if ui_icons::local_icon_button(
@@ -3191,8 +3229,29 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                 {
                                     lock = Some(li)
                                 }
+                                if l.group {
+                                    let collapsed = self
+                                        .studio
+                                        .collapsed_groups
+                                        .contains(&l.editor_id.to_string());
+                                    let (icon, action) = if collapsed {
+                                        ("chevron-right", "Expand")
+                                    } else {
+                                        ("chevron-down", "Collapse")
+                                    };
+                                    if ui_icons::local_icon_button(
+                                        ui,
+                                        icon,
+                                        &format!("{action} group {}", l.name),
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        collapse = Some(li);
+                                    }
+                                }
                                 let response = ui.add_sized(
-                                    [label_width - 90., row_height],
+                                    [label_width - if l.group { 118. } else { 90. }, row_height],
                                     egui::Button::image_and_text(
                                         egui::Image::new((
                                             ui_icons::texture(
@@ -3300,10 +3359,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                         (move_layer, move_frame)
                                     });
                                     if navigation != (0, 0) {
-                                        let layer = self
-                                            .layer
-                                            .saturating_add_signed(navigation.0 as isize)
-                                            .min(self.doc.layers.len() - 1);
+                                        let target_row = row
+                                            .saturating_add_signed(-(navigation.0 as isize))
+                                            .min(visible_rows.len() - 1);
+                                        let layer = visible_rows[target_row];
                                         let frame = self
                                             .frame
                                             .saturating_add_signed(navigation.1 as isize)
@@ -3322,6 +3381,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             });
         if let Some((layer, frame, extend)) = selection {
             self.timeline_select(layer, frame, extend);
+        }
+        if let Some(layer) = collapse {
+            self.toggle_timeline_group(layer);
         }
         ui.menu_button("Layer & frame actions", |ui| {
             for (label, command) in [

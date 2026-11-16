@@ -805,6 +805,45 @@ fn collect_text(shapes: &[egui::Shape], out: &mut Vec<String>) {
 }
 
 #[test]
+fn collapsed_groups_hide_nested_timeline_rows_without_hiding_artwork() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(2, 2);
+    let group = doc.add_group("Foreground").unwrap();
+    let nested = doc.add_group("Props").unwrap();
+    doc.layers[0].parent = Some(nested);
+    doc.layers[nested].parent = Some(group);
+    doc.layers[0].cels[0].set(0, [203, 99, 22, 255]);
+    let original = doc.composite(0);
+    app.replace(doc, None);
+
+    app.toggle_timeline_group(group);
+    assert_eq!(app.layer, group);
+    let mut rendered_frame = frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., Vec::new());
+    rendered_frame.textures_delta.clear();
+    let rendered = |layer| {
+        ctx.data(|data| {
+            data.get_temp::<(egui::Id, Rect, Rect, String)>(egui::Id::new((
+                "timeline-cell",
+                layer,
+                0usize,
+            )))
+            .is_some()
+        })
+    };
+    assert!(rendered(group));
+    assert!(!rendered(nested));
+    assert!(!rendered(0));
+    assert_eq!(app.doc.composite(0), original);
+
+    app.toggle_timeline_group(group);
+    let mut rendered_frame = frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., Vec::new());
+    rendered_frame.textures_delta.clear();
+    assert!(rendered(nested));
+    assert!(rendered(0));
+}
+
+#[test]
 fn timeline_cells_have_accessible_names_fit_and_support_keyboard_navigation() {
     for dark in [false, true] {
         for scale in [1., 1.5, 2.] {

@@ -35,6 +35,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 19 complete. Layer-menu and timeline commands duplicate nested groups or bake two sibling artwork layers across all frames. The merge uses the existing renderer for the pair in isolation and retains off-canvas pixels. Tile content becomes raster artwork in the merged layer. Tests cover hierarchy and metadata remapping, fresh edit targets, frame-dependent opacity and blending, off-canvas save/reopen, selected layer, and undo. Formatting, strict Clippy, and 442 Windows all-target tests passed.
 
+- Item 20 in progress. Flatten All and Flatten Visible bake the animation, Layer via Copy/Cut preserves selected indexed slots, and collapsing groups hides nested timeline rows without affecting the canvas. Tests confirm hidden subtree preservation, raster selection transfer, and rendered group disclosure. Formatting, strict Clippy, and 445 Windows all-target tests passed. Compatible layer-type conversions remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
