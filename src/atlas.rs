@@ -197,7 +197,7 @@ pub fn pack_atlas(
                 return Err("Atlas inputs exceed pixel or frame budget".into());
             }
             entries.push((
-                format!("{si}/{name}/{f}"),
+                format!("{si}/{name}/{}", d.frame_export_id(f)),
                 si,
                 f,
                 id,
@@ -286,13 +286,14 @@ pub fn pack_atlas(
         .iter()
         .map(|(name, si, f, id, b, sw, sh, duration)| {
             let r = placements[*id];
+            let document = &sources[*si].1;
             let mut entry = json!({
-                "filename":name,"source":si,"sourceFrame":f,
+                "filename":name,"source":si,"sourceFrame":f,"frameId":document.frame_export_id(*f),
                 "frame":{"x":r.x,"y":r.y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,
                 "spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},
                 "sourceSize":{"w":sw,"h":sh},"duration":duration
             });
-            if let Some(name) = sources[*si].1.frame_name(*f) {
+            if let Some(name) = document.frame_name(*f) {
                 entry["frameName"] = json!(name);
             }
             entry

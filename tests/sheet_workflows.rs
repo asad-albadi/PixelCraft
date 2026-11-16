@@ -22,6 +22,11 @@ fn frame_renames_roundtrip_without_changing_export_keys() {
         ]}),
     )
     .unwrap();
+    let (_, initial_atlas) = pack_atlas(
+        &[("walk.pixel".into(), doc.clone())],
+        &AtlasOptions::default(),
+    )
+    .unwrap();
     doc.remove_frame(0);
     doc.add_frame(0, false);
     let doc = decode_project(&encode_project(&doc).unwrap()).unwrap();
@@ -39,7 +44,13 @@ fn frame_renames_roundtrip_without_changing_export_keys() {
     assert_eq!(reexport["frames"], meta["frames"]);
 
     let (_, atlas) = pack_atlas(&[("walk.pixel".into(), doc)], &AtlasOptions::default()).unwrap();
-    assert_eq!(atlas["frames"][0]["filename"], "0/walk.pixel/0");
+    assert_eq!(atlas["frames"][0]["filename"], "0/walk.pixel/2");
+    assert_eq!(
+        atlas["frames"][0]["filename"],
+        initial_atlas["frames"][1]["filename"]
+    );
+    assert_eq!(atlas["frames"][0]["frameId"], 2);
+    assert_eq!(atlas["frames"][0]["sourceFrame"], 0);
     assert_eq!(atlas["frames"][0]["frameName"], "Wind-up");
     assert!(atlas["frames"][1].get("frameName").is_none());
     assert_eq!(atlas["frames"][2]["frameName"], "Follow through");
