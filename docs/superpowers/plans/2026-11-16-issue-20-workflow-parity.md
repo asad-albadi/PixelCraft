@@ -81,6 +81,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 33 in progress. The editor, CLI, and file MCP support independent sheet border, shape, and inner padding, with compatibility for existing padding settings. Grid-aware trim uses document grid origins and spacing, clips expanded bounds at the canvas, and works with split and slice samples. The regression checks scaled pixels, extrusion, metadata, invalid padding, and restored artwork. Formatting, strict Clippy, and 497 Windows all-target tests passed. Layout variants and explicit sheet dimensions remain open.
 
+- Item 33 complete. Sprite sheets support Rows, Columns, Horizontal, Vertical, and Packed layouts, with independently fixed native width and height. Layouts reuse spacing and support split and named-slice samples. The editor previews counts and available dimensions without compositing the sheet on the UI thread. Tests cover wrapping, fixed sizes at scale, uniform and variable packing, frame-order reimport, and batch rejection of an undersized canvas. Formatting, strict Clippy, and 498 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -124,7 +126,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **30. Export a standalone tileset atlas.** Export authored tilesets from selected or visible tilemap layers.
 - [x] **31. Expand batch export automation.** Compose multiple operations in one invocation, preview outputs without writing files, and support headless Lua with parameters and an interactive console.
 - [x] **32. Expand export filtering, splitting, and naming.** Include layer and group filters, per-layer and grid splits, named slices and frame ranges, and filename and tag templates.
-- [ ] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
+- [x] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
 - [ ] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
 - [ ] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
 - [ ] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.

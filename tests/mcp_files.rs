@@ -1285,6 +1285,108 @@ fn sprite_sheet_spacing_and_grid_trim_match_pixels_and_metadata() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn sheet_layouts_fit_fixed_canvases_and_keep_frame_order() {
+    let w = Workspace::new();
+    let root = w.project();
+    let input = root.join("art.pixel");
+    let mut sprite = Document::new(2, 1);
+    sprite.add_frame(0, false);
+    sprite.add_frame(1, false);
+    for f in 0..3 {
+        sprite.set_pixel(0, f, 0, [f as u8 + 10, 40, 220, 255]);
+    }
+    formats::save(&input, &sprite).unwrap();
+    for (name, options, size, positions) in [
+        (
+            "columns",
+            json!({"layout":"columns","rows":2,"width":5,"height":4,"scale":2,"padding":0}),
+            (10, 8),
+            [(0, 0), (0, 2), (4, 0)],
+        ),
+        (
+            "horizontal",
+            json!({"layout":"horizontal","columns":1,"padding":0}),
+            (6, 1),
+            [(0, 0), (2, 0), (4, 0)],
+        ),
+        (
+            "vertical",
+            json!({"layout":"vertical","padding":0}),
+            (2, 3),
+            [(0, 0), (0, 1), (0, 2)],
+        ),
+        (
+            "wrapped",
+            json!({"layout":"rows","columns":5,"width":4,"padding":0}),
+            (4, 2),
+            [(0, 0), (2, 0), (0, 1)],
+        ),
+    ] {
+        let output = format!("{name}.png");
+        let result = w.call(
+            "export",
+            json!({"input":"art.pixel","output":output,"format":"sheet","options":options}),
+        );
+        assert!(result["isError"].is_null(), "{result}");
+        let png = image::open(root.join(&output)).unwrap().into_rgba8();
+        assert_eq!(png.dimensions(), size, "{name}");
+        for (f, (x, y)) in positions.into_iter().enumerate() {
+            assert_eq!(
+                png.get_pixel(x, y).0,
+                [f as u8 + 10, 40, 220, 255],
+                "{name}"
+            );
+        }
+        let restored = formats::load(&root.join(&output).with_extension("json")).unwrap();
+        for f in 0..3 {
+            assert_eq!(restored.composite(f)[0], [f as u8 + 10, 40, 220, 255]);
+        }
+    }
+
+    let options = json!({"layout":"packed","width":2,"height":2,"padding":0,"trim":true});
+    let result = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"packed.png","format":"sheet","options":options}),
+    );
+    assert!(result["isError"].is_null(), "{result}");
+    let png = image::open(root.join("packed.png")).unwrap().into_rgba8();
+    assert_eq!(png.dimensions(), (2, 2));
+    let restored = formats::load(&root.join("packed.json")).unwrap();
+    for f in 0..3 {
+        assert_eq!(restored.composite(f), sprite.composite(f));
+    }
+    // The variable-size case exercises MaxRects and keeps three different
+    // trimmed shapes in timeline order even when their packed order differs.
+    let mut varied = Document::new(4, 3);
+    varied.add_frame(0, false);
+    varied.add_frame(1, false);
+    for (frame, [x, y]) in [[0, 0], [2, 1], [3, 2]].into_iter().enumerate() {
+        varied.set_pixel(0, frame, 0, [31, 42, 53, 255]);
+        varied.set_pixel(0, frame, y * 4 + x, [123, 80, 200, 255]);
+    }
+    formats::save(&input, &varied).unwrap();
+    let result = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"varied.png","format":"sheet",
+        "options":{"layout":"packed","width":9,"height":10,"trim":true,
+                   "border_padding":1,"shape_padding":1,"inner_padding":0}}),
+    );
+    assert!(result["isError"].is_null(), "{result}");
+    let restored = formats::load(&root.join("varied.json")).unwrap();
+    for f in 0..3 {
+        assert_eq!(restored.composite(f), varied.composite(f));
+    }
+    formats::save(&input, &sprite).unwrap();
+    let error = automation::operation("batch",&json!({"dry_run":true,"steps":[{
+        "operation":"export","arguments":{"input":input,"output":root.join("small.png"),"format":"sheet",
+          "options":{"layout":"vertical","width":2,"height":2,"padding":0}}
+    }]})).unwrap_err();
+    assert!(error.contains("fit"), "{error}");
+    assert!(!root.join("small.png").exists());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

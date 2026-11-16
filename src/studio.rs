@@ -1,7 +1,7 @@
 use super::*;
 use pixelcraft::{
     interchange,
-    workflows::{self, SheetOptions, Transform},
+    workflows::{self, SheetLayout, SheetOptions, Transform},
 };
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
@@ -1936,12 +1936,42 @@ impl PixelCraft {
             .default_width(390.)
             .show(ctx, |ui| {
                 self.export_scale_ui(ui);
+                let layout = &mut self.studio.sheet.layout;
+                egui::ComboBox::from_label("Layout")
+                    .selected_text(format!("{layout:?}"))
+                    .show_ui(ui, |ui| {
+                        for (kind, label) in [
+                            (SheetLayout::Rows, "Rows"),
+                            (SheetLayout::Columns, "Columns"),
+                            (SheetLayout::Horizontal, "Horizontal strip"),
+                            (SheetLayout::Vertical, "Vertical strip"),
+                            (SheetLayout::Packed, "Packed"),
+                        ] {
+                            ui.pc_selectable_value(layout, kind, label);
+                        }
+                    });
+                match *layout {
+                    SheetLayout::Rows => {
+                        ui.add(egui::DragValue::new(&mut self.studio.sheet.columns)
+                            .range(1..=65535).prefix("Maximum columns "));
+                    }
+                    SheetLayout::Columns => {
+                        ui.add(egui::DragValue::new(&mut self.studio.sheet.rows)
+                            .range(1..=65535).prefix("Maximum rows "));
+                    }
+                    _ => {}
+                }
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut self.studio.sheet.columns)
-                            .range(1..=256)
-                            .prefix("Columns "),
-                    );
+                    let options = &mut self.studio.sheet;
+                    for (label, setting) in [("Width ", &mut options.width), ("Height ", &mut options.height)] {
+                        let mut value = setting.unwrap_or(0);
+                        let input = egui::DragValue::new(&mut value).range(0..=MAX_DIMENSION).prefix(label)
+                            .custom_formatter(|value, _| if value == 0.0 { "Auto".to_owned() } else { format!("{value:.0}") })
+                            .custom_parser(|text| if text.eq_ignore_ascii_case("auto") { Some(0.0) } else { text.parse().ok() });
+                        if ui.add(input).on_hover_text("Canvas size before export scaling. Zero fits the samples automatically.").changed() {
+                            *setting = (value > 0).then_some(value);
+                        }
+                    }
                 });
                 ui.horizontal(|ui| {
                     let options = &mut self.studio.sheet;
@@ -2072,21 +2102,14 @@ impl PixelCraft {
                 });
                 let options = self.sprite_sheet_options();
                 let slice = self.studio.sheet_slice.as_deref();
-                let summary = if options.split_grid || options.split_layers {
-                    interchange::split_sheet_sample_count(&self.doc, &options, slice)
-                        .map(|count| format!("{count} samples"))
-                } else {
-                    interchange::pack_sheet_for_slice(&self.doc, &options, slice).map(
-                        |(image, metadata)| {
-                            format!(
-                                "{} × {} · {} frames",
-                                image.width(),
-                                image.height(),
-                                metadata["frames"].as_array().unwrap().len()
-                            )
-                        },
-                    )
-                };
+                let summary = interchange::sheet_export_summary(&self.doc, &options, slice)
+                    .map(|(count, dimensions)| {
+                        let count = format!("{count} samples");
+                        match dimensions {
+                            Some([w, h]) => format!("{w} × {h} · {count}"),
+                            None => count,
+                        }
+                    });
                 match summary {
                     Ok(summary) => {
                         ui.label(summary);
@@ -2928,13 +2951,13 @@ mod tests {
         editor.studio.sheet.split_layers = true;
         editor.studio.sheet.filename_template = "{slice}-{frame_id}".into();
         assert_eq!(
-            interchange::split_sheet_sample_count(
+            interchange::sheet_export_summary(
                 &editor.doc,
                 &editor.sprite_sheet_options(),
                 Some("Right")
             )
             .unwrap(),
-            1
+            (1, None)
         );
         let path = std::env::temp_dir().join(format!(
             "pixelcraft-gui-named-slice-sheet-{}.png",

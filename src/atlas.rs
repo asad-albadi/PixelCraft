@@ -70,6 +70,27 @@ fn maxrects(
     height: usize,
     pad: usize,
 ) -> Option<Vec<Rect>> {
+    let mut budget = usize::MAX;
+    maxrects_with_budget(sizes, width, height, pad, &mut budget)
+}
+
+pub(crate) fn pack_rect_positions(
+    sizes: &[(usize, usize)],
+    width: usize,
+    height: usize,
+    remaining: &mut usize,
+) -> Option<Vec<[usize; 2]>> {
+    maxrects_with_budget(sizes, width, height, 0, remaining)
+        .map(|rects| rects.into_iter().map(|rect| [rect.x, rect.y]).collect())
+}
+
+fn maxrects_with_budget(
+    sizes: &[(usize, usize)],
+    width: usize,
+    height: usize,
+    pad: usize,
+    remaining: &mut usize,
+) -> Option<Vec<Rect>> {
     let mut free = vec![Rect {
         x: pad,
         y: pad,
@@ -133,6 +154,12 @@ fn maxrects(
                 });
             }
         }
+        let comparisons = split.len().saturating_mul(split.len()).max(1);
+        if comparisons > *remaining {
+            *remaining = 0;
+            return None;
+        }
+        *remaining -= comparisons;
         free = split
             .iter()
             .enumerate()

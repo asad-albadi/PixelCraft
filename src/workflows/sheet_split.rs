@@ -1,4 +1,4 @@
-use super::{SheetOptions, SheetSpacing, pack_sheet_with_extrusion, scaled_image_dimensions};
+use super::{SheetOptions, SheetSpacing, pack_sheet_with_extrusion, uniform_sheet_area};
 use crate::model::*;
 use image::RgbaImage;
 use serde_json::{Value, json};
@@ -227,18 +227,8 @@ impl SplitLayout {
         {
             return Err("Split sprite sheet exceeds the animation metadata limit".into());
         }
-        let packed_columns = options.columns.clamp(1, samples);
         let spacing = SheetSpacing::new(options, extrude)?;
-        let (packed_width, packed_height) = (
-            spacing.extent(width, packed_columns),
-            spacing.extent(height, samples.div_ceil(packed_columns)),
-        );
-        if !options.trims() {
-            scaled_image_dimensions(packed_width, packed_height, options.scale)?;
-        }
-        let atlas_pixels = packed_width
-            .saturating_mul(packed_height)
-            .saturating_mul(options.scale.saturating_mul(options.scale));
+        let atlas_pixels = uniform_sheet_area([width, height], samples, options, spacing)?;
         let cells = (0..rows)
             .flat_map(|row| {
                 (0..columns).map(move |column| [start_x + column * width, start_y + row * height])

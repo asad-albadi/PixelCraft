@@ -6,7 +6,11 @@ use std::{borrow::Cow, ops::RangeInclusive};
 
 mod canvas_resize;
 mod rotsprite;
+mod sheet_layout;
 mod sheet_split;
+pub(crate) use sheet_layout::{
+    uniform_sheet_area, uniform_sheet_dimensions, validate_sheet_dimensions,
+};
 pub(crate) use sheet_split::{SheetCrop, pack_split_sheet, split_sheet_work};
 mod sprite_resize;
 mod sprite_transform;
@@ -414,11 +418,31 @@ pub(crate) fn filter_layers_for_export<'a>(
     }
     Ok(Cow::Owned(filtered))
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetLayout {
+    #[default]
+    #[serde(alias = "Rows")]
+    Rows,
+    #[serde(alias = "Columns")]
+    Columns,
+    #[serde(alias = "Horizontal")]
+    Horizontal,
+    #[serde(alias = "Vertical")]
+    Vertical,
+    #[serde(alias = "Packed", alias = "MaxRects", alias = "max_rects")]
+    Packed,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SheetOptions {
     pub scale: usize,
     pub columns: usize,
+    pub rows: usize,
+    pub layout: SheetLayout,
+    pub width: Option<usize>,
+    pub height: Option<usize>,
     pub padding: usize,
     pub border_padding: Option<usize>,
     pub shape_padding: Option<usize>,
@@ -439,6 +463,10 @@ impl Default for SheetOptions {
         Self {
             scale: 1,
             columns: 8,
+            rows: 8,
+            layout: SheetLayout::Rows,
+            width: None,
+            height: None,
             padding: 1,
             border_padding: None,
             shape_padding: None,
@@ -543,49 +571,35 @@ pub(crate) fn pack_sheet_with_extrusion(
     }
     let (first_frame, last_frame) = (*range.start(), *range.end());
     let count = last_frame - first_frame + 1;
-    let cols = o.columns.clamp(1, count);
-    let inset = spacing.inset();
     let trim = o.trims();
     if trim && count.saturating_mul(d.width * d.height) > MAX_DOCUMENT_PIXELS {
         return Err("Trimming this sprite sheet exceeds the pixel work limit; use a tag".into());
     }
-    let mut sprites = Vec::with_capacity(count);
-    let (mut x, mut y, mut row, mut width) = (spacing.border, spacing.border, 0, 0);
-    for (i, frame) in range.enumerate() {
-        if i > 0 && i % cols == 0 {
-            x = spacing.border;
-            y += row + spacing.gap;
-            row = 0;
-        }
-        let b = if trim {
-            visible_bounds(&d.composite(frame), d.width, d.height).map_or([0, 0, 1, 1], |bounds| {
-                if o.trim_by_grid {
-                    expand_bounds_to_grid(bounds, [d.width, d.height], d.drawing_grid())
-                } else {
-                    bounds
-                }
-            })
-        } else {
-            [0, 0, d.width, d.height]
-        };
-        sprites.push((frame, (x + inset, y + inset), b));
-        let right = x + b[2] + 2 * inset;
-        width = width.max(right + spacing.border);
-        x = right + spacing.gap;
-        row = row.max(b[3] + 2 * inset);
-        let height = y + row + spacing.border;
-        if width > MAX_DIMENSION
-            || height > MAX_DIMENSION
-            || width.saturating_mul(height) > MAX_PIXELS
-        {
-            return Err("Sprite sheet exceeds image limits; use more rows or a tag".into());
-        }
-        scaled_image_dimensions(width, height, o.scale)?;
-    }
-    let height = y + row + spacing.border;
+    let bounds: Vec<_> = range
+        .clone()
+        .map(|frame| {
+            if trim {
+                visible_bounds(&d.composite(frame), d.width, d.height).map_or(
+                    [0, 0, 1, 1],
+                    |bounds| {
+                        if o.trim_by_grid {
+                            expand_bounds_to_grid(bounds, [d.width, d.height], d.drawing_grid())
+                        } else {
+                            bounds
+                        }
+                    },
+                )
+            } else {
+                [0, 0, d.width, d.height]
+            }
+        })
+        .collect();
+    let sizes: Vec<_> = bounds.iter().map(|b| [b[2], b[3]]).collect();
+    let layout = sheet_layout::place_samples(&sizes, o, spacing)?;
+    let [width, height] = layout.dimensions;
     let mut im = RgbaImage::new(width as u32, height as u32);
     let mut frames = vec![];
-    for &(f, (x, y), b) in &sprites {
+    for ((f, b), [x, y]) in range.zip(bounds).zip(layout.positions) {
         let p = d.composite(f);
         for cy in 0..b[3] + 2 * extrude {
             let source_y = b[1] + cy.saturating_sub(extrude).min(b[3] - 1);
@@ -676,6 +690,9 @@ pub(crate) fn pack_sheet_with_extrusion(
     }
     if o.trim_by_grid {
         metadata["meta"]["trimByGrid"] = json!(true);
+    }
+    if o.layout != SheetLayout::Rows {
+        metadata["meta"]["layout"] = json!(o.layout);
     }
     if extrude > 0 {
         metadata["meta"]["extrude"] = json!(extrude * scale);

@@ -181,20 +181,40 @@ pub fn pack_sheet_for_slice(
     }
 }
 
-/// Count split samples without compositing pixels on the editor thread.
-pub fn split_sheet_sample_count(
+/// Preview sample counts and known output dimensions without compositing.
+pub fn sheet_export_summary(
     doc: &Document,
     options: &SheetOptions,
     slice: Option<&str>,
-) -> Result<usize, String> {
+) -> Result<(usize, Option<[usize; 2]>), String> {
     doc.validate()?;
+    validate_sheet_dimensions(options)?;
+    let spacing = SheetSpacing::new(options, 0)?;
     let filtered = filter_layers_for_export(doc, options.layers.as_deref())?;
     let frames = options.frames_for(&filtered)?;
+    let dimensions = options
+        .width
+        .zip(options.height)
+        .map(|(w, h)| [w * options.scale, h * options.scale]);
     if let Some(slice) = slice {
         let plans = plan_slice_sheets(&filtered, options, 0, Some(slice))?;
-        Ok(plans[0].samples)
+        Ok((plans[0].samples, dimensions))
+    } else if options.split_layers || options.split_grid {
+        let count = split_sheet_work(&filtered, options, 0, &frames, None)?.samples;
+        Ok((count, dimensions))
     } else {
-        Ok(split_sheet_work(&filtered, options, 0, &frames, None)?.samples)
+        let count = frames.count();
+        let dimensions = if options.trims() {
+            dimensions
+        } else {
+            Some(uniform_sheet_dimensions(
+                [doc.width, doc.height],
+                count,
+                options,
+                spacing,
+            )?)
+        };
+        Ok((count, dimensions))
     }
 }
 
@@ -317,23 +337,8 @@ pub(crate) fn plan_slice_sheets<'a>(
         let atlas_pixels = if let Some(split) = &split {
             split.atlas_pixels
         } else {
-            let columns = o.columns.clamp(1, count);
-            let rows = count.div_ceil(columns);
-            let axis =
-                |cell: usize, cells: usize| spacing.extent(cell, cells).saturating_mul(o.scale);
-            let (atlas_width, atlas_height) = (axis(width, columns), axis(height, rows));
-            let atlas_pixels = atlas_width.saturating_mul(atlas_height);
-            if !o.trims()
-                && (atlas_width > MAX_DIMENSION
-                    || atlas_height > MAX_DIMENSION
-                    || atlas_pixels > MAX_PIXELS)
-            {
-                return Err(format!(
-                    "Slice {:?} sheet exceeds the image limits",
-                    slice.name
-                ));
-            }
-            atlas_pixels
+            uniform_sheet_area([width, height], count, o, spacing)
+                .map_err(|error| format!("Slice {:?}: {error}", slice.name))?
         };
         let groups = split.as_ref().map_or(1, |work| work.groups);
         // A trimmed sheet may be smaller, but can never exceed the packer's output limit.
@@ -612,15 +617,34 @@ impl SliceSheet<'_> {
     }
 }
 
-pub(crate) fn preflight_sheet_templates(
+pub(crate) fn preflight_sheet_export(
     path: &Path,
     doc: &Document,
     options: &SheetOptions,
     extrude: usize,
     slice: Option<&SliceSheet<'_>>,
 ) -> Result<(), String> {
-    if options.filename_template.trim().is_empty() && options.tag_template.trim().is_empty() {
-        return Ok(());
+    let templates =
+        !options.filename_template.trim().is_empty() || !options.tag_template.trim().is_empty();
+    let custom_layout =
+        options.width.is_some() || options.height.is_some() || options.layout != SheetLayout::Rows;
+    if !templates {
+        if !custom_layout {
+            return Ok(());
+        }
+        if !options.trims() {
+            if slice.is_none() && !options.split_layers && !options.split_grid {
+                let spacing = SheetSpacing::new(options, extrude)?;
+                uniform_sheet_area(
+                    [doc.width, doc.height],
+                    options.frames_for(doc)?.count(),
+                    options,
+                    spacing,
+                )?;
+            }
+            // Split and slice planners checked their uniform sample dimensions.
+            return Ok(());
+        }
     }
     let (_, mut metadata) = if let Some(slice) = slice {
         slice.pack(doc, options, extrude)?

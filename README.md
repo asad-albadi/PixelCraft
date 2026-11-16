@@ -311,6 +311,8 @@ In **Export names**, use a frame filename template to name the sprite entries an
 
 Sprite sheets can set **Border**, **Shape**, and **Inner** padding independently. Border is the outer atlas margin, shape is the gap between samples, and inner adds transparent space around each sample and any extruded edge. The metadata rectangles describe the sprite pixels so sheets still reimport at their original frame dimensions. In CLI and file MCP, use `border_padding`, `shape_padding`, and `inner_padding` in the sheet options. The legacy `padding` value supplies both border and shape when their individual values are omitted. **Align trim to drawing grid** (`trim_by_grid`) extends trimmed bounds to the configured grid lines and clips them to the canvas.
 
+Choose **Rows**, **Columns**, **Horizontal strip**, **Vertical strip**, or **Packed**. Rows and columns can wrap at the configured maximum count or sheet edge. Packed arranges samples without rotating them. Set width, height, or both to reserve an exact canvas in pixels before export scaling. In the sheet options, use `layout` with `rows`, `columns`, `horizontal`, `vertical`, or `packed`. Set `width` and `height` only for the axes you want to fix.
+
 For one sheet per authored slice, pass an output directory and enable `split_slices`. Each sheet follows its slice’s keyed bounds and preserves the included frame timing. Add `extrude` to duplicate each frame’s edge pixels before scaling. The border sits outside the sprite rectangle in the JSON.
 
 ```bash
