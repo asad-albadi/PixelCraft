@@ -665,7 +665,10 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
         #[cfg(debug_assertions)]
         let candidates = [
             installed,
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/webp/libwebpdemux.dll"),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("runtime")
+                .join("webp")
+                .join("libwebpdemux.dll"),
         ];
         #[cfg(not(debug_assertions))]
         let candidates = [installed];
@@ -682,7 +685,11 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
             } {
                 Ok(library) => Some(library),
                 Err(cause) => {
-                    error = format!("{} ({cause:?})", path.display());
+                    error = format!(
+                        "{} (file exists: {}, {cause:?})",
+                        path.display(),
+                        path.is_file()
+                    );
                     None
                 }
             }
