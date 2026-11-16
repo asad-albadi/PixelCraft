@@ -426,6 +426,8 @@ pub struct SheetOptions {
     pub layers: Option<Vec<usize>>,
     pub split_layers: bool,
     pub split_grid: bool,
+    pub filename_template: String,
+    pub tag_template: String,
     pub preset: String,
 }
 impl Default for SheetOptions {
@@ -440,6 +442,8 @@ impl Default for SheetOptions {
             layers: None,
             split_layers: false,
             split_grid: false,
+            filename_template: String::new(),
+            tag_template: String::new(),
             preset: "Generic".into(),
         }
     }

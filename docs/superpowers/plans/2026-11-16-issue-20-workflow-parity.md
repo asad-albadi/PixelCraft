@@ -77,6 +77,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 32 in progress. The editor, CLI, and file MCP pack isolated raster/tilemap layers and complete drawing-grid cells as independent animated samples. Filters and named slice crops compose with both splits. Export metadata identifies each original layer, grid region, frame, and timing. Default split names use the source layer index and grid cell coordinates. Dry-run validation and crop budgets cover split layout limits. Tests cover pixels, parent opacity, grouped tag ranges, repeatable Unity importer IDs after a redraw, invalid batch plans, and the editor worker. Formatting, strict Clippy, and 495 Windows all-target tests passed. Filename and tag templates remain open.
 
+- Item 32 complete. Sprite-sheet filename and animation tag templates work in the editor, CLI, and file MCP, including layer/grid samples and named slice crops. Batch dry runs reject invalid or duplicate generated names. Tests cover numbered and stable frame tokens, nested tags, Godot resources, editor output, and preserved Unity importer identities for quoted names after redraw. Formatting, strict Clippy, and 496 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -119,7 +121,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **29. Import object-valued JSON slice geometry.** Accept named fields in slice bounds, center, and pivot. The Windows CLI currently rejects a valid sheet with that geometry.
 - [x] **30. Export a standalone tileset atlas.** Export authored tilesets from selected or visible tilemap layers.
 - [x] **31. Expand batch export automation.** Compose multiple operations in one invocation, preview outputs without writing files, and support headless Lua with parameters and an interactive console.
-- [ ] **32. Expand export filtering, splitting, and naming.** Include layer and group filters, per-layer and grid splits, named slices and frame ranges, and filename and tag templates.
+- [x] **32. Expand export filtering, splitting, and naming.** Include layer and group filters, per-layer and grid splits, named slices and frame ranges, and filename and tag templates.
 - [ ] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
 - [ ] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
 - [ ] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.

@@ -2034,6 +2034,19 @@ impl PixelCraft {
                     "Split layers into samples",
                 );
                 ui.pc_checkbox(&mut self.studio.sheet.split_grid, "Split by drawing grid");
+                ui.collapsing("Export names", |ui| {
+                    ui.label("Frame filename template");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.studio.sheet.filename_template)
+                            .hint_text("{sample}"),
+                    );
+                    ui.label("Animation tag template");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.studio.sheet.tag_template)
+                            .hint_text("{tag}"),
+                    );
+                    ui.small("Leave the fields blank to use the generated names.");
+                });
                 let options = self.sprite_sheet_options();
                 let slice = self.studio.sheet_slice.as_deref();
                 let summary = if options.split_grid || options.split_layers {
@@ -2890,6 +2903,7 @@ mod tests {
         editor.studio.sheet_slice = Some("Right".into());
         editor.studio.sheet.padding = 0;
         editor.studio.sheet.split_layers = true;
+        editor.studio.sheet.filename_template = "{slice}-{frame_id}".into();
         assert_eq!(
             interchange::split_sheet_sample_count(
                 &editor.doc,
@@ -2914,6 +2928,9 @@ mod tests {
         let image = image::open(&path).unwrap().into_rgba8();
         assert_eq!(image.dimensions(), (1, 1));
         assert_eq!(image.get_pixel(0, 0).0, ink);
+        let meta: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path.with_extension("json")).unwrap()).unwrap();
+        assert_eq!(meta["frames"][0]["filename"], "Right-0");
         std::fs::remove_file(path.with_extension("json")).unwrap();
         std::fs::remove_file(path).unwrap();
     }

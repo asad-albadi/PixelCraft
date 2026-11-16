@@ -3,11 +3,13 @@ use crate::{model::*, workflows::*};
 use image::AnimationDecoder;
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     io::{BufRead, BufReader, Cursor, ErrorKind, Read},
     path::{Path, PathBuf},
 };
 
+mod sheet_templates;
 mod tileset_atlas;
 pub use tileset_atlas::{TilesetAtlasEntry, TilesetAtlasLayout, TilesetAtlasScope, tileset_atlas};
 pub(crate) use tileset_atlas::{plan_tileset_atlas, render_tileset_atlas};
@@ -158,6 +160,7 @@ pub(crate) fn export_sheet_extruded(
         path,
         previous_path,
         o,
+        d,
         pack_sheet_with_extrusion(d, o, extrude)?,
     )
 }
@@ -205,6 +208,7 @@ pub fn export_sheet_for_slice(
         path,
         path,
         options,
+        doc,
         pack_sheet_for_slice(doc, options, slice)?,
     )
 }
@@ -492,7 +496,7 @@ impl SliceSheet<'_> {
         o: &SheetOptions,
         extrude: usize,
     ) -> Result<(), String> {
-        write_packed_sheet(path, previous_path, o, self.pack(d, o, extrude)?)
+        write_packed_sheet(path, previous_path, o, d, self.pack(d, o, extrude)?)
     }
 
     fn pack(
@@ -603,20 +607,41 @@ impl SliceSheet<'_> {
         {
             frame["sourceFrame"] = json!(self.first + n);
         }
+        metadata["meta"]["sourceSlice"] = json!(self.slice.name);
         Ok((image, metadata))
     }
+}
+
+pub(crate) fn preflight_sheet_templates(
+    path: &Path,
+    doc: &Document,
+    options: &SheetOptions,
+    extrude: usize,
+    slice: Option<&SliceSheet<'_>>,
+) -> Result<(), String> {
+    if options.filename_template.trim().is_empty() && options.tag_template.trim().is_empty() {
+        return Ok(());
+    }
+    let (_, mut metadata) = if let Some(slice) = slice {
+        slice.pack(doc, options, extrude)?
+    } else {
+        pack_sheet_with_extrusion(doc, options, extrude)?
+    };
+    sheet_templates::apply(doc, options, path, &mut metadata)
 }
 
 fn write_packed_sheet(
     path: &Path,
     previous_path: &Path,
     o: &SheetOptions,
+    doc: &Document,
     (im, mut meta): (image::RgbaImage, Value),
 ) -> Result<(), String> {
     let name = path
         .file_name()
         .ok_or("Invalid filename")?
         .to_string_lossy();
+    sheet_templates::apply(doc, o, previous_path, &mut meta)?;
     meta["meta"]["image"] = json!(name);
     if o.preset == "Unity" {
         let mut names = std::collections::HashSet::new();
@@ -833,9 +858,39 @@ fn unity_guid(value: &str) -> bool {
     value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+fn decode_unity_name(value: &str) -> Cow<'_, str> {
+    let value = value.trim();
+    if value.starts_with('"')
+        && let Ok(decoded) = serde_json::from_str::<String>(value)
+    {
+        return Cow::Owned(decoded);
+    }
+    if let Some(quoted) = value
+        .strip_prefix(char::from(39))
+        .and_then(|v| v.strip_suffix(char::from(39)))
+    {
+        return Cow::Owned(quoted.replace("''", "'"));
+    }
+    Cow::Borrowed(value)
+}
+
+fn encode_unity_name(name: &str) -> Cow<'_, str> {
+    if name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        && !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "y" | "yes" | "n" | "no" | "true" | "false" | "on" | "off" | "null"
+        )
+    {
+        Cow::Borrowed(name)
+    } else {
+        Cow::Owned(serde_json::to_string(name).unwrap())
+    }
+}
+
 fn unity_sprite_ids(
     previous: &str,
-) -> Result<std::collections::HashMap<&str, UnitySpriteIdentity<'_>>, String> {
+) -> Result<std::collections::HashMap<Cow<'_, str>, UnitySpriteIdentity<'_>>, String> {
     let mut sprites = std::collections::HashMap::<_, UnitySpriteIdentity<'_>>::new();
     let mut current = None;
     let mut in_sprites = false;
@@ -857,27 +912,24 @@ fn unity_sprite_ids(
         }
         if in_sprites {
             if let Some(name) = line.strip_prefix("      name: ") {
-                current = Some(name.trim().trim_matches(['\'', '"']));
-            } else if let Some(name) = current {
+                current = Some(decode_unity_name(name));
+            } else if let Some(name) = &current {
                 if let Some(id) = line.strip_prefix("      internalID: ") {
-                    sprites.entry(name).or_default().file_id =
+                    sprites.entry(name.clone()).or_default().file_id =
                         id.trim().parse().ok().filter(|id| *id != 0);
                 }
                 if let Some(id) = line.strip_prefix("      spriteID: ").map(str::trim)
                     && unity_guid(id)
                 {
-                    sprites.entry(name).or_default().sprite_id = Some(id);
+                    sprites.entry(name.clone()).or_default().sprite_id = Some(id);
                 }
             }
         } else if in_table
-            && let Some((name, id)) = line.strip_prefix("      ").and_then(|v| v.split_once(':'))
+            && let Some((name, id)) = line.strip_prefix("      ").and_then(|v| v.rsplit_once(':'))
             && let Ok(id) = id.trim().parse::<i64>()
             && id != 0
         {
-            sprites
-                .entry(name.trim().trim_matches(['\'', '"']))
-                .or_default()
-                .file_id = Some(id);
+            sprites.entry(decode_unity_name(name)).or_default().file_id = Some(id);
         }
         if sprites.len() > u16::MAX as usize {
             return Err("Previous Unity metadata exceeds the sprite count limit".into());
@@ -944,11 +996,13 @@ fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> Result<String
     let mut s =
         format!("fileFormatVersion: 2\nguid: {guid}\nTextureImporter:\n  internalIDToNameTable:\n");
     for (name, id, _) in &ids {
+        let name = encode_unity_name(name);
         s += &format!("  - first:\n      213: {id}\n    second: {name}\n");
     }
     s += "  serializedVersion: 12\n  mipmaps:\n    enableMipMap: 0\n  isReadable: 0\n  filterMode: 0\n  textureSettings:\n    serializedVersion: 2\n    filterMode: 0\n    aniso: 1\n    mipBias: 0\n    wrapU: 1\n    wrapV: 1\n  maxTextureSize: 16384\n  textureType: 8\n  spriteMode: 2\n  spritePixelsToUnits: 100\n  alphaIsTransparency: 1\n  textureCompression: 0\n  spriteSheet:\n    serializedVersion: 2\n    sprites:\n";
     for (frame, (name, id, sprite_id)) in frames.iter().zip(&ids) {
         let r = &frame["frame"];
+        let name = encode_unity_name(name);
         s += &format!(
             "    - serializedVersion: 2\n      name: {name}\n      rect:\n        serializedVersion: 2\n        x: {}\n        y: {}\n        width: {}\n        height: {}\n      alignment: 0\n      pivot: {{x: 0.5, y: 0.5}}\n      border: {{x: 0, y: 0, z: 0, w: 0}}\n      spriteID: {sprite_id}\n      internalID: {id}\n",
             r["x"],
@@ -959,6 +1013,7 @@ fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> Result<String
     }
     s += "    nameFileIdTable:\n";
     for (name, id, _) in ids {
+        let name = encode_unity_name(name);
         s += &format!("      {name}: {id}\n");
     }
     Ok(s)

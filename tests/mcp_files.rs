@@ -1072,6 +1072,129 @@ fn sheet_splits_layers_and_grid_cells_into_independent_animation_samples() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn sheet_templates_keep_names_and_unity_reimport_ids_stable() {
+    use pixelcraft::model::FrameTag;
+    let w = Workspace::new();
+    let root = w.project();
+    let source = root.join("art.pixel");
+    let mut sprite = Document::new(1, 1);
+    sprite.add_frame(0, false);
+    sprite.durations = vec![90, 110];
+    sprite.set_frame_name(1, r#"Pose "B": #2"#).unwrap();
+    sprite.tags.push(FrameTag {
+        name: "Walk".into(),
+        from: 0,
+        to: 1,
+        direction: 0,
+        repeat: 0,
+        color: [0; 3],
+    });
+    formats::save(&source, &sprite).unwrap();
+    let export = || {
+        w.call(
+            "export",
+            json!({"input":"art.pixel","output":"names.png","format":"sheet","overwrite":true,
+        "options":{"preset":"Unity","filename_template":r#"{title}/{tag}/{frame001}: {frame_name}"#,
+                   "tag_template":"{tag}_{from}_{to}"}}),
+        )
+    };
+    let reply = export();
+    assert!(reply["isError"].is_null(), "{reply}");
+    let read =
+        || serde_json::from_slice::<Value>(&fs::read(root.join("names.json")).unwrap()).unwrap();
+    let metadata = read();
+    assert_eq!(
+        metadata["frames"][1]["filename"],
+        r#"names/Walk/002: Pose "B": #2"#
+    );
+    assert_eq!(metadata["meta"]["frameTags"][0]["name"], "Walk_0_1");
+    let sidecar = root.join("names.png.meta");
+    let previous = fs::read_to_string(&sidecar).unwrap();
+    let name = serde_json::to_string(metadata["frames"][1]["filename"].as_str().unwrap()).unwrap();
+    assert!(previous.contains(&format!("      name: {name}\n")));
+    assert!(previous.contains(&format!("      {name}: ")));
+    // A hand-authored importer ID proves we read the quoted name back, even
+    // when the default hashed GUID would have coincidentally matched.
+    let prior_id = format!("      {name}: 21300002");
+    assert!(previous.contains(&prior_id));
+    fs::write(
+        &sidecar,
+        previous.replace(&prior_id, &format!("      {name}: 4123")),
+    )
+    .unwrap();
+    sprite.set_pixel(0, 1, 0, [55, 120, 230, 255]);
+    formats::save(&source, &sprite).unwrap();
+    let reply = export();
+    assert!(reply["isError"].is_null(), "{reply}");
+    assert_eq!(
+        read()["frames"][1]["filename"],
+        metadata["frames"][1]["filename"]
+    );
+    assert!(
+        fs::read_to_string(&sidecar)
+            .unwrap()
+            .contains(&format!("      {name}: 4123"))
+    );
+    for (template, message) in [("same", "Duplicate"), ("{unknown}", "Unknown")] {
+        let reply = w.call(
+            "export",
+            json!({"input":"art.pixel","output":"bad.png","format":"sheet",
+          "options":{"filename_template":template}}),
+        );
+        assert_error(&reply, message);
+        assert!(!root.join("bad.png").exists());
+    }
+    let dry_run = automation::operation(
+        "batch",
+        &json!({
+            "dry_run":true,"steps":[{"operation":"export","arguments":{
+                "input":source,"output":root.join("planned.png"),"format":"sheet",
+                "options":{"filename_template":"same"}
+            }}]
+        }),
+    )
+    .unwrap_err();
+    assert!(
+        dry_run.contains("Duplicate exported frame name"),
+        "{dry_run}"
+    );
+    assert!(!root.join("planned.png").exists());
+
+    let mut sprite = formats::load(&source).unwrap();
+    sprite.add_layer();
+    sprite.layers[1].name = "Ink".into();
+    sprite.tags.push(FrameTag {
+        name: "Loop".into(),
+        from: 1,
+        to: 1,
+        direction: 0,
+        repeat: 0,
+        color: [0; 3],
+    });
+    formats::save(&source, &sprite).unwrap();
+    let reply = w.call(
+        "export",
+        json!({
+            "input":"art.pixel","output":"templated-splits.png","format":"sheet","layers":[1],
+            "options":{"preset":"Godot","split_layers":true,
+               "filename_template":"{layer}_{innertag}_{outertag}_{tagframe:02}_{frame_id}",
+               "tag_template":"{layer}_{tag}_{from}_{to}"}
+        }),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(root.join("templated-splits.json")).unwrap()).unwrap();
+    assert_eq!(metadata["frames"][1]["filename"], "Ink_Loop_Walk_00_1");
+    assert_eq!(metadata["meta"]["frameTags"][1]["name"], "Ink_Loop_1_1");
+    assert!(
+        fs::read_to_string(root.join("templated-splits.tres"))
+            .unwrap()
+            .contains("Ink_Loop_1_1")
+    );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(
