@@ -30,6 +30,7 @@ pub(super) struct Studio {
     pub pressure: bool,
     pub force: f32,
     pub sheet: SheetOptions,
+    sheet_use_timeline_layers: bool,
     pub polygon: Vec<(i32, i32)>,
     pub mask: Option<Vec<bool>>,
     pub move_mask: Option<Vec<bool>>,
@@ -152,6 +153,7 @@ impl Default for Studio {
             pressure: false,
             force: 1.,
             sheet: SheetOptions::default(),
+            sheet_use_timeline_layers: false,
             polygon: vec![],
             mask: None,
             move_mask: None,
@@ -1887,14 +1889,149 @@ impl PixelCraft {
                 });
             self.studio.open &= open;
         }
-        if self.studio.sheet_open {
-            let mut open = true;
-            egui::Window::new("Export sprite sheet").open(&mut open).default_width(390.).show(ctx,|ui|{ui.label("Pack frames into rows with transparent padding.");self.export_scale_ui(ui);ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.studio.sheet.columns).range(1..=256).prefix("Columns "));ui.add(egui::DragValue::new(&mut self.studio.sheet.padding).range(0..=256).prefix("Padding "));});ui.pc_checkbox(&mut self.studio.sheet.trim,"Trim transparent borders (compact packing)");egui::ComboBox::from_label("Frames").selected_text(self.studio.sheet.tag.and_then(|i|self.doc.tags.get(i)).map_or("All frames and tags",|t|t.name.as_str())).show_ui(ui,|ui|{ui.pc_selectable_value(&mut self.studio.sheet.tag,None,"All frames and tags");for(i,t)in self.doc.tags.iter().enumerate(){ui.pc_selectable_value(&mut self.studio.sheet.tag,Some(i),&t.name);}});egui::ComboBox::from_label("Engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.small("PNG + JSON with frame positions, durations and tags. Godot adds SpriteFrames (.tres); Unity adds multiple-sprite importer (.png.meta). Place the Godot files together at res://.");if let Ok((im,meta))=workflows::pack_sheet(&self.doc,&self.studio.sheet){ui.label(format!("{} × {} · {} frames",im.width(),im.height(),meta["frames"].as_array().unwrap().len()));}
-if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG sheet",&["png"]).set_file_name("sprite.png").save_file(){self.status=match interchange::export_sheet(&path,&self.doc,&self.studio.sheet){Ok(())=>"Exported sprite sheet and metadata".into(),Err(e)=>format!("Export failed: {e}")};}ui.small("To import an atlas, open its JSON metadata. Use File → Import PNG sequence for numbered frames.");});
-            self.studio.sheet_open = open;
-        }
+        self.sprite_sheet_dialog(ctx);
         self.tileset_browser(ctx);
         self.tileset_atlas_dialog(ctx);
+    }
+
+    fn sprite_sheet_options(&self) -> SheetOptions {
+        let mut options = self.studio.sheet.clone();
+        if self.studio.sheet_use_timeline_layers {
+            options.layers = Some(if self.timeline_layers.selected.is_empty() {
+                vec![self.layer]
+            } else {
+                self.timeline_layers.selected.clone()
+            });
+        }
+        options
+    }
+
+    fn start_sprite_sheet_export(&mut self, path: PathBuf) {
+        if self.export_job.is_some() {
+            self.status = "Wait for the current export to finish".into();
+            return;
+        }
+        let doc = self.doc.clone();
+        let options = self.sprite_sheet_options();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.export_job = Some(rx);
+        self.status = "Exporting sprite sheet…".into();
+        std::thread::spawn(move || {
+            let result = interchange::export_sheet(&path, &doc, &options);
+            let _ = tx.send((path, result));
+        });
+    }
+
+    fn sprite_sheet_dialog(&mut self, ctx: &egui::Context) {
+        if !self.studio.sheet_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Export sprite sheet")
+            .open(&mut open)
+            .default_width(390.)
+            .show(ctx, |ui| {
+                self.export_scale_ui(ui);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.studio.sheet.columns)
+                            .range(1..=256)
+                            .prefix("Columns "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut self.studio.sheet.padding)
+                            .range(0..=256)
+                            .prefix("Padding "),
+                    );
+                });
+                ui.pc_checkbox(&mut self.studio.sheet.trim, "Trim transparent borders");
+                let tag = &mut self.studio.sheet.tag;
+                if tag.is_some_and(|index| index >= self.doc.tags.len()) {
+                    *tag = None;
+                }
+                egui::ComboBox::from_label("Tag")
+                    .selected_text(
+                        tag.and_then(|i| self.doc.tags.get(i))
+                            .map_or("All tags", |tag| tag.name.as_str()),
+                    )
+                    .show_ui(ui, |ui| {
+                        ui.pc_selectable_value(tag, None, "All tags");
+                        for (index, value) in self.doc.tags.iter().enumerate() {
+                            ui.pc_selectable_value(tag, Some(index), &value.name);
+                        }
+                    });
+
+                let max = self.doc.durations.len();
+                let mut limit_frames = self.studio.sheet.frame_range.is_some();
+                if ui
+                    .pc_checkbox(&mut limit_frames, "Limit to frame range")
+                    .changed()
+                {
+                    self.studio.sheet.frame_range = limit_frames.then_some([0, max - 1]);
+                }
+                if let Some([start, end]) = &mut self.studio.sheet.frame_range {
+                    let mut first = start.saturating_add(1).clamp(1, max);
+                    let mut last = end.saturating_add(1).clamp(first, max);
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut first)
+                                .range(1..=last)
+                                .prefix("First "),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut last)
+                                .range(first..=max)
+                                .prefix("Last "),
+                        );
+                    });
+                    *start = first - 1;
+                    *end = last - 1;
+                }
+                ui.pc_checkbox(
+                    &mut self.studio.sheet_use_timeline_layers,
+                    "Only selected timeline layers and groups",
+                );
+                if self.studio.sheet_use_timeline_layers {
+                    let count = self.timeline_layers.selected.len().max(1);
+                    ui.small(format!(
+                        "{count} selected · groups include visible descendants"
+                    ));
+                }
+                egui::ComboBox::from_label("Engine preset")
+                    .selected_text(&self.studio.sheet.preset)
+                    .show_ui(ui, |ui| {
+                        for preset in ["Generic", "Godot", "Unity"] {
+                            ui.pc_selectable_value(
+                                &mut self.studio.sheet.preset,
+                                preset.into(),
+                                preset,
+                            );
+                        }
+                    });
+                let options = self.sprite_sheet_options();
+                match workflows::pack_sheet(&self.doc, &options) {
+                    Ok((image, metadata)) => {
+                        ui.label(format!(
+                            "{} × {} · {} frames",
+                            image.width(),
+                            image.height(),
+                            metadata["frames"].as_array().unwrap().len()
+                        ));
+                        if ui.pc_button("Export PNG + metadata…").clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .add_filter("PNG sheet", &["png"])
+                                .set_file_name("sprite.png")
+                                .save_file()
+                        {
+                            self.start_sprite_sheet_export(path);
+                        }
+                    }
+                    Err(error) => {
+                        ui.label(error);
+                    }
+                }
+            });
+        self.studio.sheet_open = open;
     }
 
     pub(super) fn stroke_line(&mut self, a: (i32, i32), b: (i32, i32), color: Pixel) {
@@ -2649,6 +2786,50 @@ mod tests {
         assert_eq!(image.dimensions(), (1, 1));
         assert_eq!(image.get_pixel(0, 0).0, hidden);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sprite_sheet_worker_exports_timeline_groups_and_frame_range() {
+        use std::time::Duration;
+
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.doc = Document::new(2, 1);
+        let group = editor.doc.add_group("Actor").unwrap();
+        editor.doc.add_layer();
+        let child = editor.doc.layers.len() - 1;
+        editor.doc.layers[child].parent = Some(group);
+        editor.doc.add_frame(0, false);
+        let background = [220, 90, 40, 255];
+        let foreground = [40, 90, 220, 255];
+        editor.doc.set_pixel(0, 1, 0, background);
+        editor.doc.set_pixel(child, 1, 1, foreground);
+        editor.studio.sheet_use_timeline_layers = true;
+        editor.timeline_layers.selected = vec![group];
+        editor.studio.sheet.frame_range = Some([1, 1]);
+        editor.studio.sheet.padding = 0;
+
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-gui-filtered-sheet-{}.png",
+            std::process::id()
+        ));
+        editor.start_sprite_sheet_export(path.clone());
+        let (output, result) = editor
+            .export_job
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        result.unwrap();
+        assert_eq!(output, path);
+        let image = image::open(&path).unwrap().into_rgba8();
+        assert_eq!(image.dimensions(), (2, 1));
+        assert_eq!(image.get_pixel(0, 0).0, CLEAR);
+        assert_eq!(image.get_pixel(1, 0).0, foreground);
+        assert_eq!(editor.doc.composite(1)[0], background);
+        let metadata = path.with_extension("json");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(metadata).unwrap();
     }
 
     #[test]

@@ -179,13 +179,8 @@ pub(crate) fn plan_slice_sheets<'a>(
     if o.scale == 0 || o.scale > MAX_DIMENSION || extrude > 256 {
         return Err("Invalid split slice sheet scale or extrusion".into());
     }
-    let (first, last) = match o.tag {
-        Some(index) => {
-            let tag = d.tags.get(index).ok_or("Unknown tag")?;
-            (tag.from, tag.to)
-        }
-        None => (0, d.durations.len() - 1),
-    };
+    let frames = o.frames_for(d)?;
+    let (first, last) = (*frames.start(), *frames.end());
     let mut plans = Vec::new();
     let mut source_budget = MAX_DOCUMENT_PIXELS;
     let mut crop_budget = MAX_DOCUMENT_PIXELS;
@@ -465,6 +460,8 @@ impl SliceSheet<'_> {
         });
         let mut options = o.clone();
         options.tag = None;
+        options.frame_range = None;
+        options.layers = None;
         let (image, mut metadata) = pack_sheet_with_extrusion(&cropped, &options, extrude)?;
         for (n, frame) in metadata["frames"]
             .as_array_mut()

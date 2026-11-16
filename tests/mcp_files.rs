@@ -743,6 +743,115 @@ fn restricted_split_slice_exports_update_all_unity_sidecars() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn sheet_filters_groups_and_frame_ranges_in_cli_and_mcp() {
+    use pixelcraft::model::{CLEAR, FrameTag, SliceKey, SpriteSlice};
+
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let mut sprite = Document::new(3, 1);
+    let group = sprite.add_group("Characters").unwrap();
+    sprite.add_layer();
+    let actor = sprite.layers.len() - 1;
+    sprite.layers[actor].parent = Some(group);
+    sprite.add_layer();
+    let hidden = sprite.layers.len() - 1;
+    sprite.layers[hidden].parent = Some(group);
+    sprite.layers[hidden].visible = false;
+    sprite.layers[group].opacity = 128;
+    sprite.add_frame(0, false);
+    sprite.add_frame(1, false);
+    sprite.durations = vec![80, 120, 160];
+    sprite.set_frame_name(2, "jump apex").unwrap();
+    sprite.set_pixel(0, 2, 0, [230, 90, 10, 255]);
+    sprite.set_pixel(actor, 2, 1, [10, 80, 230, 255]);
+    sprite.set_pixel(hidden, 2, 2, [60, 180, 40, 255]);
+    sprite.tags.push(FrameTag {
+        name: "Jump".into(),
+        from: 1,
+        to: 2,
+        repeat: 3,
+        direction: 2,
+        color: [10, 20, 30],
+    });
+    sprite.slices.push(SpriteSlice {
+        name: "Actor".into(),
+        keys: vec![SliceKey {
+            frame: 0,
+            bounds: [1, 0, 2, 1],
+            center: None,
+            pivot: None,
+        }],
+    });
+    let input = root.join("art.pixel");
+    formats::save(&input, &sprite).unwrap();
+
+    let output = root.join("filtered.png");
+    automation::run_cli(&[
+        "export".into(),
+        json!({"input":input,"output":output,"format":"sheet","layers":[group],
+            "options":{"padding":0,"tag":0,"frame_range":[2,2]}})
+        .to_string(),
+    ])
+    .unwrap();
+    let image = image::open(&output).unwrap().into_rgba8();
+    assert_eq!(image.dimensions(), (3, 1));
+    assert_eq!(
+        image.pixels().map(|p| p.0).collect::<Vec<_>>(),
+        vec![CLEAR, [10, 80, 230, 128], CLEAR]
+    );
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(output.with_extension("json")).unwrap()).unwrap();
+    assert_eq!(metadata["frames"][0]["frameId"], sprite.frame_export_id(2));
+    assert_eq!(metadata["frames"][0]["frameName"], "jump apex");
+    assert_eq!(metadata["frames"][0]["duration"], 160);
+    assert_eq!(metadata["frames"][0]["sourceFrame"], 2);
+    assert_eq!(
+        metadata["meta"]["frameTags"],
+        json!([{"name":"Jump","from":0,"to":0,"repeat":3,"direction":"pingpong"}])
+    );
+    assert_eq!(metadata["meta"]["slices"][0]["keys"][0]["frame"], 0);
+
+    let plan = automation::operation(
+        "batch",
+        &json!({"dry_run":true,"steps":[{"operation":"export","arguments":{
+            "input":input,"output":root.join("planned.png"),"format":"sheet","layers":[group],
+            "options":{"frame_range":[2,2]}}}]}),
+    )
+    .unwrap();
+    assert!(plan.to_string().contains("planned.json"));
+    assert!(!root.join("planned.png").exists());
+
+    let reply = workspace.call(
+        "export",
+        json!({"input":"art.pixel","output":"slices","format":"sheet",
+        "options":{"padding":0,"layers":[hidden],"frame_range":[2,2],"split_slices":true}}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let slice = image::open(root.join("slices/001-Actor.png"))
+        .unwrap()
+        .into_rgba8();
+    assert_eq!(slice.dimensions(), (2, 1));
+    assert_eq!(
+        slice.pixels().map(|p| p.0).collect::<Vec<_>>(),
+        vec![CLEAR, [60, 180, 40, 128]]
+    );
+
+    for (options, message) in [
+        (json!({"layers":[999]}), "valid layer"),
+        (json!({"frame_range":[2,1]}), "frame range"),
+        (json!({"tag":0,"frame_range":[0,0]}), "overlap"),
+    ] {
+        let reply = workspace.call(
+            "export",
+            json!({"input":"art.pixel","output":"bad.png","format":"sheet","options":options}),
+        );
+        assert_error(&reply, message);
+        assert!(!root.join("bad.png").exists());
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

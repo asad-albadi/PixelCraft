@@ -2,6 +2,7 @@ use crate::model::*;
 use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::{borrow::Cow, ops::RangeInclusive};
 
 mod canvas_resize;
 mod rotsprite;
@@ -373,6 +374,44 @@ pub fn ramp(a: Pixel, b: Pixel, n: usize) -> Vec<Pixel> {
         })
         .collect()
 }
+/// Export explicit layers with their ancestors. Groups include visible descendants.
+pub(crate) fn filter_layers_for_export<'a>(
+    d: &'a Document,
+    layers: Option<&[usize]>,
+) -> Result<Cow<'a, Document>, String> {
+    let Some(indices) = layers else {
+        return Ok(Cow::Borrowed(d));
+    };
+    if indices.is_empty()
+        || indices.len() > d.layers.len()
+        || indices.iter().any(|&i| i >= d.layers.len())
+    {
+        return Err("Choose at least one valid layer".into());
+    }
+    let selected: std::collections::HashSet<_> = indices.iter().copied().collect();
+    let mut filtered = d.clone();
+    for layer in &mut filtered.layers {
+        layer.visible = false;
+    }
+    for index in 0..d.layers.len() {
+        let mut ancestor = Some(index);
+        while let Some(i) = ancestor {
+            if selected.contains(&i) {
+                let mut parent = Some(index);
+                while let Some(j) = parent {
+                    filtered.layers[j].visible = true;
+                    parent = d.layers[j].parent;
+                }
+                break;
+            }
+            if !d.layers[i].visible {
+                break;
+            }
+            ancestor = d.layers[i].parent;
+        }
+    }
+    Ok(Cow::Owned(filtered))
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SheetOptions {
@@ -381,6 +420,8 @@ pub struct SheetOptions {
     pub padding: usize,
     pub trim: bool,
     pub tag: Option<usize>,
+    pub frame_range: Option<[usize; 2]>,
+    pub layers: Option<Vec<usize>>,
     pub preset: String,
 }
 impl Default for SheetOptions {
@@ -391,10 +432,36 @@ impl Default for SheetOptions {
             padding: 1,
             trim: false,
             tag: None,
+            frame_range: None,
+            layers: None,
             preset: "Generic".into(),
         }
     }
 }
+impl SheetOptions {
+    pub(crate) fn frames_for(&self, doc: &Document) -> Result<RangeInclusive<usize>, String> {
+        let last = doc
+            .durations
+            .len()
+            .checked_sub(1)
+            .ok_or("Sprite has no frames")?;
+        let [from, to] = self.frame_range.unwrap_or([0, last]);
+        if from > to || to > last {
+            return Err("Invalid frame range".into());
+        }
+        if let Some(index) = self.tag {
+            let tag = doc.tags.get(index).ok_or("Unknown tag")?;
+            let (from, to) = (from.max(tag.from), to.min(tag.to));
+            if from > to {
+                return Err("Frame range does not overlap the selected tag".into());
+            }
+            Ok(from..=to)
+        } else {
+            Ok(from..=to)
+        }
+    }
+}
+
 pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), String> {
     pack_sheet_with_extrusion(d, o, 0)
 }
@@ -411,12 +478,9 @@ pub(crate) fn pack_sheet_with_extrusion(
     if extrude > 256 {
         return Err("Sprite extrusion must be 0–256 pixels".into());
     }
-    let range = if let Some(i) = o.tag {
-        let t = d.tags.get(i).ok_or("Unknown tag")?;
-        t.from..=t.to
-    } else {
-        0..=d.durations.len() - 1
-    };
+    let range = o.frames_for(d)?;
+    let sprite = filter_layers_for_export(d, o.layers.as_deref())?;
+    let d = sprite.as_ref();
     let (first_frame, last_frame) = (*range.start(), *range.end());
     let count = last_frame - first_frame + 1;
     let cols = o.columns.clamp(1, count);

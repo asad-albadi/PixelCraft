@@ -301,6 +301,8 @@ pixelcraft --cli palette-convert --input colors.hex --output colors.gpl
 
 `import`/`export` convert formats using the same loaders and exporters as the editor. `render` writes a PNG when output is supplied, or returns an inline PNG otherwise. `edit` accepts `input`, `output`, the `revision` returned by inspect, and `edits: [{layer,frame,x,y,color:[r,g,b,a]}]`. Edits validate completely before saving; locked layers, invalid coordinates and stale revisions fail without changing the input.
 
+For a filtered sprite sheet, pass `--layers '[2,5]'` and set `frame_range` to an inclusive pair in `--options`, such as `{"frame_range":[6,11]}`. An explicit group includes its visible descendants. An explicitly selected layer can be exported even when hidden. Ancestor masks, opacity, and blending still apply. The range intersects any selected tag. The editor's **Export sprite sheet** dialog uses the timeline's current layer selection and displays frame numbers starting at one. File MCP accepts the same export arguments as the CLI.
+
 For one sheet per authored slice, pass an output directory and enable `split_slices`. Each sheet follows its slice’s keyed bounds and preserves the included frame timing. Add `extrude` to duplicate each frame’s edge pixels before scaling. The border sits outside the sprite rectangle in the JSON.
 
 ```bash

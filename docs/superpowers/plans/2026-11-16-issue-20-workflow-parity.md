@@ -71,6 +71,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 31 complete. The terminal Lua console retains script variables and sprite edits, supports multiline input, and applies a fresh execution budget per command. Saving is explicit and uses the same staged output path as script files. Buffered serialization supports the full one-million-pixel canvas limit. The executable test covers runtime errors, runaway scripts, an incomplete command, save/discard behavior, and a maximum-size project reopen. Formatting, strict Clippy, and 490 Windows all-target tests passed.
 
+- Item 32 in progress. Editor, CLI, and file MCP sprite sheets honor explicit layers or groups and inclusive frame intervals, including tag intersections. The editor uses timeline layer selection and runs file export on the background worker. CLI and MCP slice splits inherit the filters. Tests verify compositing, stable frame IDs, rebased tags/slices, invalid filters, dry-run paths, and editor worker output. Formatting, strict Clippy, and 492 Windows all-target tests passed. Named-slice selection, per-layer and grid splitting, and filename/tag templates remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

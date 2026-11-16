@@ -777,6 +777,7 @@ pub(crate) fn batch_tags_with_previous(
                 d,
                 &SheetOptions {
                     tag: Some(i),
+                    frame_range: None,
                     ..options.clone()
                 },
             )?;
