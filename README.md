@@ -165,6 +165,8 @@ Canvases support up to 16384 pixels per side and 64 million pixels per canvas an
 
 Use **Play preview animation** in the Preview panel to play the authored frame timings while the timeline stays on your editing frame. The timeline’s playback speed applies to both the canvas and the preview. Export uses the frame durations you authored. The preview shows the main canvas viewport. Click the artwork in the preview to center the canvas there. The timeline marks tagged frames, and **Sprite → Properties, layers, tiles & ranges** edits a tag’s repeat count for batch and engine exports.
 
+- Click a frame header to select it. Shift-click another header for an interval, or Ctrl-click (Command-click on macOS) to toggle individual frames. Drag a selected header to an insertion marker to move the selected frames together. Use **Frame → Reverse frames** to reverse selected frames in their existing slots, or the entire timeline when no headers are selected. Both operations preserve sprite-sheet frame IDs and keep tag boundaries at their timeline positions.
+
 - Shift-click a timeline cel, or use Shift and the arrow keys with a cel focused, to select a rectangle. **Layer & frame actions → Selected cels** clears, links, unlinks, changes timing, or previews a move or duplicate at the chosen destination. Operations use one Undo step.
 - **Layer & frame actions → Link cel to frame** shares artwork within one layer. **Link duplicated cels** makes frame duplication link artwork on that layer. Unlink a cel before editing it independently.
 - **Position and opacity keyframe** animates offsets and opacity. Position snaps to whole pixels. Linear keys interpolate using frame durations, including the loop boundary. Enable **Hold until next keyframe** to step between values.

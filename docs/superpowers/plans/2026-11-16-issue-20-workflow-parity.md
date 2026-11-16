@@ -39,6 +39,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 20 complete. Added undoable raster, opaque background, and animated tilemap conversions. Indexed conversion requires the destination palette to represent the rendered colors. Windows verification passed all 450 all-target tests, rustfmt, and strict Clippy.
 
+- Item 21 in progress. Frame headers support interval and nonadjacent selection, insertion-gap dragging, and reversal. The shared permutation moves cels, durations, palettes, slice keys, names, stable export IDs, and metadata in one undoable edit. Tags retain their timeline positions. Tests exercise the model, pointer drag, selection, and Undo. Formatting, strict Clippy, and 454 Windows all-target tests passed. Cel and layer drag ranges and nonadjacent selection remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

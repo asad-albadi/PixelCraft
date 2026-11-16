@@ -151,6 +151,18 @@ struct Clipboard {
     h: usize,
     pixels: Vec<Pixel>,
 }
+#[derive(Clone, Default)]
+struct TimelineFrames {
+    anchor: Option<usize>,
+    selected: Vec<usize>,
+}
+
+#[derive(Clone, Copy)]
+struct FrameHeaderDrag {
+    frame: usize,
+    tab: usize,
+}
+
 #[derive(Clone)]
 struct HistoryEntry {
     doc: Document,
@@ -160,6 +172,7 @@ struct HistoryEntry {
     layer: usize,
     frame: usize,
     timeline_anchor: Option<(usize, usize)>,
+    timeline_frames: TimelineFrames,
 }
 struct SpriteTab {
     doc: Document,
@@ -177,6 +190,7 @@ struct SpriteTab {
     palette_index: usize,
     active_tag: Option<usize>,
     timeline_anchor: Option<(usize, usize)>,
+    timeline_frames: TimelineFrames,
     polygon: Vec<(i32, i32)>,
     mask: Option<Vec<bool>>,
 }
@@ -310,6 +324,7 @@ struct PixelCraft {
     frame_textures: Vec<Option<egui::TextureHandle>>,
     frame_prefetch: Option<FramePrefetch>,
     timeline_anchor: Option<(usize, usize)>,
+    timeline_frames: TimelineFrames,
     timeline_duration: u16,
     timeline_destination: Option<(usize, usize)>,
     cel_occupied: Vec<Vec<bool>>,
@@ -473,6 +488,7 @@ impl PixelCraft {
             frame_textures: vec![],
             frame_prefetch: None,
             timeline_anchor: None,
+            timeline_frames: TimelineFrames::default(),
             timeline_duration: DEFAULT_DURATION,
             timeline_destination: None,
             cel_occupied: vec![],
@@ -955,6 +971,7 @@ impl PixelCraft {
     fn advance_playback(&mut self) {
         (self.frame, self.playback_reverse) = self.next_playback_frame();
         self.timeline_anchor = None;
+        self.timeline_frames = TimelineFrames::default();
         self.timeline_destination = None;
     }
 
@@ -1452,6 +1469,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.layer = self.layer.min(self.doc.layers.len() - 1);
         self.frame = self.frame.min(self.doc.durations.len() - 1);
         self.timeline_anchor = None;
+        self.timeline_frames = TimelineFrames::default();
         self.timeline_destination = None;
         self.selection = None;
         self.studio.mask = None;
@@ -1467,6 +1485,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             layer: self.layer,
             frame: self.frame,
             timeline_anchor: self.timeline_anchor,
+            timeline_frames: self.timeline_frames.clone(),
         }
     }
     fn restore_history(&mut self, mut entry: HistoryEntry) {
@@ -1477,6 +1496,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.layer = entry.layer.min(self.doc.layers.len() - 1);
         self.frame = entry.frame.min(self.doc.durations.len() - 1);
         self.timeline_anchor = entry.timeline_anchor;
+        self.timeline_frames = entry.timeline_frames;
         self.selection = entry.selection;
         self.studio.mask = entry.mask;
         self.studio.polygon = entry.polygon;
@@ -1512,6 +1532,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.layer = 0;
         self.frame = 0;
         self.timeline_anchor = None;
+        self.timeline_frames = TimelineFrames::default();
         self.timeline_destination = None;
         self.undo.clear();
         self.redo.clear();
@@ -1544,6 +1565,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             palette_index: self.palette_index,
             active_tag: self.active_tag,
             timeline_anchor: self.timeline_anchor,
+            timeline_frames: self.timeline_frames.clone(),
             polygon: self.studio.polygon.clone(),
             mask: self.studio.mask.clone(),
         };
@@ -1580,6 +1602,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
         std::mem::swap(&mut self.active_tag, &mut tab.active_tag);
         std::mem::swap(&mut self.timeline_anchor, &mut tab.timeline_anchor);
+        std::mem::swap(&mut self.timeline_frames, &mut tab.timeline_frames);
         self.timeline_destination = None;
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
@@ -2119,6 +2142,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.doc.add_layer();
                     self.layer = self.doc.layers.len() - 1;
                     self.timeline_anchor = None;
+                    self.timeline_frames = TimelineFrames::default();
                     self.timeline_destination = None;
                 } else {
                     self.status = "Layer limit reached for this canvas size".into()
@@ -2148,6 +2172,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.doc.add_frame(self.frame, s == "frame");
                     self.frame += 1;
                     self.timeline_anchor = None;
+                    self.timeline_frames = TimelineFrames::default();
                     self.timeline_destination = None;
                 } else {
                     self.status = "Frame limit reached for this canvas size".into()
@@ -2159,15 +2184,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.clamp();
             }
             "deleteframe" => {}
+            "reverse-frames" => self.reverse_timeline_frames(),
             "play" => {
                 self.playing = !self.playing;
                 self.playback_waiting_for_frame = false;
                 self.last_tick = Instant::now();
             }
-            "prev" => {
-                self.frame = (self.frame + self.doc.durations.len() - 1) % self.doc.durations.len()
+            "prev" | "next" => {
+                let count = self.doc.durations.len();
+                let offset = if s == "next" { 1 } else { count - 1 };
+                self.frame = (self.frame + offset) % count;
+                self.timeline_frames = TimelineFrames::default();
             }
-            "next" => self.frame = (self.frame + 1) % self.doc.durations.len(),
             "flipx" | "flipy" => {
                 self.remember();
                 self.doc.flip(self.layer, self.frame, s == "flipx")
@@ -2550,6 +2578,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Duplicate frame", "frame"),
                         ("New empty frame", "blank"),
                         ("Delete frame", "deleteframe"),
+                        ("Reverse frames", "reverse-frames"),
                         ("Play / stop   Space", "play"),
                         ("Previous frame   ,", "prev"),
                         ("Next frame   .", "next"),
@@ -2911,6 +2940,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn timeline_select(&mut self, layer: usize, frame: usize, extend: bool) {
+        self.timeline_frames = TimelineFrames::default();
         if extend {
             self.timeline_anchor.get_or_insert((self.layer, self.frame));
         } else {
@@ -2922,6 +2952,65 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.timeline_destination = None;
         self.playing = false;
         self.playback_waiting_for_frame = false;
+    }
+
+    fn select_frame_header(&mut self, frame: usize, modifiers: egui::Modifiers) {
+        let selected = &mut self.timeline_frames.selected;
+        if modifiers.shift {
+            let anchor = *self.timeline_frames.anchor.get_or_insert(self.frame);
+            *selected = (anchor.min(frame)..=anchor.max(frame)).collect();
+        } else if modifiers.command {
+            match selected.binary_search(&frame) {
+                Ok(index) => {
+                    selected.remove(index);
+                }
+                Err(index) => selected.insert(index, frame),
+            }
+            self.timeline_frames.anchor = Some(frame);
+        } else {
+            *selected = vec![frame];
+            self.timeline_frames.anchor = Some(frame);
+        }
+        self.frame = frame;
+        self.timeline_duration = self.doc.durations[frame];
+        self.timeline_anchor = None;
+        self.timeline_destination = None;
+        self.playing = false;
+        self.playback_waiting_for_frame = false;
+    }
+
+    fn reorder_timeline_frames(&mut self, from: usize, before: usize) {
+        let frames = &self.timeline_frames.selected;
+        let selected = if frames.binary_search(&from).is_ok() {
+            frames.clone()
+        } else {
+            vec![from]
+        };
+        if self.edit_timeline(|doc| doc.move_frames(&selected, before).map(|_| ())) {
+            let insertion = before - selected.partition_point(|&frame| frame < before);
+            let active = selected.binary_search(&self.frame).unwrap_or(0);
+            self.frame = insertion + active;
+            self.timeline_frames.selected = (insertion..insertion + selected.len()).collect();
+            self.timeline_frames.anchor = Some(self.frame);
+            self.timeline_anchor = None;
+            self.timeline_destination = None;
+            self.timeline_duration = self.doc.durations[self.frame];
+            self.playing = false;
+            self.playback_waiting_for_frame = false;
+        }
+    }
+
+    fn reverse_timeline_frames(&mut self) {
+        let selected = if self.timeline_frames.selected.is_empty() {
+            (0..self.doc.durations.len()).collect()
+        } else {
+            self.timeline_frames.selected.clone()
+        };
+        if self.edit_timeline(|doc| doc.reverse_frames(&selected).map(|_| ())) {
+            self.timeline_duration = self.doc.durations[self.frame];
+            self.playing = false;
+            self.playback_waiting_for_frame = false;
+        }
     }
 
     fn edit_timeline(&mut self, edit: impl FnOnce(&mut Document) -> Result<(), String>) -> bool {
@@ -3118,6 +3207,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let mut lock = None;
         let mut rename = None;
         let mut selection = None;
+        let mut header_selection = None;
+        let mut frame_drop = None;
+        let mut reverse_header_selection = false;
         let range = self.timeline_range();
         let destination = self.timeline_destination.map(|(layer, frame)| {
             CelRange::between(
@@ -3148,12 +3240,46 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             } else {
                                 egui::Button::new((f + 1).to_string())
                             };
+                            let selected = f == self.frame
+                                || self.timeline_frames.selected.binary_search(&f).is_ok();
                             let response = ui.add_sized(
                                 [cell_width, header_height],
-                                button.selected(f == self.frame),
+                                button
+                                    .selected(selected)
+                                    .sense(egui::Sense::click_and_drag()),
                             );
                             if response.clicked() || response.double_clicked() {
-                                selection = Some((self.layer, f, false));
+                                header_selection = Some((f, ui.input(|input| input.modifiers)));
+                            }
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|data| {
+                                data.insert_temp(egui::Id::new(("frame-header", f)), response.rect);
+                            });
+                            if response.drag_started_by(egui::PointerButton::Primary) {
+                                response.dnd_set_drag_payload(FrameHeaderDrag {
+                                    frame: f,
+                                    tab: self.active_tab,
+                                });
+                            }
+                            if let Some(drag) = response.dnd_hover_payload::<FrameHeaderDrag>()
+                                && drag.tab == self.active_tab
+                                && let Some(pointer) =
+                                    ui.input(|input| input.pointer.interact_pos())
+                            {
+                                let after = pointer.x >= response.rect.center().x;
+                                let x = if after {
+                                    response.rect.right()
+                                } else {
+                                    response.rect.left()
+                                };
+                                ui.painter().vline(
+                                    x,
+                                    response.rect.y_range(),
+                                    Stroke::new(2., ui.visuals().selection.stroke.color),
+                                );
+                                if response.dnd_release_payload::<FrameHeaderDrag>().is_some() {
+                                    frame_drop = Some((drag.frame, f + usize::from(after)));
+                                }
                             }
                             if response.double_clicked() {
                                 self.start_rename_frame(f);
@@ -3161,6 +3287,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             response.context_menu(|ui| {
                                 if ui.pc_button("Rename frame…").clicked() {
                                     self.start_rename_frame(f);
+                                    ui.close();
+                                }
+                                if ui
+                                    .add_enabled(
+                                        self.timeline_frames.selected.len() > 1
+                                            && self
+                                                .timeline_frames
+                                                .selected
+                                                .binary_search(&f)
+                                                .is_ok(),
+                                        egui::Button::new("Reverse selected frames"),
+                                    )
+                                    .clicked()
+                                {
+                                    reverse_header_selection = true;
                                     ui.close();
                                 }
                             });
@@ -3194,7 +3335,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                 egui::WidgetInfo::selected(
                                     egui::WidgetType::SelectableLabel,
                                     response.enabled(),
-                                    f == self.frame,
+                                    selected,
                                     &description,
                                 )
                             });
@@ -3384,6 +3525,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             });
         if let Some((layer, frame, extend)) = selection {
             self.timeline_select(layer, frame, extend);
+        }
+        if let Some((frame, modifiers)) = header_selection {
+            self.select_frame_header(frame, modifiers);
+        }
+        if let Some((source, before)) = frame_drop {
+            self.reorder_timeline_frames(source, before);
+        }
+        if reverse_header_selection {
+            self.reverse_timeline_frames();
         }
         if let Some(layer) = collapse {
             self.toggle_timeline_group(layer);
@@ -4634,6 +4784,7 @@ impl PixelCraft {
                 self.set_active_color(self.fg);
             }
             self.frame = context["frame"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
+            self.timeline_frames = TimelineFrames::default();
             self.layer = context["layer"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
         }
         self.poll_script();
@@ -5913,6 +6064,78 @@ mod tests {
         a.remember();
         a.doc.add_frame(0, false);
         assert_ne!(a.doc.frame_export_id(1), issued);
+    }
+
+    #[test]
+    fn frame_header_selection_reorders_and_reverses_with_undo() {
+        let mut a = app();
+        a.doc = Document::new(2, 1);
+        for frame in 0..4 {
+            a.doc.add_frame(frame, false);
+        }
+        a.select_frame_header(1, egui::Modifiers::NONE);
+        a.select_frame_header(3, egui::Modifiers::COMMAND);
+        assert_eq!(a.timeline_frames.selected, vec![1, 3]);
+        a.reorder_timeline_frames(3, 5);
+        assert_eq!(a.timeline_frames.selected, vec![3, 4]);
+        assert_eq!(a.frame, 4);
+        assert_eq!(a.doc.frame_export_id(3), 1);
+        assert_eq!(a.doc.frame_export_id(4), 3);
+        a.action("reverse-frames");
+        assert_eq!(a.doc.frame_export_id(3), 3);
+        assert_eq!(a.doc.frame_export_id(4), 1);
+        a.undo();
+        a.undo();
+        assert_eq!(a.timeline_frames.selected, vec![1, 3]);
+        assert_eq!(a.frame, 3);
+        assert_eq!(a.doc.frame_export_id(1), 1);
+        assert_eq!(a.doc.frame_export_id(3), 3);
+        a.select_frame_header(4, egui::Modifiers::SHIFT);
+        assert_eq!(a.timeline_frames.selected, vec![3, 4]);
+    }
+
+    #[test]
+    fn pointer_drag_of_frame_headers_uses_the_left_and_right_insertion_gaps() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(2, 1), None);
+        for frame in 0..3 {
+            a.doc.add_frame(frame, false);
+        }
+        let draw = |a: &mut PixelCraft, events| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800., 400.))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| a.timeline(ui));
+            });
+            output.textures_delta.clear();
+        };
+        draw(&mut a, vec![]);
+        let header = |frame: usize| {
+            ctx.data_mut(|data| data.get_temp::<Rect>(egui::Id::new(("frame-header", frame))))
+                .unwrap()
+        };
+        let drag = |a: &mut PixelCraft, from, to| {
+            let button = |pos, pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            draw(a, vec![egui::Event::PointerMoved(from), button(from, true)]);
+            draw(a, vec![egui::Event::PointerMoved(to)]);
+            draw(a, vec![button(to, false)]);
+        };
+        let after_last = Pos2::new(header(3).right() - 4., header(3).center().y);
+        drag(&mut a, header(0).center(), after_last);
+        assert_eq!(a.doc.frame_export_id(3), 0);
+        let before_first = Pos2::new(header(0).left() + 4., header(0).center().y);
+        drag(&mut a, header(3).center(), before_first);
+        assert_eq!(a.doc.frame_export_id(0), 0);
+        assert_eq!(a.undo.len(), 2);
     }
 
     #[test]
