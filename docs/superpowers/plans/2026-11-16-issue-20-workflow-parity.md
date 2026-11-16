@@ -65,6 +65,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 30 complete. GUI, CLI, file MCP, and live MCP can export a standalone PNG of authored tiles from selected or visible tilemap layers. Shared tilesets are included once. Mixed tile sizes use padded cells, and CLI/MCP returns per-set offsets and sizes. Tests verify authored order, hidden group selection, GUI worker output, equivalent file and live output, and restricted MCP path and overwrite handling. Formatting, strict Clippy, and 486 Windows all-target tests passed.
 
+- Item 31 in progress. CLI and MCP batch exports preflight ordered export, render, atlas, tag, and palette steps. Dry run lists output files and sidecars without writing. Tests compare plans to actual exports and reject duplicate destinations, invalid crops, and out-of-root paths before any writes. Formatting, strict Clippy, and 488 Windows all-target tests passed. Headless Lua parameters and the interactive console remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

@@ -33,6 +33,16 @@ pub fn tileset_atlas(
     scope: TilesetAtlasScope<'_>,
     columns: Option<usize>,
 ) -> Result<(RgbaImage, TilesetAtlasLayout), String> {
+    let layout = plan_tileset_atlas(doc, scope, columns)?;
+    let image = render_tileset_atlas(doc, &layout);
+    Ok((image, layout))
+}
+
+pub(crate) fn plan_tileset_atlas(
+    doc: &Document,
+    scope: TilesetAtlasScope<'_>,
+    columns: Option<usize>,
+) -> Result<TilesetAtlasLayout, String> {
     doc.validate()?;
     let selected = if let TilesetAtlasScope::Selected(layers) = scope {
         if layers.is_empty() || layers.len() > doc.layers.len() {
@@ -104,13 +114,24 @@ pub fn tileset_atlas(
     let rows = total.div_ceil(columns);
     let width = columns * cell[0];
     let height = rows * cell[1];
-    let mut image = RgbaImage::new(width as u32, height as u32);
-    for entry in &tilesets {
+    Ok(TilesetAtlasLayout {
+        width,
+        height,
+        columns,
+        rows,
+        cell_size: cell,
+        tilesets,
+    })
+}
+
+pub(crate) fn render_tileset_atlas(doc: &Document, layout: &TilesetAtlasLayout) -> RgbaImage {
+    let mut image = RgbaImage::new(layout.width as u32, layout.height as u32);
+    for entry in &layout.tilesets {
         let set = &doc.tilesets[entry.index];
         for (tile_index, tile) in set.tiles.iter().enumerate() {
             let slot = entry.first_cell + tile_index;
-            let x = (slot % columns) * cell[0];
-            let y = (slot / columns) * cell[1];
+            let x = (slot % layout.columns) * layout.cell_size[0];
+            let y = (slot / layout.columns) * layout.cell_size[1];
             tile.visit_nonclear(|offset, pixel| {
                 image.put_pixel(
                     (x + offset % set.width) as u32,
@@ -120,15 +141,5 @@ pub fn tileset_atlas(
             });
         }
     }
-    Ok((
-        image,
-        TilesetAtlasLayout {
-            width,
-            height,
-            columns,
-            rows,
-            cell_size: cell,
-            tilesets,
-        },
-    ))
+    image
 }

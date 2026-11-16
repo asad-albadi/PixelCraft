@@ -82,6 +82,103 @@ fn file_call(op: &str, args: Value) -> Value {
         .clone()
 }
 
+#[test]
+fn export_batch_previews_exact_outputs_and_runs_the_ordered_operations() {
+    let w = Workspace::new();
+    let input = w.project().join("art.pixel");
+    let sheet = w.project().join("sheet.png");
+    let sequence = w.project().join("sequence");
+    let tags = w.project().join("tags");
+    let palette = w.project().join("colors.gpl");
+    let mut doc = formats::load(&input).unwrap();
+    doc.tags.push(pixelcraft::model::FrameTag {
+        name: "Idle".into(),
+        from: 0,
+        to: 0,
+        direction: 0,
+        repeat: 0,
+        color: [10, 20, 30],
+    });
+    formats::save(&input, &doc).unwrap();
+    let steps = json!([
+        {"operation":"export","arguments":{"input":input,"output":sheet,"format":"sheet"}},
+        {"operation":"export","arguments":{"input":input,"output":sequence,"format":"png-sequence"}},
+        {"operation":"batch-tags","arguments":{"input":input,"output":tags,"options":{"preset":"Unity"}}},
+        {"operation":"palette-export","arguments":{"input":input,"output":palette}},
+    ]);
+    let cli = |args: Value| automation::run_cli(&["batch".into(), args.to_string()]);
+    let preview = cli(json!({"steps":steps,"dry_run":true})).unwrap();
+    let flag_preview = automation::run_cli(&[
+        "batch".into(),
+        "--steps".into(),
+        steps.to_string(),
+        "--dry-run".into(),
+        "true".into(),
+    ])
+    .unwrap();
+    assert_eq!(flag_preview, preview);
+    assert_eq!(
+        preview["steps"][0]["outputs"],
+        json!([sheet, sheet.with_extension("json")])
+    );
+    assert_eq!(
+        preview["steps"][1]["outputs"],
+        json!([sequence.join("frame-0001.png")])
+    );
+    assert!(
+        !sheet.exists()
+            && !sheet.with_extension("json").exists()
+            && !sequence.exists()
+            && !tags.exists()
+            && !palette.exists()
+    );
+    let result = cli(json!({"steps":steps})).unwrap();
+    assert_eq!(result["steps"][0]["operation"], "export");
+    assert_eq!(
+        result["steps"][1]["outputs"],
+        preview["steps"][1]["outputs"]
+    );
+    assert_eq!(
+        preview["steps"][2]["outputs"],
+        json!([
+            tags.join("001-Idle.png"),
+            tags.join("001-Idle.json"),
+            tags.join("001-Idle.png.meta"),
+        ])
+    );
+    assert_eq!(preview["steps"][3]["outputs"], json!([palette]));
+    assert!(tags.join("001-Idle.png.meta").is_file() && palette.is_file());
+    assert!(sheet.is_file() && sheet.with_extension("json").is_file());
+    assert!(sequence.join("frame-0001.png").is_file());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn restricted_export_batch_rejects_unsafe_later_steps_before_any_writes() {
+    let w = Workspace::new();
+    let step = |output| json!({"operation":"export","arguments":{"input":"art.pixel","output":output,"format":"png"}});
+    let reply = w.call(
+        "batch",
+        json!({"steps":[step("first.png"),step("../escape.png")]}),
+    );
+    assert_error(&reply, "project root");
+    assert!(!w.project().join("first.png").exists());
+    let reply = w.call(
+        "batch",
+        json!({"steps":[step("same.png"),step("same.png")]}),
+    );
+    assert_error(&reply, "Duplicate output");
+    assert!(!w.project().join("same.png").exists());
+    let mut invalid = step("bad.png");
+    invalid["arguments"]["region"] = json!({"x":1,"y":1,"width":8,"height":8});
+    let reply = w.call("batch", json!({"steps":[step("first.png"),invalid]}));
+    assert_error(&reply, "inside the canvas");
+    assert!(!w.project().join("first.png").exists());
+    let preview = w.call("batch", json!({"steps":[step("first.png")],"dry_run":true}));
+    assert!(preview["isError"].is_null(), "{preview}");
+    assert!(!w.project().join("first.png").exists());
+}
+
 #[cfg(any(target_os = "linux", windows))]
 #[test]
 fn project_root_resolves_relative_paths_and_checks_each_array_entry() {

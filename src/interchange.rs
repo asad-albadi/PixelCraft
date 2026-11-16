@@ -10,6 +10,7 @@ use std::{
 
 mod tileset_atlas;
 pub use tileset_atlas::{TilesetAtlasEntry, TilesetAtlasLayout, TilesetAtlasScope, tileset_atlas};
+pub(crate) use tileset_atlas::{plan_tileset_atlas, render_tileset_atlas};
 
 pub fn from_frames(
     frames: impl Iterator<Item = Result<image::Frame, image::ImageError>>,

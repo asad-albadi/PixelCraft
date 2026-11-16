@@ -333,6 +333,8 @@ Use `live-save` with the revision from `live-inspect` to write the active sprite
 
 In the **File** menu, choose **Export animation GIF…** or **Export video MP4…** and select a scale. Both use integer nearest-neighbor scaling. The same options are available through `live-export` with `revision`, `output`, and optional `scale`. The file MCP `export` tool takes `input` instead of a live revision. The extension selects PNG, GIF, or MP4 for live export. For example, a 480×270 sprite exported with `scale:4` produces 1920×1080.
 
+Use the CLI `batch` operation or MCP `batch` tool to run ordered file exports in one invocation. Pass `steps` with an `operation` and its usual `arguments` for each export. Supported operations are `export`, `render` with a file output, `atlas`, `batch-tags`, and `palette-export`. Set `dry_run: true` to list output paths, including generated metadata and engine sidecars, before writing. The batch checks all planned destinations before encoding, then runs each export in order. An encoding failure stops later steps and reports how many steps completed.
+
 For individual PNG frames, use **File → Export PNG sequence…**, choose an integer scale, and name a new folder under the destination. PixelCraft writes `frame-0001.png`, `frame-0002.png`, and so on in timeline order. PNGs retain transparency. Use `live-export` with `{"revision":"…","format":"png-sequence","output":"C:/path/new-folder","scale":4}`, or use file MCP `export` with `input` in place of `revision`. Use a new directory under an existing parent. MCP can also re-export to an existing directory with `"overwrite": true`, replacing only the generated frames. Pass `layers` to filter PNG, PNG sequence, GIF, or MP4 exports. PNG sequences also accept a `region` crop.
 
 

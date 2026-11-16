@@ -1,5 +1,6 @@
 //! Headless commands and a newline-delimited JSON-RPC MCP stdio server.
 use crate::{atlas::*, formats, interchange, model::*, productivity::*, workflows::SheetOptions};
+mod batch;
 pub(crate) mod mcp_access;
 mod mcp_files;
 pub(crate) mod mcp_io;
@@ -581,6 +582,18 @@ fn file_operation(
     v: &Value,
     files: Option<&mcp_files::Files<'_>>,
 ) -> Result<Value, String> {
+    file_operation_mode(op, v, files, false)
+}
+
+fn file_operation_mode(
+    op: &str,
+    v: &Value,
+    files: Option<&mcp_files::Files<'_>>,
+    preview: bool,
+) -> Result<Value, String> {
+    let plan = |out: &Path, paths: Vec<PathBuf>, directory| {
+        batch::preview_paths(files, out, paths, directory)
+    };
     let resolve = |p| mcp_files::Files::resolve(files.and_then(|files| files.root), p);
     let argument_path = |key| path(v, key).map(resolve);
     let check_input = |p: &Path| files.map_or(Ok(()), |f| f.check_read(p));
@@ -612,6 +625,7 @@ fn file_operation(
         write_operation_file(files, out, |target| formats::save(target, d))
     };
     match op {
+        "batch" => batch::execute(v, files),
         "create" => {
             let (w, h) = (number(v, "width")?, number(v, "height")?);
             if w == 0
@@ -646,6 +660,13 @@ fn file_operation(
             }
             let out = argument_path("output")?;
             let options = options::<AtlasOptions>(&v["options"])?;
+            if preview {
+                let mut destinations = vec![out.clone()];
+                if options.metadata != AtlasMetadata::None {
+                    destinations.push(out.with_extension("json"));
+                }
+                return plan(&out, destinations, false);
+            }
             if let Some(files) = files {
                 let mut destinations = vec![out.clone()];
                 if options.metadata != AtlasMetadata::None {
@@ -710,6 +731,9 @@ fn file_operation(
                 "inspect" => Ok(inspect(&d)),
                 "render" | "export" | "import" => {
                     if op == "render" && v.get("output").is_none() {
+                        if preview {
+                            return Err("Batch render needs an output PNG path".into());
+                        }
                         let f = if v.get("frame").is_some() {
                             number(v, "frame")?
                         } else {
@@ -731,6 +755,11 @@ fn file_operation(
                         } else {
                             0
                         };
+                        if preview {
+                            let sprite = filter_export_layers(&d, v)?;
+                            preview_geometry(&sprite, frame, v, MAX_PIXELS)?;
+                            return plan(&out, vec![out.clone()], false);
+                        }
                         let (image, mut metadata) =
                             preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
                         write_operation_file(files, &out, |target| {
@@ -744,6 +773,10 @@ fn file_operation(
                     match kind {
                         "tileset-atlas" if op == "export" => {
                             check_tileset_atlas_path(&out)?;
+                            if preview {
+                                tileset_atlas_layout(&d, v)?;
+                                return plan(&out, vec![out.clone()], false);
+                            }
                             let mut metadata = write_operation_file(files, &out, |target| {
                                 write_tileset_atlas(target, &d, v, &document_revision(&d))
                             })?;
@@ -751,6 +784,25 @@ fn file_operation(
                             return Ok(metadata);
                         }
                         "png-sequence" => {
+                            if preview {
+                                if v.get("frame").is_some() {
+                                    return Err(
+                                        "PNG sequence export uses all timeline frames".into()
+                                    );
+                                }
+                                let sprite = filter_export_layers(&d, v)?;
+                                preview_geometry(&sprite, 0, v, MAX_PIXELS)?;
+                                let policy = files.ok_or("Missing batch path policy")?;
+                                if !policy.overwrite && mcp_io::metadata(&out).is_ok() {
+                                    return Err(format!(
+                                        "Output already exists: {}. Set overwrite to true to replace it.",
+                                        out.display()
+                                    ));
+                                }
+                                let paths =
+                                    check_sequence_outputs(&out, &sequence_names(&d), policy)?;
+                                return plan(&out, paths, true);
+                            }
                             let replace = files.is_some_and(|files| files.overwrite);
                             if let Some(files) = files {
                                 files.check_write(&out)?;
@@ -772,6 +824,10 @@ fn file_operation(
                         "gif" | "mp4" => {
                             let filtered = filter_export_layers(&d, v)?;
                             let scale = export_scale(v)?;
+                            if preview {
+                                formats::animation_dimensions(&filtered, scale)?;
+                                return plan(&out, vec![out.clone()], false);
+                            }
                             if let Some(files) = files {
                                 files.write_file(&out, |target| {
                                     export_animation(kind, target, &filtered, scale)
@@ -796,6 +852,9 @@ fn file_operation(
                                         interchange::sheet_output_paths(path, &options.sheet)
                                     })
                                     .collect();
+                                if preview {
+                                    return plan(&out, destinations, true);
+                                }
                                 let cli_files = mcp_files::Files {
                                     root: None,
                                     overwrite: true,
@@ -821,6 +880,13 @@ fn file_operation(
                                 )?;
                                 return Ok(json!({"outputs":paths}));
                             }
+                            if preview {
+                                return plan(
+                                    &out,
+                                    interchange::sheet_output_paths(&out, &options.sheet),
+                                    false,
+                                );
+                            }
                             let export = |target: &Path| {
                                 interchange::export_sheet_extruded(
                                     target,
@@ -844,17 +910,30 @@ fn file_operation(
                         "ase" | "aseprite"
                             if op == "export" && (d.needs_baked_ase() || d.has_frame_names()) =>
                         {
+                            if preview {
+                                return plan(&out, vec![out.clone()], false);
+                            }
                             write_operation_file(files, &out, |target| {
                                 formats::export_baked_ase(target, &d)
                             })?;
                         }
-                        "pixel" | "ase" | "aseprite" => save(&out, &d)?,
+                        "pixel" | "ase" | "aseprite" => {
+                            if preview {
+                                return plan(&out, vec![out.clone()], false);
+                            }
+                            save(&out, &d)?;
+                        }
                         "png" if v.get("layers").is_some() || v.get("region").is_some() => {
                             let frame = v
                                 .get("frame")
                                 .map(|_| number(v, "frame"))
                                 .transpose()?
                                 .unwrap_or(0);
+                            if preview {
+                                let sprite = filter_export_layers(&d, v)?;
+                                preview_geometry(&sprite, frame, v, MAX_PIXELS)?;
+                                return plan(&out, vec![out.clone()], false);
+                            }
                             let (image, mut metadata) =
                                 preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
                             write_operation_file(files, &out, |target| {
@@ -868,6 +947,10 @@ fn file_operation(
                             let f = v["frame"].as_u64().unwrap_or(0) as usize;
                             if f >= d.durations.len() {
                                 return Err("Invalid frame".into());
+                            }
+                            if preview {
+                                preview_geometry(&d, f, v, MAX_PIXELS)?;
+                                return plan(&out, vec![out.clone()], false);
                             }
                             write_operation_file(files, &out, |target| {
                                 formats::export_raster_scaled(
@@ -897,6 +980,9 @@ fn file_operation(
                                 .flat_map(|path| interchange::sheet_output_paths(path, &options))
                                 .collect()
                         };
+                        if preview {
+                            return plan(&out, destinations, true);
+                        }
                         files.write_files(&out, &destinations, true, |target| {
                             batch_tags_with_previous(target, &out, &d, gif, &options)
                         })?;
@@ -908,6 +994,10 @@ fn file_operation(
                 }
                 "palette-export" => {
                     let out = argument_path("output")?;
+                    if preview {
+                        write_palette(&d.palette, extension(&out))?;
+                        return plan(&out, vec![out.clone()], false);
+                    }
                     write_operation_file(files, &out, |target| {
                         mcp_io::write(target, write_palette(&d.palette, extension(target))?)
                             .map_err(|e| e.to_string())
@@ -942,6 +1032,7 @@ fn extension(p: &Path) -> &str {
     p.extension().and_then(|s| s.to_str()).unwrap_or("")
 }
 const OPERATIONS: &[&str] = &[
+    "batch",
     "save",
     "save-as",
     "create",
@@ -959,7 +1050,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and split_slices (true uses output as a directory and writes a PNG sheet and metadata per authored slice).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and split_slices (true uses output as a directory and writes a PNG sheet and metadata per authored slice).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});
@@ -974,10 +1065,22 @@ pub fn run_cli(args: &[String]) -> Result<Value, String> {
             let key = args[i]
                 .strip_prefix("--")
                 .ok_or("Expected --argument value")?;
+            let key = if key == "dry-run" { "dry_run" } else { key };
             let value = args.get(i + 1).ok_or("Missing argument value")?;
             v[key] = if [
-                "inputs", "options", "edits", "commands", "frame", "width", "height", "scale",
-                "layers", "columns",
+                "inputs",
+                "options",
+                "edits",
+                "commands",
+                "frame",
+                "width",
+                "height",
+                "scale",
+                "layers",
+                "columns",
+                "steps",
+                "dry_run",
+                "overwrite",
             ]
             .contains(&key)
             {
@@ -1088,6 +1191,7 @@ fn rpc_with_root(
                     let details = match *name {
                         "live-commands" | "commands" => "Atomic edits with the current revision. Set frame name and/or timing with set-frame (frame,name,duration ms). Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
+                        "batch" => "Run ordered file export steps, or set dry_run to list output paths without writing files.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
                         "live-export" => "Export a revision-matched sprite as PNG, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to PNG and PNG sequences. Frame applies to single-frame PNG.",
                         "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
@@ -1114,6 +1218,19 @@ fn rpc_with_root(
                     props["region"] = json!({"type":"object","required":["x","y","width","height"],
                         "properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},
                         "additionalProperties":false});
+                }
+                if *name == "batch" {
+                    let props = &mut tool["inputSchema"]["properties"];
+                    props["steps"] = json!({"type":"array","minItems":1,"maxItems":64,"items":{
+                        "type":"object","required":["operation","arguments"],"additionalProperties":false,
+                        "properties":{
+                            "operation":{"enum":["export","render","atlas","batch-tags","palette-export"]},
+                            "arguments":{"type":"object"}
+                        }
+                    }});
+                    props["dry_run"] = json!({"type":"boolean","default":false});
+                    props["overwrite"] = json!({"type":"boolean","default":false});
+                    tool["inputSchema"]["required"] = json!(["steps"]);
                 }
                 if matches!(*name, "export" | "live-export") {
                     tool["inputSchema"]["properties"]["columns"] = json!({
@@ -2043,12 +2160,10 @@ fn check_tileset_atlas_path(output: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn write_tileset_atlas(
-    path: &Path,
+fn tileset_atlas_layout(
     d: &Document,
     args: &Value,
-    revision: &str,
-) -> Result<Value, String> {
+) -> Result<interchange::TilesetAtlasLayout, String> {
     if ["frame", "region", "scale"]
         .iter()
         .any(|key| args.get(key).is_some())
@@ -2069,7 +2184,17 @@ fn write_tileset_atlas(
         .get("columns")
         .map(|_| number(args, "columns"))
         .transpose()?;
-    let (image, layout) = interchange::tileset_atlas(d, scope, columns)?;
+    interchange::plan_tileset_atlas(d, scope, columns)
+}
+
+fn write_tileset_atlas(
+    path: &Path,
+    d: &Document,
+    args: &Value,
+    revision: &str,
+) -> Result<Value, String> {
+    let layout = tileset_atlas_layout(d, args)?;
+    let image = interchange::render_tileset_atlas(d, &layout);
     mcp_io::write_image_as(path, &image, image::ImageFormat::Png)
         .map_err(|error| error.to_string())?;
     let mut metadata = serde_json::to_value(layout).map_err(|error| error.to_string())?;
@@ -2313,13 +2438,20 @@ fn preview_image(
     preview_composite(&sprite, f, args, revision, limit)
 }
 
-fn preview_composite(
+struct RenderGeometry {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    scale: usize,
+}
+
+fn preview_geometry(
     sprite: &Document,
     f: usize,
     args: &Value,
-    revision: &str,
     limit: usize,
-) -> Result<(image::RgbaImage, Value), String> {
+) -> Result<RenderGeometry, String> {
     if f >= sprite.durations.len() {
         return Err("Invalid frame".into());
     }
@@ -2355,6 +2487,29 @@ fn preview_composite(
             "Render scale must be positive and output must fit {limit} pixels"
         ));
     }
+    Ok(RenderGeometry {
+        x,
+        y,
+        width: w,
+        height: h,
+        scale,
+    })
+}
+
+fn preview_composite(
+    sprite: &Document,
+    f: usize,
+    args: &Value,
+    revision: &str,
+    limit: usize,
+) -> Result<(image::RgbaImage, Value), String> {
+    let RenderGeometry {
+        x,
+        y,
+        width: w,
+        height: h,
+        scale,
+    } = preview_geometry(sprite, f, args, limit)?;
     let pixels = crate::color::display_pixels(sprite, f).unwrap_or_else(|_| sprite.composite(f));
     let cropped = (y..y + h)
         .flat_map(|row| {
