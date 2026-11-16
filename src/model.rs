@@ -2143,20 +2143,69 @@ impl Document {
         let (color, n) = self.drawing_color(l, f, color);
         self.draw_pixel(l, f, i, color, n);
     }
+    /// Estimate pixels inspected and backing allocated by a scoped color replacement.
+    pub fn color_replacement_cost(
+        &self,
+        layer: usize,
+        frame: usize,
+        source: Pixel,
+        replacement: Pixel,
+        area: usize,
+    ) -> (usize, usize) {
+        let layer_data = &self.layers[layer];
+        let cel = &layer_data.cels[frame];
+        let (color, slot) = self.drawing_color(layer, frame, replacement);
+        if area == 0 || color == source {
+            return (1, 0);
+        }
+        let meta = &layer_data.cel_meta[frame];
+        let existing = cel.allocation_pixels();
+        let (scan, raster) = if source == CLEAR {
+            // Each changed pixel could require a separate sparse block.
+            let raster = (existing + area * (PIXEL_BLOCK + 8)).min(cel.len());
+            (area, raster)
+        } else {
+            (area.min(existing), existing)
+        };
+        if scan == 0 {
+            return (1, 0);
+        }
+        let indices = if self.color_mode == ColorMode::Indexed
+            && (meta.indices.is_some() || slot as usize != self.transparent_index)
+        {
+            cel.len().div_ceil(std::mem::size_of::<Pixel>())
+        } else {
+            0
+        };
+        let link_work = if meta.artwork_link.is_some() {
+            self.durations.len()
+        } else {
+            0
+        };
+        (scan + link_work, raster + indices)
+    }
+
     /// Replace an exact RGBA match in one editable raster cel.
+    /// The region contains the left, top, right, and bottom edges, with exclusive final edges.
     pub fn replace_color_in_cel(
         &mut self,
         layer: usize,
         frame: usize,
         source: Pixel,
         replacement: Pixel,
-        mask: Option<&[bool]>,
+        region: [usize; 4],
+        selected: impl Fn(usize) -> bool,
     ) -> usize {
+        let [left, top, right, bottom] = region;
+        let width = self.width;
         if source == replacement
             || frame >= self.durations.len()
             || !self.editable(layer)
             || self.layers[layer].tileset.is_some()
-            || mask.is_some_and(|mask| mask.len() != self.width * self.height)
+            || left >= right
+            || top >= bottom
+            || right > width
+            || bottom > self.height
         {
             return 0;
         }
@@ -2167,7 +2216,11 @@ impl Document {
         let cel = self.layers[layer].cels[frame].clone();
         let mut changed = 0;
         let mut replace = |i, pixel| {
-            if pixel == source && mask.is_none_or(|mask| mask[i]) {
+            if pixel == source
+                && (left..right).contains(&(i % width))
+                && (top..bottom).contains(&(i / width))
+                && selected(i)
+            {
                 if changed == 0 && self.layers[layer].cel_meta[frame].artwork_link.is_some() {
                     // An edit with explicit frame or selection limits must not propagate to linked cels.
                     self.layers[layer].cel_meta[frame].artwork_link = None;
@@ -2177,9 +2230,12 @@ impl Document {
                 changed += 1;
             }
         };
-        if source == CLEAR {
-            for (i, &pixel) in cel.iter().enumerate() {
-                replace(i, pixel);
+        let area = (right - left) * (bottom - top);
+        if source == CLEAR || area < cel.allocation_pixels() {
+            for y in top..bottom {
+                for i in y * width + left..y * width + right {
+                    replace(i, cel[i]);
+                }
             }
         } else {
             cel.visit_nonclear(replace);

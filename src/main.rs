@@ -216,7 +216,8 @@ struct FramePrefetch {
 struct ReplaceColor {
     source: Pixel,
     replacement: Pixel,
-    all_cels: bool,
+    all_layers: bool,
+    all_frames: bool,
     selection_only: bool,
 }
 
@@ -1395,7 +1396,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.extension_session = None;
         self.active_tag = None;
         self.preview_playback = None;
-        self.preview_pan = Vec2::ZERO;
         self.palette_index = 0;
         self.render_snapshot = None;
         self.doc = d;
@@ -1469,7 +1469,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
         self.preview_playback = None;
-        self.preview_pan = Vec2::ZERO;
         self.extension_session = None;
         self.render_snapshot = None;
         self.playing = false;
@@ -1967,10 +1966,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "clear" => self.clear(),
             "replace-color" => {
+                self.playing = false;
+                self.playback_waiting_for_frame = false;
                 self.replace_color = Some(ReplaceColor {
                     source: self.fg,
                     replacement: self.bg,
-                    all_cels: false,
+                    all_layers: false,
+                    all_frames: false,
                     selection_only: self.selection.is_some(),
                 });
             }
@@ -3882,39 +3884,80 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         );
     }
     fn apply_replace_color(&mut self, request: ReplaceColor) {
-        if request.selection_only && self.selection.is_none() {
+        if request.source == request.replacement
+            || (request.selection_only && self.selection.is_none())
+        {
             return;
         }
-        let mask = request.selection_only.then(|| {
-            (0..self.doc.width * self.doc.height)
-                .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
-                .collect::<Vec<_>>()
-        });
-        let layers = if request.all_cels {
+        let layers = if request.all_layers {
             0..self.doc.layers.len()
         } else {
             self.layer..self.layer + 1
         };
-        let frames = if request.all_cels {
+        let frames = if request.all_frames {
             0..self.doc.durations.len()
         } else {
             self.frame..self.frame + 1
         };
+        let width = self.doc.width;
+        let height = self.doc.height;
+        let region = if request.selection_only {
+            let [x, y, w, h] = self.selection_bounds();
+            [
+                x.clamp(0, width as i32) as usize,
+                y.clamp(0, height as i32) as usize,
+                x.saturating_add(w).clamp(0, width as i32) as usize,
+                y.saturating_add(h).clamp(0, height as i32) as usize,
+            ]
+        } else {
+            [0, 0, width, height]
+        };
+        let [left, top, right, bottom] = region;
+        let area = (right - left) * (bottom - top);
+        let targets = layers
+            .filter(|&layer| self.doc.editable(layer) && self.doc.layers[layer].tileset.is_none())
+            .flat_map(|layer| frames.clone().map(move |frame| (layer, frame)));
+
+        // Bound both the scan and the copy-on-write backing kept alive by Undo.
+        const REPLACEMENT_BUDGET: usize = MAX_PIXELS / 4;
+        let mut work = 0;
+        let mut allocation = 0;
+        for (layer, frame) in targets.clone() {
+            let (cel_work, cel_allocation) = self.doc.color_replacement_cost(
+                layer,
+                frame,
+                request.source,
+                request.replacement,
+                area,
+            );
+            work += cel_work;
+            allocation += cel_allocation;
+            if work > REPLACEMENT_BUDGET || allocation > REPLACEMENT_BUDGET {
+                self.status =
+                    "Color replacement is too large. Reduce the scope or selection.".into();
+                return;
+            }
+        }
+
         let mut next = self.doc.clone();
         let mut count = 0;
-        for layer in layers {
-            for frame in frames.clone() {
-                count += next.replace_color_in_cel(
-                    layer,
-                    frame,
-                    request.source,
-                    request.replacement,
-                    mask.as_deref(),
-                );
-            }
+        for (layer, frame) in targets {
+            count += next.replace_color_in_cel(
+                layer,
+                frame,
+                request.source,
+                request.replacement,
+                region,
+                |index| {
+                    !request.selection_only
+                        || self.selected((index % width) as i32, (index / width) as i32)
+                },
+            );
         }
         if count == 0 {
             self.status = "No matching pixels changed".into();
+        } else if let Err(error) = next.validate() {
+            self.status = error;
         } else {
             self.remember();
             self.doc = next;
@@ -3939,24 +3982,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 });
             }
             ui.label("Scope");
-            ui.radio_value(&mut request.all_cels, false, "Active layer and frame");
-            ui.radio_value(
-                &mut request.all_cels,
-                true,
-                "All unlocked image layers and frames",
-            );
+            ui.pc_checkbox(&mut request.all_layers, "All unlocked image layers");
+            ui.pc_checkbox(&mut request.all_frames, "All frames");
             ui.add_enabled_ui(self.selection.is_some(), |ui| {
                 ui.pc_checkbox(&mut request.selection_only, "Limit to selection");
             });
             let editable =
                 self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none();
-            if !request.all_cels && !editable {
+            if !request.all_layers && !editable {
                 ui.small("Choose an unlocked image layer or change the scope.");
             }
             ui.horizontal(|ui| {
                 apply = ui
                     .add_enabled(
-                        request.source != request.replacement && (request.all_cels || editable),
+                        request.source != request.replacement && (request.all_layers || editable),
                         egui::Button::new("Replace"),
                     )
                     .clicked();
@@ -5291,6 +5330,51 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
+    fn replace_color_can_update_all_frames_of_one_layer() {
+        let mut a = app();
+        a.doc = Document::new(1, 1);
+        a.doc.add_frame(0, false);
+        a.doc.add_layer();
+        let source = [12, 34, 56, 255];
+        for layer in 0..2 {
+            for frame in 0..2 {
+                a.doc.set_pixel(layer, frame, 0, source);
+            }
+        }
+        a.apply_replace_color(ReplaceColor {
+            source,
+            replacement: CLEAR,
+            all_layers: false,
+            all_frames: true,
+            selection_only: false,
+        });
+        assert!(a.doc.layers[0].cels.iter().all(|cel| cel[0] == CLEAR));
+        assert!(a.doc.layers[1].cels.iter().all(|cel| cel[0] == source));
+    }
+
+    #[test]
+    fn replace_color_limits_large_transparent_regions_but_can_update_a_small_selection() {
+        let mut a = app();
+        a.doc = Document::new(5000, 5000);
+        let color = [12, 34, 56, 255];
+        let mut request = ReplaceColor {
+            source: CLEAR,
+            replacement: color,
+            all_layers: false,
+            all_frames: false,
+            selection_only: false,
+        };
+        a.apply_replace_color(request);
+        assert!(a.undo.is_empty());
+        assert_eq!(a.doc.layers[0].cels[0].allocation_pixels(), 0);
+        a.selection = Some((1, 2, 1, 2));
+        request.selection_only = true;
+        a.apply_replace_color(request);
+        assert_eq!(a.doc.layers[0].cels[0][10001], color);
+        assert_eq!(a.doc.layers[0].cels[0][10000], CLEAR);
+    }
+
+    #[test]
     fn replace_color_selection_across_cels_is_one_undo_and_respects_locked_layers() {
         let mut a = app();
         a.doc = Document::new(3, 1);
@@ -5313,7 +5397,8 @@ mod tests {
         a.apply_replace_color(ReplaceColor {
             source,
             replacement,
-            all_cels: true,
+            all_layers: true,
+            all_frames: true,
             selection_only: true,
         });
         for layer in 0..2 {
@@ -5343,7 +5428,8 @@ mod tests {
         a.apply_replace_color(ReplaceColor {
             source,
             replacement: CLEAR,
-            all_cels: false,
+            all_layers: false,
+            all_frames: false,
             selection_only: false,
         });
         assert_eq!(a.doc.layers[0].cels[0][0], CLEAR);
