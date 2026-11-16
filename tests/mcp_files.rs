@@ -2195,6 +2195,67 @@ fn photoshop_flat_rgb_keeps_icc_and_distinguishes_saved_channels_from_alpha() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn photoshop_preview_preserves_visible_clipping_and_adjustment_appearance() {
+    let w = Workspace::new();
+    for (clip, tag, visibility, real_preview, expected) in [
+        (1, b"none", 0, true, [15, 92, 135, 255]),
+        (0, b"curv", 0, true, [15, 92, 135, 255]),
+        (0, b"curv", 2, true, [0, 0, 0, 0]),
+        (1, b"none", 0, false, [200, 40, 8, 255]),
+    ] {
+        let mut layer = 1i16.to_be_bytes().to_vec();
+        for edge in [0u32, 0, 1, 1] {
+            layer.extend_from_slice(&edge.to_be_bytes());
+        }
+        layer.extend_from_slice(&3u16.to_be_bytes());
+        for channel in [0u16, 1, 2] {
+            layer.extend_from_slice(&channel.to_be_bytes());
+            layer.extend_from_slice(&3u32.to_be_bytes());
+        }
+        layer.extend_from_slice(b"8BIMnorm");
+        layer.extend_from_slice(&[255, clip, visibility, 0]);
+        let mut extra = vec![0; 8];
+        extra.extend_from_slice(b"\x03Ink");
+        extra.extend_from_slice(b"8BIM");
+        extra.extend_from_slice(tag);
+        extra.extend_from_slice(&0u32.to_be_bytes());
+        layer.extend_from_slice(&(extra.len() as u32).to_be_bytes());
+        layer.extend(extra);
+        layer.extend_from_slice(&[0, 0, 200, 0, 0, 40, 0, 0, 8]);
+
+        let mut src = b"8BPS\0\x01".to_vec();
+        src.extend_from_slice(&[0; 6]);
+        src.extend_from_slice(b"\0\x03\0\0\0\x01\0\0\0\x01\0\x08\0\x03");
+        src.extend_from_slice(&[0; 4]);
+        let mut resources = b"8BIM\x04\x21\0\0\0\0\0\x11\0\0\0\x01".to_vec();
+        resources.push(u8::from(real_preview));
+        resources.extend_from_slice(&[0; 12]);
+        resources.push(0);
+        src.extend_from_slice(&(resources.len() as u32).to_be_bytes());
+        src.extend(resources);
+        src.extend_from_slice(&(layer.len() as u32 + 8).to_be_bytes());
+        src.extend_from_slice(&(layer.len() as u32).to_be_bytes());
+        src.extend(layer);
+        src.extend_from_slice(b"\0\0\0\0\0\0\x0f\x5c\x87");
+        let path = w.project().join("composite.psd");
+        fs::write(&path, src).unwrap();
+
+        let doc = formats::load(&path).unwrap();
+        assert_eq!(doc.composite(0), [expected]);
+        assert_eq!(doc.layers[0].cels[0][0], [200, 40, 8, 255]);
+        assert_eq!(
+            doc.layers.len(),
+            if real_preview && visibility == 0 {
+                3
+            } else {
+                1
+            }
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn photoshop_indexed_import_retains_duplicate_slots_and_transparency() {
     let w = Workspace::new();
     for (version, transparent) in [(1u16, Some(2u16)), (2, None)] {

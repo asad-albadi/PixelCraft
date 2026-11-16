@@ -103,6 +103,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 merged-image checkpoint. The loader recognizes signed layer counts, merged transparency tags, and alpha identifiers. It skips saved selection planes during preview decoding and removes Photoshop's white matte from partially transparent preview pixels with explicit transparency. Embedded 8- and 16-bit RGB and grayscale ICC profiles survive import. Seven external RGB and grayscale fixtures retained their ICC payload byte-for-byte through PNG export, with alpha and visible colors matching within one channel value. The six high-depth fixtures and the indexed fixture also passed again. Formatting, strict Clippy, and 510 Windows all-target tests passed. Photoshop clipping and adjustment previews, 32-bit profile conversion, and native grayscale PNG export remain open.
 
+- Item 35 complete. PSD and PSB import now uses the embedded merged image for visible clipping and recognized adjustment layers while preserving available raster layers in an editable group. The importer honors the version resource when Photoshop declares that no real merge was saved. Four external PSD/PSB clipping and adjustment fixtures matched reference alpha and visible pixels exactly. A fifth opened its raster layers without a merged image. Formatting, strict Clippy, and 511 Windows all-target tests passed. The format checklist covers every requested importer and exporter. Native editing of Photoshop-only effects, support for additional Photoshop color modes, and 32-bit ICC conversion remain outside the implemented raster interchange.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -148,7 +150,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **32. Expand export filtering, splitting, and naming.** Include layer and group filters, per-layer and grid splits, named slices and frame ranges, and filename and tag templates.
 - [x] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
 - [x] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
-- [ ] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
+- [x] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
 - [ ] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.
 - [ ] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.
 - [ ] **38. Apply imported pixel aspect ratios and grid defaults.** Use the stored values as editable sprite properties.

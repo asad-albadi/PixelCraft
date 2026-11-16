@@ -109,6 +109,11 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     match layers {
         ImportedLayers::Editable => {}
         ImportedLayers::None => {
+            if !resources.has_merged_image {
+                return Err(
+                    "Photoshop document has neither raster layers nor a merged image".into(),
+                );
+            }
             let palette = indexed.then_some(doc.palette.as_slice());
             decode_merged(
                 &mut input,
@@ -120,7 +125,9 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
                 &mut doc.layers[0],
             )?;
         }
-        ImportedLayers::NeedsPreview if input.end - input.position >= 2 => {
+        ImportedLayers::NeedsPreview
+            if resources.has_merged_image && input.end - input.position >= 2 =>
+        {
             let mut preview = Layer::new("Photoshop merged preview".into(), width, height, 1);
             let palette = indexed.then_some(doc.palette.as_slice());
             decode_merged(
@@ -155,6 +162,7 @@ struct ImageResources {
     transparent: Option<u8>,
     alpha_ids: Option<Vec<u32>>,
     icc: Vec<u8>,
+    has_merged_image: bool,
 }
 
 impl ImageResources {
@@ -164,6 +172,7 @@ impl ImageResources {
             transparent: None,
             alpha_ids: None,
             icc: Vec::new(),
+            has_merged_image: true,
         };
         while input.position < input.end {
             if !matches!(
@@ -206,6 +215,9 @@ impl ImageResources {
                                 .map(|_| input.u32())
                                 .collect::<Result<Vec<_>, _>>()?,
                         );
+                    }
+                    1057 if length >= 5 && input.u32()? == 1 => {
+                        resources.has_merged_image = input.byte()? != 0;
                     }
                     _ => {}
                 }
@@ -378,6 +390,7 @@ struct Record {
     blend: BlendMode,
     mask: Option<Mask>,
     has_fill: bool,
+    needs_composite: bool,
 }
 
 impl Record {
@@ -394,9 +407,9 @@ impl Record {
             return Err("Invalid Photoshop layer signature".into());
         }
         let blend = blend_mode(input.array()?);
-        let [opacity, _, flags, _] = input.array::<4>()?;
+        let [opacity, clipping, flags, _] = input.array::<4>()?;
         let length = input.length(false)?;
-        let (mask, name, group, has_fill) = input.section(length, |input| {
+        let (mask, name, group, has_fill, needs_composite) = input.section(length, |input| {
             let mask_length = input.length(false)?;
             let mask = if mask_length > 0 {
                 Some(input.section(mask_length, Mask::read)?)
@@ -412,6 +425,7 @@ impl Record {
             let mut name = String::from_utf8_lossy(&name).into_owned();
             let mut group = 0;
             let mut has_fill = false;
+            let mut needs_composite = clipping != 0;
             while let Some((key, length)) = input.tagged_header(large)? {
                 input.section(length, |input| {
                     match &key {
@@ -429,6 +443,9 @@ impl Record {
                         }
                         b"lsct" | b"lsdk" => group = input.u32()?,
                         b"SoCo" | b"GdFl" | b"PtFl" => has_fill = true,
+                        b"blwh" | b"brit" | b"mixr" | b"clrL" | b"curv" | b"expA" | b"grdm"
+                        | b"hue2" | b"hue " | b"nvrt" | b"levl" | b"phfl" | b"post" | b"selc"
+                        | b"thrs" | b"vibA" => needs_composite = true,
                         _ => {}
                     }
                     Ok(())
@@ -437,7 +454,7 @@ impl Record {
                     input.skip(1)?;
                 }
             }
-            Ok((mask, name, group, has_fill))
+            Ok((mask, name, group, has_fill, needs_composite))
         })?;
         Ok(Self {
             bounds,
@@ -449,6 +466,7 @@ impl Record {
             blend,
             mask,
             has_fill,
+            needs_composite,
         })
     }
 }
@@ -638,10 +656,12 @@ fn read_layers(
             );
         }
         let raster = planes[..colors].iter().all(|plane| !plane.is_empty());
-        if !layer.group
-            && visible
-            && !raster
-            && (record.has_fill || !record.bounds.size().contains(&0))
+        if visible
+            && record.opacity != 0
+            && (record.needs_composite
+                || (!layer.group
+                    && !raster
+                    && (record.has_fill || !record.bounds.size().contains(&0))))
         {
             needs_preview = true;
         }
