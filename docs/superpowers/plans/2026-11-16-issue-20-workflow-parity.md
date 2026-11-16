@@ -25,9 +25,11 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Items 1–2 in progress. Workspace decoding now runs off the UI thread. The editor presents Restore workspace and Discard backup, preserving artwork opened during recovery. Windows release-candidate debug startup became responsive in 0.73 seconds against a copied 33,561,892-byte recovery snapshot. Formatting, strict Clippy and 422 Windows all-target tests passed. Per-document choice and raw-image salvage remain open.
 
+- Item 1 complete and item 2 in progress. The recovery window lists all backed-up documents and can restore or discard each independently. After a decision, autosave preserves pending backups alongside open artwork. A discard removes the previous snapshot that could otherwise resurrect the deleted entry. Formatting, strict Clippy and 424 Windows tests passed. Raw-image salvage remains open.
+
 ## Recovery and distribution
 
-- [ ] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
+- [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
 - [ ] **2. Recover individual documents and raw images.** Browse backups, recover or delete them independently, and salvage readable images as layers or frames.
 - [ ] **3. Ship macOS builds.** Add a native Lua runtime, macOS CI and startup tests, and release packages for Apple Silicon and Intel.
 - [ ] **4. Expand Windows and Linux packaging.** Publish and smoke-test a standalone Windows executable, a Linux tarball, and a Debian package.

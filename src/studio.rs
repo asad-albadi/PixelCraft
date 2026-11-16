@@ -6,6 +6,12 @@ use pixelcraft::{
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
+struct RecoveryWrite {
+    state: Workspace,
+    reset_history: bool,
+    result: Result<(), String>,
+}
+
 pub(super) struct Studio {
     pub recovery_enabled: bool,
     pub open: bool,
@@ -38,9 +44,11 @@ pub(super) struct Studio {
     recovery_root: PathBuf,
     last_save: Instant,
     last_session: Option<Workspace>,
-    recovery_job: Option<std::thread::JoinHandle<(Workspace, Result<(), String>)>>,
+    recovery_job: Option<std::thread::JoinHandle<RecoveryWrite>>,
     restore_job: Option<std::thread::JoinHandle<Result<Option<Workspace>, String>>>,
     restore_candidate: Option<Workspace>,
+    recovery_decided: bool,
+    reset_recovery_history: bool,
     restore_started: Instant,
     pub recovery_status: String,
 }
@@ -97,6 +105,8 @@ impl Default for Studio {
             recovery_job: None,
             restore_job: None,
             restore_candidate: None,
+            recovery_decided: false,
+            reset_recovery_history: false,
             restore_started: Instant::now(),
             recovery_status: "Autosave every 15 seconds".into(),
         }
@@ -130,6 +140,18 @@ struct Workspace {
     colors: Vec<(String, Pixel)>,
     color: usize,
 }
+impl Workspace {
+    fn remove_tab(&mut self, index: usize) -> bool {
+        if index >= self.tabs.len() {
+            return false;
+        }
+        self.tabs.remove(index);
+        self.active =
+            (self.active - usize::from(index < self.active)).min(self.tabs.len().saturating_sub(1));
+        true
+    }
+}
+
 impl PixelCraft {
     fn workspace(&self) -> Workspace {
         let tabs = self
@@ -186,7 +208,7 @@ impl PixelCraft {
         {
             let job = self.studio.recovery_job.take().unwrap();
             match job.join() {
-                Ok((state, result)) => self.record_recovery(state, result),
+                Ok(write) => self.record_recovery(write),
                 Err(_) => {
                     self.studio.recovery_status = "Autosave worker stopped unexpectedly".into()
                 }
@@ -197,38 +219,56 @@ impl PixelCraft {
         }
         if self.studio.recovery_job.is_some()
             || self.studio.restore_job.is_some()
-            || self.studio.restore_candidate.is_some()
+            || (self.studio.restore_candidate.is_some() && !self.studio.recovery_decided)
         {
             return;
         }
-        if !force && self.studio.last_save.elapsed() < Duration::from_secs(15) {
+        if !force
+            && !self.studio.reset_recovery_history
+            && self.studio.last_save.elapsed() < Duration::from_secs(15)
+        {
             return;
         }
         self.studio.last_save = Instant::now();
-        let state = self.workspace();
-        if self.studio.last_session.as_ref() == Some(&state) {
+        let mut state = self.workspace();
+        if let Some(pending) = &self.studio.restore_candidate {
+            state.tabs.extend(pending.tabs.iter().cloned());
+        }
+        if !self.studio.reset_recovery_history && self.studio.last_session.as_ref() == Some(&state)
+        {
             return;
         }
         let root = self.studio.recovery_root.clone();
+        let reset_history = std::mem::take(&mut self.studio.reset_recovery_history);
+        let save = move || {
+            let result = write_recovery_snapshot(&root, &state, reset_history);
+            RecoveryWrite {
+                state,
+                reset_history,
+                result,
+            }
+        };
         if force {
-            let result = write_recovery(&root, &state);
-            self.record_recovery(state, result);
+            self.record_recovery(save());
         } else {
             let ctx = ctx.clone();
             self.studio.recovery_job = Some(std::thread::spawn(move || {
-                let result = write_recovery(&root, &state);
+                let write = save();
                 ctx.request_repaint();
-                (state, result)
+                write
             }));
         }
     }
-    fn record_recovery(&mut self, state: Workspace, result: Result<(), String>) {
-        match result {
+    fn record_recovery(&mut self, write: RecoveryWrite) {
+        match write.result {
             Ok(()) => {
-                self.studio.last_session = Some(state);
-                self.studio.recovery_status = "Open tabs and unsaved work backed up".into()
+                self.studio.last_session = Some(write.state);
+                self.studio.recovery_status = "Open tabs and unsaved work backed up".into();
             }
-            Err(e) => self.studio.recovery_status = format!("Autosave failed: {e}"),
+            Err(e) => {
+                self.studio.reset_recovery_history |= write.reset_history;
+                self.studio.recovery_status = format!("Autosave failed: {e}");
+            }
         }
     }
     pub(super) fn restore_workspace(&mut self) {
@@ -278,41 +318,121 @@ impl PixelCraft {
             }
             return;
         };
-        let mut restore = false;
-        let mut discard = false;
+        let mut restore = None;
+        let mut discard = None;
         egui::Window::new("Workspace recovery")
             .resizable(false)
             .show(ctx, |ui| {
-                ui.label(format!(
-                    "Recover {} open tabs, including unsaved work?",
-                    state.tabs.len()
-                ));
+                ui.label("Choose which backups to restore or discard.");
+                egui::ScrollArea::vertical()
+                    .max_height(280.)
+                    .show(ui, |ui| {
+                        for (index, tab) in state.tabs.iter().enumerate() {
+                            ui.push_id(index, |ui| {
+                                ui.horizontal(|ui| {
+                                    let display_name = tab
+                                        .path
+                                        .as_ref()
+                                        .and_then(|path| path.file_name())
+                                        .map_or_else(
+                                            || format!("Untitled {}", index + 1),
+                                            |name| name.to_string_lossy().into_owned(),
+                                        );
+                                    let label = ui.label(display_name);
+                                    if let Some(path) = &tab.path {
+                                        label.on_hover_text(path.display().to_string());
+                                    }
+                                    ui.add_enabled_ui(
+                                        self.script_job.is_none() && self.save_job.is_none(),
+                                        |ui| {
+                                            if ui.pc_button("Restore").clicked() {
+                                                restore = Some(Some(index));
+                                            }
+                                        },
+                                    );
+                                    if ui.pc_button("Discard").clicked() {
+                                        discard = Some(Some(index));
+                                    }
+                                });
+                            });
+                        }
+                    });
+                ui.separator();
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(self.script_job.is_none() && self.save_job.is_none(), |ui| {
-                        restore = ui.pc_button("Restore workspace").clicked();
+                        if ui.pc_button("Restore all").clicked() {
+                            restore = Some(None);
+                        }
                     });
-                    discard = ui.pc_button("Discard backup").clicked();
+                    if ui.pc_button("Discard all").clicked() {
+                        discard = Some(None);
+                    }
                 });
             });
-        if restore {
-            self.apply_workspace_restore();
-        } else if discard {
-            let result = discard_recovery(&self.studio.recovery_root);
-            match result {
-                Ok(()) => {
-                    self.studio.restore_candidate = None;
-                    self.status = "Workspace backup discarded".into();
-                }
-                Err(error) => self.status = format!("Could not discard workspace backup: {error}"),
-            }
+        if let Some(index) = restore {
+            self.apply_workspace_restore(index);
+        } else if let Some(index) = discard {
+            self.discard_workspace_backup(index, ctx);
         }
     }
 
-    fn apply_workspace_restore(&mut self) {
-        let Some(state) = self.studio.restore_candidate.take() else {
+    fn discard_workspace_backup(&mut self, index: Option<usize>, ctx: &egui::Context) {
+        if let Some(index) = index {
+            let Some(state) = &mut self.studio.restore_candidate else {
+                return;
+            };
+            if !state.remove_tab(index) {
+                return;
+            }
+            if state.tabs.is_empty() {
+                self.studio.restore_candidate = None;
+            }
+            self.studio.recovery_decided = true;
+            self.studio.reset_recovery_history = true;
+            self.studio.last_save = Instant::now();
+            self.autosave(false, ctx);
+            self.status = "Removed document from recovery list".into();
+            return;
+        }
+        if self.studio.recovery_job.is_some() {
+            self.status = "Wait for autosave before discarding all backups".into();
+            return;
+        }
+        match discard_recovery(&self.studio.recovery_root) {
+            Ok(()) => {
+                self.studio.restore_candidate = None;
+                self.studio.reset_recovery_history = false;
+                self.studio.last_session = None;
+                self.status = "Workspace backup discarded".into();
+            }
+            Err(error) => self.status = format!("Could not discard workspace backup: {error}"),
+        }
+    }
+
+    fn apply_workspace_restore(&mut self, index: Option<usize>) {
+        let Some(mut state) = self.studio.restore_candidate.take() else {
             return;
         };
+        if let Some(index) = index {
+            let Some(tab) = state.tabs.get(index).cloned() else {
+                self.studio.restore_candidate = Some(state);
+                return;
+            };
+            state.remove_tab(index);
+            let single = Workspace {
+                tabs: vec![tab],
+                active: 0,
+                colors: state.colors.clone(),
+                ..state
+            };
+            if !state.tabs.is_empty() {
+                self.studio.restore_candidate = Some(state);
+            }
+            self.studio.recovery_decided = true;
+            state = single;
+        }
         let empty_workspace = self.tabs.len() == 1 && self.path.is_none() && !self.dirty();
+        let restored_count = state.tabs.len();
         let open_count = self.tabs.len();
         let restored_active = open_count + state.active;
         for t in &state.tabs {
@@ -344,12 +464,11 @@ impl PixelCraft {
             self.named_colors.clone_from(&state.colors);
             self.active_color = state.color;
             self.fg = self.named_colors[self.active_color].1;
-            self.studio.last_session = Some(state);
+            if index.is_none() && !self.studio.recovery_decided {
+                self.studio.last_session = Some(state);
+            }
         }
-        self.status = format!(
-            "Restored {} open tabs",
-            self.tabs.len() - if empty_workspace { 0 } else { open_count }
-        );
+        self.status = format!("Restored {restored_count} open tabs");
     }
     pub(super) fn selection_bounds(&self) -> [i32; 4] {
         let (x, y, x1, y1) =
@@ -1137,7 +1256,16 @@ fn discard_recovery(root: &std::path::Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
+#[cfg(test)]
 fn write_recovery(root: &std::path::Path, state: &Workspace) -> Result<(), String> {
+    write_recovery_snapshot(root, state, false)
+}
+
+fn write_recovery_snapshot(
+    root: &std::path::Path,
+    state: &Workspace,
+    reset_history: bool,
+) -> Result<(), String> {
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
     let mut buffered = std::io::BufWriter::with_capacity(64 * 1024, &mut z);
@@ -1148,9 +1276,15 @@ fn write_recovery(root: &std::path::Path, state: &Workspace) -> Result<(), Strin
     let file = root.join("workspace.recovery");
     let tmp = root.join("workspace.recovery.tmp");
     std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
-    if file.exists() {
-        std::fs::copy(&file, root.join("workspace.recovery.previous"))
-            .map_err(|e| e.to_string())?;
+    let previous = root.join(RECOVERY_FILES[1]);
+    if reset_history {
+        match std::fs::remove_file(&previous) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    } else if file.exists() {
+        std::fs::copy(&file, previous).map_err(|error| error.to_string())?;
     }
     std::fs::rename(tmp, file).map_err(|e| e.to_string())
 }
@@ -1293,13 +1427,86 @@ mod tests {
         assert_eq!(backup.tabs[0].doc.layers[1].cels[0][0], ink);
 
         let current_tab = editor.active_tab;
-        editor.apply_workspace_restore();
+        editor.apply_workspace_restore(None);
         assert_eq!(editor.tabs.len(), 3);
         assert_eq!(editor.doc.layers[1].cels[0][0], ink);
         editor.switch_tab(current_tab);
         assert_eq!((editor.doc.width, editor.doc.height), (2, 3));
         assert!(editor.dirty());
         assert_eq!(editor.doc.layers[0].cels[0][0], ink);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_restores_one_document_and_keeps_other_backups_pending() {
+        let mut previous = app();
+        previous.path = Some(PathBuf::from("first.pixel"));
+        previous.open_document(Document::new(2, 2), Some(PathBuf::from("second.pixel")));
+        let mut editor = app();
+        editor.studio.restore_candidate = Some(previous.workspace());
+        editor.apply_workspace_restore(Some(0));
+
+        assert_eq!(
+            editor.path.as_deref(),
+            Some(std::path::Path::new("first.pixel"))
+        );
+        assert_eq!(editor.tabs.len(), 1);
+        let pending = editor.studio.restore_candidate.as_ref().unwrap();
+        assert_eq!(pending.tabs.len(), 1);
+        assert_eq!(
+            pending.tabs[0].path.as_deref(),
+            Some(std::path::Path::new("second.pixel"))
+        );
+
+        editor.apply_workspace_restore(Some(0));
+        assert_eq!(editor.tabs.len(), 2);
+        assert_eq!(
+            editor.path.as_deref(),
+            Some(std::path::Path::new("second.pixel"))
+        );
+        assert!(editor.studio.restore_candidate.is_none());
+    }
+
+    #[test]
+    fn discarding_one_recovery_keeps_remaining_backups_and_current_work_on_disk() {
+        use std::path::Path;
+
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-discard-recovery-{}",
+            std::process::id()
+        ));
+        let removed = root.join("discarded.pixel");
+        let kept = root.join("kept.pixel");
+        let current = root.join("current.pixel");
+        let mut previous = app();
+        previous.path = Some(removed.clone());
+        previous.open_document(Document::new(2, 2), Some(kept.clone()));
+        let backup = previous.workspace();
+        write_recovery(&root, &backup).unwrap();
+        write_recovery(&root, &backup).unwrap();
+
+        let ctx = egui::Context::default();
+        let mut editor = app();
+        editor.path = Some(current.clone());
+        editor.studio.recovery_root = root.clone();
+        editor.studio.recovery_enabled = true;
+        editor.studio.restore_candidate = Some(backup);
+        editor.discard_workspace_backup(Some(0), &ctx);
+        editor.autosave(true, &ctx);
+
+        let snapshot = read_recovery(&root).unwrap().unwrap();
+        assert_eq!(
+            snapshot
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.path.as_deref())
+                .collect::<Vec<&Path>>(),
+            [current.as_path(), kept.as_path()]
+        );
+        assert!(
+            !root.join(RECOVERY_FILES[1]).exists(),
+            "old generation contained the discarded document"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1327,7 +1534,7 @@ mod tests {
         b.studio.recovery_root = root.clone();
         b.restore_workspace();
         wait_for_recovery(&mut b);
-        b.apply_workspace_restore();
+        b.apply_workspace_restore(None);
         assert_eq!(b.tabs.len(), 2);
         assert_eq!(b.active_tab, 1);
         assert_eq!(b.live_save_root.as_ref(), Some(&second_project));
