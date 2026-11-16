@@ -512,7 +512,13 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
             }
         }
     }
+    // Atlas frame IDs belong to their source sprite. When importing multiple
+    // sources as one timeline, keep the newly assigned document IDs.
+    let multiple_sources = meta["meta"]["sources"]
+        .as_array()
+        .is_some_and(|sources| sources.len() > 1);
     if meta["meta"]["app"] == "PixelCraft"
+        && !multiple_sources
         && frames.iter().any(|frame| frame.get("frameId").is_some())
     {
         let ids: Vec<_> = frames

@@ -150,6 +150,30 @@ fn saving_atlas_preserves_previewed_pixels_and_placements() {
 }
 
 #[test]
+fn multi_source_atlas_reopens_with_distinct_frame_identities() {
+    let mut first = Document::new(1, 1);
+    first.set_frame_name(0, "Takeoff").unwrap();
+    let mut second = Document::new(1, 1);
+    second.set_frame_name(0, "Landing").unwrap();
+
+    let (image, metadata) = pack_atlas(
+        &[
+            ("first.pixel".into(), first),
+            ("second.pixel".into(), second),
+        ],
+        &AtlasOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(metadata["frames"][0]["frameId"], 0);
+    assert_eq!(metadata["frames"][1]["frameId"], 0);
+
+    let reopened = unpack_sheet(&image, &metadata).unwrap();
+    assert_ne!(reopened.frame_export_id(0), reopened.frame_export_id(1));
+    assert_eq!(reopened.frame_name(0), Some("Takeoff"));
+    assert_eq!(reopened.frame_name(1), Some("Landing"));
+}
+
+#[test]
 fn named_frames_require_native_projects_for_save_but_allow_ase_export() {
     let root = std::env::temp_dir().join(format!("pixelcraft-named-ase-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
