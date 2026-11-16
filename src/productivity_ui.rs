@@ -16,6 +16,10 @@ struct Preferences {
     checker_size: usize,
     checker_colors: Option<[[u8; 3]; 2]>,
     autosave: bool,
+    new_sprite_width: usize,
+    new_sprite_height: usize,
+    default_grid: bool,
+    background_updates: bool,
     sample_references: bool,
 }
 impl Default for Preferences {
@@ -29,10 +33,69 @@ impl Default for Preferences {
             checker_size: 8,
             checker_colors: None,
             autosave: true,
+            new_sprite_width: 32,
+            new_sprite_height: 32,
+            default_grid: false,
+            background_updates: false,
             sample_references: false,
         }
     }
 }
+impl Preferences {
+    fn new_sprite_size(&self) -> (usize, usize) {
+        let width = self.new_sprite_width.clamp(1, MAX_DIMENSION);
+        let height = self
+            .new_sprite_height
+            .clamp(1, MAX_DIMENSION.min(MAX_PIXELS / width));
+        (width, height)
+    }
+
+    fn reset_settings(&mut self) {
+        let recent = std::mem::take(&mut self.recent);
+        let preset = std::mem::take(&mut self.preset);
+        *self = Self {
+            recent,
+            preset,
+            ..Self::default()
+        };
+    }
+}
+
+fn recent_file_label(path: &std::path::Path, paths: &[PathBuf]) -> String {
+    let name = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy();
+    let duplicated = paths
+        .iter()
+        .any(|other| other != path && other.file_name() == path.file_name());
+    let label = if duplicated {
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let colliding_parent = paths.iter().any(|other| {
+            other != path
+                && other.file_name() == path.file_name()
+                && other.parent().and_then(std::path::Path::file_name) == parent.file_name()
+        });
+        let folder = if colliding_parent {
+            parent.display().to_string()
+        } else {
+            parent
+                .file_name()
+                .unwrap_or(parent.as_os_str())
+                .to_string_lossy()
+                .into_owned()
+        };
+        format!("{name} ({folder})")
+    } else {
+        name.into_owned()
+    };
+    if path.is_file() {
+        label
+    } else {
+        format!("{label} · Missing")
+    }
+}
+
 pub(super) struct PowerTools {
     pub open: bool,
     pub mode: BrushMode,
@@ -155,6 +218,16 @@ impl PowerTools {
             .map(|c| Color32::from_rgb(c[index][0], c[index][1], c[index][2]))
     }
 
+    pub(super) fn new_sprite_size(&self) -> (usize, usize) {
+        self.preferences.new_sprite_size()
+    }
+    pub(super) fn default_grid(&self) -> bool {
+        self.preferences.default_grid
+    }
+    pub(super) fn background_updates(&self) -> bool {
+        self.preferences.background_updates
+    }
+
     pub(super) fn preferences_onion(&self) -> OnionOptions {
         self.preferences.onion.clone()
     }
@@ -182,7 +255,76 @@ impl PixelCraft {
             self.save_workflow_preferences();
         }
     }
+    pub(super) fn settings_dialog(&mut self, ctx: &egui::Context) {
+        if !self.settings_open {
+            return;
+        }
+        self.settings_open = !fluent::modal_dialog(ctx, "Settings", |ui| {
+            egui::ScrollArea::vertical()
+                .max_height((ctx.content_rect().height() - 130.).max(80.))
+                .show(ui, |ui| self.settings_ui(ui));
+            ui.pc_button("Done").clicked()
+        });
+    }
+
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("New sprites", |ui| {
+            let p = &mut self.power.preferences;
+            let before = (p.new_sprite_size(), p.default_grid);
+            ui.horizontal(|ui| {
+                ui.label("Default size");
+                ui.add(
+                    egui::DragValue::new(&mut p.new_sprite_width)
+                        .range(1..=MAX_DIMENSION)
+                        .suffix(" px"),
+                );
+                ui.label("×");
+                let height_limit =
+                    MAX_DIMENSION.min(MAX_PIXELS / p.new_sprite_width.clamp(1, MAX_DIMENSION));
+                ui.add(
+                    egui::DragValue::new(&mut p.new_sprite_height)
+                        .range(1..=height_limit)
+                        .suffix(" px"),
+                );
+            });
+            ui.pc_checkbox(&mut p.default_grid, "Show pixel grid by default");
+            if before != (p.new_sprite_size(), p.default_grid) {
+                self.grid = p.default_grid;
+                self.save_workflow_preferences();
+            }
+        });
+        ui.collapsing("Updates", |ui| {
+            if ui
+                .pc_checkbox(
+                    &mut self.power.preferences.background_updates,
+                    "Download and verify updates in the background",
+                )
+                .changed()
+            {
+                self.background_update_attempt = None;
+                self.save_workflow_preferences();
+            }
+            ui.small("Install verified updates from Help → About.");
+        });
+        ui.collapsing("Onion skin defaults", |ui| {
+            let before = self.power.preferences.onion.clone();
+            let o = &mut self.power.preferences.onion;
+            ui.add(egui::Slider::new(&mut o.previous, 0..=8).text("Previous frames"));
+            ui.add(egui::Slider::new(&mut o.next, 0..=8).text("Next frames"));
+            ui.horizontal(|ui| {
+                ui.label("Previous tint");
+                ui.color_edit_button_srgb(&mut o.previous_tint);
+            });
+            ui.add(egui::Slider::new(&mut o.previous_opacity, 0..=255).text("Previous opacity"));
+            ui.horizontal(|ui| {
+                ui.label("Next tint");
+                ui.color_edit_button_srgb(&mut o.next_tint);
+            });
+            ui.add(egui::Slider::new(&mut o.next_opacity, 0..=255).text("Next opacity"));
+            if serde_json::to_value(before).ok() != serde_json::to_value(&*o).ok() {
+                self.save_workflow_preferences();
+            }
+        });
         ui.collapsing("Export scaling", |ui| self.export_scale_ui(ui));
         ui.collapsing("Interface & autosave", |ui| {
             let before = serde_json::to_value(&self.power.preferences).ok();
@@ -218,6 +360,15 @@ impl PixelCraft {
                 self.save_workflow_preferences();
             }
         });
+        if ui.pc_button("Reset settings to defaults").clicked() {
+            self.power.preferences.reset_settings();
+            self.grid = self.power.default_grid();
+            self.studio.sheet.scale = 1;
+            self.background_update_attempt = None;
+            self.power.apply_density(ui.ctx());
+            ui.ctx().set_zoom_factor(self.power.interface_scale());
+            self.save_workflow_preferences();
+        }
     }
     fn palette_arrangement_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Palette order & ramps", |ui| {
@@ -264,8 +415,12 @@ impl PixelCraft {
             ui.small("Swatch numbers start at 0. Existing indexed artwork keeps its colors.");
         });
     }
-    pub(super) fn recent_files(&self) -> Vec<PathBuf> {
-        self.power.preferences.recent.clone()
+    pub(super) fn recent_file_entries(&self) -> Vec<(PathBuf, String)> {
+        let files = &self.power.preferences.recent;
+        files
+            .iter()
+            .map(|path| (path.clone(), recent_file_label(path, files)))
+            .collect()
     }
     pub(super) fn open_recent(&mut self, p: PathBuf) {
         if self.open_job.is_some() {
@@ -500,7 +655,6 @@ impl PixelCraft {
         }
         let mut open = true;
         egui::Window::new("Workflow tools").open(&mut open).default_width(530.).default_height(650.).show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{
- self.settings_ui(ui);
  self.palette_arrangement_ui(ui);
  ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
  ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember();self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("Wraparound drawing is independent of View → Seamless preview.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
@@ -513,13 +667,13 @@ ui.horizontal(|ui|{if ui.pc_button("Fit to canvas").clicked(){r.scale=(self.doc.
 if ui.pc_button("Copy to layer").clicked(){let mut d=self.doc.clone();match reference_to_layer(&mut d,&r,self.frame){Ok(())=>{self.remember();self.doc=d;self.layer=self.doc.layers.len()-1;},Err(e)=>self.status=e}}});if r!=self.doc.references[i]{self.remember();self.doc.references[i]=r;}}
 if let Some(i)=remove{self.remember();self.doc.references.remove(i);self.power.reference_edit=None;}
 if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
- ui.collapsing("Onion skin",|ui|{ui.pc_checkbox(&mut self.onion,"Enable onion skin");let before=self.power.preferences.onion.clone();let o=&mut self.power.preferences.onion;ui.add(egui::Slider::new(&mut o.previous,0..=8).text("Previous frames"));ui.add(egui::Slider::new(&mut o.next,0..=8).text("Next frames"));ui.horizontal(|ui|{ui.label("Previous tint");ui.color_edit_button_srgb(&mut o.previous_tint);});ui.add(egui::Slider::new(&mut o.previous_opacity,0..=255).text("Previous opacity"));ui.horizontal(|ui|{ui.label("Next tint");ui.color_edit_button_srgb(&mut o.next_tint);});ui.add(egui::Slider::new(&mut o.next_opacity,0..=255).text("Next opacity"));if serde_json::to_value(before).ok()!=serde_json::to_value(&*o).ok(){self.save_workflow_preferences();}});
+ ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
  ui.collapsing("Grid sprite-sheet import",|ui|{if ui.pc_button("Choose sprite sheet…").clicked()&& let Some(p)=rfd::FileDialog::new().add_filter("Image",&["png","jpg","jpeg"]).pick_file(){match read_image(&p){Ok(im)=>{self.power.grid_texture=Some(ctx.load_texture("grid-import",color_image(&im.pixels().map(|p|p.0).collect::<Vec<_>>(),im.width() as usize,im.height() as usize),egui::TextureOptions::NEAREST));self.power.grid_source=Some(im);},Err(e)=>self.status=e}}let g=&mut self.power.grid;ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.width).prefix("Cell W ").range(1..=16384));ui.add(egui::DragValue::new(&mut g.height).prefix("H ").range(1..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.offset_x).prefix("Offset X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.offset_y).prefix("Y ").range(0..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.spacing_x).prefix("Spacing X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.spacing_y).prefix("Y ").range(0..=16384));});ui.pc_checkbox(&mut g.layers,"Import as layers (otherwise frames)");if let(Some(im),Some(tex))=(&self.power.grid_source,&self.power.grid_texture){match grid_cells(im,g){Ok(cells)=>{ui.label(format!("{} complete cells · row-major order",cells.len()));let scale=(ui.available_width()/im.width() as f32).min(260./im.height() as f32).min(8.);let response=ui.add(egui::Image::new(tex).fit_to_exact_size(Vec2::new(im.width() as f32,im.height() as f32)*scale));let painter=ui.painter_at(response.rect);for(x,y)in cells.iter().take(4096){painter.rect_stroke(Rect::from_min_size(response.rect.min+Vec2::new(*x as f32,*y as f32)*scale,Vec2::new(g.width as f32,g.height as f32)*scale),0,Stroke::new(1.,Color32::from_rgb(255,200,60)),egui::StrokeKind::Inside);}
 if ui.pc_button("Import cells into a new sprite").clicked(){match import_grid(im,g){Ok(d)=>{self.open_document(d,None);self.status="Imported sheet cells".into();},Err(e)=>self.status=e}}},Err(e)=>{ui.colored_label(Color32::RED,e);}}}});
  ui.collapsing("Batch export animation tags",|ui|{ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");egui::ComboBox::from_label("Sheet engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.horizontal(|ui|{for(gif,label)in [(true,"Export tag GIFs…"),(false,"Export tag sheets…")]{if ui.pc_button(label).clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){self.status=match batch_tags(&dir,&self.doc,gif,&self.studio.sheet){Ok(p)=>format!("Exported {} animation tags",p.len()),Err(e)=>format!("Export failed: {e}")};}}});});
  ui.collapsing("Multi-file atlas",|ui|{if ui.pc_button("Choose sprites…").clicked()&& let Some(paths)=rfd::FileDialog::new().add_filter("Sprites",ATLAS_EXTENSIONS).pick_files(){self.power.atlas_files=paths;}
 if ui.pc_button("Add folder…").clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){match expand_atlas_inputs(&[dir]){Ok(paths)=>self.power.atlas_files.extend(paths),Err(e)=>self.status=e}}for p in &self.power.atlas_files{ui.small(p.display().to_string());}let o=&mut self.power.atlas;ui.horizontal(|ui|{ui.pc_selectable_value(&mut o.layout,AtlasLayout::Rows,"Rows");ui.pc_selectable_value(&mut o.layout,AtlasLayout::MaxRects,"MaxRects");});ui.add(egui::DragValue::new(&mut o.width).range(1..=16384).prefix("Maximum width "));ui.add(egui::DragValue::new(&mut o.padding).range(0..=256).prefix("Padding "));ui.pc_checkbox(&mut o.trim,"Trim transparent borders");ui.pc_checkbox(&mut o.deduplicate,"Remove duplicate frame pixels");ui.pc_checkbox(&mut o.power_of_two,"Power-of-two dimensions");if ui.pc_button("Pack & export PNG + JSON…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG atlas",&["png"]).set_file_name("atlas.png").save_file(){let result=(||{let mut sources=vec![];for p in &self.power.atlas_files{sources.push((p.file_name().unwrap_or_default().to_string_lossy().into_owned(),formats::load(p)?));}export_atlas(&path,&sources,&self.power.atlas)})();self.status=match result{Ok(())=>"Exported multi-file atlas".into(),Err(e)=>format!("Export failed: {e}")};}});
- ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for p in &self.power.preferences.recent{if ui_icons::button(ui,"open",&p.display().to_string(),false,false).clicked(){chosen=Some(p.clone());}}
+ ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label) in self.recent_file_entries(){if ui.add_enabled_ui(path.is_file(),|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
 if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}
 if let Some(k)=remove{self.custom_shortcuts.remove(&k);self.save_shortcut_bindings();}});
@@ -1721,5 +1875,85 @@ mod density_tests {
             assert_eq!(ui.style().text_styles[&egui::TextStyle::Body].size, 14.);
         });
         out.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod application_preferences_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_preferences_get_new_document_defaults_and_disable_background_downloads() {
+        let prefs: Preferences = serde_json::from_str(r#"{"interface_scale":1.25}"#).unwrap();
+        assert_eq!(prefs.new_sprite_size(), (32, 32));
+        assert!(!prefs.default_grid);
+        assert!(!prefs.background_updates);
+        assert_eq!(prefs.interface_scale, 1.25);
+    }
+
+    #[cfg(all(
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "windows")
+    ))]
+    #[test]
+    fn background_updates_are_opt_in_and_try_each_detected_release_once() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.power.preferences.background_updates = false;
+        app.latest_release = Some(Release::parse(
+            &serde_json::json!({
+                "tag_name": "v99.0.0",
+                "assets": [
+                    {"name": "PixelCraft-v99.0.0-x86_64.AppImage", "browser_download_url": "app"},
+                    {"name": "PixelCraft-v99.0.0-x86_64-Setup.exe", "browser_download_url": "exe"}
+                ],
+            }).to_string(),
+        ).unwrap());
+        assert!(app.update_to_download(true).is_none());
+        assert!(app.update_to_download(false).is_some());
+        app.power.preferences.background_updates = true;
+        assert!(app.update_to_download(true).is_some());
+        app.background_update_attempt = Some("v99.0.0".into());
+        assert!(app.update_to_download(true).is_none());
+        assert!(app.update_to_download(false).is_some());
+    }
+
+    #[test]
+    fn settings_reset_keeps_recent_projects_and_restores_new_sprite_defaults() {
+        let paths = vec![PathBuf::from("art/sprite.pixel")];
+        let prefs = Preferences {
+            new_sprite_width: 60,
+            new_sprite_height: 48,
+            default_grid: true,
+            background_updates: true,
+            recent: paths.clone(),
+            ..Default::default()
+        };
+        let mut prefs: Preferences =
+            serde_json::from_slice(&serde_json::to_vec(&prefs).unwrap()).unwrap();
+        assert_eq!(prefs.new_sprite_size(), (60, 48));
+        assert!(prefs.default_grid && prefs.background_updates);
+        prefs.reset_settings();
+        assert_eq!(prefs.new_sprite_size(), (32, 32));
+        assert!(!prefs.default_grid && !prefs.background_updates);
+        assert_eq!(prefs.recent, paths);
+    }
+
+    #[test]
+    fn recent_paths_use_folder_hints_only_when_names_match() {
+        let paths = [
+            PathBuf::from("art/heroes/idle.pixel"),
+            PathBuf::from("art/items/idle.pixel"),
+            PathBuf::from("art/items/run.pixel"),
+        ];
+        assert_eq!(
+            recent_file_label(&paths[0], &paths),
+            "idle.pixel (heroes) · Missing"
+        );
+        assert_eq!(
+            recent_file_label(&paths[1], &paths),
+            "idle.pixel (items) · Missing"
+        );
+        assert_eq!(recent_file_label(&paths[2], &paths), "run.pixel · Missing");
     }
 }

@@ -289,6 +289,7 @@ struct PixelCraft {
     hover: Option<(i32, i32)>,
     pending: Option<Pending>,
     new_dialog: bool,
+    settings_open: bool,
     new_w: usize,
     new_h: usize,
     rename: Option<String>,
@@ -300,6 +301,7 @@ struct PixelCraft {
     latest_release: Option<Release>,
     download_job: Option<std::sync::mpsc::Receiver<Result<updates::VerifiedDownload, String>>>,
     downloaded_update: Option<updates::VerifiedDownload>,
+    background_update_attempt: Option<String>,
     update_status: String,
     next_update_check: Option<Instant>,
     extensions_open: bool,
@@ -328,6 +330,7 @@ impl PixelCraft {
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
             app.translations = pixelcraft::contributions::language(&bytes).unwrap_or_default();
         }
+        app.grid = app.power.default_grid();
         app.restore_appearance(&cc.egui_ctx, &extensions::config_directory());
         app.system_theme_rx = system_appearance::watch(cc.egui_ctx.clone());
         app.about_info = AboutInfo::load();
@@ -436,6 +439,7 @@ impl PixelCraft {
             hover: None,
             pending: None,
             new_dialog: false,
+            settings_open: false,
             new_w: 32,
             new_h: 32,
             rename: None,
@@ -456,6 +460,7 @@ impl PixelCraft {
             latest_release: None,
             download_job: None,
             downloaded_update: None,
+            background_update_attempt: None,
             update_status: "Not checked yet.".into(),
             next_update_check: None,
             extensions_open: false,
@@ -1294,6 +1299,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn dialog_open(&self) -> bool {
         self.pending.is_some()
             || self.new_dialog
+            || self.settings_open
             || self.rename.is_some()
             || self.help
             || self.properties_open
@@ -1460,7 +1466,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn perform(&mut self, p: Pending) {
         match p {
-            Pending::New => self.new_dialog = true,
+            Pending::New => {
+                (self.new_w, self.new_h) = self.power.new_sprite_size();
+                self.new_dialog = true;
+            }
             Pending::Demo => {
                 self.open_document(Document::demo(), None);
                 self.layer = 1;
@@ -2001,6 +2010,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.remember();
                 self.doc.flip(self.layer, self.frame, s == "flipx")
             }
+            "settings" => self.settings_open = true,
             "grid" => self.grid = !self.grid,
             "onion" => self.onion = !self.onion,
             "fit" => {
@@ -2280,10 +2290,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             ui.spacing_mut().item_spacing.x = 4.;
             ui.add_space(2.);
             let bar_rect = ui.max_rect();
-            let has_update = self
-                .latest_release
-                .as_ref()
-                .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION));
+            let has_update = self.downloaded_update.is_some()
+                || self
+                    .latest_release
+                    .as_ref()
+                    .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION));
             let compact = has_update && bar_rect.width() < 1000.;
             if compact {
                 ui.spacing_mut().item_spacing.x = 2.;
@@ -2322,6 +2333,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Clear   Delete", "clear"),
                         ("Select all   Ctrl+A", "selectall"),
                         ("Deselect   Esc", "deselect"),
+                        ("Settings…", "settings"),
                         ("Drawing & selection studio…", "studio"),
                         ("Magic Wand", "wand"),
                         ("Brushes, references & workflow tools…", "workflow"),
@@ -2390,20 +2402,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ui.menu_button(title_text, |ui| {
                     if title == "File" {
                         ui_icons::submenu(ui, "history", "Recent files", |ui| {
-                            let paths = self.recent_files();
-                            if paths.is_empty() {
+                            let entries = self.recent_file_entries();
+                            if entries.is_empty() {
                                 ui.label("No recent files yet");
                             }
-                            for path in paths {
-                                if ui_icons::button(
-                                    ui,
-                                    "open",
-                                    &path.display().to_string(),
-                                    false,
-                                    true,
-                                )
-                                .clicked()
-                                {
+                            for (path, label) in entries {
+                                let response = ui
+                                    .add_enabled_ui(path.is_file(), |ui| {
+                                        ui_icons::button(ui, "open", &label, false, true)
+                                    })
+                                    .inner
+                                    .on_hover_text(path.display().to_string());
+                                if response.clicked() {
                                     self.open_recent(path);
                                     ui.close();
                                 }
@@ -2505,11 +2515,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                 }
                 let rect = github_rect;
-                if self
-                    .latest_release
-                    .as_ref()
-                    .is_some_and(|r| r.is_newer_than(INSTALLED_VERSION))
-                {
+                if has_update {
                     let mut notice =
                         Rect::from_center_size(bar_rect.center(), Vec2::new(148., 22.));
                     if notice.left() <= menus_right + 8. {
@@ -2523,18 +2529,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ui.painter().text(
                             notice.center(),
                             egui::Align2::CENTER_CENTER,
-                            "New version found",
+                            if self.downloaded_update.is_some() {
+                                "Update ready"
+                            } else {
+                                "New version found"
+                            },
                             egui::FontId::proportional(14.),
                             Color32::from_rgb(241, 190, 93),
                         );
                         if ui
                             .interact(notice, egui::Id::new("update_notice"), Sense::click())
-                            .on_hover_text("Download the latest PixelCraft release")
+                            .on_hover_text("Open update details")
                             .on_hover_cursor(egui::CursorIcon::PointingHand)
                             .clicked()
-                            && let Some(url) = self.about_info.releases_url()
                         {
-                            ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                            self.about = true;
                         }
                     }
                 }
@@ -3779,6 +3788,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     if ui.pc_button("Create sprite").clicked() {
                         if self.new_w.saturating_mul(self.new_h) <= MAX_PIXELS {
                             self.open_document(Document::new(self.new_w, self.new_h), None);
+                            self.grid = self.power.default_grid();
                         } else {
                             self.status =
                                 "Could not create: canvas exceeds 64 million pixels".into();
@@ -3949,16 +3959,20 @@ impl PixelCraft {
         {
             match result {
                 Ok(release) => {
-                    self.update_status = if release.is_newer_than(INSTALLED_VERSION) {
-                        "A new version is available.".into()
-                    } else {
-                        "You are up to date.".into()
-                    };
+                    if self.downloaded_update.is_none() && self.download_job.is_none() {
+                        self.update_status = if release.is_newer_than(INSTALLED_VERSION) {
+                            "A new version is available.".into()
+                        } else {
+                            "You are up to date.".into()
+                        };
+                    }
                     self.latest_release = Some(release);
                 }
                 Err(error) => {
                     self.latest_release = None;
-                    self.update_status = error;
+                    if self.downloaded_update.is_none() && self.download_job.is_none() {
+                        self.update_status = error;
+                    }
                 }
             }
             self.update_job = None;
@@ -3976,7 +3990,9 @@ impl PixelCraft {
             }
             self.download_job = None;
         }
+        self.start_update_download(&ctx, true);
         self.about_dialog(&ctx);
+        self.settings_dialog(&ctx);
         if self.script_ui.modeless
             && self
                 .script_preview_doc
@@ -5294,6 +5310,9 @@ mod tests {
 impl PixelCraft {
     fn check_updates(&mut self, ctx: &egui::Context) {
         self.latest_release = None;
+        if self.download_job.is_none() && self.downloaded_update.is_none() {
+            self.background_update_attempt = None;
+        }
         if let Some(slug) = updates::repository_slug(&self.about_info.repository) {
             self.next_update_check = Some(Instant::now() + Duration::from_secs(3600));
             self.update_status = "Checking GitHub releases…".into();
@@ -5304,6 +5323,33 @@ impl PixelCraft {
             self.update_status =
                 "This build needs PixelCraft’s GitHub repository to check for updates.".into();
         }
+    }
+
+    fn update_to_download(&self, background: bool) -> Option<&Release> {
+        if self.download_job.is_some() || self.downloaded_update.is_some() {
+            return None;
+        }
+        self.latest_release.as_ref().filter(|release| {
+            release.is_newer_than(INSTALLED_VERSION)
+                && release.download_available()
+                && (!background
+                    || (self.power.background_updates()
+                        && self.background_update_attempt.as_deref() != Some(&release.tag)))
+        })
+    }
+
+    fn start_update_download(&mut self, ctx: &egui::Context, background: bool) {
+        let Some(release) = self.update_to_download(background).cloned() else {
+            return;
+        };
+        self.background_update_attempt = Some(release.tag.clone());
+        self.update_status = "Downloading update and verifying SHA-256…".into();
+        self.download_job = Some(updates::download(
+            release,
+            self.about_info.repository.clone(),
+            extensions::config_directory().join("updates"),
+            ctx.clone(),
+        ));
     }
 
     fn about_dialog(&mut self, ctx: &egui::Context) {
@@ -5350,10 +5396,9 @@ impl PixelCraft {
                     && let Some(url) = self.about_info.releases_url() {
                         ui.pc_hyperlink_to("Download the latest update", url);
                     }
-                if self.latest_release.as_ref().is_some_and(|r|r.is_newer_than(INSTALLED_VERSION)&&r.download_available()) && self.download_job.is_none() && self.downloaded_update.is_none()
+                if self.update_to_download(false).is_some()
                     && ui.pc_button("Download update in PixelCraft").clicked(){
-                        self.update_status="Downloading update and verifying SHA-256…".into();
-                        self.download_job=Some(updates::download(self.latest_release.as_ref().unwrap().clone(),self.about_info.repository.clone(),extensions::config_directory().join("updates"),ctx.clone()));
+                        self.start_update_download(ctx, false);
                     }
                 if let Some(download)=&self.downloaded_update {
                     ui.small(format!("Verified: {}",download.name));
