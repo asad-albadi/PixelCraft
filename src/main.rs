@@ -214,6 +214,26 @@ struct FramePrefetch {
     result: std::sync::mpsc::Receiver<(egui::ColorImage, Option<String>)>,
 }
 
+impl FramePrefetch {
+    fn start(ctx: &egui::Context, doc: &Document, frame: usize) -> Self {
+        let snapshot = doc.clone();
+        let worker_doc = snapshot.clone();
+        let wake = ctx.clone();
+        let (send, result) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let image = PixelCraft::compose_frame_image(&worker_doc, frame);
+            if send.send(image).is_ok() {
+                wake.request_repaint();
+            }
+        });
+        Self {
+            frame,
+            snapshot,
+            result,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ReplaceColor {
     source: Pixel,
@@ -277,6 +297,8 @@ struct PixelCraft {
     stroke_color: Pixel,
     texture: Option<egui::TextureHandle>,
     preview: Option<egui::TextureHandle>,
+    preview_frame: Option<usize>,
+    preview_prefetch: Option<FramePrefetch>,
     preview_settings: fluent::PreviewSettings,
     preview_pan: Vec2,
     preview_playback: Option<fluent::PreviewPlayback>,
@@ -438,6 +460,8 @@ impl PixelCraft {
             stroke_color: CLEAR,
             texture: None,
             preview: None,
+            preview_frame: None,
+            preview_prefetch: None,
             preview_settings: fluent::PreviewSettings::default(),
             preview_pan: Vec2::ZERO,
             preview_playback: None,
@@ -629,27 +653,71 @@ impl PixelCraft {
         let texture = self.frame_textures[f].as_ref().unwrap().clone();
         let frame = self.next_playback_frame().0;
         if self.playing && self.frame_prefetch.is_none() && self.frame_textures[frame].is_none() {
-            let snapshot = self.doc.clone();
-            let worker_doc = snapshot.clone();
-            let wake = ctx.clone();
-            let (send, result) = std::sync::mpsc::sync_channel(1);
-            self.frame_prefetch = Some(FramePrefetch {
-                frame,
-                snapshot,
-                result,
-            });
-            std::thread::spawn(move || {
-                let image = Self::compose_frame_image(&worker_doc, frame);
-                if send.send(image).is_ok() {
-                    wake.request_repaint();
-                }
-            });
+            self.frame_prefetch = Some(FramePrefetch::start(ctx, &self.doc, frame));
         }
         texture
     }
 
+    fn update_preview_texture(&mut self, ctx: &egui::Context, frame: usize) {
+        self.refresh_frame_cache(ctx);
+        let ready = self.poll_preview_prefetch();
+        if frame == self.frame {
+            self.preview_frame = Some(frame);
+            self.preview = Some(self.frame_texture(ctx, frame));
+        } else if let Some(texture) = &self.frame_textures[frame] {
+            self.preview_frame = Some(frame);
+            self.preview = Some(texture.clone());
+        } else if self.preview_frame != Some(frame) {
+            // Retain one detached display texture outside the canvas cache, and
+            // compose large misses in a worker so repainting can continue.
+            const ASYNC_PREVIEW_PIXELS: usize = 2_000_000;
+            if self.doc.width * self.doc.height <= ASYNC_PREVIEW_PIXELS {
+                let (image, error) = Self::compose_frame_image(&self.doc, frame);
+                self.preview_frame = Some(frame);
+                self.preview = Some(self.load_frame_texture(ctx, frame, image, error));
+                return;
+            }
+            if self.preview_prefetch.is_none() && ready.as_ref().is_none_or(|(f, _, _)| *f != frame)
+            {
+                self.preview_prefetch = Some(FramePrefetch::start(ctx, &self.doc, frame));
+            }
+            if let Some((completed, image, error)) = ready {
+                self.preview_frame = Some(completed);
+                self.preview = Some(self.load_frame_texture(ctx, completed, image, error));
+            } else if self.preview.is_none() {
+                self.preview_frame = Some(self.frame);
+                self.preview = Some(self.frame_texture(ctx, self.frame));
+            }
+        }
+    }
+
+    fn poll_preview_prefetch(&mut self) -> Option<(usize, egui::ColorImage, Option<String>)> {
+        let result = match self.preview_prefetch.as_ref()?.result.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            result => result,
+        };
+        let job = self.preview_prefetch.take().unwrap();
+        if let Ok((image, error)) = result
+            && job.frame < self.doc.durations.len()
+            && self.doc.same_frame_pixels(&job.snapshot, job.frame)
+        {
+            return Some((job.frame, image, error));
+        }
+        None
+    }
+
     fn refresh_frame_cache(&mut self, ctx: &egui::Context) {
         if self.render_snapshot.as_ref() != Some(&self.doc) {
+            if self.preview_frame.is_some_and(|frame| {
+                frame >= self.doc.durations.len()
+                    || self
+                        .render_snapshot
+                        .as_ref()
+                        .is_none_or(|previous| !self.doc.same_frame_pixels(previous, frame))
+            }) {
+                self.preview_frame = None;
+                self.preview = None;
+            }
             self.frame_textures.resize(self.doc.durations.len(), None);
             for (frame, texture) in self.frame_textures.iter_mut().enumerate() {
                 if texture.is_some()
@@ -737,15 +805,25 @@ impl PixelCraft {
             let old = self.frame_texture_order.remove(oldest).unwrap();
             self.frame_textures[old] = None;
         }
+        self.frame_textures[frame] = Some(self.load_frame_texture(ctx, frame, image, error));
+        self.frame_texture_order.push_back(frame);
+    }
+
+    fn load_frame_texture(
+        &mut self,
+        ctx: &egui::Context,
+        frame: usize,
+        image: egui::ColorImage,
+        error: Option<String>,
+    ) -> egui::TextureHandle {
         if let Some(error) = error {
             self.status = format!("Color profile: {error}; showing unconverted values");
         }
-        self.frame_textures[frame] = Some(ctx.load_texture(
+        ctx.load_texture(
             format!("frame-{frame}"),
             image,
             egui::TextureOptions::NEAREST,
-        ));
-        self.frame_texture_order.push_back(frame);
+        )
     }
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
         self.doc.drawing_index = self.drawing_palette_index(color);
@@ -5861,6 +5939,34 @@ mod tests {
         a.doc.stamp(0, 0, 0, 0, [1, 2, 3, 255], 1);
         let changed = a.frame_texture(&ctx, 0);
         assert_ne!(t.id(), changed.id());
+    }
+    #[test]
+    fn detached_large_preview_does_not_evict_the_canvas_texture() {
+        let ctx = egui::Context::default();
+        let mut app = app();
+        app.replace(Document::new(4096, 4096), None);
+        app.doc.add_frame(0, false);
+        app.refresh_frame_cache(&ctx);
+        let small_image = || egui::ColorImage::filled([1, 1], Color32::WHITE);
+        app.store_frame_texture(&ctx, 0, small_image(), None);
+        let canvas = app.frame_texture(&ctx, 0);
+
+        let (send, result) = std::sync::mpsc::channel();
+        app.preview_prefetch = Some(FramePrefetch {
+            frame: 1,
+            snapshot: app.doc.clone(),
+            result,
+        });
+        app.update_preview_texture(&ctx, 1);
+        assert_eq!(app.preview.as_ref().unwrap().id(), canvas.id());
+        send.send((small_image(), None)).unwrap();
+        app.update_preview_texture(&ctx, 1);
+        let detached = app.preview.as_ref().unwrap().id();
+        assert_ne!(detached, canvas.id());
+        assert_eq!(app.frame_texture(&ctx, 0).id(), canvas.id());
+        app.update_preview_texture(&ctx, 1);
+        assert_eq!(app.preview.as_ref().unwrap().id(), detached);
+        assert_eq!(app.frame_texture_order.len(), 1);
     }
     #[test]
     fn tile_painting_changes_ids_and_eraser_clears_whole_tile() {

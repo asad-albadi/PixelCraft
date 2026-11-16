@@ -157,6 +157,7 @@ impl AboutInfo {
 pub struct VerifiedDownload {
     path: std::path::PathBuf,
     digest: String,
+    size: u64,
     pub name: String,
 }
 /// Parse the standard SHA-256 sidecar and bind it to the selected artifact.
@@ -317,6 +318,7 @@ pub fn download(
             Ok(VerifiedDownload {
                 path,
                 digest,
+                size: bytes.len() as u64,
                 name: name.clone(),
             })
         })();
@@ -361,11 +363,18 @@ pub fn install(
 ) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     let mut installer = open_installer(&download.path).map_err(|e| e.to_string())?;
+    let metadata = installer.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.len() != download.size {
+        return Err("Downloaded installer changed; download it again".into());
+    }
     let mut bytes = Vec::new();
-    installer
+    (&mut installer)
+        .take(download.size + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if format!("{:x}", Sha256::digest(&bytes)) != download.digest {
+    if bytes.len() as u64 != download.size
+        || format!("{:x}", Sha256::digest(&bytes)) != download.digest
+    {
         return Err("Downloaded installer changed; download it again".into());
     }
     #[cfg(target_os = "windows")]
@@ -487,6 +496,7 @@ mod installation_regressions {
         let download = VerifiedDownload {
             path: source.clone(),
             digest: format!("{:x}", Sha256::digest(bytes)),
+            size: bytes.len() as u64,
             name: "download.AppImage".into(),
         };
         assert!(install(&download, Some(&source)).is_err());
@@ -528,6 +538,7 @@ mod installation_regressions {
         let download = VerifiedDownload {
             path: source,
             digest: format!("{:x}", Sha256::digest(b"verified update")),
+            size: b"verified update".len() as u64,
             name: "download.AppImage".into(),
         };
 
@@ -579,6 +590,7 @@ mod windows_installation_regressions {
         let download = VerifiedDownload {
             path: exe.clone(),
             digest: format!("{:x}", Sha256::digest(&bytes)),
+            size: bytes.len() as u64,
             name: "installer.exe".into(),
         };
         install(&download, None).unwrap();
@@ -588,10 +600,16 @@ mod windows_installation_regressions {
         }
         assert_eq!(std::fs::read(&marker).unwrap(), b"installed");
         // Wait until Windows releases the executable handle before replacing it.
-        while std::fs::write(&exe, b"tampered").is_err() {
+        let mut tampered = bytes;
+        tampered[0] ^= 1;
+        while std::fs::write(&exe, &tampered).is_err() {
             assert!(start.elapsed() < Duration::from_secs(5));
             std::thread::sleep(Duration::from_millis(10));
         }
+        assert!(install(&download, None).is_err());
+        let file = fs::OpenOptions::new().write(true).open(&exe).unwrap();
+        file.set_len(download.size + 1).unwrap();
+        drop(file);
         assert!(install(&download, None).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }

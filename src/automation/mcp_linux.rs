@@ -237,10 +237,17 @@ pub(super) fn open_read(path: &Path) -> Option<io::Result<File>> {
                 libc::O_RDONLY | libc::O_NONBLOCK,
                 RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
             )?;
-            if !input.metadata()?.is_file() {
+            let metadata = input.metadata()?;
+            if !metadata.is_file() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Input must be a regular file",
+                ));
+            }
+            if metadata.nlink() != 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "Project-root access to files with hard links is disabled",
                 ));
             }
             Ok(input)
@@ -340,38 +347,60 @@ fn unlink_child(parent: &File, name: &std::ffi::OsStr, directory: bool) -> io::R
     .map(|_| ())
 }
 
-fn empty_directory(
+fn open_entry(directory: &File, name: &Path, flags: libc::c_int) -> io::Result<Option<File>> {
+    match open(
+        directory.as_raw_fd(),
+        name,
+        libc::O_PATH | libc::O_NOFOLLOW | flags,
+        RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
+    ) {
+        Ok(file) => Ok(Some(file)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_tracked_files(
     directory: &File,
     known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
+    files: &[(PathBuf, (u64, u64))],
 ) -> io::Result<()> {
-    for entry in std::fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))? {
-        let name = entry?.file_name();
-        let opened = open(
-            directory.as_raw_fd(),
-            Path::new(&name),
-            libc::O_PATH | libc::O_NOFOLLOW,
-            RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
-        )?;
-        let is_dir = opened.metadata()?.is_dir();
-        if is_dir {
-            let Some((allowed_name, expected)) = known_child else {
-                continue;
-            };
-            if name != allowed_name || directory_identity_of(&opened)? != expected {
-                continue;
+    let mut child = None;
+    if let Some((name, expected)) = known_child
+        && let Ok(Some(handle)) = open_entry(directory, Path::new(name), libc::O_DIRECTORY)
+        && directory_identity_of(&handle)? == expected
+    {
+        child = Some((name, expected, handle));
+    }
+    for (relative, expected) in files {
+        let Some(name) = relative.file_name() else {
+            continue;
+        };
+        let parent = match relative.parent() {
+            Some(parent) if parent.as_os_str().is_empty() => directory,
+            Some(parent) => {
+                let Some((child_name, _, handle)) = &child else {
+                    continue;
+                };
+                if parent != Path::new(child_name) {
+                    continue;
+                }
+                handle
             }
-            empty_directory(&opened, None)?;
-            let current = open(
-                directory.as_raw_fd(),
-                Path::new(&name),
-                libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW,
-                RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS,
-            )?;
-            if directory_identity_of(&current)? != directory_identity_of(&opened)? {
-                return Err(io::Error::other("The restricted staging entry changed"));
+            None => continue,
+        };
+        if let Some(file) = open_entry(parent, Path::new(name), 0)? {
+            let info = file.metadata()?;
+            if info.is_file() && (info.dev(), info.ino()) == *expected {
+                unlink_child(parent, name, false)?;
             }
         }
-        unlink_child(directory, &name, is_dir)?;
+    }
+    if let Some((name, expected, _held)) = child
+        && let Some(current) = open_entry(directory, Path::new(name), libc::O_DIRECTORY)?
+        && directory_identity_of(&current)? == expected
+    {
+        unlink_child(directory, name, true)?;
     }
     Ok(())
 }
@@ -380,6 +409,7 @@ pub(super) fn remove_owned_dir_all(
     path: &Path,
     expected: (u64, u64),
     known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
+    files: &[(PathBuf, (u64, u64))],
 ) -> Option<io::Result<()>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
@@ -390,7 +420,7 @@ pub(super) fn remove_owned_dir_all(
                     "The restricted export's staging directory changed",
                 ));
             }
-            empty_directory(&dir, known_child)?;
+            remove_tracked_files(&dir, known_child, files)?;
             let parent =
                 project.open_directory(path.parent().ok_or(io::ErrorKind::InvalidInput)?)?;
             let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
@@ -416,7 +446,8 @@ pub(super) fn publish(
     destination: &Path,
     replace: bool,
     link: bool,
-) -> Option<io::Result<()>> {
+    expected: Option<(u64, u64)>,
+) -> Option<io::Result<(u64, u64)>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -424,14 +455,25 @@ pub(super) fn publish(
                 let dir =
                     project.open_directory(path.parent().ok_or(io::ErrorKind::InvalidInput)?)?;
                 let leaf = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
-                let name = std::ffi::CString::new(leaf.as_bytes())?;
-                Ok::<_, io::Error>((dir, name))
+                Ok::<_, io::Error>((dir, leaf.to_os_string()))
             };
             let (source, source_name) = parent(source)?;
             let (destination, destination_name) = parent(destination)?;
+            let opened =
+                open_entry(&source, Path::new(&source_name), 0)?.ok_or(io::ErrorKind::NotFound)?;
+            let info = opened.metadata()?;
+            let identity = (info.dev(), info.ino());
+            if !info.is_file() || expected.is_some_and(|expected| identity != expected) {
+                return Err(io::Error::other(
+                    "The staged source file changed before publication",
+                ));
+            }
+            let source_name = std::ffi::CString::new(source_name.as_bytes())?;
+            let destination_name = std::ffi::CString::new(destination_name.as_bytes())?;
             // SAFETY: both directory descriptors and names remain valid
             // during the syscall. The kernel enforces Landlock again here if
-            // either directory moved after it was opened.
+            // either directory moved after it was opened. These syscalls still
+            // resolve the leaf by name within the pinned source directory.
             unsafe {
                 if link {
                     os_result(libc::linkat(
@@ -451,7 +493,7 @@ pub(super) fn publish(
                         if replace { 0 } else { libc::RENAME_NOREPLACE },
                     ))
                 }
-                .map(|_| ())
+                .map(|_| identity)
             }
         })())
     })

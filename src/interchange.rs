@@ -1065,7 +1065,7 @@ pub(crate) fn load_tiled_with_path_check(
         .map_err(|e| e.to_string())?;
     let num = |v: &Value, k: &str| {
         v[k].as_u64()
-            .map(|x| x as usize)
+            .and_then(|x| usize::try_from(x).ok())
             .ok_or_else(|| format!("Missing Tiled {k}"))
     };
     let base = path.parent().unwrap_or(Path::new("."));
@@ -1073,6 +1073,7 @@ pub(crate) fn load_tiled_with_path_check(
         v: &Value,
         base: &Path,
         check_path: &impl Fn(&Path) -> Result<(), String>,
+        remaining_pixels: &mut usize,
     ) -> Result<Tileset, String> {
         let mut v = v.clone();
         let mut base = base.to_path_buf();
@@ -1085,14 +1086,27 @@ pub(crate) fn load_tiled_with_path_check(
         }
         let n = |k: &str| {
             v[k].as_u64()
-                .map(|x| x as usize)
+                .and_then(|x| usize::try_from(x).ok())
                 .ok_or_else(|| format!("Missing tileset {k}"))
         };
         let (w, h, count) = (n("tilewidth")?, n("tileheight")?, n("tilecount")?);
-        if w == 0 || h == 0 || count == 0 || w.saturating_mul(h).saturating_mul(count) > MAX_PIXELS
+        if w == 0
+            || h == 0
+            || w > MAX_DIMENSION
+            || h > MAX_DIMENSION
+            || count == 0
+            || w.saturating_mul(h).saturating_mul(count) > MAX_PIXELS
         {
             return Err("Tileset exceeds limits".into());
         }
+        // Small tiles also allocate a Pixels entry and a separate backing vector.
+        const TILE_OVERHEAD: usize = (std::mem::size_of::<Pixels>()
+            + std::mem::size_of::<Vec<Pixel>>())
+        .div_ceil(std::mem::size_of::<Pixel>());
+        let storage = count.saturating_mul(w * h + TILE_OVERHEAD);
+        *remaining_pixels = remaining_pixels
+            .checked_sub(storage)
+            .ok_or("Tiled document exceeds the storage budget")?;
         let columns = n("columns")?;
         if columns == 0 {
             return Err("Image collection tilesets are unsupported".into());
@@ -1102,17 +1116,29 @@ pub(crate) fn load_tiled_with_path_check(
         let im = mcp_io::open_image(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
-        let margin = v["margin"].as_u64().unwrap_or(0) as usize;
-        let spacing = v["spacing"].as_u64().unwrap_or(0) as usize;
+        let margin = usize::try_from(v["margin"].as_u64().unwrap_or(0))
+            .map_err(|_| "Invalid tileset margin")?;
+        let spacing = usize::try_from(v["spacing"].as_u64().unwrap_or(0))
+            .map_err(|_| "Invalid tileset spacing")?;
+        let x_step = w.checked_add(spacing).ok_or("Invalid tileset spacing")?;
+        let y_step = h.checked_add(spacing).ok_or("Invalid tileset spacing")?;
+        let max_x = (im.width() as usize)
+            .checked_sub(w)
+            .ok_or("Tile outside image")?;
+        let max_y = (im.height() as usize)
+            .checked_sub(h)
+            .ok_or("Tile outside image")?;
+        let coordinate = |index: usize, step: usize, edge| {
+            index
+                .checked_mul(step)
+                .and_then(|offset| margin.checked_add(offset))
+                .filter(|&start| start <= edge)
+                .ok_or("Tile outside image")
+        };
         let mut tiles = vec![];
         for i in 0..count {
-            let (x, y) = (
-                margin + i % columns * (w + spacing),
-                margin + i / columns * (h + spacing),
-            );
-            if x + w > im.width() as usize || y + h > im.height() as usize {
-                return Err("Tile outside image".into());
-            }
+            let x = coordinate(i % columns, x_step, max_x)?;
+            let y = coordinate(i / columns, y_step, max_y)?;
             tiles.push(
                 (0..w * h)
                     .map(|p| im.get_pixel((x + p % w) as u32, (y + p / w) as u32).0)
@@ -1126,8 +1152,9 @@ pub(crate) fn load_tiled_with_path_check(
             tiles,
         })
     }
+    let mut remaining_pixels = MAX_DOCUMENT_PIXELS;
     if v["type"] == "tileset" {
-        let t = tileset(&v, base, check_path)?;
+        let t = tileset(&v, base, check_path, &mut remaining_pixels)?;
         let mut d = Document::new(t.width, t.height);
         d.tilesets.push(t);
         d.add_tile_layer(0)?;
@@ -1154,13 +1181,31 @@ pub(crate) fn load_tiled_with_path_check(
     let mut d = Document::new(w, h);
     let sets = v["tilesets"].as_array().ok_or("Missing tilesets")?;
     let mut gids = vec![];
+    const MAX_GID: u32 = 0x1fff_ffff;
     for s in sets {
-        let t = tileset(s, base, check_path)?;
+        let t = tileset(s, base, check_path, &mut remaining_pixels)?;
         if t.width != tw || t.height != th {
             return Err("Mixed tile sizes are unsupported".into());
         }
+        let first = s["firstgid"]
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+            .filter(|&id| id > 0)
+            .ok_or("Invalid first global tile ID")?;
+        let end = first
+            .checked_add(t.tiles.len() as u32)
+            .filter(|&end| end <= MAX_GID + 1)
+            .ok_or("Invalid first global tile ID")?;
+        gids.push(first..end);
         d.tilesets.push(t);
-        gids.push(num(s, "firstgid")? as u32);
+    }
+    let mut by_gid: Vec<_> = gids.iter().enumerate().collect();
+    by_gid.sort_unstable_by_key(|(_, range)| range.start);
+    if by_gid
+        .windows(2)
+        .any(|pair| pair[0].1.end > pair[1].1.start)
+    {
+        return Err("Overlapping global tile ID ranges".into());
     }
     for l in v["layers"].as_array().ok_or("Missing Tiled layers")? {
         if l["type"] != "tilelayer" {
@@ -1177,46 +1222,70 @@ pub(crate) fn load_tiled_with_path_check(
         {
             return Err("Invalid tile layer dimensions".into());
         }
-        for (ti, &first) in gids.iter().enumerate() {
-            let end = first + d.tilesets[ti].tiles.len() as u32;
-            let entries: Result<Vec<u32>, String> =
-                data.iter()
-                    .map(|n| {
-                        let id = n
-                            .as_u64()
-                            .filter(|v| *v <= u32::MAX as u64)
-                            .ok_or("Invalid tile ID")? as u32;
-                        let gid = id & 0x1fffffff;
-                        if gid != 0
-                            && !gids.iter().enumerate().any(|(i, g)| {
-                                gid >= *g && gid < *g + d.tilesets[i].tiles.len() as u32
-                            })
-                        {
-                            return Err("Unknown tile ID".into());
-                        }
-                        Ok(if gid >= first && gid < end {
-                            (id & 0xe0000000) | (gid - first + 1)
-                        } else {
-                            0
-                        })
-                    })
-                    .collect();
-            let entries = entries?;
-            if !entries.iter().any(|v| *v != 0) && ti > 0 {
+        let offset = |cell: &str, offset: &str, tile_size| {
+            l[cell]
+                .as_i64()
+                .unwrap_or(0)
+                .checked_mul(tile_size)
+                .and_then(|cell| cell.checked_add(l[offset].as_i64().unwrap_or(0)))
+                .and_then(|position| i32::try_from(position).ok())
+                .ok_or("Invalid tile layer offset")
+        };
+        let x = offset("x", "offsetx", tw as i64)?;
+        let y = offset("y", "offsety", th as i64)?;
+        let mut used = std::collections::BTreeSet::new();
+        if !gids.is_empty() {
+            // Preserve the empty layer backed by the first tileset.
+            used.insert(0);
+        }
+        for tile in data {
+            let id = tile
+                .as_u64()
+                .and_then(|id| u32::try_from(id).ok())
+                .ok_or("Invalid tile ID")?;
+            let gid = id & MAX_GID;
+            if gid == 0 {
                 continue;
             }
-            d.add_tile_layer(ti)?;
+            let index = by_gid.partition_point(|(_, range)| range.start <= gid);
+            let (ti, _) = index
+                .checked_sub(1)
+                .and_then(|index| by_gid.get(index))
+                .filter(|(_, range)| range.contains(&gid))
+                .ok_or("Unknown tile ID")?;
+            used.insert(*ti);
+        }
+        remaining_pixels = remaining_pixels
+            .checked_sub(used.len().saturating_mul(data.len()))
+            .ok_or("Tiled document exceeds the storage budget")?;
+        for ti in used {
+            if !d.can_add_layer() {
+                return Err("Layer limit reached".into());
+            }
+            let range = &gids[ti];
+            let entries = data
+                .iter()
+                .map(|tile| {
+                    let id = tile.as_u64().unwrap() as u32;
+                    let gid = id & MAX_GID;
+                    if range.contains(&gid) {
+                        (id & !MAX_GID) | (gid - range.start + 1)
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            d.add_layer();
             let layer = d.layers.last_mut().unwrap();
+            layer.tileset = Some(ti);
             layer.name = l["name"].as_str().unwrap_or("Tile layer").into();
             layer.visible = l["visible"].as_bool().unwrap_or(true);
             layer.opacity =
                 (l["opacity"].as_f64().unwrap_or(1.).clamp(0., 1.) * 255.).round() as u8;
             layer.tile_cels[0] = entries;
             layer.cel_meta[0].tilemap = Some(TilemapGeometry {
-                x: (l["x"].as_i64().unwrap_or(0) * tw as i64 + l["offsetx"].as_i64().unwrap_or(0))
-                    as i32,
-                y: (l["y"].as_i64().unwrap_or(0) * th as i64 + l["offsety"].as_i64().unwrap_or(0))
-                    as i32,
+                x,
+                y,
                 columns: cols,
                 rows,
             });

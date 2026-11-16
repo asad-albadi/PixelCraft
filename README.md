@@ -138,7 +138,7 @@ Select the paint bucket and open **Fill options** to set color tolerance or matc
 
 Under **Colors → … → Color harmonies**, choose a complementary, analogous, triadic, or split-complementary swatch based on the active color.
 
-Use **Edit → Replace Color** to change an exact color match in one Undo step. Choose which layers and frames to include and whether to limit the edit to the selection. The drawing studio can include diagonal neighbors when outlining. **Edit → Settings** offers whole-pixel wheel zoom that keeps the cursor over the same artwork.
+Use **Edit → Replace Color** to change an exact color match in one Undo step. Choose which layers and frames to include and whether to limit the edit to the selection. The operation detaches any linked cel it changes so that replacements apply independently to each cel in scope. The drawing studio can include diagonal neighbors when outlining. **Edit → Settings** offers whole-pixel wheel zoom that keeps the cursor over the same artwork.
 
 Use **Sprite → Properties, layers, tiles & ranges** (also available beside the timeline) for:
 
@@ -292,6 +292,8 @@ pixelcraft --cli export --input hero.pixel --output slice-sheets --format sheet 
 Configure an MCP client to launch the executable with `--mcp`. The newline-delimited stdio JSON-RPC server advertises file inspection, PNG rendering, revision-checked edits, import/export, palettes, tag batches and atlases. Rendering returns an MCP image. File tools operate on explicitly supplied local paths and do not require the editor to be open.
 
 Add `--project-root DIRECTORY` to restrict file tools and explicit live output paths to a project directory. Relative paths resolve from that directory. Absolute paths must be under the canonical root, including companion files referenced by imports. Linux requires `openat2` and Landlock ABI 3 or newer (Linux 6.2 or newer with Landlock enabled). Linux resolves relative symlinks beneath the root and blocks publication if a destination directory moves outside the root. Windows uses directory-relative handles and rejects junctions and other reparse points. If the platform or filesystem cannot enforce the restriction, the operation fails. This option works with `--live BRIDGE_CONFIG` from the same version of PixelCraft.
+
+Restricted imports reject files with multiple hard links. Copy those inputs into the project as regular files. A separate process with write access inside a Linux project can still change the final filename between PixelCraft's identity check and a rename or removal.
 
 MCP file writes require `"overwrite": true` to replace an existing file. This applies to every generated atlas, sprite-sheet, and batch sidecar.
 

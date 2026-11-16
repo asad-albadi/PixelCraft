@@ -756,9 +756,13 @@ fn file_operation(
                         "gif" | "mp4" => {
                             let filtered = filter_export_layers(&d, v)?;
                             let scale = export_scale(v)?;
-                            write_operation_file(files, &out, |target| {
-                                write_animation_export(kind, target, &filtered, scale)
-                            })?;
+                            if let Some(files) = files {
+                                files.write_file(&out, |target| {
+                                    export_animation(kind, target, &filtered, scale)
+                                })?;
+                            } else {
+                                write_animation_export(kind, &out, &filtered, scale)?;
+                            }
                         }
                         "sheet" => {
                             let options = options::<SheetExportOptions>(&v["options"])?;
@@ -1714,6 +1718,7 @@ pub struct PreparedExport {
     staging: PathBuf,
     staging_identity: Option<(u64, u64)>,
     temporary_directory_identity: Option<(u64, u64)>,
+    staged_files: Option<std::sync::Arc<mcp_io::StagedFiles>>,
     preserve_staging: bool,
     temporary: PathBuf,
     metadata: Value,
@@ -1741,8 +1746,13 @@ impl Drop for PreparedExport {
                 overwrite: true,
             }
             .check_write(staging)?;
-            mcp_io::remove_staging(staging, staging_identity, temporary_directory)
-                .map_err(|error| error.to_string())
+            mcp_io::remove_staging(
+                staging,
+                staging_identity,
+                temporary_directory,
+                self.staged_files.as_deref(),
+            )
+            .map_err(|error| error.to_string())
         };
         if let Some(access) = &self.access {
             let _ = access.run(cleanup);
@@ -1757,7 +1767,8 @@ fn prepare_output(
     replace: bool,
     encode: impl FnOnce(&Path) -> Result<Value, String>,
 ) -> Result<PreparedExport, String> {
-    prepare_output_under(output, replace, None, false, encode)
+    let root = mcp_access::active_root();
+    prepare_output_under(output, replace, root.as_deref(), false, encode)
 }
 
 fn prepare_output_under(
@@ -1797,26 +1808,23 @@ fn prepare_output_under(
         parent
     };
     let filename = output.file_name().ok_or("Invalid output filename")?;
-    let staging = loop {
+    let (staging, staging_identity) = loop {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = parent.join(format!(".pixelcraft-output-{}-{n}", std::process::id()));
-        match mcp_io::create_private_dir(&dir) {
-            Ok(()) => break dir,
+        match mcp_io::create_staging_dir(&dir) {
+            Ok(identity) => break (dir, identity),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e.to_string()),
         }
     };
-    let staging_identity = if access.is_some() {
-        Some(mcp_io::directory_identity(&staging).map_err(|error| error.to_string())?)
-    } else {
-        None
-    };
+    let staged_files = staging_identity.map(|_| mcp_io::track_staging(&staging));
     let temporary = staging.join(filename);
     let mut prepared = PreparedExport {
         output,
         staging,
         staging_identity,
         temporary_directory_identity: None,
+        staged_files,
         preserve_staging: false,
         temporary,
         metadata: Value::Null,
@@ -1826,10 +1834,8 @@ fn prepare_output_under(
         access,
     };
     if directory && prepared.access.is_some() {
-        mcp_io::create_dir(&prepared.temporary).map_err(|error| error.to_string())?;
-        prepared.temporary_directory_identity = Some(
-            mcp_io::directory_identity(&prepared.temporary).map_err(|error| error.to_string())?,
-        );
+        prepared.temporary_directory_identity =
+            mcp_io::create_staging_dir(&prepared.temporary).map_err(|error| error.to_string())?;
     }
     prepared.metadata = encode(&prepared.temporary)?;
     prepared.check_staging()?;
