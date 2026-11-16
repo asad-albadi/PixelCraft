@@ -546,6 +546,18 @@ pub struct GridImportOptions {
     pub grid: GridImport,
     pub skip_transparent: bool,
     pub duration: u16,
+    pub order: GridOrder,
+    pub include_partial: bool,
+    pub columns: Option<usize>,
+    pub rows: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GridOrder {
+    #[default]
+    RowMajor,
+    ColumnMajor,
 }
 
 impl Default for GridImportOptions {
@@ -554,15 +566,20 @@ impl Default for GridImportOptions {
             grid: GridImport::default(),
             skip_transparent: false,
             duration: DEFAULT_DURATION,
+            order: GridOrder::RowMajor,
+            include_partial: false,
+            columns: None,
+            rows: None,
         }
     }
 }
 
 #[derive(Debug)]
 pub struct GridPreview {
-    /// The cells that will become frames or layers, in row-major order.
+    /// The cells that will become frames or layers, in the selected order.
     pub cells: Vec<(u32, u32)>,
     pub skipped: usize,
+    pub cell_size: [usize; 2],
 }
 
 pub fn grid_cells(im: &RgbaImage, g: &GridImport) -> Result<Vec<(u32, u32)>, String> {
@@ -574,60 +591,118 @@ pub fn preview_grid(
     g: &GridImport,
     skip_transparent: bool,
 ) -> Result<GridPreview, String> {
-    if g.width == 0
-        || g.height == 0
-        || g.width > MAX_DIMENSION
-        || g.height > MAX_DIMENSION
-        || g.spacing_x > MAX_DIMENSION
-        || g.spacing_y > MAX_DIMENSION
-        || g.offset_x > im.width() as usize
-        || g.offset_y > im.height() as usize
-    {
-        return Err("Invalid cell size, offset or spacing".into());
-    }
+    preview_grid_with_options(
+        im,
+        &GridImportOptions {
+            grid: g.clone(),
+            skip_transparent,
+            ..GridImportOptions::default()
+        },
+    )
+}
+
+pub fn preview_grid_with_options(
+    im: &RgbaImage,
+    options: &GridImportOptions,
+) -> Result<GridPreview, String> {
+    let g = &options.grid;
+    let (width, columns) = grid_axis(
+        im.width() as usize,
+        g.offset_x,
+        g.spacing_x,
+        g.width,
+        options.columns,
+        options.include_partial,
+    )?;
+    let (height, rows) = grid_axis(
+        im.height() as usize,
+        g.offset_y,
+        g.spacing_y,
+        g.height,
+        options.rows,
+        options.include_partial,
+    )?;
     let mut out = GridPreview {
         cells: vec![],
         skipped: 0,
+        cell_size: [width, height],
     };
     let row_width = im.width() as usize;
-    for y in (g.offset_y..im.height() as usize).step_by(g.height + g.spacing_y) {
-        if y + g.height > im.height() as usize {
-            break;
+    for index in 0..columns.saturating_mul(rows) {
+        let (column, row) = match options.order {
+            GridOrder::RowMajor => (index % columns, index / columns),
+            GridOrder::ColumnMajor => (index / rows, index % rows),
+        };
+        let x = g.offset_x + column * (width + g.spacing_x);
+        let y = g.offset_y + row * (height + g.spacing_y);
+        let right = (x + width).min(row_width);
+        let bottom = (y + height).min(im.height() as usize);
+        if options.skip_transparent
+            && (y..bottom).all(|row| {
+                let start = (row * row_width + x) * 4;
+                let end = (row * row_width + right) * 4;
+                im.as_raw()[start..end]
+                    .iter()
+                    .skip(3)
+                    .step_by(4)
+                    .all(|&alpha| alpha == 0)
+            })
+        {
+            out.skipped += 1;
+            continue;
         }
-        for x in (g.offset_x..im.width() as usize).step_by(g.width + g.spacing_x) {
-            if x + g.width > im.width() as usize {
-                break;
-            }
-            if skip_transparent
-                && (y..y + g.height).all(|row| {
-                    let start = (row * row_width + x) * 4;
-                    im.as_raw()[start..start + g.width * 4]
-                        .iter()
-                        .skip(3)
-                        .step_by(4)
-                        .all(|&alpha| alpha == 0)
-                })
-            {
-                out.skipped += 1;
-                continue;
-            }
-            out.cells.push((x as u32, y as u32));
-            if out.cells.len() > 65535 {
-                return Err("Too many cells".into());
-            }
+        out.cells.push((x as u32, y as u32));
+        if out.cells.len() > 65535 {
+            return Err("Too many cells".into());
         }
     }
     if (out.cells.is_empty() && out.skipped == 0)
-        || out
-            .cells
-            .len()
-            .saturating_mul(g.width)
-            .saturating_mul(g.height)
-            > MAX_PIXELS
+        || out.cells.len().saturating_mul(width).saturating_mul(height) > MAX_PIXELS
     {
         return Err("No complete cells, or import exceeds pixel budget".into());
     }
     Ok(out)
+}
+
+fn grid_axis(
+    image: usize,
+    offset: usize,
+    spacing: usize,
+    size: usize,
+    count: Option<usize>,
+    partial: bool,
+) -> Result<(usize, usize), String> {
+    if spacing > MAX_DIMENSION || offset > image {
+        return Err("Invalid cell offset or spacing".into());
+    }
+    let span = image - offset;
+    if let Some(count) = count {
+        if !(1..=MAX_DIMENSION).contains(&count) {
+            return Err("Invalid grid row or column count".into());
+        }
+        let available = span
+            .checked_sub(spacing * (count - 1))
+            .ok_or("Grid spacing exceeds the image")?;
+        let size = if partial {
+            available.div_ceil(count)
+        } else {
+            available / count
+        };
+        if !(1..=MAX_DIMENSION).contains(&size) || (size + spacing) * (count - 1) >= span {
+            return Err("The requested grid count does not fit uniform cells".into());
+        }
+        return Ok((size, count));
+    }
+    if !(1..=MAX_DIMENSION).contains(&size) {
+        return Err("Invalid cell size".into());
+    }
+    let pitch = size + spacing;
+    let count = if partial {
+        span.div_ceil(pitch)
+    } else {
+        (span + spacing) / pitch
+    };
+    Ok((size, count))
 }
 
 pub fn import_grid(im: &RgbaImage, g: &GridImport) -> Result<Document, String> {
@@ -644,15 +719,98 @@ pub fn import_grid_with_options(
     im: &RgbaImage,
     options: &GridImportOptions,
 ) -> Result<Document, String> {
+    import_grid_samples(im, options, None)
+}
+
+pub struct GridSource {
+    pub image: RgbaImage,
+    mode: ColorMode,
+    palette: Vec<Pixel>,
+    slots: Option<std::sync::Arc<Vec<u8>>>,
+    profile: Vec<u8>,
+    metadata: Vec<MetadataChunk>,
+}
+
+impl GridSource {
+    pub fn read(path: &Path) -> Result<Self, String> {
+        if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        {
+            let mut doc = formats::load(path)?;
+            if doc.durations.len() == 1 {
+                let layer = &mut doc.layers[0];
+                let pixels = layer.cels[0].iter().flatten().copied().collect();
+                let image = RgbaImage::from_raw(doc.width as u32, doc.height as u32, pixels)
+                    .ok_or("Invalid grid image")?;
+                return Ok(Self {
+                    image,
+                    mode: doc.color_mode,
+                    palette: doc.palette,
+                    slots: layer.cel_meta[0].indices.take(),
+                    profile: doc.color_profile,
+                    metadata: doc.metadata,
+                });
+            }
+        }
+        Ok(Self {
+            image: read_image(path)?,
+            mode: ColorMode::Rgba,
+            palette: Vec::new(),
+            slots: None,
+            profile: Vec::new(),
+            metadata: Vec::new(),
+        })
+    }
+
+    pub fn import(&self, options: &GridImportOptions) -> Result<Document, String> {
+        import_grid_samples(&self.image, options, Some(self))
+    }
+}
+
+fn import_grid_samples(
+    im: &RgbaImage,
+    options: &GridImportOptions,
+    source: Option<&GridSource>,
+) -> Result<Document, String> {
     let g = &options.grid;
     if options.duration == 0 {
         return Err("Duration must be 1–65535 ms".into());
     }
-    let cells = preview_grid(im, g, options.skip_transparent)?.cells;
+    let GridPreview {
+        cells,
+        cell_size: [width, height],
+        ..
+    } = preview_grid_with_options(im, options)?;
     if cells.is_empty() {
-        return Err("Every complete cell is transparent".into());
+        return Err("Every selected cell is transparent".into());
     }
-    let mut d = Document::new(g.width, g.height);
+    let mut d = Document::new(width, height);
+    let mut indexed = None;
+    if let Some(source) = source {
+        d.color_profile.clone_from(&source.profile);
+        d.metadata.clone_from(&source.metadata);
+        if source.mode == ColorMode::Grayscale {
+            d.color_mode = ColorMode::Grayscale;
+        } else if let Some(slots) = &source.slots {
+            let has_padding = cells.iter().any(|&(x, y)| {
+                x as usize + width > im.width() as usize
+                    || y as usize + height > im.height() as usize
+            });
+            let mut palette = source.palette.clone();
+            let mut clear = palette.iter().position(|p| p[3] == 0);
+            if has_padding && clear.is_none() && palette.len() < 256 {
+                clear = Some(palette.len());
+                palette.push(CLEAR);
+            }
+            if !has_padding || clear.is_some() {
+                d.color_mode = ColorMode::Indexed;
+                d.palette = palette;
+                d.transparent_index = clear.unwrap_or(0);
+                indexed = Some((slots, clear));
+            }
+        }
+    }
     d.durations[0] = options.duration;
     for (i, (x, y)) in cells.into_iter().enumerate() {
         if i > 0 {
@@ -663,11 +821,25 @@ pub fn import_grid_with_options(
             }
         }
         let (l, f) = if g.layers { (i, 0) } else { (0, i) };
-        d.layers[l].cels[f] = image::imageops::crop_imm(im, x, y, g.width as u32, g.height as u32)
-            .to_image()
-            .pixels()
-            .map(|p| p.0)
-            .collect();
+        let copied_width = width.min((im.width() - x) as usize);
+        let copied_height = height.min((im.height() - y) as usize);
+        let mut pixels = vec![CLEAR; width * height];
+        for row in 0..copied_height {
+            for column in 0..copied_width {
+                pixels[row * width + column] = im.get_pixel(x + column as u32, y + row as u32).0;
+            }
+        }
+        d.layers[l].cels[f] = pixels.into();
+        if let Some((slots, clear)) = indexed {
+            let mut indices = vec![clear.unwrap_or(0) as u8; width * height];
+            for row in 0..copied_height {
+                let from = (y as usize + row) * im.width() as usize + x as usize;
+                let to = row * width;
+                indices[to..to + copied_width].copy_from_slice(&slots[from..from + copied_width]);
+            }
+            d.layers[l].background = clear.is_none();
+            d.layers[l].cel_meta[f].indices = Some(indices.into());
+        }
     }
     d.validate()?;
     Ok(d)

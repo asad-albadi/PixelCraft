@@ -113,7 +113,7 @@ pub(super) struct PowerTools {
     preferences: Preferences,
     grid: GridImportOptions,
     grid_preview: Option<CachedGridPreview>,
-    grid_source: Option<image::RgbaImage>,
+    grid_source: Option<GridSource>,
     grid_texture: Option<egui::TextureHandle>,
     atlas: AtlasOptions,
     atlas_files: Vec<PathBuf>,
@@ -180,8 +180,7 @@ impl Default for PowerTools {
 }
 
 struct CachedGridPreview {
-    grid: GridImport,
-    skip_transparent: bool,
+    options: GridImportOptions,
     result: Result<GridPreview, String>,
 }
 
@@ -1000,8 +999,9 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 .add_filter("Sprite sheets", &["png", "jpg", "jpeg", "bmp", "gif"])
                 .pick_file()
         {
-            match read_image(&path) {
-                Ok(image) => {
+            match GridSource::read(&path) {
+                Ok(source) => {
+                    let image = &source.image;
                     let grid = &mut self.power.grid.grid;
                     let default = GridImport {
                         layers: grid.layers,
@@ -1016,36 +1016,62 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         grid.use_cell_size(size);
                     }
                     self.power.grid_texture =
-                        Some(import_preview_texture(ui.ctx(), "grid-import", &image));
-                    self.power.grid_source = Some(image);
+                        Some(import_preview_texture(ui.ctx(), "grid-import", image));
+                    self.power.grid_source = Some(source);
                     self.power.grid_preview = None;
                 }
                 Err(error) => self.status = error,
             }
         }
         let options = &mut self.power.grid;
+        let mut from_counts = options.columns.is_some() || options.rows.is_some();
+        if ui
+            .pc_checkbox(&mut from_counts, "Size cells from row and column counts")
+            .changed()
+        {
+            options.columns = from_counts.then_some(1);
+            options.rows = from_counts.then_some(1);
+        }
         let grid = &mut options.grid;
-        if let Some(image) = &self.power.grid_source
-            && let Some(size) =
-                GridImport::suggest_strip(image.width() as usize, image.height() as usize)
+        if !from_counts
+            && let Some(source) = &self.power.grid_source
+            && let Some(size) = GridImport::suggest_strip(
+                source.image.width() as usize,
+                source.image.height() as usize,
+            )
             && ui
                 .pc_button(format!("Use suggested {} × {} cells", size.0, size.1))
                 .clicked()
         {
             grid.use_cell_size(size);
         }
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::DragValue::new(&mut grid.width)
-                    .prefix("Cell W ")
-                    .range(1..=16384),
-            );
-            ui.add(
-                egui::DragValue::new(&mut grid.height)
-                    .prefix("H ")
-                    .range(1..=16384),
-            );
-        });
+        if from_counts {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(options.columns.get_or_insert(1))
+                        .prefix("Columns ")
+                        .range(1..=MAX_DIMENSION),
+                );
+                ui.add(
+                    egui::DragValue::new(options.rows.get_or_insert(1))
+                        .prefix("Rows ")
+                        .range(1..=MAX_DIMENSION),
+                );
+            });
+        } else {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut grid.width)
+                        .prefix("Cell W ")
+                        .range(1..=MAX_DIMENSION),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut grid.height)
+                        .prefix("H ")
+                        .range(1..=MAX_DIMENSION),
+                );
+            });
+        }
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut grid.offset_x)
@@ -1071,6 +1097,17 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             );
         });
         ui.pc_checkbox(&mut grid.layers, "Import as layers (otherwise frames)");
+        ui.pc_checkbox(&mut options.include_partial, "Include partial edge cells");
+        let order_label = match options.order {
+            GridOrder::RowMajor => "Row-major",
+            GridOrder::ColumnMajor => "Column-major",
+        };
+        egui::ComboBox::from_label("Cell order")
+            .selected_text(order_label)
+            .show_ui(ui, |ui| {
+                ui.pc_selectable_value(&mut options.order, GridOrder::RowMajor, "Row-major");
+                ui.pc_selectable_value(&mut options.order, GridOrder::ColumnMajor, "Column-major");
+            });
         ui.pc_checkbox(
             &mut options.skip_transparent,
             "Skip fully transparent cells",
@@ -1082,17 +1119,20 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 .suffix(" ms"),
         );
 
-        let (Some(image), Some(texture)) = (&self.power.grid_source, &self.power.grid_texture)
+        let (Some(source), Some(texture)) = (&self.power.grid_source, &self.power.grid_texture)
         else {
             return;
         };
-        if self.power.grid_preview.as_ref().is_none_or(|preview| {
-            preview.grid != *grid || preview.skip_transparent != options.skip_transparent
-        }) {
+        let image = &source.image;
+        if self
+            .power
+            .grid_preview
+            .as_ref()
+            .is_none_or(|preview| preview.options != *options)
+        {
             self.power.grid_preview = Some(CachedGridPreview {
-                grid: grid.clone(),
-                skip_transparent: options.skip_transparent,
-                result: preview_grid(image, grid, options.skip_transparent),
+                options: options.clone(),
+                result: preview_grid_with_options(image, options),
             });
         }
         let preview = match &self.power.grid_preview.as_ref().unwrap().result {
@@ -1102,8 +1142,16 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 return;
             }
         };
-        let kind = if grid.layers { "layers" } else { "frames" };
-        ui.label(format!("{} {kind} · row-major order", preview.cells.len()));
+        let kind = if options.grid.layers {
+            "layers"
+        } else {
+            "frames"
+        };
+        let [width, height] = preview.cell_size;
+        ui.label(format!(
+            "{} {kind} · {width} × {height} px",
+            preview.cells.len()
+        ));
         if options.skip_transparent {
             ui.small(format!("{} transparent cells skipped", preview.skipped));
         }
@@ -1113,12 +1161,13 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             .min(8.);
         let response = ui.add(egui::Image::new(texture).fit_to_exact_size(dimensions * scale));
         let painter = ui.painter_at(response.rect);
-        let cell_size = Vec2::new(grid.width as f32, grid.height as f32) * scale;
+        let cell_size = Vec2::new(width as f32, height as f32) * scale;
         let cell_rect = |x, y| {
             Rect::from_min_size(
                 response.rect.min + Vec2::new(x as f32, y as f32) * scale,
                 cell_size,
             )
+            .intersect(response.rect)
         };
         let marker = Color32::from_rgb(255, 200, 60);
         if cell_size.x.min(cell_size.y) < 3. {
@@ -1128,13 +1177,18 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             }
             painter.add(egui::Shape::mesh(markers));
         } else {
-            for &(x, y) in &preview.cells {
-                painter.rect_stroke(
-                    cell_rect(x, y),
-                    0,
-                    Stroke::new(1., marker),
-                    egui::StrokeKind::Inside,
-                );
+            for (index, &(x, y)) in preview.cells.iter().enumerate() {
+                let rect = cell_rect(x, y);
+                painter.rect_stroke(rect, 0, Stroke::new(1., marker), egui::StrokeKind::Inside);
+                if rect.width() >= 28. && rect.height() >= 18. && preview.cells.len() <= 256 {
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        index + 1,
+                        egui::FontId::monospace(11.),
+                        marker,
+                    );
+                }
             }
         }
         if ui
@@ -1144,7 +1198,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             .inner
             .clicked()
         {
-            match import_grid_with_options(image, options) {
+            match source.import(options) {
                 Ok(document) => {
                     self.open_document(document, None);
                     self.status = "Imported sheet cells".into();

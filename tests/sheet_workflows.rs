@@ -168,6 +168,114 @@ fn headless_grid_import_skips_alpha_zero_cells_and_initializes_duration() {
 }
 
 #[test]
+fn grid_import_count_order_and_partial_cells_match_between_cli_and_mcp() {
+    let root = std::env::temp_dir().join(format!("pixelcraft-grid-counts-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let input = root.join("source.png");
+    let output = root.join("out.pixel");
+    let mut image = RgbaImage::new(7, 5);
+    for (x, y, color) in [
+        (1, 0, [10, 0, 0, 255]),
+        (1, 3, [20, 0, 0, 255]),
+        (5, 0, [30, 0, 0, 255]),
+        (5, 3, [40, 0, 0, 255]),
+        (6, 4, [50, 0, 0, 255]),
+    ] {
+        image.put_pixel(x, y, Rgba(color));
+    }
+    image.save(&input).unwrap();
+    let args = json!({"input":input,"output":output,"options":{
+        "columns":2,"rows":2,"offset_x":1,"spacing_x":1,
+        "order":"column_major","include_partial":true,"duration":130
+    }});
+    let settings = serde_json::from_value(args["options"].clone()).unwrap();
+    let preview = pixelcraft::productivity::preview_grid_with_options(&image, &settings).unwrap();
+    assert_eq!(preview.cell_size, [3, 3]);
+    assert_eq!(preview.cells, [(1, 0), (1, 3), (5, 0), (5, 3)]);
+    run_cli(&["import-grid".into(), args.to_string()]).unwrap();
+    let doc = load(&output).unwrap();
+    assert_eq!([doc.width, doc.height], [3, 3]);
+    assert_eq!(doc.durations, [130; 4]);
+    assert_eq!(
+        (0..4)
+            .map(|frame| doc.composite(frame)[0][0])
+            .collect::<Vec<_>>(),
+        [10, 20, 30, 40]
+    );
+    assert_eq!(doc.composite(3)[4], [50, 0, 0, 255]);
+    assert_eq!(doc.composite(3)[8], [0; 4]);
+    let mut layers = args.clone();
+    layers["output"] = json!(root.join("layers.pixel"));
+    layers["options"]["layers"] = json!(true);
+    let response = rpc(
+        &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"import-grid","arguments":layers}}),
+        None,
+    ).unwrap();
+    assert_ne!(response["result"]["isError"], true, "{response}");
+    let imported = load(&root.join("layers.pixel")).unwrap();
+    assert_eq!(
+        imported
+            .layers
+            .iter()
+            .map(|layer| layer.cels[0][0][0])
+            .collect::<Vec<_>>(),
+        [10, 20, 30, 40]
+    );
+    let mut no_partial = args;
+    no_partial["output"] = json!(root.join("whole.pixel"));
+    no_partial["options"]["include_partial"] = json!(false);
+    run_cli(&["import-grid".into(), no_partial.to_string()]).unwrap();
+    let whole = load(&root.join("whole.pixel")).unwrap();
+    assert_eq!([whole.width, whole.height], [2, 2]);
+    assert_eq!(whole.durations, [130; 4]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn grid_import_keeps_indexed_png_slots_and_pads_partial_cells() {
+    use pixelcraft::model::ColorMode;
+    let root = std::env::temp_dir().join(format!("pixelcraft-grid-indices-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let input = root.join("indexed.png");
+    let output = root.join("out.pixel");
+    let mut encoder = png::Encoder::new(std::fs::File::create(&input).unwrap(), 3, 1);
+    encoder.set_color(png::ColorType::Indexed);
+    encoder.set_palette(vec![30, 100, 80, 30, 100, 80]);
+    let mut writer = encoder.write_header().unwrap();
+    writer.write_image_data(&[1, 0, 1]).unwrap();
+    writer.finish().unwrap();
+    run_cli(&[
+        "import-grid".into(),
+        json!({
+            "input":input,"output":output,"options":{"width":2,"height":1,"include_partial":true}
+        })
+        .to_string(),
+    ])
+    .unwrap();
+    let doc = load(&output).unwrap();
+    assert_eq!(doc.color_mode, ColorMode::Indexed);
+    assert_eq!(doc.transparent_index, 2);
+    assert_eq!(
+        doc.layers[0].cel_meta[0]
+            .indices
+            .as_ref()
+            .unwrap()
+            .as_slice(),
+        [1, 0]
+    );
+    assert_eq!(
+        doc.layers[0].cel_meta[1]
+            .indices
+            .as_ref()
+            .unwrap()
+            .as_slice(),
+        [1, 2]
+    );
+    assert_eq!(doc.composite(1), [[30, 100, 80, 255], [0; 4]]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn saving_atlas_preserves_previewed_pixels_and_placements() {
     let root =
         std::env::temp_dir().join(format!("pixelcraft-atlas-preview-{}", std::process::id()));
