@@ -216,8 +216,8 @@ fn import_preview_texture(
 enum LiveResult {
     Read(serde_json::Value),
     Export(automation::PreparedExport),
-    Save(automation::PreparedExport, Document),
-    Edit(Document, serde_json::Value),
+    Save(automation::PreparedExport, Box<Document>),
+    Edit(Box<Document>, serde_json::Value),
 }
 
 struct PreparedLive {
@@ -1392,7 +1392,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         request.project_root.as_deref(),
                         request.project_identity,
                     )?;
-                    return Ok(LiveResult::Save(prepared, doc));
+                    return Ok(LiveResult::Save(prepared, Box::new(doc)));
                 }
                 "live-preview-commands" => {
                     return automation::preview_commands(
@@ -1454,7 +1454,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 value["preview"] = preview;
             }
             automation::check_live_response_size(&value)?;
-            Ok(LiveResult::Edit(next, value))
+            Ok(LiveResult::Edit(Box::new(next), value))
         })();
         PreparedLive {
             request,
@@ -1500,7 +1500,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         return Err("The current project path changed while saving".into());
                     }
                     let result = save.write()?;
-                    self.saved = snapshot;
+                    self.saved = *snapshot;
                     self.add_recent(path.clone());
                     self.path = Some(path);
                     self.live_save_root = prepared.request.project_root.clone();
@@ -1508,7 +1508,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     self.status = "Saved sprite through MCP".into();
                     return Ok(result);
                 }
-                LiveResult::Edit(next, value) => (next, value),
+                LiveResult::Edit(next, value) => (*next, value),
             };
             if prepared.revision != self.live_revision() {
                 return Err("Stale revision; inspect the open sprite again".into());
