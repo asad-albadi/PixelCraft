@@ -286,6 +286,8 @@ Choose **File → Repeat Last Export** to render a sprite again using its last s
 
 The editor opens and exports ICO, QOI, and TGA. It also exports lossless WebP and JPEG. JPEG composites transparency on white. ICO accepts up to 256 × 256 pixels after scaling. Static WebP opens with the built-in decoder. Use the same extensions in CLI, file MCP, and live MCP raster export.
 
+PCX import reads indexed and planar RGB artwork. A single opaque indexed layer exports with its palette indices. Other PCX exports use 24-bit RGB with transparency composited on white. PCX is available in the editor, CLI, and both MCP export paths.
+
 ### Headless CLI
 
 No graphical display is needed. `pixelcraft --help` lists the operations and arguments. Run `--cli OPERATION` with a JSON argument object, or named flags; command errors go to stderr and exit with a nonzero status. Layer/frame indices are zero-based.

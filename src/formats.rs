@@ -5,6 +5,7 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
+mod pcx;
 mod raster;
 pub(crate) use raster::{raster_format, validate_raster_size, write_raster_image};
 
@@ -1612,6 +1613,9 @@ pub fn export_raster_scaled(
         .unwrap_or("");
     let format = raster_format(extension).ok_or("Unsupported raster export extension")?;
     validate_raster_size(format, d.width * count, d.height, scale)?;
+    if format == raster::RasterFormat::Pcx && !sheet && pcx::write_indexed(path, d, f, scale)? {
+        return Ok(());
+    }
     let mut im = image::RgbaImage::new((d.width * count) as u32, d.height as u32);
     for n in 0..count {
         for (i, p) in d

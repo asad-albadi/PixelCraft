@@ -87,6 +87,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 in progress. ICO, QOI, and TGA read/write and lossless WebP and JPEG output are available in the editor and shared CLI/MCP paths. The static WebP decoder is built in. JPEG uses white for transparency, while the lossless formats preserve alpha. Raster decoders check canvas bounds before the main pixel allocation, and ICO enforces its 256-pixel axis limit after scaling. Tests cover file signatures, CLI reimport, scaled alpha pixels, live cropped output, and invalid output dimensions. Formatting, strict Clippy, and 501 Windows all-target tests passed. PSD/PSB, FLI/FLC, PCX, SVG, and CSS remain open.
 
+- Item 35 in progress. PCX imports packed and planar indexed data and planar RGB, with strict scanline and canvas bounds. Export writes indexed output when a single opaque indexed layer maps exactly to its source palette and RGB output with a white matte otherwise. Tests cover duplicate palette slots, scaling, uncompressed low-bit planes, RGB padding, malformed packets, and live crops. Pillow-produced files round-tripped through PixelCraft and decoded with exact pixels in FFmpeg. Formatting, strict Clippy, and 502 Windows all-target tests passed. PSD/PSB, FLI/FLC, SVG, and CSS remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

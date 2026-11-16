@@ -1,3 +1,4 @@
+use super::pcx;
 use crate::{
     automation::mcp_io,
     model::{Document, MAX_DIMENSION, MAX_PIXELS},
@@ -9,6 +10,9 @@ use std::{
 };
 
 pub(super) fn load_static(path: &Path, extension: &str) -> Result<Document, String> {
+    if extension == "pcx" {
+        return pcx::load(path);
+    }
     if extension == "webp" {
         let file = mcp_io::open(path).map_err(|e| e.to_string())?;
         let decoder = image::codecs::webp::WebPDecoder::new(BufReader::new(file))
@@ -46,7 +50,16 @@ fn decode(decoder: impl ImageDecoder) -> Result<Document, String> {
     Ok(doc)
 }
 
-pub(crate) fn raster_format(extension: &str) -> Option<ImageFormat> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RasterFormat {
+    Standard(ImageFormat),
+    Pcx,
+}
+
+pub(crate) fn raster_format(extension: &str) -> Option<RasterFormat> {
+    if extension.eq_ignore_ascii_case("pcx") {
+        return Some(RasterFormat::Pcx);
+    }
     let format = ImageFormat::from_extension(extension)?;
     matches!(
         format,
@@ -58,11 +71,11 @@ pub(crate) fn raster_format(extension: &str) -> Option<ImageFormat> {
             | ImageFormat::Jpeg
             | ImageFormat::WebP
     )
-    .then_some(format)
+    .then_some(RasterFormat::Standard(format))
 }
 
 pub(crate) fn validate_raster_size(
-    format: ImageFormat,
+    format: RasterFormat,
     width: usize,
     height: usize,
     scale: usize,
@@ -76,7 +89,7 @@ pub(crate) fn validate_raster_size(
     {
         return Err("Scaled export exceeds image limits".into());
     }
-    if format == ImageFormat::Ico && (w > 256 || h > 256) {
+    if format == RasterFormat::Standard(ImageFormat::Ico) && (w > 256 || h > 256) {
         return Err("ICO export supports images up to 256 × 256 pixels".into());
     }
     Ok(())
@@ -85,22 +98,27 @@ pub(crate) fn validate_raster_size(
 pub(crate) fn write_raster_image(
     path: &Path,
     image: &RgbaImage,
-    format: ImageFormat,
+    format: RasterFormat,
 ) -> Result<(), String> {
     validate_raster_size(format, image.width() as usize, image.height() as usize, 1)?;
+    let RasterFormat::Standard(format) = format else {
+        return pcx::write_rgb(path, image);
+    };
     if format != ImageFormat::Jpeg {
         return mcp_io::write_image_as(path, image, format).map_err(|e| e.to_string());
     }
     let matte = image::RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let [r, g, b, a] = image.get_pixel(x, y).0;
-        let alpha = u16::from(a);
-        image::Rgb(
-            [r, g, b].map(|c| ((u16::from(c) * alpha + 255 * (255 - alpha) + 127) / 255) as u8),
-        )
+        image::Rgb([r, g, b].map(|channel| on_white(channel, a)))
     });
     let mut writer = BufWriter::new(mcp_io::create(path).map_err(|e| e.to_string())?);
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 95)
         .encode_image(&matte)
         .map_err(|e| e.to_string())?;
     writer.flush().map_err(|e| e.to_string())
+}
+
+pub(super) fn on_white(channel: u8, alpha: u8) -> u8 {
+    let alpha = u16::from(alpha);
+    ((u16::from(channel) * alpha + 255 * (255 - alpha) + 127) / 255) as u8
 }

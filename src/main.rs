@@ -2107,7 +2107,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         "Project, sprite or image",
                         &[
                             "pixel", "aseprite", "ase", "png", "gif", "webp", "apng", "ora",
-                            "json", "tmj", "tsj", "bmp", "jpg", "jpeg", "ico", "qoi", "tga",
+                            "json", "tmj", "tsj", "bmp", "jpg", "jpeg", "ico", "pcx", "qoi", "tga",
                         ],
                     )
                     .set_directory(
@@ -2329,6 +2329,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "bmp" => "bmp",
             "jpeg" => "jpg",
             "ico" => "ico",
+            "pcx" => "pcx",
             "qoi" => "qoi",
             "tga" => "tga",
             "webp" => "webp",
@@ -2527,7 +2528,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "saveas" => {
                 self.save(true);
             }
-            "png" | "bmp" | "jpeg" | "ico" | "qoi" | "tga" | "webp" | "sheet" => self.export(s),
+            "png" | "bmp" | "jpeg" | "ico" | "pcx" | "qoi" | "tga" | "webp" | "sheet" => {
+                self.export(s)
+            }
             "png-sequence" => {
                 self.sequence_name = self
                     .path
@@ -2997,6 +3000,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export JPEG…", "jpeg"),
                         ("Export WebP…", "webp"),
                         ("Export icon…", "ico"),
+                        ("Export PCX…", "pcx"),
                         ("Export QOI…", "qoi"),
                         ("Export TGA…", "tga"),
                         ("Open sample garden", "demo"),

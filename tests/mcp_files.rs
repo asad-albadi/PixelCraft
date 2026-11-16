@@ -1463,6 +1463,129 @@ fn raster_interchange_exports_real_formats_and_preserves_supported_alpha() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn pcx_interchange_keeps_palette_slots_and_checks_scanline_packets() {
+    use pixelcraft::model::ColorMode;
+
+    let w = Workspace::new();
+    let root = w.project();
+    let mut header = vec![0u8; 128];
+    header[..4].copy_from_slice(&[10, 5, 1, 8]);
+    header[4..6].copy_from_slice(&7u16.to_le_bytes());
+    header[8..10].copy_from_slice(&9u16.to_le_bytes());
+    header[65] = 1;
+    header[66] = 4;
+    header[68] = 1;
+    let mut bytes = header.clone();
+    bytes.extend_from_slice(&[0, 5, 6, 0, 12]);
+    let mut palette = [[0; 3]; 256];
+    palette[0] = [191, 65, 13];
+    palette[5] = [202, 150, 88];
+    palette[6] = palette[5];
+    bytes.extend(palette.into_iter().flatten());
+    fs::write(root.join("indexed.pcx"), &bytes).unwrap();
+    let loaded = formats::load(&root.join("indexed.pcx")).unwrap();
+    assert_eq!((loaded.width, loaded.height), (3, 1));
+    assert_eq!(loaded.color_mode, ColorMode::Indexed);
+    assert_eq!(
+        loaded.layers[0].cel_meta[0]
+            .indices
+            .as_deref()
+            .unwrap()
+            .as_slice(),
+        [0, 5, 6]
+    );
+    assert_eq!(
+        loaded.composite(0),
+        vec![[191, 65, 13, 255], [202, 150, 88, 255], [202, 150, 88, 255]]
+    );
+    assert!(loaded.layers[0].background);
+    let reply = w.call(
+        "export",
+        json!({"input":"indexed.pcx","output":"scaled.pcx","format":"pcx","scale":2}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let bytes2 = fs::read(root.join("scaled.pcx")).unwrap();
+    assert_eq!(bytes2[65], 1);
+    let scaled = formats::load(&root.join("scaled.pcx")).unwrap();
+    assert_eq!((scaled.width, scaled.height), (6, 2));
+    assert_eq!(
+        scaled.layers[0].cel_meta[0]
+            .indices
+            .as_deref()
+            .unwrap()
+            .as_slice(),
+        [0, 0, 5, 5, 6, 6].repeat(2)
+    );
+
+    let mut rgb = Document::new(3, 1);
+    rgb.set_pixel(0, 0, 0, [240, 10, 70, 255]);
+    rgb.set_pixel(0, 0, 1, [60, 180, 120, 128]);
+    formats::save(&root.join("art.pixel"), &rgb).unwrap();
+    let reply = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"rgb.pcx","format":"pcx"}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let rgb_bytes = fs::read(root.join("rgb.pcx")).unwrap();
+    assert_eq!(rgb_bytes[65], 3);
+    assert_eq!(rgb_bytes[66], 4);
+    assert_eq!(
+        formats::load(&root.join("rgb.pcx")).unwrap().composite(0),
+        vec![
+            [240, 10, 70, 255],
+            [157, 217, 187, 255],
+            [255, 255, 255, 255]
+        ]
+    );
+
+    let mut planar = header;
+    planar[2] = 0;
+    planar[3] = 1;
+    planar[65] = 4;
+    planar[66] = 2;
+    planar[16 + 3..16 + 6].copy_from_slice(&[15, 25, 35]);
+    planar[16 + 6..16 + 9].copy_from_slice(&[75, 85, 95]);
+    planar[16 + 12..16 + 15].copy_from_slice(&[110, 120, 130]);
+    planar.extend_from_slice(&[0b1000_0000, 0, 0b0100_0000, 0, 0b0010_0000, 0, 0, 0]);
+    fs::write(root.join("planar.pcx"), planar).unwrap();
+    let planar = formats::load(&root.join("planar.pcx")).unwrap();
+    assert_eq!(
+        planar.layers[0].cel_meta[0]
+            .indices
+            .as_deref()
+            .unwrap()
+            .as_slice(),
+        [1, 2, 4]
+    );
+    assert_eq!(
+        planar.composite(0),
+        vec![[15, 25, 35, 255], [75, 85, 95, 255], [110, 120, 130, 255]]
+    );
+
+    let live_path = root.join("live.pcx");
+    let args =
+        json!({"output":live_path,"format":"pcx","region":{"x":0,"y":0,"width":1,"height":1}});
+    automation::prepare_live_export(&rgb, 0, &args, "pcx-check")
+        .unwrap()
+        .write()
+        .unwrap();
+    assert_eq!(
+        formats::load(&live_path).unwrap().composite(0),
+        vec![[240, 10, 70, 255]]
+    );
+
+    let mut invalid = bytes;
+    invalid[128] = 0xc5;
+    fs::write(root.join("broken.pcx"), &invalid).unwrap();
+    assert!(
+        formats::load(&root.join("broken.pcx"))
+            .unwrap_err()
+            .contains("scanline")
+    );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(
