@@ -13,6 +13,15 @@ pub enum AtlasLayout {
     #[default]
     MaxRects,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AtlasMetadata {
+    #[default]
+    Array,
+    Hash,
+    None,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AtlasOptions {
@@ -22,6 +31,7 @@ pub struct AtlasOptions {
     pub trim: bool,
     pub deduplicate: bool,
     pub power_of_two: bool,
+    pub metadata: AtlasMetadata,
 }
 impl Default for AtlasOptions {
     fn default() -> Self {
@@ -32,6 +42,7 @@ impl Default for AtlasOptions {
             trim: true,
             deduplicate: true,
             power_of_two: false,
+            metadata: AtlasMetadata::Array,
         }
     }
 }
@@ -314,14 +325,42 @@ pub fn export_atlas(
     sources: &[(String, Document)],
     o: &AtlasOptions,
 ) -> Result<(), String> {
-    save_packed_atlas(path, &pack_atlas(sources, o)?)
+    save_packed_atlas_with_metadata(path, &pack_atlas(sources, o)?, o.metadata)
 }
 
 /// Write the same image and placement data produced by `pack_atlas`.
 pub fn save_packed_atlas(path: &Path, packed: &(RgbaImage, Value)) -> Result<(), String> {
+    save_packed_atlas_with_metadata(path, packed, AtlasMetadata::Array)
+}
+
+pub fn save_packed_atlas_with_metadata(
+    path: &Path,
+    packed: &(RgbaImage, Value),
+    metadata: AtlasMetadata,
+) -> Result<(), String> {
     let (image, meta) = packed;
+    let write_image =
+        || crate::automation::mcp_io::write_image(path, image).map_err(|e| e.to_string());
+    if metadata == AtlasMetadata::None {
+        return write_image();
+    }
     let mut meta = meta.clone();
     meta["meta"]["image"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
-    crate::automation::mcp_io::write_image(path, image).map_err(|e| e.to_string())?;
+    if metadata == AtlasMetadata::Hash {
+        let mut frames = serde_json::Map::new();
+        for frame in meta["frames"]
+            .as_array()
+            .ok_or("Atlas has no frame array")?
+        {
+            let name = frame["filename"]
+                .as_str()
+                .ok_or("Atlas frame has no filename")?;
+            if frames.insert(name.to_owned(), frame.clone()).is_some() {
+                return Err(format!("Duplicate atlas frame filename: {name}"));
+            }
+        }
+        meta["frames"] = Value::Object(frames);
+    }
+    write_image()?;
     crate::interchange::write_json(&path.with_extension("json"), &meta)
 }

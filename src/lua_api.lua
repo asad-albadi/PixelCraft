@@ -287,6 +287,40 @@ local function rectangleEqual(a,b)
  return left~=nil and right~=nil and left.x==right.x and left.y==right.y
   and left.width==right.width and left.height==right.height
 end
+local rectangleMethods={}
+local rectangleAliases={w='width',h='height'}
+function rectangleMethods:contains(other)
+ local point=pointFields[other]
+ if point then
+  return point.x>=self.x and point.x<self.x+self.width
+   and point.y>=self.y and point.y<self.y+self.height
+ end
+ return rectangleFields[other]~=nil and not self.isEmpty and not other.isEmpty
+  and other.x>=self.x and other.y>=self.y
+  and other.x+other.width<=self.x+self.width and other.y+other.height<=self.y+self.height
+end
+function rectangleMethods:intersects(other)
+ assert(rectangleFields[other],'Rectangle expected')
+ return not self.isEmpty and not other.isEmpty
+  and self.x<other.x+other.width and other.x<self.x+self.width
+  and self.y<other.y+other.height and other.y<self.y+self.height
+end
+function rectangleMethods:intersect(other)
+ if not rectangleMethods.intersects(self,other) then return Rectangle() end
+ local x,y=math.max(self.x,other.x),math.max(self.y,other.y)
+ local right=math.min(self.x+self.width,other.x+other.width)
+ local bottom=math.min(self.y+self.height,other.y+other.height)
+ return Rectangle(x,y,right-x,bottom-y)
+end
+function rectangleMethods:union(other)
+ assert(rectangleFields[other],'Rectangle expected')
+ if self.isEmpty then return Rectangle(other) end
+ if other.isEmpty then return Rectangle(self) end
+ local x,y=math.min(self.x,other.x),math.min(self.y,other.y)
+ local right=math.max(self.x+self.width,other.x+other.width)
+ local bottom=math.max(self.y+self.height,other.y+other.height)
+ return Rectangle(x,y,right-x,bottom-y)
+end
 function Rectangle(x,y,w,h)
  if type(x)=='table' then
   local t=x
@@ -300,12 +334,15 @@ function Rectangle(x,y,w,h)
  local result=setmetatable({}, {
   __name='Rectangle',
   __eq=rectangleEqual,
+  __band=rectangleMethods.intersect,
+  __bor=rectangleMethods.union,
   __index=function(_,k)
    -- Rectangle_get_isEmpty 0x3eaa00 tests signed width/height, not area.
    if k=='isEmpty' then return fields.width<=0 or fields.height<=0 end
-   return fields[k]
+   return fields[rectangleAliases[k] or k] or rectangleMethods[k]
   end,
   __newindex=function(t,k,v)
+   k=rectangleAliases[k] or k
    if k=='x' or k=='y' or k=='width' or k=='height' then fields[k]=colorInteger(v)
    elseif k=='isEmpty' then error('Rectangle.isEmpty is read-only')
    else rawset(t,k,v) end
@@ -316,26 +353,53 @@ function Rectangle(x,y,w,h)
  return result
 end
 ColorMode={RGB='Rgba',GRAY='Grayscale',INDEXED='Indexed'}
+function ImageSpec(options)
+ options=options or {}
+ return {
+  width=options.width or 1,
+  height=options.height or 1,
+  colorMode=options.colorMode or ColorMode.RGB,
+  transparentColor=options.transparentColor or 0,
+ }
+end
 BlendMode={NORMAL='Normal',MULTIPLY='Multiply',SCREEN='Screen',OVERLAY='Overlay',DARKEN='Darken',LIGHTEN='Lighten',COLOR_DODGE='ColorDodge',COLOR_BURN='ColorBurn',HARD_LIGHT='HardLight',SOFT_LIGHT='SoftLight',DIFFERENCE='Difference',EXCLUSION='Exclusion',HSL_HUE='Hue',HSL_SATURATION='Saturation',HSL_COLOR='Color',HSL_LUMINOSITY='Luminosity',ADDITION='Addition',SUBTRACT='Subtract',DIVIDE='Divide'}
 AniDir={FORWARD=0,REVERSE=1,PING_PONG=2,PING_PONG_REVERSE=3}
 -- Native App_get_fgColor 0x50ac90 / App_get_bgColor 0x50ae00 copy
 -- the preference Color into fresh Lua userdata on every read.
 local scriptColors=_pw_colors
 local imageMethods={}
-local function image(p,w,h,mode)
+local function image(p,w,h,mode,transparent)
  mode=mode or doc.color_mode
- return setmetatable({_pixels=p,width=w,height=h,colorMode=mode,bytesPerPixel=mode=='Rgba' and 4 or mode=='Grayscale' and 2 or 1,spec={width=w,height=h,colorMode=mode,transparentColor=doc.transparent_index}},{__index=imageMethods})
+ return setmetatable({
+  _pixels=p,width=w,height=h,colorMode=mode,
+  _transparent=transparent or doc.transparent_index,
+  bytesPerPixel=mode=='Rgba' and 4 or mode=='Grayscale' and 2 or 1,
+ },{
+  __index=function(im,k)
+   if k=='spec' then
+    return ImageSpec{width=im.width,height=im.height,colorMode=im.colorMode,transparentColor=im._transparent}
+   end
+   if k=='bounds' then return Rectangle(0,0,im.width,im.height) end
+   return imageMethods[k]
+  end,
+ })
 end
 function Image(w,h,mode)
- if type(w)=='table' and w._pixels then return image(copy(w._pixels),w.width,w.height,w.colorMode) end
- if type(w)=='table' then h=w.height;w=w.width end
+ local transparent
+ if type(w)=='table' then
+  if w._pixels then return image(copy(w._pixels),w.width,w.height,w.colorMode,w._transparent) end
+  w,h,mode,transparent=w.width,w.height,w.colorMode or mode,w.transparentColor
+ end
  assert(type(w)=='number' and type(h)=='number' and w>0 and h>0 and w*h<=16000000,'Image dimensions exceed budget')
- local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h,mode)
+ local p={} for i=1,w*h do p[i]={0,0,0,0} end return image(p,w,h,mode,transparent)
 end
 function imageMethods:drawPixel(x,y,c) x=math.floor(x);y=math.floor(y);if x>=0 and y>=0 and x<self.width and y<self.height then local value=unpackColor(c);self._pixels[y*self.width+x+1]=value;if self._put then self._put(x,y,value)end end end
 imageMethods.putPixel=imageMethods.drawPixel
 function imageMethods:getPixel(x,y) if x<0 or y<0 or x>=self.width or y>=self.height then return 0 end return rgba(table.unpack(self._pixels[y*self.width+x+1])) end
-function imageMethods:clear(c) for y=0,self.height-1 do for x=0,self.width-1 do self:drawPixel(x,y,c or 0)end end end
+function imageMethods:clear(c)
+ c=c or (self.colorMode==ColorMode.INDEXED and self._transparent or 0)
+ for y=0,self.height-1 do for x=0,self.width-1 do self:drawPixel(x,y,c) end end
+end
 function imageMethods:clone() return Image(self) end
 -- doc::rgba_blender_normal (0x5e81e0): rounded byte products, signed
 -- channel division truncated toward zero. Keep transparent branch ordering.

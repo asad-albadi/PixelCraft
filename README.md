@@ -134,6 +134,10 @@ New Sprite, Rename Layer, save confirmations, file errors, and **Help → Tools 
 
 Pencil B, eraser E, fill G, eyedropper I, line L, rectangle U, ellipse O, selection M, hand H. The compact **Colors** selector starts with one white entry, **Primary**. **Add Color** creates and selects another named entry; click its color chip to edit it. Selecting an entry makes it the active drawing color for either mouse button. **Dominant colors** groups similar nontransparent artwork shades across layers and frames into up to 10 representative swatches, ranked by frequency. Results are cached until artwork changes. Click a swatch to select the drawing color while keeping saved named colors unchanged. Drawing colors are shared across sprite tabs. Alt-click samples into the active entry; X swaps with the alternate color. Scroll zooms around the pointer; middle-drag pans. Ctrl+Z undoes; Ctrl+Y redoes; Ctrl+S saves. Copy/cut/paste/delete work on image-layer selections. A stroke is one undo step.
 
+Select the paint bucket and open **Fill options** to set color tolerance or match disconnected areas. The wand keeps its own settings. On a tile layer, the bucket fills matching cells with the chosen tile, and the eyedropper picks a tile for placement.
+
+Under **Colors → … → Color harmonies**, choose a complementary, analogous, triadic, or split-complementary swatch based on the active color.
+
 Use **Edit → Replace Color** to change an exact color match in one Undo step. Choose which layers and frames to include and whether to limit the edit to the selection. The drawing studio can include diagonal neighbors when outlining. **Edit → Settings** offers whole-pixel wheel zoom that keeps the cursor over the same artwork.
 
 Use **Sprite → Properties, layers, tiles & ranges** (also available beside the timeline) for:
@@ -149,12 +153,12 @@ Canvases support up to 16384 pixels per side and 64 million pixels per canvas an
 
 ### Timeline and scene editing
 
-Use **Play preview animation** in the Preview panel to play the authored frame timings while the timeline stays on your editing frame. The preview shows the main canvas viewport. Click the artwork in the preview to center the canvas there. The timeline marks tagged frames, and **Sprite → Properties, layers, tiles & ranges** edits a tag’s repeat count for batch and engine exports.
+Use **Play preview animation** in the Preview panel to play the authored frame timings while the timeline stays on your editing frame. The timeline’s playback speed applies to both the canvas and the preview. Export uses the frame durations you authored. The preview shows the main canvas viewport. Click the artwork in the preview to center the canvas there. The timeline marks tagged frames, and **Sprite → Properties, layers, tiles & ranges** edits a tag’s repeat count for batch and engine exports.
 
 - Shift-click a timeline cel, or use Shift and the arrow keys with a cel focused, to select a rectangle. **Layer & frame actions → Selected cels** clears, links, unlinks, changes timing, or previews a move or duplicate at the chosen destination. Operations use one Undo step.
 - **Layer & frame actions → Link cel to frame** shares artwork within one layer. **Link duplicated cels** makes frame duplication link artwork on that layer. Unlink a cel before editing it independently.
 - **Position and opacity keyframe** animates offsets and opacity. Position snaps to whole pixels. Linear keys interpolate using frame durations, including the loop boundary. Enable **Hold until next keyframe** to step between values.
-- **Drawing & selection studio** has free-angle rotation with a draggable preview pivot, masks from selection, levels, hue/saturation and palette remapping. An adjustment applies to the layers composited below it in its group. Use an empty image layer for an adjustment and its visibility control to toggle the effect.
+- **Drawing & selection studio** has free-angle rotation with a draggable preview pivot. Choose Fast or RotSprite for the preview and applied rotation. The studio also offers masks from selection, levels, hue/saturation and palette remapping. An adjustment applies to the layers composited below it in its group. Use an empty image layer for an adjustment and its visibility control to toggle the effect.
 - **Sprite Properties → Slices and pivots** edits frame-keyed game asset bounds and pivots. Tile painting modes in the same window support shared tile edits and placement variants. Variants reuse an identical tile when present and retain the placement's flip flags.
 
 Native projects save compact empty cels and sparse raster blocks. Copy-on-write buffers are written once per shared raster, and older dense native projects remain readable. Frame textures survive unrelated edits. During playback, PixelCraft prepares one upcoming frame in the background. If the next frame misses its deadline, the editor holds the current frame until the new one is ready. The texture cache targets 64 MiB and reserves space for the current and upcoming frames.
@@ -213,7 +217,7 @@ Pull requests targeting main run formatting, strict Clippy, and Rust tests on Li
 
 PixelCraft is an early-alpha desktop app with Linux AppImage and Windows installer release workflows. Drawing, animation, advanced document features, native project persistence and independent Lua extensions have automated coverage. The standalone check also exercises saving, exports and plugins in an isolated filesystem without Aseprite or an installed Lua interpreter.
 
-Compatibility is partial and explicitly documented in [COMPATIBILITY.md](COMPATIBILITY.md). Ten real Aseprite projects (33 frames) have reference-image and metadata round-trip coverage, and four unchanged upstream scripts have automated coverage. Exact original widget skins, every API/command, multi-document Lua objects and monitor-specific ICC calibration are outside the supported surface. Other operating systems and architectures have not been validated.
+Compatibility is partial and explicitly documented in [COMPATIBILITY.md](COMPATIBILITY.md). Ten real Aseprite projects (33 frames) have reference-image and metadata round-trip coverage, and five unchanged upstream scripts have automated coverage. Exact original widget skins, every API/command, multi-document Lua objects and monitor-specific ICC calibration are outside the supported surface. Other operating systems and architectures have not been validated.
 
 ## License and credits
 
@@ -251,9 +255,9 @@ Open **Tools…** beside the brush controls, or **Edit → Brushes, references &
 - **Reference images** imports PNG/JPEG overlays. Set X/Y, scale, visibility and opacity, or enable Move/scale and drag on canvas (Shift-drag scales). Finish moving to draw again. Images and placement are embedded in `.pixel` projects and recovery; artwork PNG, GIF, sprite sheets and atlases exclude them. Save `.pixel` to preserve editor-only reference data.
 - **Palette tools** optionally snap RGB pencil, fill and shapes to the document palette. Import/export `.hex`, JASC `.pal`, GIMP `.gpl` and JSON. HEX accepts RRGGBB or RRGGBBAA; PAL/GPL contain RGB only. Drag document swatches to reorder them. The named drawing-color JSON palette remains available in Colors.
 - **Onion skin** supports 0–8 previous and 0–8 next frames, each side with its own tint and opacity. More distant frames fade by distance. Settings are remembered.
-- **Grid sprite-sheet import** accepts PNG, JPEG, BMP, or GIF (first image) and previews complete cells in row-major order. Set cell size, offset, spacing, and an initial duration in milliseconds. Optionally skip fully transparent cells when importing as frames or layers.
+- **Grid sprite-sheet import** accepts PNG, JPEG, BMP, or GIF (first image) and previews complete cells in row-major order. Set cell size, offset, spacing, and an initial duration in milliseconds. PixelCraft suggests editable square cells for simple horizontal or vertical strips. Optionally skip fully transparent cells when importing as frames or layers.
 - **Batch tag export** writes one GIF or PNG/JSON sheet per animation tag. GIFs contain the requested forward, reverse or ping-pong playback order and original durations (subject to GIF's 10 ms precision). Sheets retain direction metadata and reuse the current columns/padding/trim and Generic/Godot/Unity options. Indexed filename prefixes avoid name collisions and unsafe tag names.
-- **Multi-file atlas** packs every frame of selected sprites with Rows or MaxRects, optional trimming, padding, exact pixel deduplication and power-of-two dimensions. Preview the packed image and its dimensions before saving the PNG and JSON together. JSON keeps every frame's timing, source identity, original canvas size, trim offsets and source tags even when frames share one packed region. The width is an upper bound; power-of-two mode uses a width no larger than that bound. Existing image/pixel limits apply.
+- **Multi-file atlas** packs every frame of selected sprites with Rows or MaxRects, optional trimming, padding, exact pixel deduplication and power-of-two dimensions. Preview the packed image and its dimensions before saving. Choose a JSON array, a JSON object keyed by stable frame filename, or PNG only. In the CLI or MCP atlas options, use `"metadata":"array"`, `"metadata":"hash"`, or `"metadata":"none"`. JSON keeps every frame's timing, source identity, original canvas size, trim offsets and source tags even when frames share one packed region. The width is an upper bound; power-of-two mode uses a width no larger than that bound. Existing image/pixel limits apply.
 - **File → Recent files** remembers the last 15 successfully opened or saved files. Duplicate filenames show a folder hint and missing files are marked. Workflow tools also provide PixelCraft, Aseprite and Photoshop shortcut presets for supported commands and an editable binding list. Choosing a preset replaces the current bindings; edits and removals are saved.
 
 Double-click a timeline frame number or choose **Rename current frame** under **Layer & frame actions**. Names are saved in `.pixel` projects and exported as optional `frameName` entries in sheet and atlas JSON, with the existing filenames and IDs preserved.
@@ -276,6 +280,12 @@ pixelcraft --cli palette-convert --input colors.hex --output colors.gpl
 ```
 
 `import`/`export` convert formats using the same loaders and exporters as the editor. `render` writes a PNG when output is supplied, or returns an inline PNG otherwise. `edit` accepts `input`, `output`, the `revision` returned by inspect, and `edits: [{layer,frame,x,y,color:[r,g,b,a]}]`. Edits validate completely before saving; locked layers, invalid coordinates and stale revisions fail without changing the input.
+
+For one sheet per authored slice, pass an output directory and enable `split_slices`. Each sheet follows its slice’s keyed bounds and preserves the included frame timing. Add `extrude` to duplicate each frame’s edge pixels before scaling. The border sits outside the sprite rectangle in the JSON.
+
+```bash
+pixelcraft --cli export --input hero.pixel --output slice-sheets --format sheet --options '{"split_slices":true,"extrude":1}'
+```
 
 ### MCP and live editor access
 

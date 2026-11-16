@@ -105,6 +105,8 @@ pub(super) struct PowerTools {
     pub stamp: Option<(usize, usize, Vec<Pixel>)>,
     pub contiguous: bool,
     pub tolerance: u8,
+    fill_tolerance: u8,
+    fill_global: bool,
     pub selection_op: SelectionOp,
     preferences: Preferences,
     grid: GridImportOptions,
@@ -144,6 +146,8 @@ impl Default for PowerTools {
             stamp: None,
             contiguous: true,
             tolerance: 0,
+            fill_tolerance: 0,
+            fill_global: false,
             selection_op: SelectionOp::Replace,
             preferences,
             grid: GridImportOptions::default(),
@@ -685,19 +689,87 @@ impl PixelCraft {
             paint_brush(&mut self.doc, self.layer, self.frame, p, color, size, &o);
         }
     }
+    pub(super) fn fill_controls(&mut self, ui: &mut egui::Ui) {
+        ui.menu_button("Fill options", |ui| {
+            if self.doc.layers[self.layer].tileset.is_none() {
+                ui.add(
+                    egui::Slider::new(&mut self.power.fill_tolerance, 0..=255)
+                        .text("Color tolerance"),
+                );
+            }
+            ui.pc_checkbox(&mut self.power.fill_global, "Match disconnected areas");
+        });
+    }
+
+    pub(super) fn pick_tile(&mut self, p: (i32, i32)) -> bool {
+        let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
+            return false;
+        };
+        let tile = self.doc.layers[self.layer].tile_cels[self.frame][y * geometry.columns + x];
+        if tile & 0x1fffffff == 0 {
+            self.status = "Empty tile cell".into();
+        } else {
+            self.selected_tile = tile & 0x1fffffff;
+            self.status = format!("Picked tile {}", self.selected_tile);
+        }
+        true
+    }
+
     pub(super) fn power_fill(&mut self, p: (i32, i32), color: Pixel) {
+        if let Some(tileset) = self.doc.layers[self.layer].tileset {
+            if self.tile_pixel_mode.is_some() {
+                self.status = "Switch to Place tiles to fill tile cells".into();
+                return;
+            }
+            let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
+                return;
+            };
+            let cells = &self.doc.layers[self.layer].tile_cels[self.frame];
+            let mut matches = matching_by(
+                cells,
+                geometry.columns,
+                geometry.rows,
+                (x as i32, y as i32),
+                !self.power.fill_global,
+                self.doc.wraparound,
+                |a, b| a == b,
+            );
+            if self.selection.is_some() || self.studio.mask.is_some() {
+                let tile = &self.doc.tilesets[tileset];
+                let [x, y, width, height] = self.selection_bounds().map(i64::from);
+                let (selected_right, selected_bottom) = (x + width, y + height);
+                for (index, hit) in matches.iter_mut().enumerate().filter(|(_, hit)| **hit) {
+                    let left =
+                        i64::from(geometry.x) + ((index % geometry.columns) * tile.width) as i64;
+                    let top =
+                        i64::from(geometry.y) + ((index / geometry.columns) * tile.height) as i64;
+                    let right = (left + tile.width as i64).min(selected_right);
+                    let bottom = (top + tile.height as i64).min(selected_bottom);
+                    *hit = (top.max(y)..bottom).any(|row| {
+                        (left.max(x)..right).any(|col| self.selected(col as i32, row as i32))
+                    });
+                }
+            }
+            if let Err(error) =
+                self.doc
+                    .paint_matching_tiles(self.layer, self.frame, self.selected_tile, &matches)
+            {
+                self.status = error;
+            }
+            return;
+        }
         let color = self.doc.snapped_color(self.frame, color);
-        let mut hits = matching(
+        let hits = matching(
             &self.doc.layer_pixels(self.layer, self.frame),
             self.doc.width,
             self.doc.height,
             p,
-            0,
-            true,
+            self.power.fill_tolerance,
+            !self.power.fill_global,
             self.doc.wraparound,
         );
-        for (i, hit) in hits.iter_mut().enumerate() {
-            if *hit && self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
+        for (i, hit) in hits.into_iter().enumerate() {
+            if hit && self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
                 self.doc.set_pixel(self.layer, self.frame, i, color);
             }
         }
@@ -753,6 +825,19 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         {
             match read_image(&path) {
                 Ok(image) => {
+                    let grid = &mut self.power.grid.grid;
+                    let default = GridImport {
+                        layers: grid.layers,
+                        ..GridImport::default()
+                    };
+                    if *grid == default
+                        && let Some(size) = GridImport::suggest_strip(
+                            image.width() as usize,
+                            image.height() as usize,
+                        )
+                    {
+                        grid.use_cell_size(size);
+                    }
                     self.power.grid_texture =
                         Some(import_preview_texture(ui.ctx(), "grid-import", &image));
                     self.power.grid_source = Some(image);
@@ -763,6 +848,15 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         }
         let options = &mut self.power.grid;
         let grid = &mut options.grid;
+        if let Some(image) = &self.power.grid_source
+            && let Some(size) =
+                GridImport::suggest_strip(image.width() as usize, image.height() as usize)
+            && ui
+                .pc_button(format!("Use suggested {} × {} cells", size.0, size.1))
+                .clicked()
+        {
+            grid.use_cell_size(size);
+        }
         ui.horizontal(|ui| {
             ui.add(
                 egui::DragValue::new(&mut grid.width)
@@ -929,6 +1023,20 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         if *options != old_options {
             self.power.atlas_preview = None;
         }
+        ui.horizontal(|ui| {
+            ui.label("Output");
+            ui.pc_selectable_value(
+                &mut options.metadata,
+                AtlasMetadata::Array,
+                "PNG + JSON array",
+            );
+            ui.pc_selectable_value(
+                &mut options.metadata,
+                AtlasMetadata::Hash,
+                "PNG + JSON hash",
+            );
+            ui.pc_selectable_value(&mut options.metadata, AtlasMetadata::None, "PNG only");
+        });
 
         if ui
             .add_enabled_ui(!self.power.atlas_files.is_empty(), |ui| {
@@ -962,13 +1070,17 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     .min(260. / dimensions.y)
                     .min(8.);
                 ui.add(egui::Image::new(&preview.texture).fit_to_exact_size(dimensions * scale));
-                if ui.pc_button("Save atlas PNG + JSON…").clicked()
+                if ui.pc_button("Save atlas…").clicked()
                     && let Some(path) = rfd::FileDialog::new()
                         .add_filter("PNG atlas", &["png"])
                         .set_file_name("atlas.png")
                         .save_file()
                 {
-                    self.status = match save_packed_atlas(&path, &preview.packed) {
+                    self.status = match save_packed_atlas_with_metadata(
+                        &path,
+                        &preview.packed,
+                        options.metadata,
+                    ) {
                         Ok(()) => "Exported multi-file atlas".into(),
                         Err(error) => format!("Export failed: {error}"),
                     };
@@ -2418,5 +2530,70 @@ mod application_preferences_tests {
             "idle.pixel (items) · Missing"
         );
         assert_eq!(recent_file_label(&paths[2], &paths), "run.pixel · Missing");
+    }
+}
+
+#[cfg(test)]
+mod smarter_fill_tests {
+    use super::*;
+
+    #[test]
+    fn fill_tolerance_and_global_mode_respect_the_selection_without_changing_wand_settings() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(5, 1), None);
+        let near = [21, 30, 40, 255];
+        let exact = [20, 30, 40, 255];
+        let other = [80, 30, 40, 255];
+        let fill = [250, 0, 0, 255];
+        app.doc.layers[0].cels[0] = vec![exact, near, other, near, exact].into();
+        app.power.fill_tolerance = 2;
+        app.power.fill_global = true;
+        app.selection = Some((0, 0, 3, 0));
+        app.remember();
+        app.power_fill((0, 0), fill);
+        assert_eq!(app.doc.composite(0), vec![fill, fill, other, fill, exact]);
+        app.undo();
+        assert_eq!(app.doc.composite(0), vec![exact, near, other, near, exact]);
+        assert_eq!(app.power.tolerance, 0);
+        assert!(app.power.contiguous);
+    }
+
+    #[test]
+    fn tile_picker_and_fill_use_cell_geometry_and_preserve_tileset_artwork() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(8, 2), None);
+        app.doc.tilesets.push(Tileset {
+            name: "Tiles".into(),
+            width: 2,
+            height: 2,
+            tiles: vec![
+                vec![[10, 20, 30, 255]; 4].into(),
+                vec![[40, 50, 60, 255]; 4].into(),
+            ],
+        });
+        app.doc.add_tile_layer(0).unwrap();
+        app.layer = 1;
+        app.doc.layers[1].tile_cels[0] = vec![1, 1, 2, 1];
+        assert!(app.pick_tile((4, 0)));
+        assert_eq!(app.selected_tile, 2);
+        app.remember();
+        app.power_fill((0, 0), CLEAR);
+        assert_eq!(app.doc.layers[1].tile_cels[0], vec![2, 2, 2, 1]);
+        app.undo();
+        app.power.fill_global = true;
+        app.tile_pixel_mode = Some(false);
+        app.power_fill((0, 0), CLEAR);
+        assert_eq!(app.doc.layers[1].tile_cels[0], vec![1, 1, 2, 1]);
+        app.tile_pixel_mode = None;
+        app.selection = Some((1, 0, 1, 0));
+        app.power_fill((1, 0), CLEAR);
+        assert_eq!(app.doc.layers[1].tile_cels[0], vec![2, 1, 2, 1]);
+        app.selection = None;
+        app.power_fill((2, 0), CLEAR);
+        assert_eq!(app.doc.layers[1].tile_cels[0], vec![2; 4]);
+        assert_eq!(app.doc.tilesets[0].tiles[0][0], [10, 20, 30, 255]);
+        assert_eq!(app.doc.tilesets[0].tiles[1][0], [40, 50, 60, 255]);
     }
 }

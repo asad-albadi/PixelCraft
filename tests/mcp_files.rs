@@ -362,3 +362,26 @@ fn restricted_webp_import_keeps_the_shipped_decoder_available() {
         serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(sprite["frames"].as_array().unwrap().len(), 2);
 }
+
+#[test]
+fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
+    let w = Workspace::new();
+    let reply = w.call(
+        "atlas",
+        json!({"inputs":["art.pixel"], "output":"keyed.png","options":{"metadata":"hash"}}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let keyed: Value =
+        serde_json::from_slice(&fs::read(w.project().join("keyed.json")).unwrap()).unwrap();
+    assert_eq!(keyed["frames"]["0/art.pixel/0"]["frameId"], 0);
+
+    let sidecar = w.project().join("image-only.json");
+    fs::write(&sidecar, b"keep").unwrap();
+    let reply = w.call(
+        "atlas",
+        json!({"inputs":["art.pixel"],"output":"image-only.png","options":{"metadata":"none"}}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    assert!(w.project().join("image-only.png").is_file());
+    assert_eq!(fs::read(sidecar).unwrap(), b"keep");
+}

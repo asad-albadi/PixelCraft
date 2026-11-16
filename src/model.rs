@@ -3069,6 +3069,72 @@ impl Document {
         l.tile_cels = vec![vec![0; count]; self.durations.len()];
         Ok(())
     }
+    pub fn tile_at_point(
+        &self,
+        layer: usize,
+        frame: usize,
+        point: (i32, i32),
+    ) -> Option<(TilemapGeometry, usize, usize)> {
+        let layer = self.layers.get(layer)?;
+        let set = self.tilesets.get(layer.tileset?)?;
+        let geometry = layer
+            .cel_meta
+            .get(frame)?
+            .tilemap
+            .clone()
+            .unwrap_or(TilemapGeometry {
+                x: 0,
+                y: 0,
+                columns: self.width.div_ceil(set.width),
+                rows: self.height.div_ceil(set.height),
+            });
+        let x = usize::try_from(i64::from(point.0) - i64::from(geometry.x)).ok()? / set.width;
+        let y = usize::try_from(i64::from(point.1) - i64::from(geometry.y)).ok()? / set.height;
+        if x >= geometry.columns || y >= geometry.rows {
+            return None;
+        }
+        layer.tile_cels.get(frame)?.get(y * geometry.columns + x)?;
+        Some((geometry, x, y))
+    }
+
+    pub fn paint_matching_tiles(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        tile: u32,
+        hits: &[bool],
+    ) -> Result<(), String> {
+        if !self.editable(layer) {
+            return Err("Layer is locked".into());
+        }
+        let layer = &mut self.layers[layer];
+        let tile_count = layer
+            .tileset
+            .and_then(|index| self.tilesets.get(index))
+            .ok_or("Select a tile layer")?
+            .tiles
+            .len();
+        if (tile & 0x1fffffff) as usize > tile_count
+            || layer
+                .tile_cels
+                .get(frame)
+                .is_none_or(|cells| cells.len() != hits.len())
+        {
+            return Err("Tile is outside the map or tileset".into());
+        }
+        let link = layer.cel_meta[frame].artwork_link;
+        for (target, cells) in layer.tile_cels.iter_mut().enumerate() {
+            if target == frame || link.is_some() && layer.cel_meta[target].artwork_link == link {
+                for (cell, hit) in cells.iter_mut().zip(hits) {
+                    if *hit {
+                        *cell = tile;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn paint_tile(
         &mut self,
         l: usize,

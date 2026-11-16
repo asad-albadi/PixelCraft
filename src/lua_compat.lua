@@ -55,6 +55,9 @@ local spriteSelection=Selection((_pw_options or {}).selection)
 local filename=(_pw_options or {}).filename or ''
 local spriteIndex=getmetatable(sprite).__index
 getmetatable(sprite).__index=function(t,k)
+ if k=='spec' then
+  return ImageSpec{width=doc.width,height=doc.height,colorMode=doc.color_mode,transparentColor=doc.transparent_index}
+ end
  if k=='selection' then return spriteSelection elseif k=='events' then return spriteEvents elseif k=='bounds' then return Rectangle(0,0,doc.width,doc.height) elseif k=='filename' then return filename elseif k=='transparentColor' then return doc.transparent_index elseif k=='id' then return 1 end
  return spriteIndex(t,k)
 end
@@ -234,11 +237,11 @@ local imageGet,imageDraw=imageMethods.getPixel,imageMethods.drawPixel
 function imageMethods:getPixel(x,y)
  local p=imageGet(self,x,y)
  if self.colorMode=='Grayscale' then local c=unpackColor(p);return app.pixelColor.graya(c[1],c[4])
- elseif self.colorMode=='Indexed' then local c=unpackColor(p);if c[4]==0 then return doc.transparent_index end;return Color(c).index end
+ elseif self.colorMode=='Indexed' then local c=unpackColor(p);if c[4]==0 then return self._transparent end;return Color(c).index end
  return p
 end
 function imageMethods:drawPixel(x,y,p)
- if type(p)=='number' then if self.colorMode=='Grayscale' then local g=p&255;p=rgba(g,g,g,(p>>8)&255) elseif self.colorMode=='Indexed' then local c=copy(doc.palette[p+1] or {0,0,0,0});if p==doc.transparent_index then c[4]=0 end;p=c end end
+ if type(p)=='number' then if self.colorMode=='Grayscale' then local g=p&255;p=rgba(g,g,g,(p>>8)&255) elseif self.colorMode=='Indexed' then local c=copy(doc.palette[p+1] or {0,0,0,0});if p==self._transparent then c[4]=0 end;p=c end end
  imageDraw(self,x,y,p)
 end
 function imageMethods:isEqual(other)if self.width~=other.width or self.height~=other.height then return false end;for i,p in ipairs(self._pixels)do for c=1,4 do if p[c]~=other._pixels[i][c]then return false end end end;return true end

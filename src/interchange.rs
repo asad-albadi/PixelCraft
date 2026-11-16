@@ -140,7 +140,198 @@ pub(crate) fn export_sheet_with_previous(
     d: &Document,
     o: &SheetOptions,
 ) -> Result<(), String> {
-    let (im, mut meta) = pack_sheet(d, o)?;
+    export_sheet_extruded(path, previous_path, d, o, 0)
+}
+
+pub(crate) fn export_sheet_extruded(
+    path: &Path,
+    previous_path: &Path,
+    d: &Document,
+    o: &SheetOptions,
+    extrude: usize,
+) -> Result<(), String> {
+    write_packed_sheet(
+        path,
+        previous_path,
+        o,
+        pack_sheet_with_extrusion(d, o, extrude)?,
+    )
+}
+
+pub(crate) struct SliceSheet<'a> {
+    slice: &'a SpriteSlice,
+    first: usize,
+    last: usize,
+    pub file_name: String,
+}
+
+pub(crate) fn plan_slice_sheets<'a>(
+    d: &'a Document,
+    o: &SheetOptions,
+) -> Result<Vec<SliceSheet<'a>>, String> {
+    let (first, last) = match o.tag {
+        Some(index) => {
+            let tag = d.tags.get(index).ok_or("Unknown tag")?;
+            (tag.from, tag.to)
+        }
+        None => (0, d.durations.len() - 1),
+    };
+    let mut plans = Vec::new();
+    let mut pixels = 0usize;
+    for (index, slice) in d.slices.iter().enumerate() {
+        let Some(key) = slice.keys.first().filter(|key| key.frame <= last) else {
+            continue;
+        };
+        let first = first.max(key.frame);
+        pixels = pixels.saturating_add((last - first + 1).saturating_mul(d.width * d.height));
+        if pixels > MAX_DOCUMENT_PIXELS {
+            return Err("Split slice export exceeds the pixel work limit; use a tag".into());
+        }
+        let label: String = slice
+            .name
+            .chars()
+            .take(48)
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let label = if label.is_empty() { "slice" } else { &label };
+        plans.push(SliceSheet {
+            slice,
+            first,
+            last,
+            file_name: format!("{:03}-{label}.png", index + 1),
+        });
+    }
+    if plans.is_empty() {
+        return Err("No authored slices in the selected frame range".into());
+    }
+    Ok(plans)
+}
+
+impl SliceSheet<'_> {
+    pub(crate) fn export(
+        &self,
+        path: &Path,
+        previous_path: &Path,
+        d: &Document,
+        o: &SheetOptions,
+        extrude: usize,
+    ) -> Result<(), String> {
+        let mut keys = self.slice.keys.iter().peekable();
+        let mut active = keys.next().unwrap();
+        let active_keys: Vec<_> = (self.first..=self.last)
+            .map(|f| {
+                while keys.peek().is_some_and(|next| next.frame <= f) {
+                    active = keys.next().unwrap();
+                }
+                active
+            })
+            .collect();
+        let width = active_keys.iter().map(|key| key.bounds[2]).max().unwrap() as usize;
+        let height = active_keys.iter().map(|key| key.bounds[3]).max().unwrap() as usize;
+        if width == 0
+            || height == 0
+            || width > MAX_DIMENSION
+            || height > MAX_DIMENSION
+            || width * height > MAX_PIXELS
+            || (width * height).saturating_mul(active_keys.len()) > MAX_DOCUMENT_PIXELS
+        {
+            return Err(format!(
+                "Slice {:?} exceeds the export limits",
+                self.slice.name
+            ));
+        }
+
+        let mut cropped = Document::new(width, height);
+        cropped.durations = d.durations[self.first..=self.last].to_vec();
+        let frame_count = cropped.durations.len();
+        cropped.layers[0]
+            .cel_meta
+            .resize_with(frame_count, CelMeta::default);
+        cropped.layers[0]
+            .tile_cels
+            .resize_with(frame_count, Vec::new);
+        cropped.set_sheet_frame_export_ids(
+            (self.first..=self.last)
+                .map(|f| d.frame_export_id(f))
+                .collect(),
+            d.next_frame_export_id(),
+        );
+        cropped.tags = d
+            .tags
+            .iter()
+            .filter_map(|tag| {
+                let from = tag.from.max(self.first);
+                let to = tag.to.min(self.last);
+                (from <= to).then(|| FrameTag {
+                    from: from - self.first,
+                    to: to - self.first,
+                    ..tag.clone()
+                })
+            })
+            .collect();
+
+        let mut local_keys = Vec::new();
+        let mut cels = Vec::with_capacity(frame_count);
+        for (n, &key) in active_keys.iter().enumerate() {
+            let source_frame = self.first + n;
+            if let Some(name) = d.frame_name(source_frame) {
+                cropped.set_frame_name(n, name)?;
+            }
+            if n == 0 || active_keys[n - 1].frame != key.frame {
+                let mut local = key.clone();
+                local.frame = n;
+                local.bounds[..2].fill(0);
+                local_keys.push(local);
+            }
+            let [x, y, w, h] = key.bounds.map(i64::from);
+            let (left, right) = (x.max(0), (x + w).min(d.width as i64));
+            let (top, bottom) = (y.max(0), (y + h).min(d.height as i64));
+            if left >= right || top >= bottom {
+                cels.push(Pixels::empty(width * height));
+                continue;
+            }
+            let mut pixels = vec![CLEAR; width * height];
+            let source = d.composite(source_frame);
+            let len = (right - left) as usize;
+            for row in top..bottom {
+                let from = row as usize * d.width + left as usize;
+                let to = (row - y) as usize * width + (left - x) as usize;
+                pixels[to..to + len].copy_from_slice(&source[from..from + len]);
+            }
+            cels.push(pixels.into());
+        }
+        cropped.layers[0].cels = cels;
+        cropped.slices.push(SpriteSlice {
+            name: self.slice.name.clone(),
+            keys: local_keys,
+        });
+        let mut options = o.clone();
+        options.tag = None;
+        let (image, mut metadata) = pack_sheet_with_extrusion(&cropped, &options, extrude)?;
+        for (n, frame) in metadata["frames"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            frame["sourceFrame"] = json!(self.first + n);
+        }
+        write_packed_sheet(path, previous_path, &options, (image, metadata))
+    }
+}
+
+fn write_packed_sheet(
+    path: &Path,
+    previous_path: &Path,
+    o: &SheetOptions,
+    (im, mut meta): (image::RgbaImage, Value),
+) -> Result<(), String> {
     let name = path
         .file_name()
         .ok_or("Invalid filename")?

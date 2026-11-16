@@ -3,6 +3,8 @@ use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+mod rotsprite;
+
 #[derive(Clone, Copy)]
 pub enum Transform {
     Move(i32, i32),
@@ -30,6 +32,28 @@ pub fn inside_polygon(points: &[(i32, i32)], x: i32, y: i32) -> bool {
     }
     hit
 }
+fn snap_near_integer(value: f64) -> f64 {
+    if (value - value.round()).abs() < 1e-9 {
+        value.round()
+    } else {
+        value
+    }
+}
+
+fn rotation_basis(degrees: f64) -> [f64; 2] {
+    let (sin, cos) = degrees.rem_euclid(360.).to_radians().sin_cos();
+    [snap_near_integer(sin), snap_near_integer(cos)]
+}
+
+fn needs_enlargement(basis: [f64; 2]) -> bool {
+    basis.into_iter().all(|v| v != 0.)
+}
+
+/// Check RotSprite's temporary enlargement budget. Right-angle turns use exact sampling.
+pub fn rotsprite_within_budget(width: usize, height: usize, degrees: f64) -> bool {
+    !needs_enlargement(rotation_basis(degrees)) || rotsprite::enlargement_fits(width, height)
+}
+
 fn rotation_bounds(
     bounds: [i32; 4],
     degrees: f64,
@@ -43,15 +67,7 @@ fn rotation_bounds(
         return None;
     }
     let [x, y, w, h] = bounds;
-    let (sin, cos) = degrees.rem_euclid(360.).to_radians().sin_cos();
-    let snap = |value: f64| {
-        if (value - value.round()).abs() < 1e-9 {
-            value.round()
-        } else {
-            value
-        }
-    };
-    let [sin, cos] = [snap(sin), snap(cos)];
+    let [sin, cos] = rotation_basis(degrees);
     let mut min = [f64::INFINITY; 2];
     let mut max = [f64::NEG_INFINITY; 2];
     for [x, y] in [[x, y], [x + w, y], [x, y + h], [x + w, y + h]] {
@@ -62,21 +78,23 @@ fn rotation_bounds(
             max[axis] = max[axis].max(result[axis]);
         }
     }
-    let origin = min.map(|v| snap(v).floor() as i32);
-    let end = max.map(|v| snap(v).ceil() as i32);
+    let origin = min.map(|v| snap_near_integer(v).floor() as i32);
+    let end = max.map(|v| snap_near_integer(v).ceil() as i32);
     Some((
         [origin[0], origin[1], end[0] - origin[0], end[1] - origin[1]],
         [sin, cos],
     ))
 }
 
-fn rotated_source(position: [i32; 2], pivot: [f64; 2], [sin, cos]: [f64; 2]) -> (i32, i32) {
+fn inverse_rotation(position: [i32; 2], pivot: [f64; 2], [sin, cos]: [f64; 2]) -> [f64; 2] {
     let x = f64::from(position[0]) + 0.5 - pivot[0];
     let y = f64::from(position[1]) + 0.5 - pivot[1];
-    (
-        (pivot[0] + x * cos + y * sin).floor() as i32,
-        (pivot[1] - x * sin + y * cos).floor() as i32,
-    )
+    [pivot[0] + x * cos + y * sin, pivot[1] - x * sin + y * cos]
+}
+
+fn rotated_source(position: [i32; 2], pivot: [f64; 2], basis: [f64; 2]) -> (i32, i32) {
+    let [x, y] = inverse_rotation(position, pivot, basis);
+    (x.floor() as i32, y.floor() as i32)
 }
 
 pub fn transform(
@@ -87,7 +105,40 @@ pub fn transform(
     mask: Option<&[bool]>,
     t: Transform,
 ) -> Result<[i32; 4], String> {
-    if !d.editable(l) || d.layers[l].tileset.is_some() {
+    transform_selection(d, l, f, b, mask, t, false).map(|(bounds, _)| bounds)
+}
+
+/// Rotate using RotSprite and return the exact destination selection sampled by the rotation.
+pub fn transform_rotsprite(
+    d: &mut Document,
+    l: usize,
+    f: usize,
+    b: [i32; 4],
+    mask: Option<&[bool]>,
+    degrees: f64,
+    pivot: [f64; 2],
+) -> Result<([i32; 4], Vec<bool>), String> {
+    transform_selection(
+        d,
+        l,
+        f,
+        b,
+        mask,
+        Transform::RotateAround { degrees, pivot },
+        true,
+    )
+}
+
+fn transform_selection(
+    d: &mut Document,
+    l: usize,
+    f: usize,
+    b: [i32; 4],
+    mask: Option<&[bool]>,
+    t: Transform,
+    use_rotsprite: bool,
+) -> Result<([i32; 4], Vec<bool>), String> {
+    if !d.editable(l) || d.layers[l].tileset.is_some() || f >= d.durations.len() {
         return Err("Select an unlocked image layer".into());
     }
     let [x, y, w, h] = b;
@@ -127,14 +178,42 @@ pub fn transform(
         d.index(sx, sy)
             .is_some_and(|i| mask.is_none_or(|m| m.get(i) == Some(&true)))
     };
+    let sample_source = |sx, sy| {
+        if !selected(sx, sy) {
+            return None;
+        }
+        let src = d.index(sx, sy).unwrap();
+        Some((source[src], source_indices.as_ref().map(|v| v[src])))
+    };
+    let enlarged = if use_rotsprite && rotation.is_some_and(|(_, basis)| needs_enlargement(basis)) {
+        Some(rotsprite::Enlarged::new(
+            w as usize,
+            h as usize,
+            |sx, sy| sample_source(x + sx as i32, y + sy as i32),
+        )?)
+    } else {
+        None
+    };
     let mut writes = Vec::new();
     for oy in 0..nh {
         for ox in 0..nw {
+            let position = [x + dx + ox as i32, y + dy + oy as i32];
+            let Some(dst) = d.index(position[0], position[1]) else {
+                continue;
+            };
+            if let Some(enlarged) = &enlarged {
+                let (pivot, basis) = rotation.unwrap();
+                let [sx, sy] = inverse_rotation(position, pivot, basis);
+                if let Some((pixel, index)) = enlarged.sample(sx - f64::from(x), sy - f64::from(y))
+                {
+                    writes.push((dst, pixel, index));
+                }
+                continue;
+            }
             let (sx, sy) = match t {
                 Transform::RotateAround { .. } => {
                     let (pivot, basis) = rotation.unwrap();
-                    let (sx, sy) =
-                        rotated_source([x + dx + ox as i32, y + dy + oy as i32], pivot, basis);
+                    let (sx, sy) = rotated_source(position, pivot, basis);
                     if !(x..x + w).contains(&sx) || !(y..y + h).contains(&sy) {
                         continue;
                     }
@@ -145,11 +224,8 @@ pub fn transform(
                 Transform::FlipY => (ox as i32, h - 1 - oy as i32),
                 _ => (ox as i32 * w / nw as i32, oy as i32 * h / nh as i32),
             };
-            if selected(x + sx, y + sy)
-                && let Some(dst) = d.index(x + dx + ox as i32, y + dy + oy as i32)
-            {
-                let src = d.index(x + sx, y + sy).unwrap();
-                writes.push((dst, source[src], source_indices.as_ref().map(|v| v[src])));
+            if let Some((pixel, index)) = sample_source(x + sx, y + sy) {
+                writes.push((dst, pixel, index));
             }
         }
     }
@@ -162,12 +238,20 @@ pub fn transform(
             }
         }
     }
+    let mut rotated_selection = if use_rotsprite {
+        vec![false; d.width * d.height]
+    } else {
+        Vec::new()
+    };
     for (i, p, index) in writes {
+        if use_rotsprite {
+            rotated_selection[i] = true;
+        }
         d.drawing_index = index.map(|n| n as usize);
         d.set_pixel(l, f, i, p);
     }
     d.drawing_index = None;
-    Ok([x + dx, y + dy, nw as i32, nh as i32])
+    Ok(([x + dx, y + dy, nw as i32, nh as i32], rotated_selection))
 }
 pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
     let [x, y, w, h] = b;
@@ -305,9 +389,20 @@ impl Default for SheetOptions {
     }
 }
 pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), String> {
+    pack_sheet_with_extrusion(d, o, 0)
+}
+
+pub(crate) fn pack_sheet_with_extrusion(
+    d: &Document,
+    o: &SheetOptions,
+    extrude: usize,
+) -> Result<(RgbaImage, Value), String> {
     d.validate()?;
     if o.scale == 0 || o.scale > MAX_DIMENSION {
         return Err("Scale must be a positive integer within image limits".into());
+    }
+    if extrude > 256 {
+        return Err("Sprite extrusion must be 0–256 pixels".into());
     }
     let range = if let Some(i) = o.tag {
         let t = d.tags.get(i).ok_or("Unknown tag")?;
@@ -335,10 +430,10 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
         } else {
             [0, 0, d.width, d.height]
         };
-        sprites.push((frame, (x, y), b));
-        width = width.max(x + b[2] + pad);
-        x += b[2] + pad;
-        row = row.max(b[3]);
+        sprites.push((frame, (x + extrude, y + extrude), b));
+        x += b[2] + 2 * extrude + pad;
+        width = width.max(x);
+        row = row.max(b[3] + 2 * extrude);
         let height = y + row + pad;
         if width > MAX_DIMENSION
             || height > MAX_DIMENSION
@@ -353,12 +448,14 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
     let mut frames = vec![];
     for &(f, (x, y), b) in &sprites {
         let p = d.composite(f);
-        for cy in 0..b[3] {
-            for cx in 0..b[2] {
+        for cy in 0..b[3] + 2 * extrude {
+            let source_y = b[1] + cy.saturating_sub(extrude).min(b[3] - 1);
+            for cx in 0..b[2] + 2 * extrude {
+                let source_x = b[0] + cx.saturating_sub(extrude).min(b[2] - 1);
                 im.put_pixel(
-                    (x + cx) as u32,
-                    (y + cy) as u32,
-                    Rgba(p[(b[1] + cy) * d.width + b[0] + cx]),
+                    (x + cx - extrude) as u32,
+                    (y + cy - extrude) as u32,
+                    Rgba(p[source_y * d.width + source_x]),
                 );
             }
         }
@@ -432,10 +529,11 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
             })
         })
         .collect();
-    Ok((
-        im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices,"nextFrameId":d.next_frame_export_id()}}),
-    ))
+    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices,"nextFrameId":d.next_frame_export_id()}});
+    if extrude > 0 {
+        metadata["meta"]["extrude"] = json!(extrude * scale);
+    }
+    Ok((im, metadata))
 }
 
 fn visible_bounds(pixels: &[Pixel], width: usize, height: usize) -> [usize; 4] {
@@ -457,7 +555,11 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
     let frames: Vec<&Value> = if let Some(a) = meta["frames"].as_array() {
         a.iter().collect()
     } else if let Some(a) = meta["frames"].as_object() {
-        a.values().collect()
+        let mut frames: Vec<_> = a.values().collect();
+        if meta["meta"]["app"] == "PixelCraft" && meta["meta"]["sources"].is_array() {
+            frames.sort_by_key(|frame| (frame["source"].as_u64(), frame["sourceFrame"].as_u64()));
+        }
+        frames
     } else {
         return Err("Missing frames".into());
     };

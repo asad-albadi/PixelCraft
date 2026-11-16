@@ -258,18 +258,27 @@ enum PreviewTime {
 pub(super) struct PreviewPlayback {
     frame: usize,
     time: PreviewTime,
-}
-
-fn frame_seconds(durations: &[u16], frame: usize) -> f64 {
-    f64::from(durations[frame].max(1)) / 1000.
+    speed: u16,
 }
 
 impl PreviewPlayback {
-    fn new(frame: usize, now: f64, durations: &[u16]) -> Self {
+    fn new(frame: usize, now: f64, durations: &[u16], speed: u16) -> Self {
         Self {
             frame,
-            time: PreviewTime::Playing(now + frame_seconds(durations, frame)),
+            time: PreviewTime::Playing(now + playback_seconds(durations[frame], speed)),
+            speed,
         }
+    }
+
+    pub(super) fn set_speed(&mut self, now: f64, speed: u16) {
+        let ratio = f64::from(self.speed) / f64::from(speed);
+        self.time = match self.time {
+            PreviewTime::Playing(deadline) => {
+                PreviewTime::Playing(now + (deadline - now).max(0.) * ratio)
+            }
+            PreviewTime::Paused(remaining) => PreviewTime::Paused(remaining.max(0.) * ratio),
+        };
+        self.speed = speed;
     }
 
     fn toggle(&mut self, now: f64) {
@@ -282,7 +291,7 @@ impl PreviewPlayback {
     fn update(&mut self, now: f64, durations: &[u16]) {
         if self.frame >= durations.len() {
             self.frame = durations.len() - 1;
-            let duration = frame_seconds(durations, self.frame);
+            let duration = playback_seconds(durations[self.frame], self.speed);
             self.time = match self.time {
                 PreviewTime::Playing(_) => PreviewTime::Playing(now + duration),
                 PreviewTime::Paused(_) => PreviewTime::Paused(duration),
@@ -293,14 +302,23 @@ impl PreviewPlayback {
         {
             // Skip entire cycles after a delayed repaint, then find the current cel.
             let cycle_ms: u64 = durations.iter().map(|d| u64::from((*d).max(1))).sum();
-            let cycle = cycle_ms as f64 / 1000.;
+            let cycle = cycle_ms as f64 / (10. * f64::from(self.speed));
             *deadline += ((now - *deadline) / cycle).floor() * cycle;
             while now >= *deadline {
                 self.frame = (self.frame + 1) % durations.len();
-                *deadline += frame_seconds(durations, self.frame);
+                *deadline += playback_seconds(durations[self.frame], self.speed);
             }
         }
     }
+}
+
+fn harmony_color([red, green, blue, alpha]: Pixel, degrees: f32) -> Pixel {
+    // Use straight sRGB channels for the hue wheel, independently of opacity.
+    let mut hsv =
+        egui::ecolor::Hsva::from_rgb([red, green, blue].map(|channel| f32::from(channel) / 255.));
+    hsv.h = (hsv.h + degrees / 360.).rem_euclid(1.);
+    let [red, green, blue] = hsv.to_rgb().map(|channel| (channel * 255.).round() as u8);
+    [red, green, blue, alpha]
 }
 
 impl PixelCraft {
@@ -596,6 +614,38 @@ impl PixelCraft {
                         self.add_named_color();
                     }
                     ui.menu_button("…", |ui| {
+                        ui.menu_button("Color harmonies", |ui| {
+                            for (label, angles) in [
+                                ("Complementary", &[180.][..]),
+                                ("Analogous", &[-30., 30.]),
+                                ("Triadic", &[120., 240.]),
+                                ("Split complementary", &[150., 210.]),
+                            ] {
+                                ui.menu_button(label, |ui| {
+                                    for &angle in angles {
+                                        let color = harmony_color(self.fg, angle);
+                                        let hex = format!(
+                                            "#{:02X}{:02X}{:02X}",
+                                            color[0], color[1], color[2]
+                                        );
+                                        let swatch = Color32::from_rgba_unmultiplied(
+                                            color[0], color[1], color[2], color[3],
+                                        );
+                                        if ui
+                                            .horizontal(|ui| {
+                                                ui.colored_label(swatch, "■");
+                                                ui.pc_button(hex)
+                                            })
+                                            .inner
+                                            .clicked()
+                                        {
+                                            self.set_active_color(color);
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                        });
                         ui.label("Color name");
                         ui.text_edit_singleline(&mut self.named_colors[self.active_color].0);
                         if self.named_colors.len() > 1
@@ -730,7 +780,7 @@ impl PixelCraft {
                     if let Some(playback) = &mut self.preview_playback {
                         playback.toggle(now);
                     } else {
-                        self.preview_playback = Some(PreviewPlayback::new(self.frame, now, &self.doc.durations));
+                        self.preview_playback = Some(PreviewPlayback::new(self.frame, now, &self.doc.durations, self.playback_speed));
                     }
                 }
             });
@@ -931,6 +981,11 @@ impl PixelCraft {
             )),
         )
         .ui(ui, |ui| self.tools(ui));
+        if self.tool == Tool::Fill {
+            self.fill_controls(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
         ui.add_sized(
             [if short { 50. } else { 90. }, if short { 28. } else { 32. }],
             egui::DragValue::new(&mut self.brush)
@@ -1053,5 +1108,42 @@ impl PixelCraft {
         {
             self.power.open = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod workflow_option_tests {
+    use super::*;
+
+    #[test]
+    fn complementary_hue_preserves_alpha() {
+        assert_eq!(harmony_color([255, 0, 0, 42], 180.), [0, 255, 255, 42]);
+        assert_eq!(harmony_color([0, 0, 255, 255], 120.), [255, 0, 0, 255]);
+        let opaque = harmony_color([255, 128, 0, 255], 180.);
+        for alpha in [0, 1, 42] {
+            let color = harmony_color([255, 128, 0, alpha], 180.);
+            assert_eq!(&color[..3], &opaque[..3]);
+            assert_eq!(color[3], alpha);
+        }
+    }
+
+    #[test]
+    fn changing_speed_rescales_both_live_and_paused_preview_timing() {
+        let durations = [100, 100];
+        let mut preview = PreviewPlayback::new(0, 0., &durations, 100);
+        preview.set_speed(0.02, 200);
+        preview.update(0.05, &durations);
+        assert_eq!(preview.frame, 0);
+        preview.update(0.061, &durations);
+        assert_eq!(preview.frame, 1);
+        preview.toggle(0.08);
+        preview.set_speed(0.09, 50);
+        preview.toggle(0.10);
+        preview.update(0.218, &durations);
+        assert_eq!(preview.frame, 1);
+        preview.update(0.222, &durations);
+        assert_eq!(preview.frame, 0);
+        assert_eq!(durations, [100, 100]);
+        assert_eq!(playback_seconds(100, 200), 0.05);
     }
 }

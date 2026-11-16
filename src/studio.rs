@@ -31,7 +31,9 @@ pub(super) struct Studio {
     outline_corners: bool,
     rotation_angle: f64,
     rotation_pivot: Option<[f64; 2]>,
+    rotation_rotsprite: bool,
     rotation_preview: bool,
+    rotation_texture: Option<RotationPreview>,
     adjustment_input: Adjustment,
     recovery_root: PathBuf,
     last_save: Instant,
@@ -39,6 +41,19 @@ pub(super) struct Studio {
     recovery_job: Option<std::thread::JoinHandle<(Workspace, Result<(), String>)>>,
     pub recovery_status: String,
 }
+
+struct RotationPreview {
+    source: Document,
+    layer: usize,
+    frame: usize,
+    bounds: [i32; 4],
+    mask: Option<Vec<bool>>,
+    polygon: Vec<(i32, i32)>,
+    degrees: f64,
+    pivot: [f64; 2],
+    texture: egui::TextureHandle,
+}
+
 impl Default for Studio {
     fn default() -> Self {
         Self {
@@ -66,7 +81,9 @@ impl Default for Studio {
             outline_corners: false,
             rotation_angle: 0.,
             rotation_pivot: None,
+            rotation_rotsprite: false,
             rotation_preview: false,
+            rotation_texture: None,
             adjustment_input: Adjustment::Levels {
                 black: 0,
                 white: 255,
@@ -327,8 +344,25 @@ impl PixelCraft {
             .collect();
         let original_bounds = b;
         let mut next = self.doc.clone();
-        match workflows::transform(&mut next, self.layer, self.frame, b, Some(&mask), t) {
-            Ok(b) => {
+        let result = if let Transform::RotateAround { degrees, pivot } = t
+            && self.studio.rotation_rotsprite
+        {
+            workflows::transform_rotsprite(
+                &mut next,
+                self.layer,
+                self.frame,
+                b,
+                Some(&mask),
+                degrees,
+                pivot,
+            )
+            .map(|(bounds, selection)| (bounds, Some(selection)))
+        } else {
+            workflows::transform(&mut next, self.layer, self.frame, b, Some(&mask), t)
+                .map(|bounds| (bounds, None))
+        };
+        match result {
+            Ok((b, rotated_selection)) => {
                 self.remember();
                 self.doc = next;
                 self.selection = Some((
@@ -360,7 +394,9 @@ impl PixelCraft {
                     };
                 }
                 if self.studio.mask.is_some() || matches!(t, Transform::RotateAround { .. }) {
-                    let mask = workflows::transform_mask(&self.doc, original_bounds, &mask, t);
+                    let mask = rotated_selection.unwrap_or_else(|| {
+                        workflows::transform_mask(&self.doc, original_bounds, &mask, t)
+                    });
                     self.studio.polygon.clear();
                     self.set_selection_mask(mask);
                 }
@@ -539,12 +575,33 @@ impl PixelCraft {
                 ui.add(egui::DragValue::new(&mut pivot[0]).prefix("Pivot X "));
                 ui.add(egui::DragValue::new(&mut pivot[1]).prefix("Pivot Y "));
             });
+            ui.horizontal(|ui| {
+                ui.pc_selectable_value(&mut self.studio.rotation_rotsprite, false, "Fast");
+                ui.pc_selectable_value(&mut self.studio.rotation_rotsprite, true, "RotSprite")
+                    .on_hover_text("Smooths stepped edges without blending colors.");
+            });
             ui.pc_checkbox(&mut self.studio.rotation_preview, "Preview on canvas");
+            let within_budget = !self.studio.rotation_rotsprite
+                || workflows::rotsprite_within_budget(
+                    w as usize,
+                    h as usize,
+                    self.studio.rotation_angle,
+                );
+            if !within_budget {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Selection is too large for RotSprite. Select a smaller area or use Fast.",
+                );
+            }
             let transform = Transform::RotateAround {
                 degrees: self.studio.rotation_angle,
                 pivot,
             };
-            if ui.pc_button("Apply rotation").clicked() {
+            if ui
+                .add_enabled_ui(within_budget, |ui| ui.pc_button("Apply rotation"))
+                .inner
+                .clicked()
+            {
                 self.transform_selection(transform);
                 self.studio.rotation_preview = false;
             }
@@ -565,6 +622,7 @@ impl PixelCraft {
             || !self.studio.rotation_preview
             || self.doc.width * self.doc.height > 4_194_304
         {
+            self.studio.rotation_texture = None;
             return None;
         }
         let mut pivot = self.studio.rotation_pivot?;
@@ -580,30 +638,74 @@ impl PixelCraft {
             pivot[1] += f64::from(delta.y / self.zoom);
             self.studio.rotation_pivot = Some(pivot);
         }
-        let mut preview = self.doc.clone();
         let bounds = self.selection_bounds();
+        let degrees = self.studio.rotation_angle;
+        if self.studio.rotation_rotsprite
+            && let Some(cached) = &self.studio.rotation_texture
+            && cached.degrees == degrees
+            && cached.pivot == pivot
+            && cached.bounds == bounds
+            && cached.layer == self.layer
+            && cached.frame == self.frame
+            && cached.mask == self.studio.mask
+            && cached.polygon == self.studio.polygon
+            && cached.source == self.doc
+        {
+            return Some(cached.texture.clone());
+        }
+        self.studio.rotation_texture = None;
+        if self.studio.rotation_rotsprite
+            && !workflows::rotsprite_within_budget(bounds[2] as usize, bounds[3] as usize, degrees)
+        {
+            return None;
+        }
+        let mut preview = self.doc.clone();
         let mask: Vec<_> = (0..self.doc.width * self.doc.height)
             .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
             .collect();
-        let transform = Transform::RotateAround {
-            degrees: self.studio.rotation_angle,
-            pivot,
-        };
-        workflows::transform(
-            &mut preview,
-            self.layer,
-            self.frame,
-            bounds,
-            Some(&mask),
-            transform,
-        )
-        .ok()?;
+        let transform = Transform::RotateAround { degrees, pivot };
+        if self.studio.rotation_rotsprite {
+            workflows::transform_rotsprite(
+                &mut preview,
+                self.layer,
+                self.frame,
+                bounds,
+                Some(&mask),
+                degrees,
+                pivot,
+            )
+            .ok()?;
+        } else {
+            workflows::transform(
+                &mut preview,
+                self.layer,
+                self.frame,
+                bounds,
+                Some(&mask),
+                transform,
+            )
+            .ok()?;
+        }
         let pixels = preview.composite(self.frame);
-        Some(ui.ctx().load_texture(
+        let texture = ui.ctx().load_texture(
             "rotation-preview",
             color_image(&pixels, preview.width, preview.height),
             egui::TextureOptions::NEAREST,
-        ))
+        );
+        if self.studio.rotation_rotsprite {
+            self.studio.rotation_texture = Some(RotationPreview {
+                source: self.doc.clone(),
+                layer: self.layer,
+                frame: self.frame,
+                bounds,
+                mask: self.studio.mask.clone(),
+                polygon: self.studio.polygon.clone(),
+                degrees,
+                pivot,
+                texture: texture.clone(),
+            });
+        }
+        Some(texture)
     }
 
     pub(super) fn paint_rotation_pivot(&self, painter: &egui::Painter, board: Rect) {
@@ -962,6 +1064,61 @@ fn write_recovery(root: &std::path::Path, state: &Workspace) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_mode_applies_to_the_whole_sprite_without_a_selection() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        let mut source = Document::new(3, 3);
+        let ink = [240, 100, 60, 255];
+        for index in [0, 2, 3, 4, 5] {
+            source.set_pixel(0, 0, index, ink);
+        }
+        let turn = Transform::RotateAround {
+            degrees: 30.,
+            pivot: [1.5, 1.5],
+        };
+        a.replace(source.clone(), None);
+        a.transform_selection(turn);
+        assert_eq!(a.doc.layers[0].cels[0][1], CLEAR);
+        a.undo();
+        assert!(a.doc == source);
+        assert!(a.selection.is_none());
+
+        a.studio.rotation_rotsprite = true;
+        a.transform_selection(turn);
+        assert_eq!(a.doc.layers[0].cels[0][1], ink);
+        assert!(a.selected(1, 0));
+        a.undo();
+        assert!(a.doc == source);
+        assert!(a.selection.is_none());
+    }
+
+    #[test]
+    fn rotsprite_preview_reuses_its_texture_until_rotation_changes() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(8, 8), None);
+        a.doc.set_pixel(0, 0, 23, [240, 100, 60, 255]);
+        a.studio.open = true;
+        a.studio.rotation_preview = true;
+        a.studio.rotation_rotsprite = true;
+        a.studio.rotation_pivot = Some([4., 4.]);
+        a.studio.rotation_angle = 30.;
+        let preview = |a: &mut PixelCraft| {
+            let mut texture = None;
+            let mut rendered = ctx.run_ui(egui::RawInput::default(), |ui| {
+                texture = a.rotation_preview(ui, Rect::from_min_size(Pos2::ZERO, Vec2::splat(80.)));
+            });
+            rendered.textures_delta.clear();
+            texture.unwrap()
+        };
+        let first = preview(&mut a);
+        let reused = preview(&mut a);
+        assert_eq!(first.id(), reused.id());
+        a.studio.rotation_angle = 40.;
+        assert_ne!(first.id(), preview(&mut a).id());
+    }
     fn app() -> PixelCraft {
         PixelCraft::with_context(&egui::Context::default(), None)
     }

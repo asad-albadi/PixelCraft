@@ -32,25 +32,37 @@ pub fn matching(
     contiguous: bool,
     wrap: bool,
 ) -> Vec<bool> {
+    matching_by(p, w, h, seed, contiguous, wrap, |c, target| {
+        (c[3] == 0 && target[3] == 0) || (0..4).all(|i| c[i].abs_diff(target[i]) <= tolerance)
+    })
+}
+
+pub fn matching_by<T: Copy>(
+    p: &[T],
+    w: usize,
+    h: usize,
+    seed: (i32, i32),
+    contiguous: bool,
+    wrap: bool,
+    matches: impl Fn(T, T) -> bool,
+) -> Vec<bool> {
     let mut out = vec![false; p.len()];
+    let (x, y) = seed;
     if w == 0
         || h == 0
         || p.len() != w.saturating_mul(h)
-        || seed.0 < 0
-        || seed.1 < 0
-        || seed.0 as usize >= w
-        || seed.1 as usize >= h
+        || x < 0
+        || y < 0
+        || x as usize >= w
+        || y as usize >= h
     {
         return out;
     }
-    let first = seed.1 as usize * w + seed.0 as usize;
+    let first = y as usize * w + x as usize;
     let target = p[first];
-    let matches = |c: Pixel| {
-        (c[3] == 0 && target[3] == 0) || (0..4).all(|i| c[i].abs_diff(target[i]) <= tolerance)
-    };
     if !contiguous {
         for (v, c) in out.iter_mut().zip(p) {
-            *v = matches(*c);
+            *v = matches(*c, target);
         }
         return out;
     }
@@ -67,7 +79,7 @@ pub fn matching(
                 continue;
             }
             let n = y as usize * w + x as usize;
-            if !out[n] && matches(p[n]) {
+            if !out[n] && matches(p[n], target) {
                 out[n] = true;
                 stack.push(n);
             }
@@ -455,6 +467,23 @@ pub struct GridImport {
     pub spacing_x: usize,
     pub spacing_y: usize,
     pub layers: bool,
+}
+impl GridImport {
+    /// Suggest square cells when one complete row or column fits the image.
+    pub fn suggest_strip(width: usize, height: usize) -> Option<(usize, usize)> {
+        let short = width.min(height);
+        let long = width.max(height);
+        (short != 0 && long > short && long.is_multiple_of(short)).then_some((short, short))
+    }
+
+    pub fn use_cell_size(&mut self, (width, height): (usize, usize)) {
+        self.width = width;
+        self.height = height;
+        self.offset_x = 0;
+        self.offset_y = 0;
+        self.spacing_x = 0;
+        self.spacing_y = 0;
+    }
 }
 impl Default for GridImport {
     fn default() -> Self {

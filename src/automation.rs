@@ -536,6 +536,15 @@ fn path(v: &Value, key: &str) -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .ok_or_else(|| format!("Missing path: {key}"))
 }
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct SheetExportOptions {
+    #[serde(flatten)]
+    sheet: SheetOptions,
+    split_slices: bool,
+    extrude: usize,
+}
+
 fn options<T: serde::de::DeserializeOwned + Default>(v: &Value) -> Result<T, String> {
     if v.is_null() {
         Ok(T::default())
@@ -630,12 +639,13 @@ fn file_operation(
             let out = argument_path("output")?;
             let options = options::<AtlasOptions>(&v["options"])?;
             if let Some(files) = files {
-                files.write_files(
-                    &out,
-                    &[out.clone(), out.with_extension("json")],
-                    false,
-                    |target| export_atlas(target, &docs, &options),
-                )?;
+                let mut destinations = vec![out.clone()];
+                if options.metadata != AtlasMetadata::None {
+                    destinations.push(out.with_extension("json"));
+                }
+                files.write_files(&out, &destinations, false, |target| {
+                    export_atlas(target, &docs, &options)
+                })?;
             } else {
                 export_atlas(&out, &docs, &options)?;
             }
@@ -751,20 +761,60 @@ fn file_operation(
                             })?;
                         }
                         "sheet" => {
-                            let options = options::<SheetOptions>(&v["options"])?;
+                            let options = options::<SheetExportOptions>(&v["options"])?;
+                            if options.split_slices {
+                                let plans = interchange::plan_slice_sheets(&d, &options.sheet)?;
+                                let paths: Vec<_> =
+                                    plans.iter().map(|plan| out.join(&plan.file_name)).collect();
+                                let destinations: Vec<_> = paths
+                                    .iter()
+                                    .flat_map(|path| {
+                                        interchange::sheet_output_paths(path, &options.sheet)
+                                    })
+                                    .collect();
+                                let cli_files = mcp_files::Files {
+                                    root: None,
+                                    overwrite: true,
+                                };
+                                files.unwrap_or(&cli_files).write_files(
+                                    &out,
+                                    &destinations,
+                                    true,
+                                    |target| {
+                                        mcp_io::create_dir_all(target)
+                                            .map_err(|e| e.to_string())?;
+                                        for (plan, previous) in plans.iter().zip(&paths) {
+                                            plan.export(
+                                                &target.join(&plan.file_name),
+                                                previous,
+                                                &d,
+                                                &options.sheet,
+                                                options.extrude,
+                                            )?;
+                                        }
+                                        Ok(())
+                                    },
+                                )?;
+                                return Ok(json!({"outputs":paths}));
+                            }
+                            let export = |target: &Path| {
+                                interchange::export_sheet_extruded(
+                                    target,
+                                    &out,
+                                    &d,
+                                    &options.sheet,
+                                    options.extrude,
+                                )
+                            };
                             if let Some(files) = files {
                                 files.write_files(
                                     &out,
-                                    &interchange::sheet_output_paths(&out, &options),
+                                    &interchange::sheet_output_paths(&out, &options.sheet),
                                     false,
-                                    |target| {
-                                        interchange::export_sheet_with_previous(
-                                            target, &out, &d, &options,
-                                        )
-                                    },
+                                    export,
                                 )?;
                             } else {
-                                interchange::export_sheet(&out, &d, &options)?;
+                                export(&out)?;
                             }
                         }
                         "ase" | "aseprite"
@@ -885,7 +935,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and split_slices (true uses output as a directory and writes a PNG sheet and metadata per authored slice).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});

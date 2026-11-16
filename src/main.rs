@@ -223,6 +223,10 @@ struct ReplaceColor {
     selection_only: bool,
 }
 
+fn playback_seconds(duration: u16, percent: u16) -> f64 {
+    f64::from(duration.max(1)) / (10. * f64::from(percent))
+}
+
 struct PixelCraft {
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
@@ -257,6 +261,7 @@ struct PixelCraft {
     filled: bool,
     playing: bool,
     last_tick: Instant,
+    playback_speed: u16,
     playback_waiting_for_frame: bool,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
@@ -417,6 +422,7 @@ impl PixelCraft {
             filled: false,
             playing: false,
             last_tick: Instant::now(),
+            playback_speed: 100,
             playback_waiting_for_frame: false,
             undo: vec![],
             redo: vec![],
@@ -808,14 +814,18 @@ impl PixelCraft {
         self.doc.drawing_index = None;
     }
     fn update_playback_clock(&mut self, now: Instant) -> Duration {
-        let duration =
-            |app: &Self| Duration::from_millis(u64::from(app.doc.durations[app.frame].max(1)));
+        let duration = |app: &Self| {
+            Duration::from_secs_f64(playback_seconds(
+                app.doc.durations[app.frame],
+                app.playback_speed,
+            ))
+        };
         // Repaint delivery varies by a few milliseconds around a refresh. For
         // short cels, a small margin avoids a hold followed by a skipped cel.
         const FAST_FRAME: Duration = Duration::from_millis(20);
         const REPAINT_JITTER: Duration = Duration::from_millis(3);
 
-        if now.saturating_duration_since(self.last_tick) > Duration::from_secs(1)
+        if now.saturating_duration_since(self.last_tick + duration(self)) > Duration::from_secs(1)
             && !self.playback_waiting_for_frame
         {
             self.last_tick = now;
@@ -2905,6 +2915,28 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             {
                 a = Some("play");
             }
+            let speed = self.playback_speed;
+            egui::ComboBox::from_id_salt("playback_speed")
+                .selected_text(format!("{speed}%"))
+                .width(60.)
+                .show_ui(ui, |ui| {
+                    for percent in [25, 50, 100, 150, 200, 400] {
+                        ui.pc_selectable_value(
+                            &mut self.playback_speed,
+                            percent,
+                            format!("{percent}%"),
+                        );
+                    }
+                })
+                .response
+                .on_hover_text("Playback speed for the timeline and preview");
+            if self.playback_speed != speed {
+                self.last_tick = Instant::now();
+                self.playback_waiting_for_frame = false;
+                if let Some(preview) = &mut self.preview_playback {
+                    preview.set_speed(ui.input(|input| input.time), self.playback_speed);
+                }
+            }
             if ui_icons::button(ui, "prev", "", false, false).clicked() {
                 a = Some("prev")
             }
@@ -3702,8 +3734,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.playback_waiting_for_frame = false;
             let p = self.hover.unwrap();
             self.stroke_color = self.fg;
-            if ctx.input(|i| i.modifiers.alt) || self.tool == Tool::Picker {
-                self.set_active_color(self.sample_color(p.0, p.1));
+            let sample_color = ctx.input(|i| i.modifiers.alt);
+            if sample_color || self.tool == Tool::Picker {
+                if sample_color || self.tile_pixel_mode.is_some() || !self.pick_tile(p) {
+                    self.set_active_color(self.sample_color(p.0, p.1));
+                }
             } else if self.tool == Tool::Wand {
                 let op = ctx.input(|i| {
                     if i.modifiers.command {
@@ -6078,6 +6113,24 @@ mod update_ui_tests {
 #[cfg(test)]
 mod merge_regressions {
     use super::*;
+    #[test]
+    fn slow_playback_advances_a_cel_whose_deadline_is_longer_than_a_second() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(1, 1), None);
+        app.doc.add_frame(0, false);
+        app.doc.durations = vec![300, 400];
+        app.playback_speed = 25;
+        let start = Instant::now();
+        app.last_tick = start;
+        assert_eq!(
+            app.update_playback_clock(start + Duration::from_millis(1200)),
+            Duration::from_millis(1600)
+        );
+        assert_eq!(app.frame, 1);
+        assert_eq!(app.doc.durations, vec![300, 400]);
+    }
+
     #[test]
     fn regression_crop_wand_mask_allows_copy_delete_and_fill() {
         let ctx = egui::Context::default();

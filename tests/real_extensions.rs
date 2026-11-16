@@ -1,5 +1,110 @@
 use pixelcraft::{extensions::*, model::*};
 use serde_json::json;
+
+#[test]
+fn unchanged_glass_floor_reflects_selected_layers_across_frames() {
+    let mut doc = Document::new(6, 8);
+    doc.add_frame(0, false);
+    doc.add_layer();
+    doc.add_layer();
+    for frame in 0..2 {
+        doc.layers[0].cel_meta[frame].bounds = Some([1, 1, 1, 2]);
+        doc.layers[1].cel_meta[frame].bounds = Some([2, 1, 1, 2]);
+        doc.set_pixel(0, frame, 7, [255, 30 + frame as u8, 0, 255]);
+        doc.set_pixel(1, frame, 14, [0, 255, 0, 255]);
+        doc.set_pixel(2, frame, 9, [0, 0, 255, 255]);
+    }
+
+    let reflected = run_source_with_host(
+        &doc,
+        include_str!("fixtures/scripts/Glass Floor.lua"),
+        1,
+        0,
+        None,
+        None,
+        json!({"timelineRange":{
+            "first_layer":0,"last_layer":1,"first_frame":0,"last_frame":1
+        }}),
+        Box::new(|request| match request["op"].as_str() {
+            Some("preferences") => Ok(json!({})),
+            _ => panic!("Unexpected host request: {request}"),
+        }),
+    )
+    .unwrap();
+
+    assert_eq!(reflected.layers.len(), 4);
+    let floor = &reflected.layers[3];
+    assert_eq!(floor.name, "Glass Floor");
+    assert_eq!(floor.opacity, 128);
+    for frame in 0..2 {
+        // The combined artwork bounds end at y=3. Reflection in the
+        // eight-pixel canvas followed by a two-pixel upward shift gives y'=5-y.
+        assert_eq!(
+            floor.cels[frame][4 * 6 + 1],
+            [255, 30 + frame as u8, 0, 255]
+        );
+        assert_eq!(floor.cels[frame][3 * 6 + 2], [0, 255, 0, 255]);
+        assert_eq!(floor.cels[frame][4 * 6 + 3], CLEAR);
+        assert_eq!(floor.cels[frame][7], CLEAR);
+    }
+    assert_eq!(&reflected.layers[..3], &doc.layers);
+}
+
+#[test]
+fn rectangle_geometry_and_image_specs_follow_the_active_sprite() {
+    let mut doc = Document::new(4, 3);
+    doc.transparent_index = 2;
+    doc.set_color_mode(ColorMode::Indexed);
+    run_source(
+        &doc,
+        r#"
+        local a, b = Rectangle(-2, 1, 4, 3), Rectangle(1, 2, 4, 4)
+        assert(Rectangle():union(a) == a)
+        assert(a:union(b) == Rectangle(-2, 1, 7, 5))
+        assert((a | b) == a:union(b))
+        assert(a:intersects(b) and b:intersects(a))
+        assert(a:intersect(b) == Rectangle(1, 2, 1, 2))
+        assert((a & b) == a:intersect(b))
+        assert(not a:intersects(Rectangle(2, 1, 1, 1)))
+        assert(a:intersect(Rectangle(2, 1, 1, 1)) == Rectangle())
+        assert(a:contains(Point(-2, 1)) and not a:contains(Point(2, 1)))
+        assert(a:contains(Rectangle(-1, 2, 1, 1)) and not a:contains(Rectangle()))
+        assert(a.w == 4 and a.h == 3)
+
+        local sprite = app.activeSprite
+        local spec = sprite.spec
+        assert(spec.width == 4 and spec.height == 3)
+        assert(spec.colorMode == ColorMode.INDEXED and spec.transparentColor == 2)
+        spec.width = 2
+        assert(sprite.spec.width == 4)
+
+        spec.transparentColor = 5
+        local im = Image(spec)
+        assert(im.width == 2 and im.height == 3 and im.colorMode == ColorMode.INDEXED)
+        assert(im.bounds == Rectangle(0, 0, 2, 3))
+        assert(im.spec.transparentColor == 5 and im:getPixel(0, 0) == 5)
+        im:drawPixel(0, 0, 5)
+        assert(im:getPixel(0, 0) == 5)
+        im:clear()
+        assert(im:getPixel(0, 0) == 5)
+        im.spec.transparentColor = 8
+        assert(im.spec.transparentColor == 5)
+        assert(im:clone().spec.transparentColor == 5)
+
+        local defaults = ImageSpec()
+        assert(defaults.width == 1 and defaults.height == 1 and defaults.colorMode == ColorMode.RGB)
+        assert(defaults.transparentColor == 0)
+        local gray = Image(ImageSpec{width=2,height=2,colorMode=ColorMode.GRAY})
+        gray:drawPixel(1, 1, app.pixelColor.graya(70, 130))
+        assert(gray.colorMode == ColorMode.GRAY and gray:getPixel(1, 1) == app.pixelColor.graya(70, 130))
+        "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+}
+
 #[test]
 fn unchanged_random_palette_and_pixels_scripts() {
     for (name, source) in [

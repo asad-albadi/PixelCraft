@@ -213,3 +213,30 @@ fn lua_frame_insertions_keep_authored_names_on_their_frames() {
     assert_eq!(updated.frame_name(2), None);
     assert_eq!(updated.frame_name(3), Some("Landing"));
 }
+
+#[test]
+fn grid_suggestion_is_limited_to_divisible_square_cell_strips() {
+    assert_eq!(GridImport::suggest_strip(96, 24), Some((24, 24)));
+    assert_eq!(GridImport::suggest_strip(20, 60), Some((20, 20)));
+    assert_eq!(GridImport::suggest_strip(99, 24), None);
+    assert_eq!(GridImport::suggest_strip(32, 32), None);
+}
+
+#[test]
+fn filename_keyed_atlas_reopens_in_authored_frame_order() {
+    use pixelcraft::atlas::{AtlasMetadata, save_packed_atlas_with_metadata};
+    let mut doc = Document::new(1, 1);
+    doc.add_frame(0, false);
+    doc.add_frame(0, false);
+    doc.durations = vec![100, 200, 300];
+    doc.set_frame_name(1, "Second").unwrap();
+    let packed = pack_atlas(&[("walk.pixel".into(), doc)], &AtlasOptions::default()).unwrap();
+    let dir = std::env::temp_dir().join(format!("pixelcraft-hash-atlas-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("ordered.png");
+    save_packed_atlas_with_metadata(&path, &packed, AtlasMetadata::Hash).unwrap();
+    let reopened = load(&path.with_extension("json")).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(reopened.durations, vec![100, 200, 300]);
+    assert_eq!(reopened.frame_name(1), Some("Second"));
+}
