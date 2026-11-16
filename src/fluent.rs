@@ -250,6 +250,39 @@ impl Default for PreviewSettings {
     }
 }
 
+pub(super) struct PreviewPlayback {
+    frame: usize,
+    deadline: f64,
+}
+
+fn frame_seconds(durations: &[u16], frame: usize) -> f64 {
+    f64::from(durations[frame].max(1)) / 1000.
+}
+
+impl PreviewPlayback {
+    fn new(frame: usize, now: f64, durations: &[u16]) -> Self {
+        Self {
+            frame,
+            deadline: now + frame_seconds(durations, frame),
+        }
+    }
+
+    fn update(&mut self, now: f64, durations: &[u16]) {
+        if self.frame >= durations.len() {
+            *self = Self::new(0, now, durations);
+        } else if now >= self.deadline {
+            // Skip entire cycles after a delayed repaint, then find the current cel.
+            let cycle_ms: u64 = durations.iter().map(|d| u64::from((*d).max(1))).sum();
+            let cycle = cycle_ms as f64 / 1000.;
+            self.deadline += ((now - self.deadline) / cycle).floor() * cycle;
+            while now >= self.deadline {
+                self.frame = (self.frame + 1) % durations.len();
+                self.deadline += frame_seconds(durations, self.frame);
+            }
+        }
+    }
+}
+
 impl PixelCraft {
     pub(super) fn restore_preview_settings(&mut self, path: PathBuf) {
         if let Ok(bytes) = std::fs::read(&path)
@@ -503,6 +536,7 @@ impl PixelCraft {
     pub(super) fn sprite_preview(&mut self, ui: &mut egui::Ui) {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 0)).show(ui, |ui| {
             let old_zoom = self.preview_settings.zoom;
+            let now = ui.input(|input| input.time);
             let controls = ui.horizontal(|ui| {
                 ui.strong("Preview");
                 egui::ComboBox::from_id_salt("preview_zoom")
@@ -516,14 +550,40 @@ impl PixelCraft {
                             ui.selectable_value(&mut self.preview_settings.zoom, zoom, label);
                         }
                     }).response.on_hover_text("Fit the whole sprite, or zoom in physical pixels. Drag artwork to pan.");
+                let playing = self.preview_playback.is_some();
+                let play = ui.add_enabled_ui(self.doc.durations.len() > 1, |ui| {
+                    let (icon, label) = if playing {
+                        ("pause", "Pause preview animation")
+                    } else {
+                        ("play", "Play preview animation")
+                    };
+                    ui_icons::local_icon_button(ui, icon, label, playing)
+                }).inner;
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("preview-play"), play.rect));
+                if play.clicked() {
+                    self.preview_playback = if playing { None } else {
+                        Some(PreviewPlayback::new(self.frame, now, &self.doc.durations))
+                    };
+                }
             });
             if old_zoom != self.preview_settings.zoom {
                 self.preview_pan = Vec2::ZERO;
                 self.save_preview_settings();
             }
-            self.preview = Some(self.frame_texture(ui.ctx(), self.frame));
+            if self.doc.durations.len() <= 1 {
+                self.preview_playback = None;
+            }
+            let frame = if let Some(playback) = &mut self.preview_playback {
+                playback.update(now, &self.doc.durations);
+                ui.ctx().request_repaint_after(Duration::from_secs_f64(playback.deadline - now));
+                playback.frame
+            } else {
+                self.frame
+            };
+            self.preview = Some(self.frame_texture(ui.ctx(), frame));
             let (r, response) = ui.allocate_exact_size(
-                Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::drag());
+                Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::click_and_drag());
             let source = Vec2::new(self.doc.width as f32, self.doc.height as f32);
             let scale = if self.preview_settings.zoom == 0 {
                 (r.width() / source.x).min(r.height() / source.y)
@@ -534,13 +594,24 @@ impl PixelCraft {
                 self.preview_pan += response.drag_delta();
             }
             self.preview_pan = self.preview_pan.clamp(-limit, limit);
-            if limit != Vec2::ZERO { response.on_hover_cursor(egui::CursorIcon::Grab); }
             let ppp = ui.ctx().pixels_per_point();
             let origin = r.center() + self.preview_pan - size * 0.5;
             let origin = if self.preview_settings.zoom == 0 { origin } else {
                 Pos2::new((origin.x * ppp).round() / ppp, (origin.y * ppp).round() / ppp)
             };
             let image = Rect::from_min_size(origin, size);
+            let response = response.on_hover_text("Click to center the canvas. Drag to pan the preview.");
+            if let Some(picked) = response.interact_pointer_pos()
+                && response.clicked()
+                && image.contains(picked)
+            {
+                self.pan = (image.center() - picked) * (self.zoom / scale);
+                ui.ctx().request_repaint();
+            }
+            if limit != Vec2::ZERO {
+                response.on_hover_cursor(egui::CursorIcon::Grab);
+            }
+
             let painter = ui.painter().with_clip_rect(r.intersect(ui.clip_rect()));
             // Paint only visible checker cells, regardless of sprite size or zoom.
             let cell = 8.;
@@ -554,6 +625,20 @@ impl PixelCraft {
             }
             if let Some(t) = &self.preview {
                 painter.image(t.id(), image, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.,1.)), Color32::WHITE);
+            }
+            if let Some(canvas_size) = self.canvas_view_size {
+                let factor = scale / self.zoom;
+                let view = Rect::from_center_size(image.center() - self.pan * factor, canvas_size * factor);
+                let clip = r.intersect(image);
+                if view.intersects(clip) {
+                    // Clamp to the sprite so the navigator also shows an entirely visible sprite.
+                    let border = view.intersect(image).shrink(0.5);
+                    let painter = painter.with_clip_rect(clip);
+                    painter.rect_stroke(border, 1, Stroke::new(3., Color32::BLACK), egui::StrokeKind::Inside);
+                    painter.rect_stroke(border, 1, Stroke::new(1., Color32::WHITE), egui::StrokeKind::Inside);
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("preview-canvas-view"), border));
+                }
             }
             #[cfg(test)]
             ui.ctx().data_mut(|d| {

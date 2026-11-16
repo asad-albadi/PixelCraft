@@ -259,6 +259,8 @@ struct PixelCraft {
     preview: Option<egui::TextureHandle>,
     preview_settings: fluent::PreviewSettings,
     preview_pan: Vec2,
+    preview_playback: Option<fluent::PreviewPlayback>,
+    canvas_view_size: Option<Vec2>,
     preview_settings_path: Option<PathBuf>,
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
@@ -409,6 +411,8 @@ impl PixelCraft {
             preview: None,
             preview_settings: fluent::PreviewSettings::default(),
             preview_pan: Vec2::ZERO,
+            preview_playback: None,
+            canvas_view_size: None,
             preview_settings_path: None,
             render_snapshot: None,
             frame_textures: vec![],
@@ -1374,6 +1378,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.power.bridge_generation += 1;
         self.extension_session = None;
         self.active_tag = None;
+        self.preview_playback = None;
+        self.preview_pan = Vec2::ZERO;
         self.palette_index = 0;
         self.render_snapshot = None;
         self.doc = d;
@@ -1446,6 +1452,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.timeline_destination = None;
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
+        self.preview_playback = None;
+        self.preview_pan = Vec2::ZERO;
         self.extension_session = None;
         self.render_snapshot = None;
         self.playing = false;
@@ -2759,6 +2767,44 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
 
+    fn set_tag_repeat(&mut self, tag: usize, repeat: u16) {
+        if self.doc.tags[tag].repeat != repeat {
+            self.remember();
+            self.doc.tags[tag].repeat = repeat;
+        }
+    }
+
+    fn timeline_tag_controls(&mut self, ui: &mut egui::Ui) {
+        if self.doc.tags.is_empty() {
+            return;
+        }
+        let mut changed = None;
+        ui.menu_button("Tags", |ui| {
+            ui.small("0 repeats loops indefinitely in exports.");
+            for (index, tag) in self.doc.tags.iter().enumerate() {
+                ui.push_id(index, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} · {}–{}", tag.name, tag.from + 1, tag.to + 1));
+                        let mut repeat = tag.repeat;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut repeat)
+                                    .range(0..=u16::MAX)
+                                    .prefix("Repeat "),
+                            )
+                            .changed()
+                        {
+                            changed = Some((index, repeat));
+                        }
+                    });
+                });
+            }
+        });
+        if let Some((index, repeat)) = changed {
+            self.set_tag_repeat(index, repeat);
+        }
+    }
+
     fn timeline(&mut self, ui: &mut egui::Ui) {
         // The timeline must not composite every frame when a single cel changes.
         // Show thumbnails for frames the canvas or playback has already rendered.
@@ -2824,6 +2870,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             if wide {
                 fluent::toggle(ui, &mut self.onion, "Onion skin");
             }
+            self.timeline_tag_controls(ui);
         });
         ui.separator();
         let mut toggle = None;
@@ -2852,25 +2899,53 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             ui.label("");
                         });
                         for f in 0..self.doc.durations.len() {
-                            if ui
-                                .add_sized(
-                                    [cell_width, header_height],
-                                    if let Some(Some(t)) = self.frame_textures.get(f) {
-                                        egui::Button::image_and_text(
-                                            egui::Image::new((t.id(), Vec2::new(20., 20.))),
-                                            (f + 1).to_string(),
-                                        )
-                                        .selected(f == self.frame)
-                                    } else {
-                                        egui::Button::new((f + 1).to_string())
-                                            .selected(f == self.frame)
-                                    },
+                            let button = if let Some(Some(texture)) = self.frame_textures.get(f) {
+                                egui::Button::image_and_text(
+                                    egui::Image::new((texture.id(), Vec2::splat(20.))),
+                                    (f + 1).to_string(),
                                 )
-                                .on_hover_text(format!("Select frame {}", f + 1))
-                                .clicked()
-                            {
+                            } else {
+                                egui::Button::new((f + 1).to_string())
+                            };
+                            let response = ui.add_sized(
+                                [cell_width, header_height],
+                                button.selected(f == self.frame),
+                            );
+                            if response.clicked() {
                                 selection = Some((self.layer, f, false));
                             }
+                            let tags: Vec<_> = self
+                                .doc
+                                .tags
+                                .iter()
+                                .filter(|tag| (tag.from..=tag.to).contains(&f))
+                                .collect();
+                            let mut description = format!("Select frame {}", f + 1);
+                            if !tags.is_empty() {
+                                use std::fmt::Write;
+                                let marker_width = (response.rect.width() - 4.) / tags.len() as f32;
+                                description.push_str(" · Tags");
+                                for (index, tag) in tags.iter().enumerate() {
+                                    let [r, g, b] = tag.color;
+                                    let origin = response.rect.left_bottom()
+                                        + Vec2::new(2. + marker_width * index as f32, -4.);
+                                    ui.painter().rect_filled(
+                                        Rect::from_min_size(origin, Vec2::new(marker_width, 3.)),
+                                        0,
+                                        Color32::from_rgb(r, g, b),
+                                    );
+                                    let _ = write!(description, " · {}", tag.name);
+                                }
+                            }
+                            response.widget_info(|| {
+                                egui::WidgetInfo::selected(
+                                    egui::WidgetType::SelectableLabel,
+                                    response.enabled(),
+                                    f == self.frame,
+                                    &description,
+                                )
+                            });
+                            response.on_hover_text(description);
                         }
                         ui.end_row();
                         for li in (0..self.doc.layers.len()).rev() {
@@ -3303,6 +3378,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         #[cfg(test)]
         ui.ctx()
             .data_mut(|d| d.insert_temp(egui::Id::new("canvas-bounds"), r));
+        let view_changed = self.canvas_view_size.replace(r.size()) != Some(r.size());
+        let previous_pan = self.pan;
+        let previous_zoom = self.zoom;
         let painter = ui.painter_at(r);
         painter.rect_filled(r, 0, self.colors().canvas);
         let ctx = ui.ctx().clone();
@@ -3362,6 +3440,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.doc.height as f32 * self.zoom,
             ),
         );
+        if view_changed || self.pan != previous_pan || self.zoom != previous_zoom {
+            ctx.request_repaint();
+        }
         // Draw only visible checker squares, including at high zoom and while panning.
         let check = self.power.checker_size();
         let check_size = check * self.zoom;
@@ -5238,6 +5319,46 @@ mod tests {
         a.undo();
         assert_eq!(a.doc, before);
         assert_eq!(a.timeline_range(), selection);
+    }
+
+    #[test]
+    fn editing_tag_repeat_updates_gif_and_godot_batch_exports() {
+        use image::AnimationDecoder;
+        let mut a = app();
+        a.doc = Document::new(2, 2);
+        a.doc.add_frame(0, false);
+        a.doc.tags.push(FrameTag {
+            name: "Walk".into(),
+            from: 0,
+            to: 1,
+            direction: 0,
+            repeat: 0,
+            color: [63, 123, 181],
+        });
+        a.set_tag_repeat(0, 3);
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-tag-repeat-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let options = pixelcraft::workflows::SheetOptions {
+            preset: "Godot".into(),
+            ..Default::default()
+        };
+        let gifs = pixelcraft::productivity::batch_tags(&root, &a.doc, true, &options).unwrap();
+        let decoder = image::codecs::gif::GifDecoder::new(std::io::BufReader::new(
+            std::fs::File::open(&gifs[0]).unwrap(),
+        ))
+        .unwrap();
+        assert!(
+            matches!(decoder.loop_count(), image::metadata::LoopCount::Finite(n) if n.get() == 3)
+        );
+        let sheets = pixelcraft::productivity::batch_tags(&root, &a.doc, false, &options).unwrap();
+        let resource = std::fs::read_to_string(sheets[0].with_extension("tres")).unwrap();
+        assert!(resource.contains(r#""loop": false"#));
+        assert_eq!(resource.matches(r#""texture": SubResource"#).count(), 6);
+        a.undo();
+        assert_eq!(a.doc.tags[0].repeat, 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

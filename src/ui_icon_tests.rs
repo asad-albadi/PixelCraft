@@ -1461,6 +1461,55 @@ fn preview_resize_pan_and_preferences_survive_restart() {
 }
 
 #[test]
+fn preview_click_recenters_canvas_and_updates_viewport_border() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1366., 900.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.open_document(Document::new(128, 128), None);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 16.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+
+    let image = layout_rect(&ctx, "preview-image");
+    let picked = image.center() + image.size() * 0.2;
+    discard_frame(&mut app, &ctx, size, 1., click(picked));
+    assert!((app.pan - Vec2::splat(-409.6)).length() < 0.01);
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let border = layout_rect(&ctx, "preview-canvas-view");
+    assert!((border.center() - picked).length() < 0.01);
+}
+
+#[test]
+fn independent_preview_uses_authored_durations_and_keeps_edit_frame() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1366., 900.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.open_document(Document::new(16, 16), None);
+    app.doc.add_frame(0, false);
+    app.doc.durations = vec![50, 250];
+    let mut render = |time, events| {
+        let mut raw = input(size, 1., events);
+        raw.time = Some(time);
+        let mut output = ctx.run_ui(raw, |ui| app.render(ui));
+        output.textures_delta.clear();
+        assert_eq!(app.frame, 0);
+        app.preview.as_ref().unwrap().id() == app.frame_texture(&ctx, 0).id()
+    };
+    assert!(render(0., vec![]));
+    assert!(render(0.001, vec![]));
+    let play = layout_rect(&ctx, "preview-play").center();
+    assert!(render(0.01, click(play)));
+    assert!(render(0.055, vec![]));
+    assert!(!render(0.09, vec![]));
+    assert!(!render(0.29, vec![]));
+    assert!(render(0.32, vec![]));
+    assert!(render(0.33, click(play)));
+    assert!(render(0.43, vec![]));
+}
+
+#[test]
 fn preview_zoom_frame_sync_and_controls_across_sizes_and_scales() {
     for scale in [1., 1.25, 1.5, 2.] {
         for size in [
