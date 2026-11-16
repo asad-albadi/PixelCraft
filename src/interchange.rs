@@ -224,9 +224,19 @@ pub fn export_sheet_for_slice(
     options: &SheetOptions,
     slice: Option<&str>,
 ) -> Result<(), String> {
+    export_sheet_for_slice_with_previous(path, path, doc, options, slice)
+}
+
+pub(crate) fn export_sheet_for_slice_with_previous(
+    path: &Path,
+    previous: &Path,
+    doc: &Document,
+    options: &SheetOptions,
+    slice: Option<&str>,
+) -> Result<(), String> {
     write_packed_sheet(
         path,
-        path,
+        previous,
         options,
         doc,
         pack_sheet_for_slice(doc, options, slice)?,

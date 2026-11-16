@@ -616,6 +616,7 @@ impl PixelCraft {
         for t in &state.tabs {
             self.tabs.push(Some(SpriteTab {
                 doc: t.doc.clone(),
+                last_export: None,
                 saved: t.saved.clone(),
                 path: t.path.clone(),
                 live_save_root: t.live_save_root.clone(),
@@ -909,10 +910,10 @@ impl PixelCraft {
                     .set_file_name("map.tmj")
                     .save_file()
                 {
-                    self.status = match interchange::export_tiled(&path, &self.doc, self.frame) {
-                        Ok(()) => "Exported Tiled map, tilesets and images".into(),
-                        Err(e) => format!("Export failed: {e}"),
-                    }
+                    let kind = ExportKind::Tiled {
+                        frame_id: self.doc.frame_export_id(self.frame),
+                    };
+                    self.start_export_recipe(ExportRecipe { path, kind }, false);
                 }
             }
             "savepalette" => {
@@ -1449,34 +1450,23 @@ impl PixelCraft {
     }
 
     fn start_tileset_atlas_export(&mut self, path: PathBuf, options: TilesetAtlasDialog) {
-        if self.export_job.is_some() {
-            self.status = "Wait for the current export to finish".into();
-            return;
-        }
-        let mut args = serde_json::json!({
-            "output": path, "format": "tileset-atlas", "overwrite": true,
+        let layers = (!options.visible).then(|| {
+            let selected = &self.timeline_layers.selected;
+            let current = [self.layer];
+            export_layer_ids(
+                &self.doc,
+                if selected.is_empty() {
+                    &current
+                } else {
+                    selected
+                },
+            )
         });
-        if !options.visible {
-            let layers = if self.timeline_layers.selected.is_empty() {
-                vec![self.layer]
-            } else {
-                self.timeline_layers.selected.clone()
-            };
-            args["layers"] = serde_json::json!(layers);
-        }
-        if options.columns != 0 {
-            args["columns"] = serde_json::json!(options.columns);
-        }
-        let doc = self.doc.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.export_job = Some(rx);
-        self.status = "Exporting tileset atlas…".into();
-        std::thread::spawn(move || {
-            let result = pixelcraft::automation::prepare_live_export(&doc, 0, &args, "")
-                .and_then(|prepared| prepared.write())
-                .map(|_| ());
-            let _ = tx.send((path, result));
-        });
+        let kind = ExportKind::Tileset {
+            columns: options.columns,
+            layers,
+        };
+        self.start_export_recipe(ExportRecipe { path, kind }, false);
     }
 
     fn tileset_atlas_dialog(&mut self, ctx: &egui::Context) {
@@ -1909,21 +1899,22 @@ impl PixelCraft {
     }
 
     fn start_sprite_sheet_export(&mut self, path: PathBuf) {
-        if self.export_job.is_some() {
-            self.status = "Wait for the current export to finish".into();
-            return;
-        }
-        let doc = self.doc.clone();
-        let options = self.sprite_sheet_options();
-        let slice = self.studio.sheet_slice.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.export_job = Some(rx);
-        self.status = "Exporting sprite sheet…".into();
-        std::thread::spawn(move || {
-            let result =
-                interchange::export_sheet_for_slice(&path, &doc, &options, slice.as_deref());
-            let _ = tx.send((path, result));
-        });
+        let mut options = self.sprite_sheet_options();
+        let layers = options
+            .layers
+            .take()
+            .map(|indices| export_layer_ids(&self.doc, &indices));
+        let tag = options
+            .tag
+            .and_then(|index| self.doc.tags.get(index))
+            .map(|tag| tag.name.clone());
+        let kind = ExportKind::Sheet {
+            options: Box::new(options),
+            slice: self.studio.sheet_slice.clone(),
+            layers,
+            tag,
+        };
+        self.start_export_recipe(ExportRecipe { path, kind }, false);
     }
 
     fn sprite_sheet_dialog(&mut self, ctx: &egui::Context) {

@@ -83,6 +83,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 33 complete. Sprite sheets support Rows, Columns, Horizontal, Vertical, and Packed layouts, with independently fixed native width and height. Layouts reuse spacing and support split and named-slice samples. The editor previews counts and available dimensions without compositing the sheet on the UI thread. Tests cover wrapping, fixed sizes at scale, uniform and variable packing, frame-order reimport, and batch rejection of an undersized canvas. Formatting, strict Clippy, and 498 Windows all-target tests passed.
 
+- Item 34 complete. File and the toolbar export menu repeat the active tab’s last successful artwork export during the current session. The worker reuses the resolved destination and options with updated artwork. Raster export follows the original frame ID, and layer filters retain their original targets through reordering. PNG sequences replace the current numbered outputs without removing unrelated files. The tests exercise export failure, frame reorder, tab switching before worker completion, exact sprite-sheet settings, and sequence replacement. Formatting, strict Clippy, and 500 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -127,7 +129,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **31. Expand batch export automation.** Compose multiple operations in one invocation, preview outputs without writing files, and support headless Lua with parameters and an interactive console.
 - [x] **32. Expand export filtering, splitting, and naming.** Include layer and group filters, per-layer and grid splits, named slices and frame ranges, and filename and tag templates.
 - [x] **33. Expand sheet layout controls.** Set border, shape, and inner padding separately. Add grid-aware trim, more sheet layout types, and explicit sheet dimensions.
-- [ ] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
+- [x] **34. Add Repeat Last Export.** Reuse the previous export destination and settings from the editor.
 - [ ] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
 - [ ] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.
 - [ ] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.

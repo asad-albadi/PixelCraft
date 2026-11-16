@@ -1927,6 +1927,23 @@ fn export_animation(kind: &str, output: &Path, doc: &Document, scale: usize) -> 
     }
 }
 
+/// Save an editor sheet with its metadata and engine sidecars as one staged export.
+pub fn write_editor_sheet_export(
+    output: &Path,
+    doc: &Document,
+    options: &SheetOptions,
+    slice: Option<&str>,
+) -> Result<(), String> {
+    let files = mcp_files::Files {
+        root: None,
+        overwrite: true,
+    };
+    let destinations = interchange::sheet_output_paths(output, options);
+    files.write_files(output, &destinations, false, |target| {
+        interchange::export_sheet_for_slice_with_previous(target, output, doc, options, slice)
+    })
+}
+
 pub fn write_animation_export(
     kind: &str,
     output: &Path,

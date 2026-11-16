@@ -282,6 +282,8 @@ Open **Tools…** beside the brush controls, or **Edit → Brushes, references &
 
 Double-click a timeline frame number or choose **Rename current frame** under **Layer & frame actions**. Names are saved in `.pixel` projects and exported as optional `frameName` entries in sheet and atlas JSON, with the existing filenames and IDs preserved.
 
+Choose **File → Repeat Last Export** to render a sprite again using its last successful export destination and settings. Each open tab keeps its own export history for the current editor session. Repeat reads the current artwork, and remembers the original frame for single-frame exports. PNG sequence repeats update the frame files for the current timeline and leave other files in the destination folder.
+
 ### Headless CLI
 
 No graphical display is needed. `pixelcraft --help` lists the operations and arguments. Run `--cli OPERATION` with a JSON argument object, or named flags; command errors go to stderr and exit with a nonzero status. Layer/frame indices are zero-based.

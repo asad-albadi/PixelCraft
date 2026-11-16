@@ -1092,6 +1092,16 @@ impl PixelCraft {
                     RichText::new("Export").color(Color32::WHITE),
                 ),
                 |ui| {
+                    if ui
+                        .add_enabled_ui(self.can_repeat_export(), |ui| {
+                            ui.pc_command_button("repeat-export", "Repeat Last Export")
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        self.action("repeat-export");
+                        ui.close();
+                    }
                     for (command, label) in [
                         ("png", "Export PNG…"),
                         ("sheet", "Sprite sheet…"),

@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod export_actions;
 mod fluent;
 mod ui_icons;
 use ui_icons::UiIcons;
@@ -14,6 +15,7 @@ mod subtag_playback;
 mod system_appearance;
 mod system_clipboard;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use export_actions::{ExportJob, ExportKind, ExportRecipe, export_layer_ids, load_atlas_inputs};
 use pixelcraft::{
     extensions::{self, Manager, PluginCommand, Session},
     formats,
@@ -244,6 +246,7 @@ struct SplitCanvas {
 
 struct SpriteTab {
     doc: Document,
+    last_export: Option<ExportRecipe>,
     saved: Document,
     path: Option<PathBuf>,
     live_save_root: Option<PathBuf>,
@@ -439,7 +442,8 @@ struct PixelCraft {
     cel_occupied: Vec<Vec<bool>>,
     open_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<Document, String>)>>,
     play_after_open: bool,
-    export_job: Option<std::sync::mpsc::Receiver<(PathBuf, Result<(), String>)>>,
+    export_job: Option<ExportJob>,
+    last_export: Option<ExportRecipe>,
     animation_export: Option<&'static str>,
     sequence_name: String,
     save_job: Option<SaveJob>,
@@ -614,6 +618,7 @@ impl PixelCraft {
             open_job: None,
             play_after_open: false,
             export_job: None,
+            last_export: None,
             animation_export: None,
             sequence_name: String::new(),
             save_job: None,
@@ -1971,6 +1976,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.preview_playback = None;
         self.palette_index = 0;
         self.render_snapshot = None;
+        self.last_export = None;
         self.doc = d;
         self.saved = self.doc.clone();
         self.path = path;
@@ -2000,6 +2006,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.cancel_gesture();
         let tab = SpriteTab {
             doc: self.doc.clone(),
+            last_export: self.last_export.take(),
             saved: self.saved.clone(),
             path: self.path.clone(),
             live_save_root: self.live_save_root.clone(),
@@ -2036,6 +2043,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.power.bridge_generation += 1;
         let mut tab = self.tabs[index].take().unwrap();
         std::mem::swap(&mut self.doc, &mut tab.doc);
+        std::mem::swap(&mut self.last_export, &mut tab.last_export);
         std::mem::swap(&mut self.saved, &mut tab.saved);
         std::mem::swap(&mut self.path, &mut tab.path);
         std::mem::swap(&mut self.live_save_root, &mut tab.live_save_root);
@@ -2347,62 +2355,25 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn start_export(&mut self, kind: &str, path: PathBuf) {
-        let sequence = kind == "png-sequence";
-        let (tx, rx) = std::sync::mpsc::channel();
-        let doc = self.doc.clone();
-        let frame = self.frame;
         let scale = self.studio.sheet.scale;
-        let gif = kind == "gif";
-        let video = kind == "mp4";
-        let sheet = kind == "sheet";
-        let baked_ase = kind == "baked-ase";
-        self.status = format!(
-            "Exporting {}",
-            path.file_name().unwrap_or_default().to_string_lossy()
-        );
-        self.export_job = Some(rx);
-        std::thread::spawn(move || {
-            let result = if sequence {
-                pixelcraft::automation::prepare_png_sequence(
-                    &doc,
-                    path.clone(),
-                    &serde_json::json!({"scale":scale}),
-                    "",
-                )
-                .and_then(|export| export.write())
-                .map(|_| ())
-            } else if gif || video {
-                pixelcraft::automation::write_animation_export(
-                    if gif { "gif" } else { "mp4" },
-                    &path,
-                    &doc,
-                    scale,
-                )
-            } else if baked_ase {
-                formats::export_baked_ase(&path, &doc)
-            } else {
-                formats::export_raster_scaled(&path, &doc, frame, sheet, scale)
-            };
-            let _ = tx.send((path, result));
-        });
-    }
-    fn poll_export(&mut self) {
-        let Some(job) = &self.export_job else { return };
-        let result = job.try_recv();
-        if matches!(result, Err(std::sync::mpsc::TryRecvError::Empty)) {
-            return;
-        }
-        self.export_job = None;
-        self.status = match result {
-            Ok((path, result)) => match result {
-                Ok(()) => format!(
-                    "Exported {}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                ),
-                Err(e) => format!("Export failed: {e}"),
+        let kind = match kind {
+            "png-sequence" => ExportKind::Sequence { scale },
+            "gif" => ExportKind::Animation {
+                format: "gif",
+                scale,
             },
-            Err(_) => "Export worker stopped unexpectedly".into(),
+            "mp4" => ExportKind::Animation {
+                format: "mp4",
+                scale,
+            },
+            "baked-ase" => ExportKind::BakedAse,
+            _ => ExportKind::Raster {
+                frame_id: self.doc.frame_export_id(self.frame),
+                scale,
+                sheet: kind == "sheet",
+            },
         };
+        self.start_export_recipe(ExportRecipe { path, kind }, false);
     }
     fn copy(&mut self) {
         self.clipboard_target = None;
@@ -2547,6 +2518,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.save(false);
             }
             "export-baked-ase" => self.export_baked_ase(),
+            "repeat-export" => self.repeat_export(),
             "saveas" => {
                 self.save(true);
             }
@@ -3007,6 +2979,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Grid import, tag batch & atlas…", "workflow"),
                         ("Save   Ctrl+S", "save"),
                         ("Save as…", "saveas"),
+                        ("Repeat Last Export", "repeat-export"),
                         ("Export baked ASE copy…", "export-baked-ase"),
                         ("Export PNG…", "png"),
                         ("Export sprite sheet…", "sheet"),
@@ -3215,6 +3188,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             a
                         };
                         let enabled = match a {
+                            "repeat-export" => self.can_repeat_export(),
                             "undo" => !self.undo.is_empty(),
                             "redo" => !self.redo.is_empty(),
                             _ => true,
@@ -7935,6 +7909,131 @@ mod tests {
         a.undo();
         assert_eq!(a.doc, before);
         assert_eq!(a.timeline_range(), selection);
+    }
+
+    fn wait_for_export(editor: &mut PixelCraft) {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while editor.export_job.is_some() && Instant::now() < deadline {
+            editor.poll_export();
+            if editor.export_job.is_some() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert!(editor.export_job.is_none());
+    }
+
+    #[test]
+    fn repeat_last_export_uses_the_last_successful_settings_for_each_tab() {
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.replace(Document::new(2, 1), None);
+        editor.doc.add_frame(0, false);
+        editor.doc.set_pixel(0, 0, 0, [120, 20, 40, 255]);
+        editor.doc.set_pixel(0, 1, 0, [10, 40, 210, 255]);
+        editor.frame = 1;
+        editor.studio.sheet.scale = 2;
+        let directory =
+            std::env::temp_dir().join(format!("pixelcraft-repeat-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let png = directory.join("first.png");
+
+        editor.start_export("png", png.clone());
+        wait_for_export(&mut editor);
+        assert!(editor.status.starts_with("Exported "), "{}", editor.status);
+        editor.start_export("png", directory.join("missing/fail.png"));
+        wait_for_export(&mut editor);
+        assert!(
+            editor.status.starts_with("Export failed"),
+            "{}",
+            editor.status
+        );
+
+        let edited = [110, 230, 60, 255];
+        editor.doc.set_pixel(0, 1, 0, edited);
+        editor.doc.move_frames(&[1], 0).unwrap();
+        editor.frame = 1;
+        editor.studio.sheet.scale = 1;
+        editor.open_document(Document::new(1, 1), None);
+        editor.action("repeat-export");
+        assert!(editor.export_job.is_none(), "a new tab inherited an export");
+        editor.switch_tab(0);
+        editor.action("repeat-export");
+        assert!(
+            editor.export_job.is_some(),
+            "repeat action did not start the worker"
+        );
+        wait_for_export(&mut editor);
+        let rendered = image::open(&png).unwrap().into_rgba8();
+        assert_eq!(rendered.dimensions(), (4, 2));
+        assert_eq!(rendered.get_pixel(0, 0).0, edited);
+
+        let second = directory.join("sequence");
+        editor.start_export("png-sequence", second.clone());
+        wait_for_export(&mut editor);
+        assert!(editor.status.starts_with("Exported "), "{}", editor.status);
+        editor.doc.set_pixel(0, 0, 0, edited);
+        editor.action("repeat-export");
+        wait_for_export(&mut editor);
+        assert!(editor.status.starts_with("Exported "), "{}", editor.status);
+        let repeated = image::open(second.join("frame-0001.png"))
+            .unwrap()
+            .into_rgba8();
+        assert_eq!(repeated.get_pixel(0, 0).0, edited);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn repeat_export_routes_completed_sheet_to_its_original_tab() {
+        use pixelcraft::workflows::SheetLayout;
+
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.replace(Document::new(2, 1), None);
+        editor.doc.add_frame(0, false);
+        editor.doc.set_pixel(0, 0, 1, [220, 70, 12, 255]);
+        let options = pixelcraft::workflows::SheetOptions {
+            scale: 2,
+            padding: 0,
+            layout: SheetLayout::Vertical,
+            width: Some(3),
+            filename_template: "fixed_{frame_id}".into(),
+            ..Default::default()
+        };
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-repeat-sheet-{}.png",
+            std::process::id()
+        ));
+        let recipe = ExportRecipe {
+            path: path.clone(),
+            kind: ExportKind::Sheet {
+                options: Box::new(options),
+                slice: None,
+                layers: None,
+                tag: None,
+            },
+        };
+        editor.start_export_recipe(recipe, false);
+        editor.open_document(Document::new(1, 1), None);
+        wait_for_export(&mut editor);
+        assert!(!editor.can_repeat_export());
+        editor.switch_tab(0);
+        assert!(editor.can_repeat_export());
+        let changed = [120, 210, 10, 255];
+        editor.doc.set_pixel(0, 0, 1, changed);
+        editor.studio.sheet.scale = 4;
+        editor.action("repeat-export");
+        wait_for_export(&mut editor);
+        assert!(editor.status.starts_with("Exported "), "{}", editor.status);
+        let exported = image::open(&path).unwrap().into_rgba8();
+        assert_eq!(exported.dimensions(), (6, 4));
+        assert_eq!(exported.get_pixel(2, 0).0, changed);
+        let metadata = path.with_extension("json");
+        let json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&metadata).unwrap()).unwrap();
+        assert_eq!(json["frames"][0]["filename"], "fixed_0");
+        std::fs::remove_file(metadata).unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

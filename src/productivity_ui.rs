@@ -186,6 +186,8 @@ struct CachedGridPreview {
 }
 
 struct AtlasPreview {
+    inputs: Vec<PathBuf>,
+    options: AtlasOptions,
     packed: (image::RgbaImage, serde_json::Value),
     texture: egui::TextureHandle,
 }
@@ -961,7 +963,26 @@ if let Some(i)=remove{self.remember_action("Remove reference image");self.doc.re
 if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
  ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
  ui.collapsing("Grid sprite-sheet import", |ui| self.grid_import_ui(ui));
- ui.collapsing("Batch export animation tags",|ui|{ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");egui::ComboBox::from_label("Sheet engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.horizontal(|ui|{for(gif,label)in [(true,"Export tag GIFs…"),(false,"Export tag sheets…")]{if ui.pc_button(label).clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){self.status=match batch_tags(&dir,&self.doc,gif,&self.studio.sheet){Ok(p)=>format!("Exported {} animation tags",p.len()),Err(e)=>format!("Export failed: {e}")};}}});});
+        ui.collapsing("Batch export animation tags", |ui| {
+            ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");
+            egui::ComboBox::from_label("Sheet engine preset")
+                .selected_text(&self.studio.sheet.preset)
+                .show_ui(ui, |ui| {
+                    for preset in ["Generic", "Godot", "Unity"] {
+                        ui.pc_selectable_value(&mut self.studio.sheet.preset, preset.into(), preset);
+                    }
+                });
+            ui.horizontal(|ui| {
+                for (gif, label) in [(true, "Export tag GIFs…"), (false, "Export tag sheets…")] {
+                    if ui.add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button(label)).inner.clicked()
+                        && let Some(path) = rfd::FileDialog::new().pick_folder()
+                    {
+                        let kind = ExportKind::Tags { gif, options: Box::new(self.studio.sheet.clone()) };
+                        self.start_export_recipe(ExportRecipe { path, kind }, false);
+                    }
+                }
+            });
+        });
  ui.collapsing("Multi-file atlas", |ui| self.atlas_export_ui(ui));
  ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label) in self.recent_file_entries(){if ui.add_enabled_ui(path.is_file(),|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
@@ -1201,18 +1222,16 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             .clicked()
         {
             let result = (|| {
-                let mut sources = vec![];
-                for path in &self.power.atlas_files {
-                    let name = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
-                    sources.push((name, formats::load(path)?));
-                }
+                let inputs = self.power.atlas_files.clone();
+                let sources = load_atlas_inputs(&inputs)?;
                 let packed = pack_atlas(&sources, options)?;
                 let texture = import_preview_texture(ui.ctx(), "atlas-preview", &packed.0);
-                Ok(AtlasPreview { packed, texture })
+                Ok(AtlasPreview {
+                    inputs,
+                    options: options.clone(),
+                    packed,
+                    texture,
+                })
             })();
             self.power.atlas_preview = Some(result);
         }
@@ -1225,7 +1244,10 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     .min(260. / dimensions.y)
                     .min(8.);
                 ui.add(egui::Image::new(&preview.texture).fit_to_exact_size(dimensions * scale));
-                if ui.pc_button("Save atlas…").clicked()
+                if ui
+                    .add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button("Save atlas…"))
+                    .inner
+                    .clicked()
                     && let Some(path) = rfd::FileDialog::new()
                         .add_filter("PNG atlas", &["png"])
                         .set_file_name("atlas.png")
@@ -1236,7 +1258,19 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         &preview.packed,
                         options.metadata,
                     ) {
-                        Ok(()) => "Exported multi-file atlas".into(),
+                        Ok(()) => {
+                            self.last_export = Some(ExportRecipe {
+                                path,
+                                kind: ExportKind::MultiAtlas {
+                                    inputs: preview.inputs.clone(),
+                                    options: AtlasOptions {
+                                        metadata: options.metadata,
+                                        ..preview.options.clone()
+                                    },
+                                },
+                            });
+                            "Exported multi-file atlas".into()
+                        }
                         Err(error) => format!("Export failed: {error}"),
                     };
                 }
