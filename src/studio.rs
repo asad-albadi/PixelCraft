@@ -6,6 +6,8 @@ use pixelcraft::{
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
+mod recovery_images;
+
 struct RecoveryWrite {
     state: Workspace,
     reset_history: bool,
@@ -47,6 +49,7 @@ pub(super) struct Studio {
     recovery_job: Option<std::thread::JoinHandle<RecoveryWrite>>,
     restore_job: Option<std::thread::JoinHandle<Result<Option<Workspace>, String>>>,
     restore_candidate: Option<Workspace>,
+    salvage_job: Option<std::thread::JoinHandle<Result<Document, String>>>,
     recovery_decided: bool,
     reset_recovery_history: bool,
     restore_started: Instant,
@@ -105,6 +108,7 @@ impl Default for Studio {
             recovery_job: None,
             restore_job: None,
             restore_candidate: None,
+            salvage_job: None,
             recovery_decided: false,
             reset_recovery_history: false,
             restore_started: Instant::now(),
@@ -119,6 +123,8 @@ struct StoredTab {
     #[serde(with = "formats::recovery_document")]
     saved: Document,
     path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    raw_recovery: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     live_save_root: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -141,14 +147,14 @@ struct Workspace {
     color: usize,
 }
 impl Workspace {
-    fn remove_tab(&mut self, index: usize) -> bool {
+    fn remove_tab(&mut self, index: usize) -> Option<StoredTab> {
         if index >= self.tabs.len() {
-            return false;
+            return None;
         }
-        self.tabs.remove(index);
+        let tab = self.tabs.remove(index);
         self.active =
             (self.active - usize::from(index < self.active)).min(self.tabs.len().saturating_sub(1));
-        true
+        Some(tab)
     }
 }
 
@@ -163,6 +169,7 @@ impl PixelCraft {
                         doc: t.doc.clone(),
                         saved: t.saved.clone(),
                         path: t.path.clone(),
+                        raw_recovery: false,
                         live_save_root: t.live_save_root.clone(),
                         live_save_root_identity: t.live_save_root_identity,
                         layer: t.layer,
@@ -178,6 +185,7 @@ impl PixelCraft {
                         doc: self.doc.clone(),
                         saved: self.saved.clone(),
                         path: self.path.clone(),
+                        raw_recovery: false,
                         live_save_root: self.live_save_root.clone(),
                         live_save_root_identity: self.live_save_root_identity,
                         layer: self.layer,
@@ -301,8 +309,49 @@ impl PixelCraft {
         }
     }
 
+    fn start_recovery_salvage(&mut self, index: usize, layout: recovery_images::Layout) {
+        if self.studio.salvage_job.is_some() {
+            return;
+        }
+        let Some(tab) = self
+            .studio
+            .restore_candidate
+            .as_ref()
+            .and_then(|state| state.tabs.get(index))
+        else {
+            return;
+        };
+        let doc = tab.doc.clone();
+        self.studio.salvage_job = Some(std::thread::spawn(move || {
+            recovery_images::salvage(&doc, layout)
+        }));
+        self.status = "Recovering raw images…".into();
+    }
+
+    fn poll_recovery_salvage(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.studio.salvage_job else {
+            return;
+        };
+        if !job.is_finished() || self.script_job.is_some() || self.save_job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(25));
+            return;
+        }
+        let job = self.studio.salvage_job.take().unwrap();
+        match job.join() {
+            Ok(Ok(doc)) => {
+                let baseline = Document::new(doc.width, doc.height);
+                self.open_document(doc, None);
+                self.saved = baseline;
+                self.status = "Opened recovered images as a new sprite".into();
+            }
+            Ok(Err(error)) => self.status = format!("Could not recover images: {error}"),
+            Err(_) => self.status = "Image recovery worker stopped unexpectedly".into(),
+        }
+    }
+
     pub(super) fn workspace_recovery_dialog(&mut self, ctx: &egui::Context) {
         self.poll_workspace_restore(ctx);
+        self.poll_recovery_salvage(ctx);
         let Some(state) = &self.studio.restore_candidate else {
             if self.studio.restore_job.is_some()
                 && self.studio.restore_started.elapsed() >= Duration::from_millis(250)
@@ -320,6 +369,7 @@ impl PixelCraft {
         };
         let mut restore = None;
         let mut discard = None;
+        let mut salvage = None;
         egui::Window::new("Workspace recovery")
             .resizable(false)
             .show(ctx, |ui| {
@@ -339,17 +389,36 @@ impl PixelCraft {
                                             |name| name.to_string_lossy().into_owned(),
                                         );
                                     let label = ui.label(display_name);
+                                    if tab.raw_recovery {
+                                        ui.label("Images only");
+                                    }
                                     if let Some(path) = &tab.path {
                                         label.on_hover_text(path.display().to_string());
                                     }
                                     ui.add_enabled_ui(
-                                        self.script_job.is_none() && self.save_job.is_none(),
+                                        !tab.raw_recovery
+                                            && self.script_job.is_none()
+                                            && self.save_job.is_none(),
                                         |ui| {
                                             if ui.pc_button("Restore").clicked() {
                                                 restore = Some(Some(index));
                                             }
                                         },
                                     );
+                                    ui.add_enabled_ui(self.studio.salvage_job.is_none(), |ui| {
+                                        ui.menu_button("Recover images", |ui| {
+                                            if ui.pc_button("As layers").clicked() {
+                                                salvage =
+                                                    Some((index, recovery_images::Layout::Layers));
+                                                ui.close();
+                                            }
+                                            if ui.pc_button("As frames").clicked() {
+                                                salvage =
+                                                    Some((index, recovery_images::Layout::Frames));
+                                                ui.close();
+                                            }
+                                        });
+                                    });
                                     if ui.pc_button("Discard").clicked() {
                                         discard = Some(Some(index));
                                     }
@@ -359,11 +428,16 @@ impl PixelCraft {
                     });
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.add_enabled_ui(self.script_job.is_none() && self.save_job.is_none(), |ui| {
-                        if ui.pc_button("Restore all").clicked() {
-                            restore = Some(None);
-                        }
-                    });
+                    ui.add_enabled_ui(
+                        state.tabs.iter().any(|tab| !tab.raw_recovery)
+                            && self.script_job.is_none()
+                            && self.save_job.is_none(),
+                        |ui| {
+                            if ui.pc_button("Restore all").clicked() {
+                                restore = Some(None);
+                            }
+                        },
+                    );
                     if ui.pc_button("Discard all").clicked() {
                         discard = Some(None);
                     }
@@ -373,6 +447,8 @@ impl PixelCraft {
             self.apply_workspace_restore(index);
         } else if let Some(index) = discard {
             self.discard_workspace_backup(index, ctx);
+        } else if let Some((index, layout)) = salvage {
+            self.start_recovery_salvage(index, layout);
         }
     }
 
@@ -381,7 +457,7 @@ impl PixelCraft {
             let Some(state) = &mut self.studio.restore_candidate else {
                 return;
             };
-            if !state.remove_tab(index) {
+            if state.remove_tab(index).is_none() {
                 return;
             }
             if state.tabs.is_empty() {
@@ -414,7 +490,12 @@ impl PixelCraft {
             return;
         };
         if let Some(index) = index {
-            let Some(tab) = state.tabs.get(index).cloned() else {
+            let Some(tab) = state
+                .tabs
+                .get(index)
+                .filter(|tab| !tab.raw_recovery)
+                .cloned()
+            else {
                 self.studio.restore_candidate = Some(state);
                 return;
             };
@@ -430,6 +511,26 @@ impl PixelCraft {
             }
             self.studio.recovery_decided = true;
             state = single;
+        } else if state.tabs.iter().any(|tab| tab.raw_recovery) {
+            let earlier_raw = state.tabs[..state.active]
+                .iter()
+                .filter(|tab| tab.raw_recovery)
+                .count();
+            let (pending, intact): (Vec<_>, Vec<_>) =
+                state.tabs.into_iter().partition(|tab| tab.raw_recovery);
+            state.tabs = intact;
+            state.active = (state.active - earlier_raw).min(state.tabs.len().saturating_sub(1));
+            self.studio.restore_candidate = Some(Workspace {
+                version: state.version,
+                tabs: pending,
+                active: 0,
+                colors: state.colors.clone(),
+                color: state.color,
+            });
+            self.studio.recovery_decided = true;
+            if state.tabs.is_empty() {
+                return;
+            }
         }
         let empty_workspace = self.tabs.len() == 1 && self.path.is_none() && !self.dirty();
         let restored_count = state.tabs.len();
@@ -1212,7 +1313,14 @@ fn read_recovery(root: &std::path::Path) -> Result<Option<Workspace>, String> {
         };
         match decode_recovery(file) {
             Ok(state) => return Ok(Some(state)),
-            Err(error) => failure = Some(error),
+            Err(error) => {
+                if let Ok(file) = std::fs::File::open(root.join(name))
+                    && let Ok(state) = recovery_images::read_partial_workspace(file)
+                {
+                    return Ok(Some(state));
+                }
+                failure = Some(error);
+            }
         }
     }
     failure.map_or(Ok(None), Err)
@@ -1232,17 +1340,22 @@ fn decode_recovery(file: std::fs::File) -> Result<Workspace, String> {
         return Err("Invalid workspace recovery".into());
     }
     for tab in &state.tabs {
-        tab.doc.validate()?;
-        tab.saved.validate()?;
-        if tab.layer >= tab.doc.layers.len()
-            || tab.frame >= tab.doc.durations.len()
-            || !tab.zoom.is_finite()
-            || !tab.pan.iter().all(|value| value.is_finite())
-        {
-            return Err("Invalid recovery tab or memory limit".into());
-        }
+        validate_recovery_tab(tab)?;
     }
     Ok(state)
+}
+
+fn validate_recovery_tab(tab: &StoredTab) -> Result<(), String> {
+    tab.doc.validate()?;
+    tab.saved.validate()?;
+    if tab.layer >= tab.doc.layers.len()
+        || tab.frame >= tab.doc.durations.len()
+        || !tab.zoom.is_finite()
+        || !tab.pan.iter().all(|value| value.is_finite())
+    {
+        return Err("Invalid recovery tab or memory limit".into());
+    }
+    Ok(())
 }
 
 fn discard_recovery(root: &std::path::Path) -> Result<(), std::io::Error> {
@@ -1435,6 +1548,63 @@ mod tests {
         assert!(editor.dirty());
         assert_eq!(editor.doc.layers[0].cels[0][0], ink);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_salvages_healthy_rasters_when_other_backup_records_are_damaged() {
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-damaged-tab-recovery-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let ink = [31, 55, 112, 255];
+        let mut previous = app();
+        previous.replace(Document::new(2, 2), Some(PathBuf::from("first.pixel")));
+        previous.doc.set_pixel(0, 0, 0, ink);
+        previous.open_document(Document::new(3, 3), Some(PathBuf::from("second.pixel")));
+        let mut encoded = serde_json::to_value(previous.workspace()).unwrap();
+        encoded["tabs"][0]["saved"] = serde_json::json!("damaged baseline");
+        encoded["tabs"][0]["zoom"] = serde_json::json!("damaged view");
+        encoded["tabs"][1]["doc"] = serde_json::json!({"document": "damaged raster record"});
+        let file = std::fs::File::create(root.join(RECOVERY_FILES[0])).unwrap();
+        let mut stream = flate2::write::ZlibEncoder::new(file, flate2::Compression::fast());
+        serde_json::to_writer(&mut stream, &encoded).unwrap();
+        stream.finish().unwrap();
+
+        let result = read_recovery(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let recovered = result.unwrap().unwrap();
+        assert_eq!(recovered.tabs.len(), 1);
+        assert!(recovered.tabs[0].raw_recovery);
+        assert_eq!(recovered.tabs[0].doc.layers[0].cels[0][0], ink);
+        assert_eq!(recovered.active, 0);
+    }
+
+    #[test]
+    fn recovering_raw_images_opens_an_unsaved_copy_and_keeps_the_backup() {
+        let mut previous = app();
+        let path = PathBuf::from("original.pixel");
+        previous.replace(Document::new(2, 2), Some(path.clone()));
+        let ink = [110, 88, 55, 255];
+        previous.doc.set_pixel(0, 0, 0, ink);
+        let mut editor = app();
+        editor.studio.restore_candidate = Some(previous.workspace());
+        editor.start_recovery_salvage(0, recovery_images::Layout::Frames);
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while editor.studio.salvage_job.is_some() {
+            assert!(Instant::now() < deadline);
+            editor.poll_recovery_salvage(&ctx);
+            std::thread::yield_now();
+        }
+
+        assert_eq!(editor.tabs.len(), 2);
+        assert!(editor.path.is_none());
+        assert!(editor.dirty());
+        assert_eq!(editor.doc.layers[0].cels[0][0], ink);
+        let backup = &editor.studio.restore_candidate.as_ref().unwrap().tabs[0];
+        assert_eq!(backup.path.as_ref(), Some(&path));
+        assert_eq!(backup.doc.layers[0].cels[0][0], ink);
     }
 
     #[test]

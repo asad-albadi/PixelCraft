@@ -27,10 +27,12 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 1 complete and item 2 in progress. The recovery window lists all backed-up documents and can restore or discard each independently. After a decision, autosave preserves pending backups alongside open artwork. A discard removes the previous snapshot that could otherwise resurrect the deleted entry. Formatting, strict Clippy and 424 Windows tests passed. Raw-image salvage remains open.
 
+- Item 2 complete. The recovery window can extract readable image cels as layers or frames into a new unsaved sprite, including hidden and off-canvas pixels. A bounded fallback reads valid raster records from otherwise damaged backups, one tab at a time. The focused regressions went red before the fixes, then passed. Formatting, strict Clippy, and 427 Windows all-target tests passed. Raster records that cannot be decoded remain unavailable.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
-- [ ] **2. Recover individual documents and raw images.** Browse backups, recover or delete them independently, and salvage readable images as layers or frames.
+- [x] **2. Recover individual documents and raw images.** Browse backups, recover or delete them independently, and salvage readable images as layers or frames.
 - [ ] **3. Ship macOS builds.** Add a native Lua runtime, macOS CI and startup tests, and release packages for Apple Silicon and Intel.
 - [ ] **4. Expand Windows and Linux packaging.** Publish and smoke-test a standalone Windows executable, a Linux tarball, and a Debian package.
 
