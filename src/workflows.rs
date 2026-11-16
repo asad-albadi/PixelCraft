@@ -363,7 +363,11 @@ pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), 
             }
         }
         let id = d.frame_export_id(f);
-        frames.push(json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[f],"sourceFrame":f}));
+        let mut entry = json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[f],"sourceFrame":f});
+        if let Some(name) = d.frame_name(f) {
+            entry["frameName"] = json!(name);
+        }
+        frames.push(entry);
     }
     let tags: Vec<Value> = d
         .tags
@@ -482,6 +486,9 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
             d.add_frame(f - 1, false)
         }
         d.durations[f] = v["duration"].as_u64().unwrap_or(100).clamp(1, 65535) as u16;
+        if let Some(name) = v["frameName"].as_str() {
+            d.set_frame_name(f, name)?;
+        }
         let r = &v["frame"];
         let get = |key: &str| {
             r[key]

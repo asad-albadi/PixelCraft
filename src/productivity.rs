@@ -444,7 +444,7 @@ pub fn write_palette(p: &[Pixel], ext: &str) -> Result<Vec<u8>, String> {
     };
     Ok(s.into_bytes())
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GridImport {
     pub width: usize,
@@ -468,7 +468,41 @@ impl Default for GridImport {
         }
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GridImportOptions {
+    #[serde(flatten)]
+    pub grid: GridImport,
+    pub skip_transparent: bool,
+    pub duration: u16,
+}
+
+impl Default for GridImportOptions {
+    fn default() -> Self {
+        Self {
+            grid: GridImport::default(),
+            skip_transparent: false,
+            duration: DEFAULT_DURATION,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GridPreview {
+    /// The cells that will become frames or layers, in row-major order.
+    pub cells: Vec<(u32, u32)>,
+    pub skipped: usize,
+}
+
 pub fn grid_cells(im: &RgbaImage, g: &GridImport) -> Result<Vec<(u32, u32)>, String> {
+    Ok(preview_grid(im, g, false)?.cells)
+}
+
+pub fn preview_grid(
+    im: &RgbaImage,
+    g: &GridImport,
+    skip_transparent: bool,
+) -> Result<GridPreview, String> {
     if g.width == 0
         || g.height == 0
         || g.width > MAX_DIMENSION
@@ -480,7 +514,11 @@ pub fn grid_cells(im: &RgbaImage, g: &GridImport) -> Result<Vec<(u32, u32)>, Str
     {
         return Err("Invalid cell size, offset or spacing".into());
     }
-    let mut out = vec![];
+    let mut out = GridPreview {
+        cells: vec![],
+        skipped: 0,
+    };
+    let row_width = im.width() as usize;
     for y in (g.offset_y..im.height() as usize).step_by(g.height + g.spacing_y) {
         if y + g.height > im.height() as usize {
             break;
@@ -489,20 +527,62 @@ pub fn grid_cells(im: &RgbaImage, g: &GridImport) -> Result<Vec<(u32, u32)>, Str
             if x + g.width > im.width() as usize {
                 break;
             }
-            out.push((x as u32, y as u32));
-            if out.len() > 65535 {
+            if skip_transparent
+                && (y..y + g.height).all(|row| {
+                    let start = (row * row_width + x) * 4;
+                    im.as_raw()[start..start + g.width * 4]
+                        .iter()
+                        .skip(3)
+                        .step_by(4)
+                        .all(|&alpha| alpha == 0)
+                })
+            {
+                out.skipped += 1;
+                continue;
+            }
+            out.cells.push((x as u32, y as u32));
+            if out.cells.len() > 65535 {
                 return Err("Too many cells".into());
             }
         }
     }
-    if out.is_empty() || out.len().saturating_mul(g.width).saturating_mul(g.height) > MAX_PIXELS {
+    if (out.cells.is_empty() && out.skipped == 0)
+        || out
+            .cells
+            .len()
+            .saturating_mul(g.width)
+            .saturating_mul(g.height)
+            > MAX_PIXELS
+    {
         return Err("No complete cells, or import exceeds pixel budget".into());
     }
     Ok(out)
 }
+
 pub fn import_grid(im: &RgbaImage, g: &GridImport) -> Result<Document, String> {
-    let cells = grid_cells(im, g)?;
+    import_grid_with_options(
+        im,
+        &GridImportOptions {
+            grid: g.clone(),
+            ..GridImportOptions::default()
+        },
+    )
+}
+
+pub fn import_grid_with_options(
+    im: &RgbaImage,
+    options: &GridImportOptions,
+) -> Result<Document, String> {
+    let g = &options.grid;
+    if options.duration == 0 {
+        return Err("Duration must be 1–65535 ms".into());
+    }
+    let cells = preview_grid(im, g, options.skip_transparent)?.cells;
+    if cells.is_empty() {
+        return Err("Every complete cell is transparent".into());
+    }
     let mut d = Document::new(g.width, g.height);
+    d.durations[0] = options.duration;
     for (i, (x, y)) in cells.into_iter().enumerate() {
         if i > 0 {
             if g.layers {
@@ -545,6 +625,13 @@ pub fn tag_document(d: &Document, index: usize) -> Result<Document, String> {
     out.durations = frames.iter().map(|&f| d.durations[f]).collect();
     // A derived clip can contain the same source frame more than once.
     out.frame_export_ids = Default::default();
+    if d.has_frame_names() {
+        out.frame_names = frames
+            .iter()
+            .map(|&f| d.frame_name(f).unwrap_or_default().to_owned())
+            .collect();
+        out.prune_frame_names();
+    }
     out.frame_palettes = frames.iter().map(|&f| d.palette_for(f).to_vec()).collect();
     for (l, s) in out.layers.iter_mut().zip(&d.layers) {
         l.cels = frames.iter().map(|&f| s.cels[f].clone()).collect();

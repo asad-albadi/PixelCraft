@@ -249,10 +249,12 @@ Open **Tools…** beside the brush controls, or **Edit → Brushes, references &
 - **Reference images** imports PNG/JPEG overlays. Set X/Y, scale, visibility and opacity, or enable Move/scale and drag on canvas (Shift-drag scales). Finish moving to draw again. Images and placement are embedded in `.pixel` projects and recovery; artwork PNG, GIF, sprite sheets and atlases exclude them. Save `.pixel` to preserve editor-only reference data.
 - **Palette tools** optionally snap RGB pencil, fill and shapes to the document palette. Import/export `.hex`, JASC `.pal`, GIMP `.gpl` and JSON. HEX accepts RRGGBB or RRGGBBAA; PAL/GPL contain RGB only. The existing named drawing-color JSON palette remains available in Colors.
 - **Onion skin** supports 0–8 previous and 0–8 next frames, each side with its own tint and opacity. More distant frames fade by distance. Settings are remembered.
-- **Grid sprite-sheet import** previews complete cells in row-major order with independent cell size, offset and spacing. Import into a new document as frames or layers; incomplete edge cells are omitted.
+- **Grid sprite-sheet import** accepts PNG, JPEG, BMP, or GIF (first image) and previews complete cells in row-major order. Set cell size, offset, spacing, and an initial duration in milliseconds. Optionally skip fully transparent cells when importing as frames or layers.
 - **Batch tag export** writes one GIF or PNG/JSON sheet per animation tag. GIFs contain the requested forward, reverse or ping-pong playback order and original durations (subject to GIF's 10 ms precision). Sheets retain direction metadata and reuse the current columns/padding/trim and Generic/Godot/Unity options. Indexed filename prefixes avoid name collisions and unsafe tag names.
-- **Multi-file atlas** packs every frame of selected sprites with Rows or MaxRects, optional trimming, padding, exact pixel deduplication and power-of-two dimensions. JSON keeps every frame's timing, source identity, original canvas size, trim offsets and source tags even when frames share one packed region. The width is an upper bound; power-of-two mode uses a width no larger than that bound. Existing image/pixel limits apply.
+- **Multi-file atlas** packs every frame of selected sprites with Rows or MaxRects, optional trimming, padding, exact pixel deduplication and power-of-two dimensions. Preview the packed image and its dimensions before saving the PNG and JSON together. JSON keeps every frame's timing, source identity, original canvas size, trim offsets and source tags even when frames share one packed region. The width is an upper bound; power-of-two mode uses a width no larger than that bound. Existing image/pixel limits apply.
 - **File → Recent files** remembers the last 15 successfully opened or saved files. Duplicate filenames show a folder hint and missing files are marked. Workflow tools also provide PixelCraft, Aseprite and Photoshop shortcut presets for supported commands and an editable binding list. Choosing a preset replaces the current bindings; edits and removals are saved.
+
+Double-click a timeline frame number or choose **Rename current frame** under **Layer & frame actions**. Names are saved in `.pixel` projects and exported as optional `frameName` entries in sheet and atlas JSON, with the existing filenames and IDs preserved.
 
 ### Headless CLI
 
@@ -262,7 +264,7 @@ No graphical display is needed. `pixelcraft --help` lists the operations and arg
 pixelcraft --cli inspect --input hero.pixel
 pixelcraft --cli export --input hero.pixel --output hero.gif
 pixelcraft --cli export --input hero.pixel --output hero.png --format sheet --options '{"preset":"Godot","columns":8,"trim":true}'
-pixelcraft --cli import-grid --input sheet.png --output animation.pixel --options '{"width":16,"height":16,"offset_x":1,"spacing_x":2}'
+pixelcraft --cli import-grid --input sheet.png --output animation.pixel --options '{"width":16,"height":16,"offset_x":1,"spacing_x":2,"skip_transparent":true,"duration":120}'
 pixelcraft --cli import-sequence --inputs '["walk1.png","walk2.png"]' --output walk.pixel
 pixelcraft --cli batch-tags --input hero.pixel --output exports --format gif
 pixelcraft --cli atlas --inputs '["hero.pixel","enemy.aseprite"]' --output atlas.png --options '{"layout":"MaxRects","width":1024,"padding":2,"trim":true,"deduplicate":true,"power_of_two":true}'

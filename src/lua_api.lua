@@ -447,6 +447,12 @@ local function insertFrameExportId(index)
  table.insert(ids.frames,index,ids.next)
  ids.next=ids.next+1
 end
+local function insertFrameName(index, source)
+ local names=doc.frame_names
+ if not names then return end
+ local name=source and names[source] or ''
+ if index<=#names or name~='' then table.insert(names,index,name) end
+end
 function spriteMethods:newFrame(f)
  assert((#doc.durations+1)*#doc.layers*doc.width*doc.height<=64000000,'Frame budget exceeded')
  local explicit=f~=nil
@@ -455,6 +461,7 @@ function spriteMethods:newFrame(f)
  -- Sprite_newFrame (0x3f3b10) -> DocApi::addFrame (0x19f0b0):
  -- copy the preceding frame into the insertion slot, shifting later frames.
  insertFrameExportId(f+1)
+ insertFrameName(f+1,f)
  table.insert(doc.durations,f+1,doc.durations[f])
  for _,l in ipairs(doc.layers) do
   table.insert(l.cels,f+1,copy(l.cels[f]))
@@ -477,6 +484,7 @@ function spriteMethods:newEmptyFrame(f)
  assert(f%1==0 and f>=1 and f<=#doc.durations+1,'Missing frame')
  local previous=math.max(1,f-1)
  insertFrameExportId(f)
+ insertFrameName(f)
  table.insert(doc.durations,f,doc.durations[previous])
  for _,l in ipairs(doc.layers) do
   local tiles={} for i=1,#(l.tile_cels[previous] or {}) do tiles[i]=0 end

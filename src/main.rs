@@ -305,6 +305,7 @@ struct PixelCraft {
     new_w: usize,
     new_h: usize,
     rename: Option<String>,
+    rename_frame: Option<(EditorId, u32, String)>,
     help: bool,
     about: bool,
     github_texture: egui::TextureHandle,
@@ -459,6 +460,7 @@ impl PixelCraft {
             new_w: 32,
             new_h: 32,
             rename: None,
+            rename_frame: None,
             help: false,
             about: false,
             github_texture: {
@@ -1318,6 +1320,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.settings_open
             || self.rename.is_some()
             || self.replace_color.is_some()
+            || self.rename_frame.is_some()
             || self.help
             || self.properties_open
             || self.animation_export.is_some()
@@ -1593,7 +1596,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         let mut saving = self.doc.clone();
-        if !saving.references.is_empty()
+        if !saving.has_frame_names()
+            && !saving.references.is_empty()
             && matches!(
                 path.extension().and_then(|e| e.to_str()),
                 Some("ase" | "aseprite")
@@ -2827,6 +2831,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
 
+    fn start_rename_frame(&mut self, frame: usize) {
+        self.rename_frame = Some((
+            self.doc.editor_id,
+            self.doc.frame_export_id(frame),
+            self.doc.frame_name(frame).unwrap_or_default().into(),
+        ));
+    }
+
     fn timeline(&mut self, ui: &mut egui::Ui) {
         // The timeline must not composite every frame when a single cel changes.
         // Show thumbnails for frames the canvas or playback has already rendered.
@@ -2873,6 +2885,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.frame + 1,
                 self.doc.durations.len()
             ));
+            if let Some(name) = self.doc.frame_name(self.frame) {
+                ui.add(egui::Label::new(name).truncate())
+                    .on_hover_text(name);
+            }
             let mut ms = self.doc.durations[self.frame];
             if !narrow
                 && ui
@@ -2933,16 +2949,28 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                 [cell_width, header_height],
                                 button.selected(f == self.frame),
                             );
-                            if response.clicked() {
+                            if response.clicked() || response.double_clicked() {
                                 selection = Some((self.layer, f, false));
                             }
+                            if response.double_clicked() {
+                                self.start_rename_frame(f);
+                            }
+                            response.context_menu(|ui| {
+                                if ui.pc_button("Rename frame…").clicked() {
+                                    self.start_rename_frame(f);
+                                    ui.close();
+                                }
+                            });
                             let tags: Vec<_> = self
                                 .doc
                                 .tags
                                 .iter()
                                 .filter(|tag| (tag.from..=tag.to).contains(&f))
                                 .collect();
-                            let mut description = format!("Select frame {}", f + 1);
+                            let mut description = match self.doc.frame_name(f) {
+                                Some(name) => format!("Frame {}: {name}", f + 1),
+                                None => format!("Select frame {}", f + 1),
+                            };
                             if !tags.is_empty() {
                                 use std::fmt::Write;
                                 let marker_width = (response.rect.width() - 4.) / tags.len() as f32;
@@ -3134,6 +3162,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.timeline_select(layer, frame, extend);
         }
         ui.menu_button("Layer & frame actions", |ui| {
+            if ui.pc_button("Rename current frame…").clicked() {
+                self.start_rename_frame(self.frame);
+                ui.close();
+            }
             let range = self.timeline_range();
             ui.menu_button("Selected cels", |ui| {
                 ui.label(format!(
@@ -4076,6 +4108,34 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.rename = None
             } else {
                 self.rename = Some(name)
+            }
+            return;
+        }
+        if let Some((document, frame_id, mut name)) = self.rename_frame.take() {
+            let Some(frame) = (self.doc.editor_id == document)
+                .then(|| {
+                    (0..self.doc.durations.len()).find(|&f| self.doc.frame_export_id(f) == frame_id)
+                })
+                .flatten()
+            else {
+                return;
+            };
+            let mut done = false;
+            let mut cancel = false;
+            let dismissed = fluent::modal_dialog(ctx, "Rename frame", |ui| {
+                ui.label(format!("Frame {}", frame + 1));
+                ui.add(egui::TextEdit::singleline(&mut name).char_limit(MAX_FRAME_NAME_CHARS));
+                ui.small("Leave blank to clear the name. Names are saved in .pixel projects and sheet/atlas metadata.");
+                ui.horizontal(|ui| {
+                    done = ui.pc_button("Save name").clicked();
+                    cancel = ui.pc_button("Cancel").clicked();
+                });
+                done || cancel
+            });
+            if done {
+                self.edit_timeline(|doc| doc.set_frame_name(frame, &name));
+            } else if !cancel && !dismissed {
+                self.rename_frame = Some((document, frame_id, name));
             }
             return;
         }

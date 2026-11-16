@@ -3,6 +3,7 @@ use std::sync::Arc;
 pub type Pixel = [u8; 4];
 pub const CLEAR: Pixel = [0; 4];
 pub const DEFAULT_DURATION: u16 = 100;
+pub const MAX_FRAME_NAME_CHARS: usize = 256;
 pub const MIN_BRUSH_SIZE: i32 = 1;
 pub const MAX_BRUSH_SIZE: i32 = 64;
 pub const MAX_DIMENSION: usize = 16384;
@@ -918,6 +919,8 @@ pub struct Document {
     pub height: usize,
     pub layers: Vec<Layer>,
     pub durations: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) frame_names: Vec<String>,
     #[serde(default, skip_serializing_if = "FrameExportIds::is_none")]
     pub(crate) frame_export_ids: FrameExportIds,
     pub color_mode: ColorMode,
@@ -1159,6 +1162,7 @@ impl Document {
             height: h,
             layers: vec![Layer::new("Layer 1".into(), w, h, 1)],
             durations: vec![DEFAULT_DURATION],
+            frame_names: vec![],
             frame_export_ids: FrameExportIds::default(),
             color_mode: ColorMode::Rgba,
             palette: default_palette(),
@@ -1179,6 +1183,44 @@ impl Document {
             references: vec![],
         }
     }
+    pub fn frame_name(&self, frame: usize) -> Option<&str> {
+        self.frame_names
+            .get(frame)
+            .filter(|name| !name.is_empty())
+            .map(String::as_str)
+    }
+
+    pub fn has_frame_names(&self) -> bool {
+        self.frame_names.iter().any(|name| !name.is_empty())
+    }
+
+    /// A blank name restores the default numbered label.
+    pub fn set_frame_name(&mut self, frame: usize, name: &str) -> Result<(), String> {
+        if frame >= self.durations.len() {
+            return Err("Invalid frame".into());
+        }
+        let name = name.trim();
+        if name.chars().count() > MAX_FRAME_NAME_CHARS || name.chars().any(char::is_control) {
+            return Err(format!(
+                "Use a single-line frame name of up to {MAX_FRAME_NAME_CHARS} characters"
+            ));
+        }
+        if !name.is_empty() || frame < self.frame_names.len() {
+            if frame >= self.frame_names.len() {
+                self.frame_names.resize_with(frame + 1, String::new);
+            }
+            self.frame_names[frame] = name.to_owned();
+            self.prune_frame_names();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prune_frame_names(&mut self) {
+        while self.frame_names.last().is_some_and(String::is_empty) {
+            self.frame_names.pop();
+        }
+    }
+
     pub fn frame_export_id(&self, frame: usize) -> u32 {
         self.frame_export_ids
             .0
@@ -1255,6 +1297,13 @@ impl Document {
             || self.stored_pixels() > MAX_DOCUMENT_PIXELS
         {
             return Err("Project dimensions or stored pixel count exceed limits".into());
+        }
+        if self.frame_names.len() > self.durations.len()
+            || self.frame_names.iter().any(|name| {
+                name.chars().count() > MAX_FRAME_NAME_CHARS || name.chars().any(char::is_control)
+            })
+        {
+            return Err("Invalid frame names".into());
         }
         if let Some(ids) = &self.frame_export_ids.0 {
             let mut seen = std::collections::HashSet::with_capacity(ids.frames.len());
@@ -2841,6 +2890,15 @@ impl Document {
             );
         }
         self.durations.insert(f + 1, self.durations[f]);
+        if f < self.frame_names.len() {
+            let name = if duplicate {
+                self.frame_names[f].clone()
+            } else {
+                String::new()
+            };
+            self.frame_names.insert(f + 1, name);
+            self.prune_frame_names();
+        }
         if duplicate {
             for index in 0..self.layers.len() {
                 if self.layers[index].link_duplicates && !self.layers[index].group {
@@ -2884,6 +2942,10 @@ impl Document {
         if self.durations.len() > 1 && f < self.durations.len() {
             self.explicit_frame_export_ids().frames.remove(f);
             self.durations.remove(f);
+            if f < self.frame_names.len() {
+                self.frame_names.remove(f);
+                self.prune_frame_names();
+            }
             if f < self.frame_palettes.len() {
                 self.frame_palettes.remove(f);
             }

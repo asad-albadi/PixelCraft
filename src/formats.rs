@@ -1531,6 +1531,9 @@ pub fn load(path: &Path) -> Result<Document, String> {
     Ok(d)
 }
 pub fn save(path: &Path, d: &Document) -> Result<(), String> {
+    if path.extension().and_then(|s| s.to_str()) != Some("pixel") && d.has_frame_names() {
+        return Err("Save As .pixel to keep frame names. Use Export baked ASE copy to export artwork for ASE interchange.".into());
+    }
     if path.extension().and_then(|s| s.to_str()) != Some("pixel") && !d.references.is_empty() {
         return Err("Reference images require .pixel. Save as .pixel or explicitly discard references before saving ASE.".into());
     }

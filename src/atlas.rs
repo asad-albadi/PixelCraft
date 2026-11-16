@@ -7,13 +7,13 @@ use std::{
     hash::{Hash, Hasher},
     path::Path,
 };
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AtlasLayout {
     Rows,
     #[default]
     MaxRects,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AtlasOptions {
     pub layout: AtlasLayout,
@@ -282,7 +282,22 @@ pub fn pack_atlas(
             }
         }
     }
-    let frames:Vec<_>=entries.iter().map(|(name,si,f,id,b,sw,sh,duration)|{let r=placements[*id];json!({"filename":name,"source":si,"sourceFrame":f,"frame":{"x":r.x,"y":r.y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":sw,"h":sh},"duration":duration})}).collect();
+    let frames: Vec<_> = entries
+        .iter()
+        .map(|(name, si, f, id, b, sw, sh, duration)| {
+            let r = placements[*id];
+            let mut entry = json!({
+                "filename":name,"source":si,"sourceFrame":f,
+                "frame":{"x":r.x,"y":r.y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,
+                "spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},
+                "sourceSize":{"w":sw,"h":sh},"duration":duration
+            });
+            if let Some(name) = sources[*si].1.frame_name(*f) {
+                entry["frameName"] = json!(name);
+            }
+            entry
+        })
+        .collect();
     let sources: Vec<_> = sources
         .iter()
         .enumerate()
@@ -298,8 +313,14 @@ pub fn export_atlas(
     sources: &[(String, Document)],
     o: &AtlasOptions,
 ) -> Result<(), String> {
-    let (im, mut meta) = pack_atlas(sources, o)?;
+    save_packed_atlas(path, &pack_atlas(sources, o)?)
+}
+
+/// Write the same image and placement data produced by `pack_atlas`.
+pub fn save_packed_atlas(path: &Path, packed: &(RgbaImage, Value)) -> Result<(), String> {
+    let (image, meta) = packed;
+    let mut meta = meta.clone();
     meta["meta"]["image"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
-    im.save(path).map_err(|e| e.to_string())?;
+    image.save(path).map_err(|e| e.to_string())?;
     crate::interchange::write_json(&path.with_extension("json"), &meta)
 }

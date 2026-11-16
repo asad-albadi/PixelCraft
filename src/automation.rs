@@ -77,12 +77,20 @@ pub fn inspect_revision(d: &Document, revision: &str) -> Value {
         json!({"index":i,"id":layer.editor_id.to_string(),"name":layer.name,"locked":layer.locked,
             "group":layer.group,"visible":layer.visible,"parent":layer.parent})
     }).collect();
-    json!({"revision":revision,"document_id":d.editor_id.to_string(),
+    let mut info = json!({"revision":revision,"document_id":d.editor_id.to_string(),
         "capabilities":{"stable_targets":true,"command_preview":1},
         "width":d.width,"height":d.height,"frames":d.durations,"layers":layers,
         "tags":d.tags,"slices":d.slices,"palette":d.palette,"references":d.references.iter()
             .map(|r|json!({"name":r.name,"x":r.x,"y":r.y,"scale":r.scale,"opacity":r.opacity}))
-            .collect::<Vec<_>>()})
+            .collect::<Vec<_>>()});
+    if d.has_frame_names() {
+        info["frame_names"] = json!(
+            (0..d.durations.len())
+                .map(|f| d.frame_name(f))
+                .collect::<Vec<_>>()
+        );
+    }
+    info
 }
 pub fn inspect_cel_page(doc: &Document, args: &Value) -> Result<Value, String> {
     let layer = resolve_layer(doc, args)?;
@@ -414,11 +422,19 @@ pub fn apply_command_batch_until(
             "unlink-cel" => out.unlink_cel(layer()?, frame()?)?,
             "set-frame" => {
                 let f = frame()?;
-                let duration = number(c, "duration")?;
-                if !(1..=65535).contains(&duration) {
-                    return Err("Duration must be 1–65535 ms".into());
+                if c.get("duration").is_none() && c.get("name").is_none() {
+                    return Err("Supply a frame name or duration".into());
                 }
-                out.durations[f] = duration as u16;
+                if c.get("duration").is_some() {
+                    let duration = number(c, "duration")?;
+                    if !(1..=65535).contains(&duration) {
+                        return Err("Duration must be 1–65535 ms".into());
+                    }
+                    out.durations[f] = duration as u16;
+                }
+                if let Some(name) = c.get("name") {
+                    out.set_frame_name(f, name.as_str().ok_or("Expected a frame name")?)?;
+                }
             }
             "set-tag" | "add-tag" => {
                 let tag: FrameTag =
@@ -572,7 +588,7 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
         }
         "import-grid" => {
             let im = read_image(&path(v, "input")?)?;
-            let d = import_grid(&im, &options::<GridImport>(&v["options"])?)?;
+            let d = import_grid_with_options(&im, &options::<GridImportOptions>(&v["options"])?)?;
             let out = path(v, "output")?;
             formats::save(&out, &d)?;
             Ok(inspect(&d))
@@ -651,7 +667,9 @@ pub fn operation(op: &str, v: &Value) -> Result<Value, String> {
                             &d,
                             &options::<SheetOptions>(&v["options"])?,
                         )?,
-                        "ase" | "aseprite" if d.needs_baked_ase() && op == "export" => {
+                        "ase" | "aseprite"
+                            if op == "export" && (d.needs_baked_ase() || d.has_frame_names()) =>
+                        {
                             formats::export_baked_ase(&out, &d)?;
                         }
                         "pixel" | "ase" | "aseprite" => formats::save(&out, &d)?,
@@ -746,7 +764,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers.\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two.\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});
@@ -855,7 +873,7 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
             }
             Ok(json!({"tools":names.iter().map(|name| {
                     let details = match *name {
-                        "live-commands" | "commands" => "Atomic edits with the current revision. Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
+                        "live-commands" | "commands" => "Atomic edits with the current revision. Set frame name and/or timing with set-frame (frame,name,duration ms). Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
                         "live-export" => "Export a revision-matched sprite to a new PNG, GIF or MP4 file, or set format to png-sequence and output to a new directory. Integer scale uses nearest-neighbor. Layers apply to all formats; region applies to PNG and PNG sequences; frame applies to single PNG only.",
@@ -877,6 +895,21 @@ pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
                 }
                 if matches!(*name, "live-commands" | "live-edit") {
                     tool["inputSchema"]["properties"]["return_preview"] = json!({"type":"boolean"});
+                }
+                if *name == "import-grid" {
+                    tool["inputSchema"]["properties"]["options"] = json!({
+                        "type":"object","properties":{
+                            "width":{"type":"integer","minimum":1,"maximum":MAX_DIMENSION,"default":16},
+                            "height":{"type":"integer","minimum":1,"maximum":MAX_DIMENSION,"default":16},
+                            "offset_x":{"type":"integer","minimum":0},"offset_y":{"type":"integer","minimum":0},
+                            "spacing_x":{"type":"integer","minimum":0,"maximum":MAX_DIMENSION},
+                            "spacing_y":{"type":"integer","minimum":0,"maximum":MAX_DIMENSION},
+                            "layers":{"type":"boolean","default":false},
+                            "skip_transparent":{"type":"boolean","default":false},
+                            "duration":{"type":"integer","minimum":1,"maximum":65535,"default":DEFAULT_DURATION}
+                        }
+                    });
+                    tool["inputSchema"]["required"] = json!(["input","output"]);
                 }
                 if *name == "live-cel-targets" {
                     tool["inputSchema"]["properties"]["layer"] = json!({"type":"integer","minimum":0});

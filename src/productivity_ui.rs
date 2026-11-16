@@ -107,11 +107,13 @@ pub(super) struct PowerTools {
     pub tolerance: u8,
     pub selection_op: SelectionOp,
     preferences: Preferences,
-    grid: GridImport,
+    grid: GridImportOptions,
+    grid_preview: Option<CachedGridPreview>,
     grid_source: Option<image::RgbaImage>,
     grid_texture: Option<egui::TextureHandle>,
     atlas: AtlasOptions,
     atlas_files: Vec<PathBuf>,
+    atlas_preview: Option<Result<AtlasPreview, String>>,
     pub reference_edit: Option<usize>,
     reference_textures: Vec<(Pixels, egui::TextureHandle)>,
     reference_drag: Option<(f32, f32, f32, Pos2)>,
@@ -144,11 +146,13 @@ impl Default for PowerTools {
             tolerance: 0,
             selection_op: SelectionOp::Replace,
             preferences,
-            grid: GridImport::default(),
+            grid: GridImportOptions::default(),
+            grid_preview: None,
             grid_source: None,
             grid_texture: None,
             atlas: AtlasOptions::default(),
             atlas_files: vec![],
+            atlas_preview: None,
             reference_edit: None,
             reference_textures: vec![],
             reference_drag: None,
@@ -167,6 +171,46 @@ impl Default for PowerTools {
             shortcut_action: "wand".into(),
         }
     }
+}
+
+struct CachedGridPreview {
+    grid: GridImport,
+    skip_transparent: bool,
+    result: Result<GridPreview, String>,
+}
+
+struct AtlasPreview {
+    packed: (image::RgbaImage, serde_json::Value),
+    texture: egui::TextureHandle,
+}
+
+fn import_preview_texture(
+    ctx: &egui::Context,
+    label: &str,
+    image: &image::RgbaImage,
+) -> egui::TextureHandle {
+    // A preview never needs full-resolution GPU storage for a large sheet.
+    let thumb;
+    let image = if image.width().max(image.height()) > 1024 {
+        let scale = 1024. / image.width().max(image.height()) as f32;
+        thumb = image::imageops::resize(
+            image,
+            (image.width() as f32 * scale).round().max(1.) as u32,
+            (image.height() as f32 * scale).round().max(1.) as u32,
+            image::imageops::FilterType::Nearest,
+        );
+        &thumb
+    } else {
+        image
+    };
+    ctx.load_texture(
+        label,
+        egui::ColorImage::from_rgba_unmultiplied(
+            [image.width() as usize, image.height() as usize],
+            image.as_raw(),
+        ),
+        egui::TextureOptions::NEAREST,
+    )
 }
 
 enum LiveResult {
@@ -686,11 +730,9 @@ if ui.pc_button("Copy to layer").clicked(){let mut d=self.doc.clone();match refe
 if let Some(i)=remove{self.remember();self.doc.references.remove(i);self.power.reference_edit=None;}
 if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
  ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
- ui.collapsing("Grid sprite-sheet import",|ui|{if ui.pc_button("Choose sprite sheet…").clicked()&& let Some(p)=rfd::FileDialog::new().add_filter("Image",&["png","jpg","jpeg"]).pick_file(){match read_image(&p){Ok(im)=>{self.power.grid_texture=Some(ctx.load_texture("grid-import",color_image(&im.pixels().map(|p|p.0).collect::<Vec<_>>(),im.width() as usize,im.height() as usize),egui::TextureOptions::NEAREST));self.power.grid_source=Some(im);},Err(e)=>self.status=e}}let g=&mut self.power.grid;ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.width).prefix("Cell W ").range(1..=16384));ui.add(egui::DragValue::new(&mut g.height).prefix("H ").range(1..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.offset_x).prefix("Offset X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.offset_y).prefix("Y ").range(0..=16384));});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut g.spacing_x).prefix("Spacing X ").range(0..=16384));ui.add(egui::DragValue::new(&mut g.spacing_y).prefix("Y ").range(0..=16384));});ui.pc_checkbox(&mut g.layers,"Import as layers (otherwise frames)");if let(Some(im),Some(tex))=(&self.power.grid_source,&self.power.grid_texture){match grid_cells(im,g){Ok(cells)=>{ui.label(format!("{} complete cells · row-major order",cells.len()));let scale=(ui.available_width()/im.width() as f32).min(260./im.height() as f32).min(8.);let response=ui.add(egui::Image::new(tex).fit_to_exact_size(Vec2::new(im.width() as f32,im.height() as f32)*scale));let painter=ui.painter_at(response.rect);for(x,y)in cells.iter().take(4096){painter.rect_stroke(Rect::from_min_size(response.rect.min+Vec2::new(*x as f32,*y as f32)*scale,Vec2::new(g.width as f32,g.height as f32)*scale),0,Stroke::new(1.,Color32::from_rgb(255,200,60)),egui::StrokeKind::Inside);}
-if ui.pc_button("Import cells into a new sprite").clicked(){match import_grid(im,g){Ok(d)=>{self.open_document(d,None);self.status="Imported sheet cells".into();},Err(e)=>self.status=e}}},Err(e)=>{ui.colored_label(Color32::RED,e);}}}});
+ ui.collapsing("Grid sprite-sheet import", |ui| self.grid_import_ui(ui));
  ui.collapsing("Batch export animation tags",|ui|{ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");egui::ComboBox::from_label("Sheet engine preset").selected_text(&self.studio.sheet.preset).show_ui(ui,|ui|{for p in ["Generic","Godot","Unity"]{ui.pc_selectable_value(&mut self.studio.sheet.preset,p.into(),p);}});ui.horizontal(|ui|{for(gif,label)in [(true,"Export tag GIFs…"),(false,"Export tag sheets…")]{if ui.pc_button(label).clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){self.status=match batch_tags(&dir,&self.doc,gif,&self.studio.sheet){Ok(p)=>format!("Exported {} animation tags",p.len()),Err(e)=>format!("Export failed: {e}")};}}});});
- ui.collapsing("Multi-file atlas",|ui|{if ui.pc_button("Choose sprites…").clicked()&& let Some(paths)=rfd::FileDialog::new().add_filter("Sprites",ATLAS_EXTENSIONS).pick_files(){self.power.atlas_files=paths;}
-if ui.pc_button("Add folder…").clicked()&& let Some(dir)=rfd::FileDialog::new().pick_folder(){match expand_atlas_inputs(&[dir]){Ok(paths)=>self.power.atlas_files.extend(paths),Err(e)=>self.status=e}}for p in &self.power.atlas_files{ui.small(p.display().to_string());}let o=&mut self.power.atlas;ui.horizontal(|ui|{ui.pc_selectable_value(&mut o.layout,AtlasLayout::Rows,"Rows");ui.pc_selectable_value(&mut o.layout,AtlasLayout::MaxRects,"MaxRects");});ui.add(egui::DragValue::new(&mut o.width).range(1..=16384).prefix("Maximum width "));ui.add(egui::DragValue::new(&mut o.padding).range(0..=256).prefix("Padding "));ui.pc_checkbox(&mut o.trim,"Trim transparent borders");ui.pc_checkbox(&mut o.deduplicate,"Remove duplicate frame pixels");ui.pc_checkbox(&mut o.power_of_two,"Power-of-two dimensions");if ui.pc_button("Pack & export PNG + JSON…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG atlas",&["png"]).set_file_name("atlas.png").save_file(){let result=(||{let mut sources=vec![];for p in &self.power.atlas_files{sources.push((p.file_name().unwrap_or_default().to_string_lossy().into_owned(),formats::load(p)?));}export_atlas(&path,&sources,&self.power.atlas)})();self.status=match result{Ok(())=>"Exported multi-file atlas".into(),Err(e)=>format!("Export failed: {e}")};}});
+ ui.collapsing("Multi-file atlas", |ui| self.atlas_export_ui(ui));
  ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label) in self.recent_file_entries(){if ui.add_enabled_ui(path.is_file(),|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
 if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}
@@ -700,6 +742,231 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
  });});
         self.power.open = open;
     }
+    fn grid_import_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.pc_button("Choose sprite sheet…").clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("Sprite sheets", &["png", "jpg", "jpeg", "bmp", "gif"])
+                .pick_file()
+        {
+            match read_image(&path) {
+                Ok(image) => {
+                    self.power.grid_texture =
+                        Some(import_preview_texture(ui.ctx(), "grid-import", &image));
+                    self.power.grid_source = Some(image);
+                    self.power.grid_preview = None;
+                }
+                Err(error) => self.status = error,
+            }
+        }
+        let options = &mut self.power.grid;
+        let grid = &mut options.grid;
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut grid.width)
+                    .prefix("Cell W ")
+                    .range(1..=16384),
+            );
+            ui.add(
+                egui::DragValue::new(&mut grid.height)
+                    .prefix("H ")
+                    .range(1..=16384),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut grid.offset_x)
+                    .prefix("Offset X ")
+                    .range(0..=16384),
+            );
+            ui.add(
+                egui::DragValue::new(&mut grid.offset_y)
+                    .prefix("Y ")
+                    .range(0..=16384),
+            );
+        });
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut grid.spacing_x)
+                    .prefix("Spacing X ")
+                    .range(0..=16384),
+            );
+            ui.add(
+                egui::DragValue::new(&mut grid.spacing_y)
+                    .prefix("Y ")
+                    .range(0..=16384),
+            );
+        });
+        ui.pc_checkbox(&mut grid.layers, "Import as layers (otherwise frames)");
+        ui.pc_checkbox(
+            &mut options.skip_transparent,
+            "Skip fully transparent cells",
+        );
+        ui.add(
+            egui::DragValue::new(&mut options.duration)
+                .range(1..=u16::MAX)
+                .prefix("Initial frame duration ")
+                .suffix(" ms"),
+        );
+
+        let (Some(image), Some(texture)) = (&self.power.grid_source, &self.power.grid_texture)
+        else {
+            return;
+        };
+        if self.power.grid_preview.as_ref().is_none_or(|preview| {
+            preview.grid != *grid || preview.skip_transparent != options.skip_transparent
+        }) {
+            self.power.grid_preview = Some(CachedGridPreview {
+                grid: grid.clone(),
+                skip_transparent: options.skip_transparent,
+                result: preview_grid(image, grid, options.skip_transparent),
+            });
+        }
+        let preview = match &self.power.grid_preview.as_ref().unwrap().result {
+            Ok(preview) => preview,
+            Err(error) => {
+                ui.colored_label(Color32::RED, error);
+                return;
+            }
+        };
+        let kind = if grid.layers { "layers" } else { "frames" };
+        ui.label(format!("{} {kind} · row-major order", preview.cells.len()));
+        if options.skip_transparent {
+            ui.small(format!("{} transparent cells skipped", preview.skipped));
+        }
+        let dimensions = Vec2::new(image.width() as f32, image.height() as f32);
+        let scale = (ui.available_width() / dimensions.x)
+            .min(260. / dimensions.y)
+            .min(8.);
+        let response = ui.add(egui::Image::new(texture).fit_to_exact_size(dimensions * scale));
+        let painter = ui.painter_at(response.rect);
+        for &(x, y) in preview.cells.iter().take(4096) {
+            painter.rect_stroke(
+                Rect::from_min_size(
+                    response.rect.min + Vec2::new(x as f32, y as f32) * scale,
+                    Vec2::new(grid.width as f32, grid.height as f32) * scale,
+                ),
+                0,
+                Stroke::new(1., Color32::from_rgb(255, 200, 60)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if ui
+            .add_enabled_ui(!preview.cells.is_empty(), |ui| {
+                ui.pc_button("Import cells into a new sprite")
+            })
+            .inner
+            .clicked()
+        {
+            match import_grid_with_options(image, options) {
+                Ok(document) => {
+                    self.open_document(document, None);
+                    self.status = "Imported sheet cells".into();
+                }
+                Err(error) => self.status = error,
+            }
+        }
+    }
+
+    fn atlas_export_ui(&mut self, ui: &mut egui::Ui) {
+        if ui.pc_button("Choose sprites…").clicked()
+            && let Some(paths) = rfd::FileDialog::new()
+                .add_filter("Sprites", ATLAS_EXTENSIONS)
+                .pick_files()
+        {
+            self.power.atlas_files = paths;
+            self.power.atlas_preview = None;
+        }
+        if ui.pc_button("Add folder…").clicked()
+            && let Some(dir) = rfd::FileDialog::new().pick_folder()
+        {
+            match expand_atlas_inputs(&[dir]) {
+                Ok(paths) => {
+                    self.power.atlas_files.extend(paths);
+                    self.power.atlas_preview = None;
+                }
+                Err(error) => self.status = error,
+            }
+        }
+        for path in &self.power.atlas_files {
+            ui.small(path.display().to_string());
+        }
+
+        let options = &mut self.power.atlas;
+        let old_options = options.clone();
+        ui.horizontal(|ui| {
+            ui.pc_selectable_value(&mut options.layout, AtlasLayout::Rows, "Rows");
+            ui.pc_selectable_value(&mut options.layout, AtlasLayout::MaxRects, "MaxRects");
+        });
+        ui.add(
+            egui::DragValue::new(&mut options.width)
+                .range(1..=16384)
+                .prefix("Maximum width "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut options.padding)
+                .range(0..=256)
+                .prefix("Padding "),
+        );
+        ui.pc_checkbox(&mut options.trim, "Trim transparent borders");
+        ui.pc_checkbox(&mut options.deduplicate, "Remove duplicate frame pixels");
+        ui.pc_checkbox(&mut options.power_of_two, "Power-of-two dimensions");
+        if *options != old_options {
+            self.power.atlas_preview = None;
+        }
+
+        if ui
+            .add_enabled_ui(!self.power.atlas_files.is_empty(), |ui| {
+                ui.pc_button("Preview atlas")
+            })
+            .inner
+            .clicked()
+        {
+            let result = (|| {
+                let mut sources = vec![];
+                for path in &self.power.atlas_files {
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
+                    sources.push((name, formats::load(path)?));
+                }
+                let packed = pack_atlas(&sources, options)?;
+                let texture = import_preview_texture(ui.ctx(), "atlas-preview", &packed.0);
+                Ok(AtlasPreview { packed, texture })
+            })();
+            self.power.atlas_preview = Some(result);
+        }
+        match &self.power.atlas_preview {
+            Some(Ok(preview)) => {
+                let (width, height) = preview.packed.0.dimensions();
+                ui.label(format!("Atlas size: {width} × {height} px"));
+                let dimensions = Vec2::new(width as f32, height as f32);
+                let scale = (ui.available_width() / dimensions.x)
+                    .min(260. / dimensions.y)
+                    .min(8.);
+                ui.add(egui::Image::new(&preview.texture).fit_to_exact_size(dimensions * scale));
+                if ui.pc_button("Save atlas PNG + JSON…").clicked()
+                    && let Some(path) = rfd::FileDialog::new()
+                        .add_filter("PNG atlas", &["png"])
+                        .set_file_name("atlas.png")
+                        .save_file()
+                {
+                    self.status = match save_packed_atlas(&path, &preview.packed) {
+                        Ok(()) => "Exported multi-file atlas".into(),
+                        Err(error) => format!("Export failed: {error}"),
+                    };
+                }
+            }
+            Some(Err(error)) => {
+                ui.colored_label(Color32::RED, error);
+            }
+            None => {
+                ui.small("Preview the packed image and its dimensions before saving.");
+            }
+        }
+    }
+
     fn palette_file(&mut self, export: bool) {
         let dialog = rfd::FileDialog::new()
             .add_filter("HEX palette", &["hex"])
