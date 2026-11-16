@@ -1663,6 +1663,7 @@ pub struct PreparedExport {
     pub output: PathBuf,
     staging: PathBuf,
     staging_identity: Option<(u64, u64)>,
+    temporary_directory_identity: Option<(u64, u64)>,
     preserve_staging: bool,
     temporary: PathBuf,
     metadata: Value,
@@ -1680,13 +1681,18 @@ impl Drop for PreparedExport {
         let root = self.project_root.as_deref();
         let staging = &self.staging;
         let staging_identity = self.staging_identity;
+        let temporary_directory = self
+            .temporary
+            .file_name()
+            .zip(self.temporary_directory_identity);
         let cleanup = || {
             mcp_files::Files {
                 root,
                 overwrite: true,
             }
             .check_write(staging)?;
-            mcp_io::remove_staging(staging, staging_identity).map_err(|error| error.to_string())
+            mcp_io::remove_staging(staging, staging_identity, temporary_directory)
+                .map_err(|error| error.to_string())
         };
         if let Some(access) = &self.access {
             let _ = access.run(cleanup);
@@ -1701,13 +1707,14 @@ fn prepare_output(
     replace: bool,
     encode: impl FnOnce(&Path) -> Result<Value, String>,
 ) -> Result<PreparedExport, String> {
-    prepare_output_under(output, replace, None, encode)
+    prepare_output_under(output, replace, None, false, encode)
 }
 
 fn prepare_output_under(
     output: PathBuf,
     replace: bool,
     root: Option<&Path>,
+    directory: bool,
     encode: impl FnOnce(&Path) -> Result<Value, String>,
 ) -> Result<PreparedExport, String> {
     let files = mcp_files::Files {
@@ -1759,6 +1766,7 @@ fn prepare_output_under(
         output,
         staging,
         staging_identity,
+        temporary_directory_identity: None,
         preserve_staging: false,
         temporary,
         metadata: Value::Null,
@@ -1767,6 +1775,12 @@ fn prepare_output_under(
         project_root: root.map(Path::to_path_buf),
         access,
     };
+    if directory && prepared.access.is_some() {
+        mcp_io::create_dir(&prepared.temporary).map_err(|error| error.to_string())?;
+        prepared.temporary_directory_identity = Some(
+            mcp_io::directory_identity(&prepared.temporary).map_err(|error| error.to_string())?,
+        );
+    }
     prepared.metadata = encode(&prepared.temporary)?;
     prepared.check_staging()?;
     Ok(prepared)
@@ -1791,7 +1805,7 @@ pub fn prepare_live_save_under(
 ) -> Result<PreparedExport, String> {
     let metadata = save_metadata(d, &output, revision)?;
     mcp_access::run(root, identity, || {
-        prepare_output_under(output, replace, root, |temporary| {
+        prepare_output_under(output, replace, root, false, |temporary| {
             formats::save(temporary, d)?;
             Ok(metadata)
         })
@@ -1877,8 +1891,10 @@ fn prepare_png_sequence_progress(
     } else {
         output.clone()
     };
-    let mut prepared = prepare_output_under(staging_target, replace, root, |temporary| {
-        mcp_io::create_dir(temporary).map_err(|e| e.to_string())?;
+    let mut prepared = prepare_output_under(staging_target, replace, root, true, |temporary| {
+        if root.is_none() {
+            mcp_io::create_dir(temporary).map_err(|e| e.to_string())?;
+        }
         let mut metadata = Value::Null;
         for (frame, name) in names.iter().enumerate() {
             progress(frame, names.len())?;
@@ -1959,41 +1975,43 @@ fn prepare_live_export_inner(
     if args.get("format").is_some_and(|v| v != kind.as_str()) {
         return Err("Export format must match the output extension".into());
     }
-    prepare_output_under(output, replace, root, |temporary| match kind.as_str() {
-        "png" => {
-            progress(0, 1)?;
-            let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
-            mcp_io::write_image_as(temporary, &image, image::ImageFormat::Png)
-                .map_err(|e| e.to_string())?;
-            progress(1, 1)?;
-            Ok(metadata)
-        }
-        "gif" | "mp4" => {
-            if ["frame", "region"]
-                .iter()
-                .any(|key| args.get(key).is_some())
-            {
-                return Err("GIF and MP4 export all frames and do not support cropping".into());
+    prepare_output_under(output, replace, root, false, |temporary| {
+        match kind.as_str() {
+            "png" => {
+                progress(0, 1)?;
+                let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
+                mcp_io::write_image_as(temporary, &image, image::ImageFormat::Png)
+                    .map_err(|e| e.to_string())?;
+                progress(1, 1)?;
+                Ok(metadata)
             }
-            let scale = export_scale(args)?;
-            let (width, height) = formats::animation_dimensions(d, scale)?;
-            let filtered = filter_export_layers(d, args)?;
-            if kind == "mp4" {
-                formats::export_mp4_progress(temporary, &filtered, scale, &mut progress)?;
-            } else {
-                formats::export_gif_progress(temporary, &filtered, scale, &mut progress)?;
+            "gif" | "mp4" => {
+                if ["frame", "region"]
+                    .iter()
+                    .any(|key| args.get(key).is_some())
+                {
+                    return Err("GIF and MP4 export all frames and do not support cropping".into());
+                }
+                let scale = export_scale(args)?;
+                let (width, height) = formats::animation_dimensions(d, scale)?;
+                let filtered = filter_export_layers(d, args)?;
+                if kind == "mp4" {
+                    formats::export_mp4_progress(temporary, &filtered, scale, &mut progress)?;
+                } else {
+                    formats::export_gif_progress(temporary, &filtered, scale, &mut progress)?;
+                }
+                progress(d.durations.len(), d.durations.len())?;
+                let (width, height) = if kind == "mp4" {
+                    (width.next_multiple_of(2), height.next_multiple_of(2))
+                } else {
+                    (width, height)
+                };
+                Ok(
+                    json!({"revision":revision,"format":kind,"width":width,"height":height,"scale":scale,"frames":d.durations.len()}),
+                )
             }
-            progress(d.durations.len(), d.durations.len())?;
-            let (width, height) = if kind == "mp4" {
-                (width.next_multiple_of(2), height.next_multiple_of(2))
-            } else {
-                (width, height)
-            };
-            Ok(
-                json!({"revision":revision,"format":kind,"width":width,"height":height,"scale":scale,"frames":d.durations.len()}),
-            )
+            _ => Err("Choose a .png, .gif or .mp4 path, or set format to png-sequence".into()),
         }
-        _ => Err("Choose a .png, .gif or .mp4 path, or set format to png-sequence".into()),
     })
 }
 
@@ -2004,6 +2022,12 @@ impl PreparedExport {
                 != identity
         {
             return Err("The restricted export's staging directory changed".into());
+        }
+        if let Some(identity) = self.temporary_directory_identity
+            && mcp_io::directory_identity(&self.temporary).map_err(|error| error.to_string())?
+                != identity
+        {
+            return Err("The restricted export's temporary directory changed".into());
         }
         Ok(())
     }

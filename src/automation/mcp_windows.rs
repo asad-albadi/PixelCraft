@@ -628,10 +628,15 @@ impl Guard {
     #[cfg(test)]
     fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
         let expected = self.directory_identity(path)?;
-        self.remove_owned_dir_all(path, expected)
+        self.remove_owned_dir_all(path, expected, None)
     }
 
-    pub(super) fn remove_owned_dir_all(&self, path: &Path, expected: (u64, u64)) -> io::Result<()> {
+    pub(super) fn remove_owned_dir_all(
+        &self,
+        path: &Path,
+        expected: (u64, u64),
+        known_child: Option<(&OsStr, (u64, u64))>,
+    ) -> io::Result<()> {
         let (parent, name) = self.parent(path)?;
         let directory = open_child(
             &parent.file,
@@ -660,6 +665,14 @@ impl Guard {
                     0,
                 )?;
                 if child.metadata()?.is_dir() {
+                    let Some((allowed_name, expected)) =
+                        known_child.filter(|_| directories.len() == 1)
+                    else {
+                        continue;
+                    };
+                    if name != allowed_name || directory_identity(&child)? != expected {
+                        continue;
+                    }
                     let names = directory_names(&child)?;
                     directories.push((child, names.into_iter()));
                 } else {

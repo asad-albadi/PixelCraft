@@ -120,16 +120,20 @@ pub(crate) fn directory_identity(path: &Path) -> io::Result<(u64, u64)> {
     ))
 }
 
-pub(crate) fn remove_staging(path: &Path, expected: Option<(u64, u64)>) -> io::Result<()> {
+pub(crate) fn remove_staging(
+    path: &Path,
+    expected: Option<(u64, u64)>,
+    known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
+) -> io::Result<()> {
     if let Some(expected) = expected {
         #[cfg(windows)]
-        if let Some(result) =
-            super::mcp_access::windows(|guard| guard.remove_owned_dir_all(path, expected))
-        {
+        if let Some(result) = super::mcp_access::windows(|guard| {
+            guard.remove_owned_dir_all(path, expected, known_child)
+        }) {
             return result;
         }
         #[cfg(target_os = "linux")]
-        if let Some(result) = super::mcp_linux::remove_owned_dir_all(path, expected) {
+        if let Some(result) = super::mcp_linux::remove_owned_dir_all(path, expected, known_child) {
             return result;
         }
         return Err(io::Error::new(

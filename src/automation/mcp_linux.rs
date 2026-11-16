@@ -340,7 +340,10 @@ fn unlink_child(parent: &File, name: &std::ffi::OsStr, directory: bool) -> io::R
     .map(|_| ())
 }
 
-fn empty_directory(directory: &File) -> io::Result<()> {
+fn empty_directory(
+    directory: &File,
+    known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
+) -> io::Result<()> {
     for entry in std::fs::read_dir(format!("/proc/self/fd/{}", directory.as_raw_fd()))? {
         let name = entry?.file_name();
         let opened = open(
@@ -351,7 +354,13 @@ fn empty_directory(directory: &File) -> io::Result<()> {
         )?;
         let is_dir = opened.metadata()?.is_dir();
         if is_dir {
-            empty_directory(&opened)?;
+            let Some((allowed_name, expected)) = known_child else {
+                continue;
+            };
+            if name != allowed_name || directory_identity_of(&opened)? != expected {
+                continue;
+            }
+            empty_directory(&opened, None)?;
             let current = open(
                 directory.as_raw_fd(),
                 Path::new(&name),
@@ -367,7 +376,11 @@ fn empty_directory(directory: &File) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn remove_owned_dir_all(path: &Path, expected: (u64, u64)) -> Option<io::Result<()>> {
+pub(super) fn remove_owned_dir_all(
+    path: &Path,
+    expected: (u64, u64),
+    known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
+) -> Option<io::Result<()>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -377,7 +390,7 @@ pub(super) fn remove_owned_dir_all(path: &Path, expected: (u64, u64)) -> Option<
                     "The restricted export's staging directory changed",
                 ));
             }
-            empty_directory(&dir)?;
+            empty_directory(&dir, known_child)?;
             let parent =
                 project.open_directory(path.parent().ok_or(io::ErrorKind::InvalidInput)?)?;
             let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;

@@ -199,7 +199,9 @@ impl Files<'_> {
             } else {
                 output.to_path_buf()
             };
-        let prepared = prepare_output_under(staging_target, true, self.root, |_| Ok(Value::Null))?;
+        let prepared = prepare_output_under(staging_target, true, self.root, directory, |_| {
+            Ok(Value::Null)
+        })?;
         let result = encode(&prepared.temporary)?;
         // Recheck staging and destinations before publishing in case a path
         // changed while the encoder was running.
@@ -233,6 +235,7 @@ pub(super) fn publish_files(
             prepared.staging.clone(),
             true,
             prepared.project_root.as_deref(),
+            false,
             |_| Ok(Value::Null),
         )?)
     } else {
@@ -310,9 +313,13 @@ mod tests {
         fs::create_dir_all(&outside).unwrap();
         let canonical = root.canonicalize().unwrap();
         let prepared = super::super::mcp_access::run(Some(&canonical), None, || {
-            prepare_output_under(parent.join("file.png"), true, Some(&canonical), |_| {
-                Ok(Value::Null)
-            })
+            prepare_output_under(
+                parent.join("file.png"),
+                true,
+                Some(&canonical),
+                false,
+                |_| Ok(Value::Null),
+            )
         })
         .unwrap();
         let unrelated = outside
@@ -338,7 +345,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let canonical = root.canonicalize().unwrap();
         let prepared = super::super::mcp_access::run(Some(&canonical), None, || {
-            prepare_output_under(root.join("file.png"), true, Some(&canonical), |_| {
+            prepare_output_under(root.join("file.png"), true, Some(&canonical), false, |_| {
                 Ok(Value::Null)
             })
         })
@@ -355,11 +362,44 @@ mod tests {
         assert_eq!(contents.unwrap(), b"keep");
     }
 
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn restricted_cleanup_preserves_an_unrelated_directory_moved_into_staging() {
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-staging-graft-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let prepared = super::super::mcp_access::run(Some(&canonical), None, || {
+            prepare_output_under(
+                canonical.join("file.png"),
+                true,
+                Some(&canonical),
+                true,
+                |_| Ok(Value::Null),
+            )
+        })
+        .unwrap();
+        let known = prepared.temporary.join("owned.png");
+        fs::write(&known, b"temporary output").unwrap();
+        let unrelated = canonical.join("unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        fs::write(unrelated.join("keep"), b"keep").unwrap();
+        let moved = prepared.temporary.join("moved");
+        fs::rename(unrelated, &moved).unwrap();
+        drop(prepared);
+        let contents = fs::read(moved.join("keep"));
+        let owned_gone = !known.exists();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(contents.unwrap(), b"keep");
+        assert!(owned_gone);
+    }
+
     #[test]
     fn failed_overwrite_restores_previously_published_files() {
         let output =
             std::env::temp_dir().join(format!("pixelcraft-rollback-test-{}", std::process::id()));
-        let prepared = prepare_output_under(output, true, None, |_| Ok(Value::Null)).unwrap();
+        let prepared =
+            prepare_output_under(output, true, None, false, |_| Ok(Value::Null)).unwrap();
         let published = prepared.staging.join("published");
         let staged = &prepared.temporary;
         fs::create_dir(&published).unwrap();
