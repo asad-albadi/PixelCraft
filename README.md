@@ -163,6 +163,8 @@ Canvases support up to 16384 pixels per side and 64 million pixels per canvas an
 
 ### Timeline and scene editing
 
+Use **Playback** on the timeline to loop selected frames, or play the selection, active tag, or whole sprite once. Nonadjacent selections skip unselected frames. **Rewind on stop** returns to the frame you were editing before playback started.
+
 Use **Play preview animation** in the Preview panel to play the authored frame timings while the timeline stays on your editing frame. The timeline’s playback speed applies to both the canvas and the preview. Export uses the frame durations you authored. The preview shows the main canvas viewport. Click the artwork in the preview to center the canvas there. The timeline marks tagged frames, and **Sprite → Properties, layers, tiles & ranges** edits a tag’s repeat count for batch and engine exports.
 
 - Click a frame header to select it. Shift-click another header for an interval, or Ctrl-click (Command-click on macOS) to toggle individual frames. Drag a selected header to an insertion marker to move the selected frames together. Use **Frame → Reverse frames** to reverse selected frames in their existing slots, or the entire timeline when no headers are selected. Both operations preserve sprite-sheet frame IDs and keep tag boundaries at their timeline positions.

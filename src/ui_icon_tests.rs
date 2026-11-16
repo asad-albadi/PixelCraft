@@ -1703,7 +1703,7 @@ fn preview_zoom_frame_sync_and_controls_across_sizes_and_scales() {
                         (image.width() * ctx.pixels_per_point() - 320. * zoom as f32).abs() < 0.01
                     );
                 }
-                let _ = app.frame_texture(&ctx, app.next_playback_frame().0);
+                let _ = app.frame_texture(&ctx, app.next_playback_frame().unwrap().0);
                 app.playing = true;
                 app.last_tick =
                     Instant::now() - Duration::from_millis(u64::from(app.doc.durations[app.frame]));

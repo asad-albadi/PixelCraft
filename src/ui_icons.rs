@@ -595,6 +595,7 @@ fn button_named(
                 | "seamless-horizontal"
                 | "seamless-vertical"
                 | "play"
+                | "rewind-on-stop"
                 | "lock"
                 | "theme"
         );

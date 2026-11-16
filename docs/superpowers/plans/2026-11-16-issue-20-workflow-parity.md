@@ -51,6 +51,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 23 complete. The main canvas repeats horizontally, vertically, or on both axes. The copies share the frame texture and accept paint, erase, shapes, fill, and sampling through the existing editor tools. Each stroke uses one Undo entry and PNG export writes the single source tile. Tests exercise pointer drags across each axis, fill, brush footprints, fitting tall sprites, texture refresh, and exports. Formatting, strict Clippy, and 470 Windows all-target tests passed.
 
+- Item 24 in progress. The timeline plays a frame or cel selection in order, skips gaps, supports play once for selection/tag/sprite, and optionally rewinds to the pre-playback frame on stop. Tests exercise a short final frame, reverse ping-pong, selection gaps and rewind. Formatting, strict Clippy, and 472 Windows all-target tests passed. Subtags and draggable onion ranges remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

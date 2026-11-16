@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 struct Preferences {
     recent: Vec<PathBuf>,
     onion: OnionOptions,
+    rewind_on_stop: bool,
     preset: String,
     interface_scale: f32,
     comfortable: bool,
@@ -28,6 +29,7 @@ impl Default for Preferences {
         Self {
             recent: vec![],
             onion: OnionOptions::default(),
+            rewind_on_stop: false,
             preset: String::new(),
             interface_scale: 1.,
             comfortable: false,
@@ -286,6 +288,15 @@ impl PowerTools {
     }
 }
 impl PixelCraft {
+    pub(super) fn rewind_on_stop(&self) -> bool {
+        self.power.preferences.rewind_on_stop
+    }
+    pub(super) fn toggle_rewind_on_stop(&mut self) {
+        self.power.preferences.rewind_on_stop = !self.rewind_on_stop();
+        if self.shot.is_none() && !cfg!(test) {
+            self.save_workflow_preferences();
+        }
+    }
     pub(super) fn export_scale_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Export scale");
@@ -532,8 +543,7 @@ impl PixelCraft {
                 );
                 self.open_document(d, editable.then_some(p));
                 if std::mem::take(&mut self.play_after_open) {
-                    self.playing = true;
-                    self.last_tick = Instant::now();
+                    self.start_playback(false, false);
                 }
                 self.status = "Opened sprite".into();
             }

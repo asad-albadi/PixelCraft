@@ -310,6 +310,12 @@ fn playback_seconds(duration: u16, percent: u16) -> f64 {
     f64::from(duration.max(1)) / (10. * f64::from(percent))
 }
 
+struct PlaybackRun {
+    origin: usize,
+    frames: Option<Vec<usize>>,
+    once: bool,
+}
+
 struct PixelCraft {
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
@@ -346,6 +352,7 @@ struct PixelCraft {
     last_tick: Instant,
     playback_speed: u16,
     playback_waiting_for_frame: bool,
+    playback_run: Option<PlaybackRun>,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
@@ -512,6 +519,7 @@ impl PixelCraft {
             last_tick: Instant::now(),
             playback_speed: 100,
             playback_waiting_for_frame: false,
+            playback_run: None,
             undo: vec![],
             redo: vec![],
             selection: None,
@@ -720,8 +728,11 @@ impl PixelCraft {
             self.store_frame_texture(ctx, f, image, error);
         }
         let texture = self.frame_textures[f].as_ref().unwrap().clone();
-        let frame = self.next_playback_frame().0;
-        if self.playing && self.frame_prefetch.is_none() && self.frame_textures[frame].is_none() {
+        if self.playing
+            && self.frame_prefetch.is_none()
+            && let Some((frame, _)) = self.next_playback_frame()
+            && self.frame_textures[frame].is_none()
+        {
             self.frame_prefetch = Some(FramePrefetch::start(ctx, &self.doc, frame));
         }
         texture
@@ -1050,7 +1061,13 @@ impl PixelCraft {
                 // this refresh when its successor is only marginally overdue.
                 return Duration::ZERO;
             }
-            let next = self.next_playback_frame().0;
+            let Some((next, _)) = self.next_playback_frame() else {
+                if now < deadline {
+                    return deadline - now;
+                }
+                self.stop_playback(true);
+                return Duration::ZERO;
+            };
             if self.playing && self.frame_textures.get(next).is_none_or(Option::is_none) {
                 if now < deadline {
                     return deadline - now;
@@ -1069,7 +1086,11 @@ impl PixelCraft {
         }
     }
     fn advance_playback(&mut self) {
-        (self.frame, self.playback_reverse) = self.next_playback_frame();
+        let Some(next) = self.next_playback_frame() else {
+            self.stop_playback(true);
+            return;
+        };
+        (self.frame, self.playback_reverse) = next;
         self.timeline_anchor = None;
         self.selected_cels = None;
         self.timeline_frames = TimelineHeaders::default();
@@ -1077,13 +1098,93 @@ impl PixelCraft {
         self.timeline_destination = None;
     }
 
-    fn next_playback_frame(&self) -> (usize, bool) {
+    fn start_playback(&mut self, selected: bool, once: bool) {
+        let origin = self.frame;
+        let frames = selected.then(|| {
+            if !self.timeline_frames.selected.is_empty() {
+                return self.timeline_frames.selected.clone();
+            }
+            if let Some(CelSelection::Individual(cels)) = &self.selected_cels {
+                let mut frames: Vec<_> = cels.iter().map(|&(_, frame)| frame).collect();
+                frames.sort_unstable();
+                frames.dedup();
+                return frames;
+            }
+            let bounds = self.timeline_range();
+            (bounds.first_frame..=bounds.last_frame).collect()
+        });
+        if let Some(first) = frames.as_ref().and_then(|frames| frames.first()) {
+            self.frame = *first;
+        } else if let Some(tag) = self.active_tag.and_then(|i| self.doc.tags.get(i)) {
+            if once || !(tag.from..=tag.to).contains(&self.frame) {
+                self.frame = if matches!(tag.direction, 1 | 3) {
+                    tag.to
+                } else {
+                    tag.from
+                };
+            }
+            self.playback_reverse = matches!(tag.direction, 1 | 3);
+        } else if once {
+            self.frame = 0;
+        }
+        self.playback_run = Some(PlaybackRun {
+            origin,
+            frames,
+            once,
+        });
+        self.playing = true;
+        self.playback_waiting_for_frame = false;
+        self.last_tick = Instant::now();
+    }
+
+    fn stop_playback(&mut self, allow_rewind: bool) {
+        if let Some(run) = self.playback_run.take()
+            && self.playing
+            && allow_rewind
+            && self.rewind_on_stop()
+        {
+            self.frame = run.origin.min(self.doc.durations.len() - 1);
+        }
+        self.playing = false;
+        self.playback_waiting_for_frame = false;
+    }
+
+    fn next_playback_frame(&self) -> Option<(usize, bool)> {
+        let once = self.playback_run.as_ref().is_some_and(|run| run.once);
+        if let Some(frames) = self
+            .playback_run
+            .as_ref()
+            .and_then(|run| run.frames.as_deref())
+        {
+            let count = self.doc.durations.len();
+            let frames = &frames[..frames.partition_point(|&frame| frame < count)];
+            let next_index = frames.partition_point(|&frame| frame <= self.frame);
+            return frames
+                .get(next_index)
+                .or_else(|| if once { None } else { frames.first() })
+                .map(|&frame| (frame, false));
+        }
         let Some(tag) = self.active_tag.and_then(|i| self.doc.tags.get(i)) else {
-            return (
-                (self.frame + 1) % self.doc.durations.len(),
-                self.playback_reverse,
-            );
+            return (!once || self.frame + 1 < self.doc.durations.len()).then(|| {
+                (
+                    (self.frame + 1) % self.doc.durations.len(),
+                    self.playback_reverse,
+                )
+            });
         };
+        let reached_end = match tag.direction {
+            1 => self.frame <= tag.from,
+            2 => self.frame <= tag.from && self.playback_reverse,
+            3 => self.frame >= tag.to && !self.playback_reverse,
+            _ => self.frame >= tag.to,
+        };
+        if once && (tag.from == tag.to || reached_end) {
+            return None;
+        }
+        Some(self.step_frame_tag(tag))
+    }
+
+    fn step_frame_tag(&self, tag: &FrameTag) -> (usize, bool) {
         let reverse = match tag.direction {
             1 => true,
             2 | 3 => self.playback_reverse,
@@ -1677,8 +1778,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.zoom = (480. / self.doc.width.max(self.doc.height) as f32)
             .floor()
             .clamp(1., 16.);
-        self.playing = false;
-        self.playback_waiting_for_frame = false;
+        self.stop_playback(false);
     }
     fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
         self.cancel_gesture();
@@ -1748,8 +1848,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.preview_playback = None;
         self.extension_session = None;
         self.render_snapshot = None;
-        self.playing = false;
-        self.playback_waiting_for_frame = false;
+        self.stop_playback(false);
         self.hover = None;
         self.status = "Switched sprite".into();
     }
@@ -2255,8 +2354,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "clear" => self.clear(),
             "replace-color" => {
-                self.playing = false;
-                self.playback_waiting_for_frame = false;
+                self.stop_playback(false);
                 self.replace_color = Some(ReplaceColor {
                     source: self.fg,
                     replacement: self.bg,
@@ -2332,11 +2430,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "deleteframe" => {}
             "reverse-frames" => self.reverse_timeline_frames(),
-            "play" => {
-                self.playing = !self.playing;
-                self.playback_waiting_for_frame = false;
-                self.last_tick = Instant::now();
-            }
+            "play" if self.playing => self.stop_playback(true),
+            "play" => self.start_playback(false, false),
+            "play-once" => self.start_playback(false, true),
+            "play-selection" => self.start_playback(true, false),
+            "play-selection-once" => self.start_playback(true, true),
+            "rewind-on-stop" => self.toggle_rewind_on_stop(),
             "prev" | "next" => {
                 let count = self.doc.durations.len();
                 let offset = if s == "next" { 1 } else { count - 1 };
@@ -2494,8 +2593,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         });
         self.extension_session = Some(session);
         self.script_job = Some(rx);
-        self.playing = false;
-        self.playback_waiting_for_frame = false;
+        self.stop_playback(false);
         self.status = "Running embedded Lua…".into();
         Ok(())
     }
@@ -2733,6 +2831,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Delete frame", "deleteframe"),
                         ("Reverse frames", "reverse-frames"),
                         ("Play / stop   Space", "play"),
+                        ("Play once", "play-once"),
+                        ("Play selection", "play-selection"),
+                        ("Play selection once", "play-selection-once"),
+                        ("Rewind on stop", "rewind-on-stop"),
                         ("Previous frame   ,", "prev"),
                         ("Next frame   .", "next"),
                     ],
@@ -2833,6 +2935,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         let selected = match a {
                             "grid" => self.grid,
                             "onion" => self.onion,
+                            "rewind-on-stop" => self.rewind_on_stop(),
                             "play" => self.playing,
                             "seamless" => self.studio.seamless == WrapAxes::BOTH,
                             "seamless-horizontal" => self.studio.seamless == WrapAxes::HORIZONTAL,
@@ -3109,8 +3212,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.layer = layer;
         self.frame = frame;
         self.timeline_destination = None;
-        self.playing = false;
-        self.playback_waiting_for_frame = false;
+        self.stop_playback(false);
     }
 
     fn timeline_cel_selection(&self) -> CelSelection {
@@ -3186,8 +3288,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.timeline_frames = TimelineHeaders::default();
             self.timeline_layers = TimelineHeaders::default();
             self.timeline_destination = None;
-            self.playing = false;
-            self.playback_waiting_for_frame = false;
+            self.stop_playback(false);
         }
     }
 
@@ -3263,8 +3364,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.timeline_anchor = None;
         self.selected_cels = None;
         self.timeline_destination = None;
-        self.playing = false;
-        self.playback_waiting_for_frame = false;
+        self.stop_playback(false);
     }
 
     fn reorder_timeline_frames(&mut self, from: usize, before: usize) {
@@ -3285,8 +3385,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.selected_cels = None;
             self.timeline_destination = None;
             self.timeline_duration = self.doc.durations[self.frame];
-            self.playing = false;
-            self.playback_waiting_for_frame = false;
+            self.stop_playback(false);
         }
     }
 
@@ -3298,8 +3397,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         };
         if self.edit_timeline(|doc| doc.reverse_frames(&selected).map(|_| ())) {
             self.timeline_duration = self.doc.durations[self.frame];
-            self.playing = false;
-            self.playback_waiting_for_frame = false;
+            self.stop_playback(false);
         }
     }
 
@@ -3441,6 +3539,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             {
                 a = Some("play");
             }
+            ui.menu_button("Playback", |ui| {
+                for (label, command) in [
+                    ("Play once", "play-once"),
+                    ("Play selection", "play-selection"),
+                    ("Play selection once", "play-selection-once"),
+                ] {
+                    if ui.pc_command_button(command, label).clicked() {
+                        a = Some(command);
+                        ui.close();
+                    }
+                }
+                let mut rewind = self.rewind_on_stop();
+                if ui.pc_checkbox(&mut rewind, "Rewind on stop").changed() {
+                    self.toggle_rewind_on_stop();
+                }
+            });
             let speed = self.playback_speed;
             egui::ComboBox::from_id_salt("playback_speed")
                 .selected_text(format!("{speed}%"))
@@ -4552,8 +4666,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && (accepts_copies || self.doc.index(raw.0, raw.1).is_some())
             && self.tool != Tool::Hand
         {
-            self.playing = false;
-            self.playback_waiting_for_frame = false;
+            self.stop_playback(false);
             let p = if draws { raw } else { self.hover.unwrap() };
             self.stroke_color = self.fg;
             let sample_color = ctx.input(|i| i.modifiers.alt);
@@ -7028,6 +7141,90 @@ mod tests {
         a.undo();
         assert_eq!(a.doc.tags[0].repeat, 0);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn play_selected_frames_once_honors_gaps_and_the_final_frame_duration() {
+        let mut a = app();
+        if a.rewind_on_stop() {
+            a.action("rewind-on-stop");
+        }
+        a.replace(Document::new(1, 1), None);
+        for frame in 0..4 {
+            a.doc.add_frame(frame, false);
+        }
+        a.frame = 2;
+        a.timeline_frames.selected = vec![1, 4];
+        a.action("play-selection-once");
+        assert!(a.playing);
+        assert_eq!(a.frame, 1);
+        // Advance via the production playback clock with the next frame cached.
+        let ctx = egui::Context::default();
+        let _ = a.frame_texture(&ctx, 4);
+        let start = a.last_tick;
+        a.doc.durations[4] = 200;
+        a.update_playback_clock(start + Duration::from_millis(100));
+        assert_eq!(a.frame, 4);
+        assert!(a.playing);
+        a.update_playback_clock(start + Duration::from_millis(299));
+        assert!(a.playing);
+        a.update_playback_clock(start + Duration::from_millis(300));
+        assert!(!a.playing);
+        assert_eq!(a.frame, 4);
+
+        a.doc.durations[4] = 16;
+        a.timeline_frames.selected = vec![4];
+        a.action("play-selection-once");
+        let start = a.last_tick;
+        assert_eq!(
+            a.update_playback_clock(start + Duration::from_millis(14)),
+            Duration::from_millis(2)
+        );
+        assert!(a.playing);
+        a.update_playback_clock(start + Duration::from_millis(16));
+        assert!(!a.playing);
+    }
+
+    #[test]
+    fn play_once_traverses_reverse_ping_pong_and_rewind_restores_entry_frame() {
+        let mut a = app();
+        if a.rewind_on_stop() {
+            a.action("rewind-on-stop");
+        }
+        a.replace(Document::new(1, 1), None);
+        for frame in 0..4 {
+            a.doc.add_frame(frame, false);
+        }
+        a.doc.tags.push(FrameTag {
+            name: "Reverse walk".into(),
+            from: 1,
+            to: 3,
+            direction: 3,
+            repeat: 0,
+            color: [0, 0, 0],
+        });
+        a.active_tag = Some(0);
+        a.frame = 4;
+        a.action("play-once");
+        assert_eq!(a.frame, 3);
+        for frame in [2, 1, 2, 3] {
+            a.advance_playback();
+            assert_eq!(a.frame, frame);
+            assert!(a.playing);
+        }
+        a.advance_playback();
+        assert!(!a.playing);
+        assert_eq!(a.frame, 3);
+
+        a.action("rewind-on-stop");
+        a.frame = 2;
+        a.action("play-once");
+        a.advance_playback();
+        a.advance_playback();
+        assert_eq!(a.frame, 1);
+        a.action("play");
+        assert!(!a.playing);
+        assert_eq!(a.frame, 2);
     }
 
     #[test]
