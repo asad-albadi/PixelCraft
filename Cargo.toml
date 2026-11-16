@@ -14,7 +14,7 @@ rfd = "0.17.2"
 flate2 = "1.1.10"
 base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = "1.0.151"
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
 libloading = "0.8.8"
 png = "0.18.1"
 moxcms = "0.8.1"

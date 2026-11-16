@@ -10,6 +10,55 @@ use pixelcraft::{
 use serde_json::json;
 
 #[test]
+fn imported_hash_sheet_preserves_serialized_frame_order_and_tags() {
+    let metadata = serde_json::from_str(r#"{
+        "frames": {
+            "walk 1":  {"frame":{"x":0,"y":0,"w":1,"h":1},"sourceSize":{"w":1,"h":1},"duration":101},
+            "walk 2":  {"frame":{"x":1,"y":0,"w":1,"h":1},"sourceSize":{"w":1,"h":1},"duration":102},
+            "walk 10": {"frame":{"x":2,"y":0,"w":1,"h":1},"sourceSize":{"w":1,"h":1},"duration":110}
+        },
+        "meta":{"frameTags":[{"name":"pair","from":0,"to":1}]}
+    }"#).unwrap();
+    let image = RgbaImage::from_fn(3, 1, |x, _| Rgba([x as u8, 0, 0, 255]));
+    let sprite = unpack_sheet(&image, &metadata).unwrap();
+
+    assert_eq!(sprite.durations, [101, 102, 110]);
+    assert_eq!((sprite.tags[0].from, sprite.tags[0].to), (0, 1));
+    assert_eq!(sprite.layers[0].cels[1][0], [1, 0, 0, 255]);
+}
+
+#[test]
+fn imported_sheet_accepts_string_and_numeric_repeats() {
+    let frame = json!({"frame":{"x":0,"y":0,"w":1,"h":1},"sourceSize":{"w":1,"h":1}});
+    let meta = json!({"frames":[frame],"meta":{"frameTags":[
+        {"name":"string","from":0,"to":0,"repeat":"3"},
+        {"name":"number","from":0,"to":0,"repeat":4},
+        {"name":"omitted","from":0,"to":0}
+    ]}});
+    let sprite = unpack_sheet(&RgbaImage::new(1, 1), &meta).unwrap();
+    assert_eq!(
+        sprite.tags.iter().map(|tag| tag.repeat).collect::<Vec<_>>(),
+        [3, 4, 0]
+    );
+}
+
+#[test]
+fn imported_sheet_accepts_named_slice_coordinates() {
+    let frame = json!({"frame":{"x":0,"y":0,"w":4,"h":3},"sourceSize":{"w":4,"h":3}});
+    let meta = json!({"frames":[frame],"meta":{"slices":[
+        {"name":"character","keys":[{"frame":0,"bounds":{"x":0,"y":0,"w":4,"h":3},
+            "center":{"x":1,"y":1,"w":2,"h":1},"pivot":{"x":2,"y":-1}}]},
+        {"name":"native","keys":[{"frame":0,"bounds":[0,0,4,3],"pivot":[2,1]}]}
+    ]}});
+    let sprite = unpack_sheet(&RgbaImage::new(4, 3), &meta).unwrap();
+    let key = &sprite.slices[0].keys[0];
+    assert_eq!(key.bounds, [0, 0, 4, 3]);
+    assert_eq!(key.center, Some([1, 1, 2, 1]));
+    assert_eq!(key.pivot, Some([2, -1]));
+    assert_eq!(sprite.slices[1].keys[0].pivot, Some([2, 1]));
+}
+
+#[test]
 fn oversized_hash_sheet_is_rejected_before_decoding_frame_entries() {
     let frames: serde_json::Map<_, _> = (0..=u16::MAX)
         .map(|index| (format!("frame_{index}"), serde_json::Value::Null))

@@ -564,6 +564,8 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
     let frames: Vec<&Value> = if let Some(a) = meta["frames"].as_array() {
         a.iter().collect()
     } else if let Some(a) = meta["frames"].as_object() {
+        // Foreign hashes use serialized order for tag indices. PixelCraft
+        // atlases also provide explicit indices for older key-sorted files.
         let mut frames: Vec<_> = a.values().collect();
         if meta["meta"]["app"] == "PixelCraft" && meta["meta"]["sources"].is_array() {
             frames.sort_by_key(|frame| (frame["source"].as_u64(), frame["sourceFrame"].as_u64()));
@@ -659,16 +661,45 @@ pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
                     Some("pingpong_reverse") => 3,
                     _ => 0,
                 },
-                repeat: match t.get("repeat").and_then(Value::as_u64) {
-                    Some(n) => u16::try_from(n).map_err(|_| "Invalid tag repeat")?,
-                    None => 0,
+                repeat: match t.get("repeat") {
+                    None | Some(Value::Null) => 0,
+                    Some(Value::String(repeat)) => {
+                        repeat.parse().map_err(|_| "Invalid tag repeat")?
+                    }
+                    Some(repeat) => repeat
+                        .as_u64()
+                        .and_then(|repeat| u16::try_from(repeat).ok())
+                        .ok_or("Invalid tag repeat")?,
                 },
                 color: [0; 3],
             });
         }
     }
     if let Some(slices) = meta["meta"].get("slices") {
-        d.slices = serde_json::from_value(slices.clone()).map_err(|_| "Invalid slice metadata")?;
+        let mut slices = slices.clone();
+        for slice in slices.as_array_mut().ok_or("Invalid slice metadata")? {
+            let keys = slice
+                .get_mut("keys")
+                .and_then(Value::as_array_mut)
+                .ok_or("Invalid slice metadata")?;
+            for key in keys {
+                for (field, coordinates) in [
+                    ("bounds", ["x", "y", "w", "h"].as_slice()),
+                    ("center", ["x", "y", "w", "h"].as_slice()),
+                    ("pivot", ["x", "y"].as_slice()),
+                ] {
+                    if let Some(value @ Value::Object(_)) = key.get_mut(field) {
+                        *value = Value::Array(
+                            coordinates
+                                .iter()
+                                .map(|coordinate| value[*coordinate].take())
+                                .collect(),
+                        );
+                    }
+                }
+            }
+        }
+        d.slices = serde_json::from_value(slices).map_err(|_| "Invalid slice metadata")?;
     }
     d.validate()?;
     Ok(d)
