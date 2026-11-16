@@ -36,16 +36,14 @@ fn unchanged_glass_floor_reflects_selected_layers_across_frames() {
     let floor = &reflected.layers[3];
     assert_eq!(floor.name, "Glass Floor");
     assert_eq!(floor.opacity, 128);
-    for frame in 0..2 {
+    assert_eq!(floor.cels.len(), 2);
+    for (frame, cel) in floor.cels.iter().enumerate() {
         // The combined artwork bounds end at y=3. Reflection in the
         // eight-pixel canvas followed by a two-pixel upward shift gives y'=5-y.
-        assert_eq!(
-            floor.cels[frame][4 * 6 + 1],
-            [255, 30 + frame as u8, 0, 255]
-        );
-        assert_eq!(floor.cels[frame][3 * 6 + 2], [0, 255, 0, 255]);
-        assert_eq!(floor.cels[frame][4 * 6 + 3], CLEAR);
-        assert_eq!(floor.cels[frame][7], CLEAR);
+        assert_eq!(cel[4 * 6 + 1], [255, 30 + frame as u8, 0, 255]);
+        assert_eq!(cel[3 * 6 + 2], [0, 255, 0, 255]);
+        assert_eq!(cel[4 * 6 + 3], CLEAR);
+        assert_eq!(cel[7], CLEAR);
     }
     assert_eq!(&reflected.layers[..3], &doc.layers);
 }
