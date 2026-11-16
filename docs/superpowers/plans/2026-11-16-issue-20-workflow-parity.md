@@ -79,6 +79,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 32 complete. Sprite-sheet filename and animation tag templates work in the editor, CLI, and file MCP, including layer/grid samples and named slice crops. Batch dry runs reject invalid or duplicate generated names. Tests cover numbered and stable frame tokens, nested tags, Godot resources, editor output, and preserved Unity importer identities for quoted names after redraw. Formatting, strict Clippy, and 496 Windows all-target tests passed.
 
+- Item 33 in progress. The editor, CLI, and file MCP support independent sheet border, shape, and inner padding, with compatibility for existing padding settings. Grid-aware trim uses document grid origins and spacing, clips expanded bounds at the canvas, and works with split and slice samples. The regression checks scaled pixels, extrusion, metadata, invalid padding, and restored artwork. Formatting, strict Clippy, and 497 Windows all-target tests passed. Layout variants and explicit sheet dimensions remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

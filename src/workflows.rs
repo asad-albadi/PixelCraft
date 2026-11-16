@@ -420,7 +420,11 @@ pub struct SheetOptions {
     pub scale: usize,
     pub columns: usize,
     pub padding: usize,
+    pub border_padding: Option<usize>,
+    pub shape_padding: Option<usize>,
+    pub inner_padding: usize,
     pub trim: bool,
+    pub trim_by_grid: bool,
     pub tag: Option<usize>,
     pub frame_range: Option<[usize; 2]>,
     pub layers: Option<Vec<usize>>,
@@ -436,7 +440,11 @@ impl Default for SheetOptions {
             scale: 1,
             columns: 8,
             padding: 1,
+            border_padding: None,
+            shape_padding: None,
+            inner_padding: 0,
             trim: false,
+            trim_by_grid: false,
             tag: None,
             frame_range: None,
             layers: None,
@@ -449,6 +457,10 @@ impl Default for SheetOptions {
     }
 }
 impl SheetOptions {
+    pub(crate) fn trims(&self) -> bool {
+        self.trim || self.trim_by_grid
+    }
+
     pub(crate) fn frames_for(&self, doc: &Document) -> Result<RangeInclusive<usize>, String> {
         let last = doc
             .durations
@@ -472,6 +484,43 @@ impl SheetOptions {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SheetSpacing {
+    border: usize,
+    gap: usize,
+    inner: usize,
+    extrude: usize,
+}
+
+impl SheetSpacing {
+    pub(crate) fn new(options: &SheetOptions, extrude: usize) -> Result<Self, String> {
+        let legacy = options.padding.min(256);
+        let spacing = Self {
+            border: options.border_padding.unwrap_or(legacy),
+            gap: options.shape_padding.unwrap_or(legacy),
+            inner: options.inner_padding,
+            extrude,
+        };
+        if [spacing.border, spacing.gap, spacing.inner, extrude]
+            .into_iter()
+            .any(|value| value > 256)
+        {
+            return Err("Sheet padding and extrusion must be 0–256 pixels".into());
+        }
+        Ok(spacing)
+    }
+
+    fn inset(self) -> usize {
+        self.inner + self.extrude
+    }
+
+    pub(crate) fn extent(self, sample_size: usize, samples: usize) -> usize {
+        2 * self.border
+            + samples * (sample_size + 2 * self.inset())
+            + samples.saturating_sub(1) * self.gap
+    }
+}
+
 pub fn pack_sheet(d: &Document, o: &SheetOptions) -> Result<(RgbaImage, Value), String> {
     pack_sheet_with_extrusion(d, o, 0)
 }
@@ -485,9 +534,7 @@ pub(crate) fn pack_sheet_with_extrusion(
     if o.scale == 0 || o.scale > MAX_DIMENSION {
         return Err("Scale must be a positive integer within image limits".into());
     }
-    if extrude > 256 {
-        return Err("Sprite extrusion must be 0–256 pixels".into());
-    }
+    let spacing = SheetSpacing::new(o, extrude)?;
     let range = o.frames_for(d)?;
     let sprite = filter_layers_for_export(d, o.layers.as_deref())?;
     let d = sprite.as_ref();
@@ -497,28 +544,36 @@ pub(crate) fn pack_sheet_with_extrusion(
     let (first_frame, last_frame) = (*range.start(), *range.end());
     let count = last_frame - first_frame + 1;
     let cols = o.columns.clamp(1, count);
-    let pad = o.padding.min(256);
-    if o.trim && count.saturating_mul(d.width * d.height) > MAX_DOCUMENT_PIXELS {
+    let inset = spacing.inset();
+    let trim = o.trims();
+    if trim && count.saturating_mul(d.width * d.height) > MAX_DOCUMENT_PIXELS {
         return Err("Trimming this sprite sheet exceeds the pixel work limit; use a tag".into());
     }
     let mut sprites = Vec::with_capacity(count);
-    let (mut x, mut y, mut row, mut width) = (pad, pad, 0, 0);
+    let (mut x, mut y, mut row, mut width) = (spacing.border, spacing.border, 0, 0);
     for (i, frame) in range.enumerate() {
         if i > 0 && i % cols == 0 {
-            x = pad;
-            y += row + pad;
+            x = spacing.border;
+            y += row + spacing.gap;
             row = 0;
         }
-        let b = if o.trim {
-            visible_bounds(&d.composite(frame), d.width, d.height)
+        let b = if trim {
+            visible_bounds(&d.composite(frame), d.width, d.height).map_or([0, 0, 1, 1], |bounds| {
+                if o.trim_by_grid {
+                    expand_bounds_to_grid(bounds, [d.width, d.height], d.drawing_grid())
+                } else {
+                    bounds
+                }
+            })
         } else {
             [0, 0, d.width, d.height]
         };
-        sprites.push((frame, (x + extrude, y + extrude), b));
-        x += b[2] + 2 * extrude + pad;
-        width = width.max(x);
-        row = row.max(b[3] + 2 * extrude);
-        let height = y + row + pad;
+        sprites.push((frame, (x + inset, y + inset), b));
+        let right = x + b[2] + 2 * inset;
+        width = width.max(right + spacing.border);
+        x = right + spacing.gap;
+        row = row.max(b[3] + 2 * inset);
+        let height = y + row + spacing.border;
         if width > MAX_DIMENSION
             || height > MAX_DIMENSION
             || width.saturating_mul(height) > MAX_PIXELS
@@ -527,7 +582,7 @@ pub(crate) fn pack_sheet_with_extrusion(
         }
         scaled_image_dimensions(width, height, o.scale)?;
     }
-    let height = y + row + pad;
+    let height = y + row + spacing.border;
     let mut im = RgbaImage::new(width as u32, height as u32);
     let mut frames = vec![];
     for &(f, (x, y), b) in &sprites {
@@ -544,7 +599,7 @@ pub(crate) fn pack_sheet_with_extrusion(
             }
         }
         let id = d.frame_export_id(f);
-        let mut entry = json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[f],"sourceFrame":f});
+        let mut entry = json!({"filename":format!("frame_{id}"),"frameId":id,"frame":{"x":x,"y":y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":d.width,"h":d.height},"duration":d.durations[f],"sourceFrame":f});
         if let Some(name) = d.frame_name(f) {
             entry["frameName"] = json!(name);
         }
@@ -613,14 +668,22 @@ pub(crate) fn pack_sheet_with_extrusion(
             })
         })
         .collect();
-    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":pad*scale,"frameTags":tags,"slices":slices,"nextFrameId":d.next_frame_export_id()}});
+    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","version":"1","image":"sprite.png","format":"RGBA8888","size":{"w":width*scale,"h":height*scale},"scale":scale.to_string(),"padding":spacing.gap*scale,"frameTags":tags,"slices":slices,"nextFrameId":d.next_frame_export_id()}});
+    if o.border_padding.is_some() || o.shape_padding.is_some() || spacing.inner != 0 {
+        metadata["meta"]["borderPadding"] = json!(spacing.border * scale);
+        metadata["meta"]["shapePadding"] = json!(spacing.gap * scale);
+        metadata["meta"]["innerPadding"] = json!(spacing.inner * scale);
+    }
+    if o.trim_by_grid {
+        metadata["meta"]["trimByGrid"] = json!(true);
+    }
     if extrude > 0 {
         metadata["meta"]["extrude"] = json!(extrude * scale);
     }
     Ok((im, metadata))
 }
 
-fn visible_bounds(pixels: &[Pixel], width: usize, height: usize) -> [usize; 4] {
+fn visible_bounds(pixels: &[Pixel], width: usize, height: usize) -> Option<[usize; 4]> {
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
     for (index, _) in pixels.iter().enumerate().filter(|(_, pixel)| pixel[3] > 0) {
         let (x, y) = (index % width, index / width);
@@ -629,12 +692,30 @@ fn visible_bounds(pixels: &[Pixel], width: usize, height: usize) -> [usize; 4] {
         right = right.max(x + 1);
         bottom = bottom.max(y + 1);
     }
-    if left < right && top < bottom {
-        [left, top, right - left, bottom - top]
-    } else {
-        [0, 0, 1, 1]
-    }
+    (left < right && top < bottom).then(|| [left, top, right - left, bottom - top])
 }
+
+fn expand_bounds_to_grid(
+    [x, y, width, height]: [usize; 4],
+    [canvas_width, canvas_height]: [usize; 2],
+    grid: DrawingGrid,
+) -> [usize; 4] {
+    let axis = |start, size, limit, origin: i32, step: u32| {
+        let (origin, step) = (i64::from(origin), i64::from(step));
+        let edge = |value: usize, round_up| {
+            let offset = value as i64 - origin;
+            let round = if round_up { step - 1 } else { 0 };
+            origin + (offset + round).div_euclid(step) * step
+        };
+        let first = edge(start, false).max(0) as usize;
+        let last = edge(start + size, true).min(limit as i64) as usize;
+        (first, last - first)
+    };
+    let (x, width) = axis(x, width, canvas_width, grid.origin[0], grid.size[0]);
+    let (y, height) = axis(y, height, canvas_height, grid.origin[1], grid.size[1]);
+    [x, y, width, height]
+}
+
 pub fn unpack_sheet(im: &RgbaImage, meta: &Value) -> Result<Document, String> {
     let entries = &meta["frames"];
     let count = match entries {

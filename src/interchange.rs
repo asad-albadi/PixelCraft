@@ -257,7 +257,7 @@ pub(crate) fn plan_slice_sheets<'a>(
     let mut record_budget = MAX_CEL_SLOTS;
     let mut label_budget = 32 * 1024 * 1024usize;
     let mut godot_budget = MAX_CEL_SLOTS;
-    let pad = o.padding.min(256);
+    let spacing = SheetSpacing::new(o, extrude)?;
     for (index, slice) in d.slices.iter().enumerate() {
         if target.is_some_and(|target| index != target) {
             continue;
@@ -319,12 +319,11 @@ pub(crate) fn plan_slice_sheets<'a>(
         } else {
             let columns = o.columns.clamp(1, count);
             let rows = count.div_ceil(columns);
-            let axis = |cell: usize, cells: usize| {
-                (pad + cells * (cell + 2 * extrude + pad)).saturating_mul(o.scale)
-            };
+            let axis =
+                |cell: usize, cells: usize| spacing.extent(cell, cells).saturating_mul(o.scale);
             let (atlas_width, atlas_height) = (axis(width, columns), axis(height, rows));
             let atlas_pixels = atlas_width.saturating_mul(atlas_height);
-            if !o.trim
+            if !o.trims()
                 && (atlas_width > MAX_DIMENSION
                     || atlas_height > MAX_DIMENSION
                     || atlas_pixels > MAX_PIXELS)
@@ -532,6 +531,7 @@ impl SliceSheet<'_> {
 
         let mut cropped = Document::new(width, height);
         cropped.durations = d.durations[self.first..=self.last].to_vec();
+        cropped.drawing_grid = d.drawing_grid;
         let frame_count = cropped.durations.len();
         cropped.layers[0]
             .cel_meta

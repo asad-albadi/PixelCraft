@@ -1942,13 +1942,36 @@ impl PixelCraft {
                             .range(1..=256)
                             .prefix("Columns "),
                     );
+                });
+                ui.horizontal(|ui| {
+                    let options = &mut self.studio.sheet;
+                    for (label, setting) in [
+                        ("Border ", &mut options.border_padding),
+                        ("Shape ", &mut options.shape_padding),
+                    ] {
+                        let mut value = setting.unwrap_or(options.padding);
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut value)
+                                    .range(0..=256)
+                                    .prefix(label),
+                            )
+                            .changed()
+                        {
+                            *setting = Some(value);
+                        }
+                    }
                     ui.add(
-                        egui::DragValue::new(&mut self.studio.sheet.padding)
+                        egui::DragValue::new(&mut options.inner_padding)
                             .range(0..=256)
-                            .prefix("Padding "),
+                            .prefix("Inner "),
                     );
                 });
                 ui.pc_checkbox(&mut self.studio.sheet.trim, "Trim transparent borders");
+                ui.pc_checkbox(
+                    &mut self.studio.sheet.trim_by_grid,
+                    "Align trim to drawing grid",
+                );
                 let tag = &mut self.studio.sheet.tag;
                 if tag.is_some_and(|index| index >= self.doc.tags.len()) {
                     *tag = None;

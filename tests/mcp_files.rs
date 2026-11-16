@@ -1051,7 +1051,7 @@ fn sheet_splits_layers_and_grid_cells_into_independent_animation_samples() {
     for (options, message) in [
         (
             json!({"split_grid":true,"extrude":4294967295u64}),
-            "scale or extrusion",
+            "extrusion",
         ),
         (json!({"split_grid":true,"scale":10000}), "image limits"),
     ] {
@@ -1191,6 +1191,96 @@ fn sheet_templates_keep_names_and_unity_reimport_ids_stable() {
             .unwrap()
             .contains("Ink_Loop_1_1")
     );
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn sprite_sheet_spacing_and_grid_trim_match_pixels_and_metadata() {
+    use pixelcraft::model::{CLEAR, DrawingGrid};
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let input = root.join("art.pixel");
+    let red = [220, 45, 30, 255];
+    let mut sprite = Document::new(2, 1);
+    sprite.add_frame(0, false);
+    sprite.set_pixel(0, 0, 0, red);
+    sprite.set_pixel(0, 1, 1, red);
+    formats::save(&input, &sprite).unwrap();
+    let export = |file, options: Value| {
+        let reply = workspace.call(
+            "export",
+            json!({
+                "input":"art.pixel","output":file,"format":"sheet","options":options,
+            }),
+        );
+        assert!(reply["isError"].is_null(), "{reply}");
+    };
+    export(
+        "spaced.png",
+        json!({
+            "scale":2,"columns":2,"padding":0,"border_padding":2,"shape_padding":3,
+            "inner_padding":1,"extrude":1
+        }),
+    );
+    let sheet = image::open(root.join("spaced.png")).unwrap().into_rgba8();
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(root.join("spaced.json")).unwrap()).unwrap();
+    assert_eq!(sheet.dimensions(), (38, 18));
+    assert_eq!(sheet.get_pixel(4, 8).0, CLEAR);
+    assert_eq!(sheet.get_pixel(6, 8).0, red);
+    assert_eq!(sheet.get_pixel(26, 8).0, CLEAR);
+    assert_eq!(sheet.get_pixel(28, 8).0, red);
+    assert_eq!(
+        metadata["frames"][0]["frame"],
+        json!({"x":8,"y":8,"w":4,"h":2})
+    );
+    assert_eq!(
+        metadata["frames"][1]["frame"],
+        json!({"x":26,"y":8,"w":4,"h":2})
+    );
+    assert_eq!(metadata["meta"]["borderPadding"], 4);
+    assert_eq!(metadata["meta"]["shapePadding"], 6);
+    assert_eq!(metadata["meta"]["innerPadding"], 2);
+    let reopened = formats::load(&root.join("spaced.json")).unwrap();
+    assert_eq!(
+        reopened.composite(0),
+        vec![red, red, CLEAR, CLEAR, red, red, CLEAR, CLEAR]
+    );
+
+    let reply = workspace.call(
+        "export",
+        json!({
+            "input":"art.pixel","output":"bad-spacing.png","format":"sheet",
+            "options":{"inner_padding":257}
+        }),
+    );
+    assert_error(&reply, "padding and extrusion");
+    assert!(!root.join("bad-spacing.png").exists());
+
+    let mut sprite = Document::new(7, 5);
+    sprite.drawing_grid = Some(DrawingGrid {
+        origin: [1, -1],
+        size: [3, 3],
+    });
+    sprite.add_frame(0, false);
+    sprite.set_pixel(0, 0, 3 * 7 + 5, red);
+    sprite.set_pixel(0, 1, 0, red);
+    formats::save(&input, &sprite).unwrap();
+    export("grid.png", json!({"trim_by_grid":true,"padding":0}));
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(root.join("grid.json")).unwrap()).unwrap();
+    assert_eq!(
+        metadata["frames"][0]["spriteSourceSize"],
+        json!({"x":4,"y":2,"w":3,"h":3})
+    );
+    assert_eq!(
+        metadata["frames"][1]["spriteSourceSize"],
+        json!({"x":0,"y":0,"w":1,"h":2})
+    );
+    let reopened = formats::load(&root.join("grid.json")).unwrap();
+    for frame in 0..2 {
+        assert_eq!(reopened.composite(frame), sprite.composite(frame));
+    }
 }
 
 #[cfg(any(target_os = "linux", windows))]

@@ -1,4 +1,4 @@
-use super::{SheetOptions, pack_sheet_with_extrusion, scaled_image_dimensions};
+use super::{SheetOptions, SheetSpacing, pack_sheet_with_extrusion, scaled_image_dimensions};
 use crate::model::*;
 use image::RgbaImage;
 use serde_json::{Value, json};
@@ -53,6 +53,14 @@ pub(crate) fn pack_split_sheet(
     )?;
     let tags = layout.tags(source, &frames);
     let mut projected = Document::new(layout.width, layout.height);
+    projected.drawing_grid = if options.split_grid {
+        Some(DrawingGrid {
+            origin: [0, 0],
+            size: [layout.width as u32, layout.height as u32],
+        })
+    } else {
+        source.drawing_grid
+    };
     projected.durations = frames
         .clone()
         .cycle()
@@ -220,13 +228,12 @@ impl SplitLayout {
             return Err("Split sprite sheet exceeds the animation metadata limit".into());
         }
         let packed_columns = options.columns.clamp(1, samples);
-        let padding = options.padding.min(256);
-        let axis = |size: usize, count: usize| padding + count * (size + 2 * extrude + padding);
+        let spacing = SheetSpacing::new(options, extrude)?;
         let (packed_width, packed_height) = (
-            axis(width, packed_columns),
-            axis(height, samples.div_ceil(packed_columns)),
+            spacing.extent(width, packed_columns),
+            spacing.extent(height, samples.div_ceil(packed_columns)),
         );
-        if !options.trim {
+        if !options.trims() {
             scaled_image_dimensions(packed_width, packed_height, options.scale)?;
         }
         let atlas_pixels = packed_width
