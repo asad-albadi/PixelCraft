@@ -1848,9 +1848,14 @@ if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::File
                 self.paint_at(p, color)
             }
         } else {
-            let points = self.studio.stroke.clone();
-            let start = points.iter().rposition(|p| *p == a).unwrap_or(0);
-            for &p in &points[start..] {
+            let start = self
+                .studio
+                .stroke
+                .iter()
+                .rposition(|p| *p == a)
+                .unwrap_or(0);
+            let points = self.studio.stroke[start..].to_vec();
+            for p in points {
                 self.paint_at(p, color)
             }
         }

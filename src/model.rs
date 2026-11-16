@@ -10,7 +10,7 @@ mod tile_operations;
 pub use cel_selection::CelSelection;
 pub use layer_conversion::LayerConversion;
 pub use layer_order::LayerDrop;
-pub use tile_operations::{TileDefinitionEdit, TileTransform};
+pub use tile_operations::{TileDefinitionEdit, TilePixelEdit, TileTransform};
 pub type Pixel = [u8; 4];
 pub const TILE_ID_MASK: u32 = 0x1fff_ffff;
 pub const CLEAR: Pixel = [0; 4];
@@ -3073,6 +3073,23 @@ impl Document {
         color: Pixel,
         variant: bool,
     ) -> Result<(), String> {
+        let mode = if variant {
+            TilePixelEdit::ReuseVariant
+        } else {
+            TilePixelEdit::Shared
+        };
+        self.paint_tile_pixel(layer, frame, cell, pixel, color, mode)
+    }
+
+    pub fn paint_tile_pixel(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        cell: (usize, usize),
+        pixel: (usize, usize),
+        color: Pixel,
+        mode: TilePixelEdit,
+    ) -> Result<(), String> {
         if !self.editable(layer) || frame >= self.durations.len() {
             return Err("Choose an unlocked tile cel".into());
         }
@@ -3098,7 +3115,7 @@ impl Document {
         if id > set.tiles.len() {
             return Err("Tile placement refers to a missing tile".into());
         }
-        if !variant && id != 0 {
+        if mode == TilePixelEdit::Shared && id != 0 {
             self.tilesets[tileset].tiles[id - 1].set(offset, color);
             return Ok(());
         }
@@ -3107,8 +3124,15 @@ impl Document {
         } else {
             set.tiles[id - 1].clone()
         };
+        if mode == TilePixelEdit::CreateVariant && artwork[offset] == color {
+            return Ok(());
+        }
         artwork.set(offset, color);
-        let existing = set.tiles.iter().position(|tile| *tile == artwork);
+        let existing = if mode == TilePixelEdit::CreateVariant {
+            None
+        } else {
+            set.tiles.iter().position(|tile| *tile == artwork)
+        };
         let new_id = if let Some(existing) = existing {
             existing + 1
         } else {
@@ -3123,7 +3147,7 @@ impl Document {
             self.tilesets[tileset].tiles.push(artwork);
             self.tilesets[tileset].tiles.len()
         };
-        self.layers[layer].tile_cels[frame][slot] = (placed & 0xe000_0000) | new_id as u32;
+        self.layers[layer].tile_cels[frame][slot] = (placed & !TILE_ID_MASK) | new_id as u32;
         self.layers[layer].cel_meta[frame].artwork_link = None;
         self.layers[layer].prune_cel_links();
         Ok(())

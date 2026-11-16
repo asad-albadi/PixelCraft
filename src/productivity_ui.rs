@@ -2594,7 +2594,7 @@ mod smarter_fill_tests {
         );
         app.undo();
         app.power.fill_global = true;
-        app.tile_pixel_mode = Some(false);
+        app.tile_pixel_mode = Some(TilePixelEdit::Shared);
         app.power_fill((0, 0), CLEAR);
         assert_eq!(app.doc.layers[1].tile_cels[0], vec![1, 1, flipped_tile, 1]);
         app.tile_pixel_mode = None;

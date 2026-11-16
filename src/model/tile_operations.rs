@@ -7,6 +7,14 @@ pub enum TileDefinitionEdit {
     MoveTo(u32),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TilePixelEdit {
+    Shared,
+    ReuseVariant,
+    CreateVariant,
+}
+
 const TILE_FLIP_X: u32 = 0x8000_0000;
 const TILE_FLIP_Y: u32 = 0x4000_0000;
 const TILE_TRANSPOSE: u32 = 0x2000_0000;
@@ -180,6 +188,53 @@ mod tests {
         doc.layers[2].tile_cels[1] = vec![2, 3, 1];
         doc.layers[3].tile_cels[1] = vec![1, 2, 3];
         doc
+    }
+
+    #[test]
+    fn new_variant_keeps_its_own_id_when_existing_artwork_matches() {
+        let mut doc = Document::new(4, 1);
+        let a = [10, 20, 30, 255];
+        let b = [40, 50, 60, 255];
+        doc.tilesets.push(Tileset {
+            name: "Variants".into(),
+            width: 2,
+            height: 1,
+            tiles: vec![vec![a, a].into(), vec![a, b].into()],
+        });
+        doc.add_tile_layer(0).unwrap();
+        doc.layers[1].tile_cels[0] = vec![0x8000_0001, 1];
+        doc.paint_tile_pixel(1, 0, (0, 0), (0, 0), a, TilePixelEdit::CreateVariant)
+            .unwrap();
+        assert_eq!(doc.tilesets[0].tiles.len(), 2);
+        doc.paint_tile_pixel(1, 0, (0, 0), (0, 0), b, TilePixelEdit::CreateVariant)
+            .unwrap();
+        assert_eq!(doc.layers[1].tile_cels[0], [0x8000_0003, 1]);
+        assert_eq!(doc.tilesets[0].tiles[1], doc.tilesets[0].tiles[2]);
+        doc.paint_tile_pixel(1, 0, (1, 0), (1, 0), b, TilePixelEdit::ReuseVariant)
+            .unwrap();
+        assert_eq!(doc.layers[1].tile_cels[0], [0x8000_0003, 2]);
+    }
+
+    #[test]
+    fn automation_accepts_explicit_variant_mode_and_legacy_boolean() {
+        let doc = tilemap();
+        let mut edit = serde_json::json!({
+            "op": "edit-tile-pixel", "layer": 1, "frame": 0,
+            "x": 0, "y": 0, "pixel_x": 0, "pixel_y": 0, "color": [10, 80, 90, 255],
+            "variant": true
+        });
+        let apply = |edit| {
+            crate::automation::apply_command_batch(&doc, &serde_json::json!({"commands": [edit]}))
+        };
+        let legacy = apply(edit.clone()).unwrap();
+        assert_eq!(legacy.tilesets[0].tiles.len(), 3);
+        assert_eq!(legacy.layers[1].tile_cels[0][0], 0x8000_0002);
+        edit["variant_mode"] = serde_json::json!("create-variant");
+        let fresh = apply(edit.clone()).unwrap();
+        assert_eq!(fresh.tilesets[0].tiles.len(), 4);
+        assert_eq!(fresh.layers[1].tile_cels[0][0], 0x8000_0004);
+        edit["variant_mode"] = serde_json::json!("invalid");
+        assert!(apply(edit).is_err());
     }
 
     #[test]

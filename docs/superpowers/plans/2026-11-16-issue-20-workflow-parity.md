@@ -47,6 +47,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 22 in progress. The tileset browser adds independent duplication, deletion, and ID reordering across shared layers and frames, plus brush flips, square-tile quarter turns, and a clipped tile-index overlay. Tests cover ASE round trips, transformed rendering, selection and Undo history, and overlay geometry. Formatting, strict Clippy, and 465 Windows all-target tests passed. Always-create variants remain open.
 
+- Item 22 complete. Always-create mode gives each changed tile placement its own variant for the whole pencil or eraser stroke. Fast drags interpolate missing samples. Direct MCP pixel edits can request the new mode and retain support for the legacy variant flag. Tests cover exact-match artwork, flips, one variant per placement, pointer input, and Undo. Formatting, strict Clippy, and 468 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -76,7 +78,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **19. Duplicate and merge layers.** Duplicate complete layers and group trees across frames and merge layers down with correct blending and opacity.
 - [x] **20. Expand layer organization.** Add flatten all or visible, layer via copy or cut, compatible layer type conversions, and collapsible groups.
 - [x] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
-- [ ] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.
+- [x] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.
 - [ ] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.
 - [ ] **24. Expand playback and onion skin controls.** Add selected-range playback, play once, subtags, rewind on stop, and draggable onion ranges.
 - [ ] **25. Add an Undo History panel.** Inspect entries and jump to a point in the active document’s history.

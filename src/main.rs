@@ -389,7 +389,7 @@ struct PixelCraft {
     palette_index: usize,
     tile_size: usize,
     selected_tile: u32,
-    tile_pixel_mode: Option<bool>,
+    tile_pixel_mode: Option<TilePixelEdit>,
     active_tag: Option<usize>,
     tag_name: String,
     playback_reverse: bool,
@@ -898,23 +898,30 @@ impl PixelCraft {
         self.doc.drawing_index = self.drawing_palette_index(color);
         if let Some(ti) = self.doc.layers[self.layer].tileset {
             let t = &self.doc.tilesets[ti];
-            let (ox, oy) = self.doc.layers[self.layer].cel_meta[self.frame]
-                .tilemap
-                .as_ref()
-                .map_or((0, 0), |g| (g.x, g.y));
-            if p.0 < ox || p.1 < oy {
+            let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
                 self.status = "Point is outside this tilemap cel".into();
+                self.doc.drawing_index = None;
                 return;
-            }
-            let (x, y) = (
-                (p.0 - ox) as usize / t.width,
-                (p.1 - oy) as usize / t.height,
-            );
-            if let Some(variant) = self.tile_pixel_mode {
+            };
+            if let Some(mut mode) = self.tile_pixel_mode {
                 let pixel = (
-                    (p.0 - ox) as usize % t.width,
-                    (p.1 - oy) as usize % t.height,
+                    (i64::from(p.0) - i64::from(geometry.x)) as usize % t.width,
+                    (i64::from(p.1) - i64::from(geometry.y)) as usize % t.height,
                 );
+                if mode == TilePixelEdit::CreateVariant
+                    && let Some(before_stroke) = self
+                        .stroke_base
+                        .as_ref()
+                        .and_then(|doc| doc.tilesets.get(ti))
+                {
+                    // This stroke owns the fresh IDs it appended. Keep editing
+                    // the placement's new tile until the pointer is released.
+                    let cel = &self.doc.layers[self.layer].tile_cels[self.frame];
+                    let id = (cel[y * geometry.columns + x] & TILE_ID_MASK) as usize;
+                    if id > before_stroke.tiles.len() {
+                        mode = TilePixelEdit::Shared;
+                    }
+                }
                 let color = if self.tool == Tool::Eraser {
                     CLEAR
                 } else {
@@ -922,7 +929,7 @@ impl PixelCraft {
                 };
                 if let Err(error) =
                     self.doc
-                        .edit_tile_pixel(self.layer, self.frame, (x, y), pixel, color, variant)
+                        .paint_tile_pixel(self.layer, self.frame, (x, y), pixel, color, mode)
                 {
                     self.status = error;
                 }
@@ -1387,8 +1394,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }});}
             ui.horizontal_wrapped(|ui| {
                 ui.pc_selectable_value(&mut self.tile_pixel_mode, None, "Place tiles");
-                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(false), "Edit shared tile pixels");
-                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(true), "Edit placement variant");
+                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(TilePixelEdit::Shared), "Edit shared tile pixels");
+                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(TilePixelEdit::ReuseVariant), "Reuse placement variant");
+                ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(TilePixelEdit::CreateVariant), "Always create variant")
+                    .on_hover_text("Create one independent tile for each changed placement in a stroke");
             });
             self.slice_controls(ui, &mut edited);
             ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
@@ -4590,7 +4599,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         } else {
                             self.stroke_color
                         };
-                        if self.doc.layers[self.layer].tileset.is_some() {
+                        if self.doc.layers[self.layer].tileset.is_some()
+                            && self.tile_pixel_mode != Some(TilePixelEdit::CreateVariant)
+                        {
                             self.paint_at(b, color);
                         } else {
                             self.stroke_line(self.last.unwrap_or(a), b, color);
@@ -6901,6 +6912,64 @@ mod tests {
         assert_eq!(app.preview.as_ref().unwrap().id(), detached);
         assert_eq!(app.frame_texture_order.len(), 1);
     }
+    #[test]
+    fn always_create_tile_brush_uses_one_variant_per_placement_in_a_stroke() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(4, 1), None);
+        a.zoom = 32.;
+        let old = [10, 20, 30, 255];
+        let paint = [40, 50, 60, 255];
+        a.doc.tilesets.push(Tileset {
+            name: "Variants".into(),
+            width: 2,
+            height: 1,
+            tiles: vec![vec![old, old].into(), vec![paint, paint].into()],
+        });
+        a.doc.add_tile_layer(0).unwrap();
+        a.layer = 1;
+        a.doc.layers[1].tile_cels[0] = vec![1, 1];
+        a.tile_pixel_mode = Some(TilePixelEdit::CreateVariant);
+        a.fg = paint;
+        let draw = |a: &mut PixelCraft, events| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| a.canvas(ui));
+            });
+            output.textures_delta.clear();
+        };
+        draw(&mut a, vec![]);
+        let from = Pos2::new(252., 300.);
+        let to = Pos2::new(348., 300.);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        draw(
+            &mut a,
+            vec![egui::Event::PointerMoved(from), button(from, true)],
+        );
+        draw(&mut a, vec![egui::Event::PointerMoved(to)]);
+        draw(&mut a, vec![egui::Event::PointerMoved(from)]);
+        draw(&mut a, vec![button(from, false)]);
+        assert_eq!(a.doc.layers[1].tile_cels[0], [3, 4]);
+        assert_eq!(a.doc.tilesets[0].tiles.len(), 4);
+        assert_eq!(a.doc.tilesets[0].tiles[2], a.doc.tilesets[0].tiles[1]);
+        assert_eq!(a.doc.tilesets[0].tiles[3], a.doc.tilesets[0].tiles[1]);
+        assert_eq!(a.undo.len(), 1);
+        a.undo();
+        assert_eq!(a.doc.layers[1].tile_cels[0], [1, 1]);
+        assert_eq!(a.doc.tilesets[0].tiles.len(), 2);
+    }
+
     #[test]
     fn tileset_editor_reorders_duplicates_and_deletes_with_brush_history() {
         let mut editor = app();

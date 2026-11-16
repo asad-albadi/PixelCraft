@@ -308,13 +308,21 @@ pub fn apply_command_batch_until(
             "edit-tile-pixel" => {
                 let color =
                     serde_json::from_value(c["color"].clone()).map_err(|_| "Invalid RGBA color")?;
-                out.edit_tile_pixel(
+                let mode = if let Some(value) = c.get("variant_mode") {
+                    serde_json::from_value(value.clone())
+                        .map_err(|_| "Invalid tile variant mode")?
+                } else if c["variant"].as_bool().unwrap_or(false) {
+                    crate::model::TilePixelEdit::ReuseVariant
+                } else {
+                    crate::model::TilePixelEdit::Shared
+                };
+                out.paint_tile_pixel(
                     layer()?,
                     frame()?,
                     (number(c, "x")?, number(c, "y")?),
                     (number(c, "pixel_x")?, number(c, "pixel_y")?),
                     color,
-                    c["variant"].as_bool().unwrap_or(false),
+                    mode,
                 )?;
             }
             "set-slice" => {
