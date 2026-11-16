@@ -97,6 +97,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 in progress. PSD and PSB import now opens common 8-bit RGB and grayscale files with editable raster layers, group hierarchy, Unicode names, opacity, blend modes, and raster masks. The decoder supports raw, PackBits, ZIP, and byte prediction, and bounds nested sections before reading channels. Tests cover both versions, raw grayscale composite fallback, mixing compression methods, proper mask density, and truncated files. Six external group/mask fixtures matched the merged image exactly or within one channel value. Formatting, strict Clippy, and 506 Windows all-target tests passed. The remaining Photoshop import work includes higher channel depths and layer features beyond the raster model.
 
+- Item 35 high-depth checkpoint. PSD and PSB now import 16-bit integer and 32-bit float RGB and grayscale channels, including layers stored in `Lr16` and `Lr32` blocks. The importer converts float color to sRGB while retaining linear alpha and mask coverage. Visible fills without raster data use the embedded composite when present and preserve the layer stack in a hidden group. Tests cover tagged-layer ZIP prediction and the unrasterized fill fallback. Six external high-depth fixtures rendered within one 8-bit channel value for the four small raster fixtures and within five values for the two shape fixtures. Formatting, strict Clippy, and 508 Windows all-target tests passed. Indexed Photoshop files and additional Photoshop-specific layer and color profile behavior remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

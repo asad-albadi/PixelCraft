@@ -2054,6 +2054,106 @@ fn photoshop_psd_and_psb_import_editable_layers_masks_and_groups() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn photoshop_high_depth_tagged_layers_convert_samples_and_remain_editable() {
+    use std::io::Write;
+    fn integer(out: &mut Vec<u8>, size: usize, wide: bool) {
+        if wide {
+            out.extend_from_slice(&(size as u64).to_be_bytes());
+        } else {
+            out.extend_from_slice(&(size as u32).to_be_bytes());
+        }
+    }
+    let w = Workspace::new();
+    for (depth, large, tag) in [(16u16, false, b"Lr16"), (32, true, b"Lr32")] {
+        let mut zip = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        // .25 then .75, as predicted words or shuffled float bytes.
+        let bytes: &[u8] = if depth == 16 {
+            &[0x40, 0, 0x80, 0]
+        } else {
+            &[0x3e, 1, 0x41, 0xc0, 0xc0, 0, 0, 0]
+        };
+        zip.write_all(bytes).unwrap();
+        let mut channel = 3u16.to_be_bytes().to_vec();
+        channel.extend(zip.finish().unwrap());
+        let mut layer = 1i16.to_be_bytes().to_vec();
+        for word in [0, 0, 1, 2] {
+            integer(&mut layer, word, false);
+        }
+        layer.extend_from_slice(&[0, 1, 0, 0]);
+        integer(&mut layer, channel.len(), large);
+        layer.extend_from_slice(b"8BIMnorm");
+        layer.extend_from_slice(&[255, 0, 0, 0]);
+        integer(&mut layer, 16, false);
+        layer.extend_from_slice(&[0; 8]);
+        layer.extend_from_slice(b"\x04Tone\0\0\0");
+        layer.extend(channel);
+        let mut section = vec![0; if large { 12 } else { 8 }];
+        section.extend_from_slice(b"8BIM");
+        section.extend_from_slice(tag);
+        integer(&mut section, layer.len(), large);
+        section.extend(layer);
+        section.resize(section.len().next_multiple_of(4), 0);
+        let mut src = b"8BPS".to_vec();
+        src.extend_from_slice(&(if large { 2u16 } else { 1 }).to_be_bytes());
+        src.extend_from_slice(&[0; 6]);
+        src.extend_from_slice(&[0, 1]);
+        integer(&mut src, 1, false);
+        integer(&mut src, 2, false);
+        src.extend_from_slice(&depth.to_be_bytes());
+        src.extend_from_slice(&[0, 1]);
+        src.extend_from_slice(&[0; 8]);
+        integer(&mut src, section.len(), large);
+        src.extend(section);
+        let name = if large { "hdr.psb" } else { "hdr.psd" };
+        fs::write(w.project().join(name), src).unwrap();
+        let loaded = formats::load(&w.project().join(name)).unwrap();
+        assert_eq!(loaded.layers[0].name, "Tone");
+        let [low, high] = if depth == 16 { [64, 191] } else { [137, 225] };
+        assert_eq!(
+            loaded.composite(0),
+            [[low, low, low, 255], [high, high, high, 255]]
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn photoshop_unrasterized_fill_uses_merged_preview_and_retains_source_layers() {
+    let w = Workspace::new();
+    let mut layer = 1i16.to_be_bytes().to_vec();
+    layer.extend_from_slice(&[0; 16]); // Shape bounds are stored outside its raster record.
+    layer.extend_from_slice(&0u16.to_be_bytes());
+    layer.extend_from_slice(b"8BIMnorm");
+    layer.extend_from_slice(&[255, 0, 0, 0]);
+    let mut extra = vec![0; 8];
+    extra.extend_from_slice(b"\x05Shape\0\0");
+    extra.extend_from_slice(b"8BIMSoCo\0\0\0\x04\0\0\0\x10");
+    layer.extend_from_slice(&(extra.len() as u32).to_be_bytes());
+    layer.extend(extra);
+    let mut src = b"8BPS\0\x01".to_vec();
+    src.extend_from_slice(&[0; 6]);
+    src.extend_from_slice(b"\0\x03\0\0\0\x01\0\0\0\x01\0\x08\0\x03");
+    src.extend_from_slice(&[0; 8]);
+    src.extend_from_slice(&(layer.len() as u32 + 8).to_be_bytes());
+    src.extend_from_slice(&(layer.len() as u32).to_be_bytes());
+    src.extend(layer);
+    src.extend_from_slice(&[0; 4]);
+    src.extend_from_slice(b"\0\0\x40\x60\x80");
+    let path = w.project().join("shape.psd");
+    fs::write(&path, src).unwrap();
+
+    let loaded = formats::load(&path).unwrap();
+    assert_eq!(loaded.composite(0), [[64, 96, 128, 255]]);
+    assert_eq!(loaded.layers.len(), 3);
+    assert_eq!(loaded.layers[0].name, "Shape");
+    assert_eq!(loaded.layers[0].parent, Some(1));
+    assert!(loaded.layers[1].group);
+    assert!(!loaded.layers[1].visible);
+    assert_eq!(loaded.layers[2].name, "Photoshop merged preview");
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

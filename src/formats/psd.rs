@@ -26,12 +26,17 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     let channels = usize::from(input.u16()?);
     let height = input.u32()? as usize;
     let width = input.u32()? as usize;
-    let depth = input.u16()?;
+    let depth = SampleDepth::parse(input.u16()?)?;
     let mode = input.u16()?;
-    if depth != 8 || !matches!(mode, 1 | 3) {
-        return Err("Photoshop import currently supports 8-bit RGB and grayscale documents".into());
+    if !matches!(mode, 1 | 3) {
+        return Err("Photoshop import supports RGB and grayscale documents".into());
     }
     let colors = if mode == 3 { 3 } else { 1 };
+    let encoding = ChannelEncoding {
+        large,
+        depth,
+        color_planes: colors,
+    };
     if channels < colors
         || channels > 56
         || width == 0
@@ -51,36 +56,67 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     if colors == 1 {
         doc.color_mode = ColorMode::Grayscale;
     }
-    if section > 0 {
-        let decoded = input.section(section, |input| {
-            let layer_info = input.length(large)?;
-            if layer_info == 0 {
-                return Ok(false);
-            }
-            input.section(layer_info, |input| {
-                read_layers(input, &mut doc, colors, large)
-            })
-        })?;
-        if decoded {
-            doc.validate()?;
-            return Ok(doc);
+    let layers = if section > 0 {
+        input.section(section, |input| {
+            read_layer_section(input, &mut doc, colors, encoding)
+        })?
+    } else {
+        ImportedLayers::None
+    };
+    match layers {
+        ImportedLayers::Editable => {}
+        ImportedLayers::None => {
+            doc.layers[0].cels[0] =
+                decode_merged(&mut input, [width, height], colors, channels, encoding)?;
         }
+        ImportedLayers::NeedsPreview if input.end - input.position >= 2 => {
+            let pixels = decode_merged(&mut input, [width, height], colors, channels, encoding)?;
+            let group_index = doc.layers.len();
+            for layer in &mut doc.layers {
+                if layer.parent.is_none() {
+                    layer.parent = Some(group_index);
+                }
+            }
+            let mut group = Layer::new("Editable Photoshop layers".into(), width, height, 1);
+            group.group = true;
+            group.visible = false;
+            doc.layers.push(group);
+            let mut preview = Layer::new("Photoshop merged preview".into(), width, height, 1);
+            preview.cels[0] = pixels;
+            doc.layers.push(preview);
+        }
+        ImportedLayers::NeedsPreview => {}
     }
+    doc.validate()?;
+    Ok(doc)
+}
+
+fn decode_merged(
+    input: &mut Input,
+    [width, height]: [usize; 2],
+    colors: usize,
+    channels: usize,
+    encoding: ChannelEncoding,
+) -> Result<Pixels, String> {
     let compression = input.u16()?;
-    let included = channels.min(colors + 1);
     let planes = decode_planes(
-        &mut input,
+        input,
         compression,
         [width, height],
         channels,
-        included,
-        large,
+        channels.min(colors + 1),
+        encoding,
     )?;
-    doc.layers[0].cels[0] = (0..width * height)
+    Ok((0..width * height)
         .map(|i| color_at(&planes, colors, i))
-        .collect();
-    doc.validate()?;
-    Ok(doc)
+        .collect())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ImportedLayers {
+    None,
+    Editable,
+    NeedsPreview,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,6 +203,7 @@ struct Record {
     opacity: u8,
     blend: BlendMode,
     mask: Option<Mask>,
+    has_fill: bool,
 }
 
 impl Record {
@@ -185,7 +222,7 @@ impl Record {
         let blend = blend_mode(input.array()?);
         let [opacity, _, flags, _] = input.array::<4>()?;
         let length = input.length(false)?;
-        let (mask, name, group) = input.section(length, |input| {
+        let (mask, name, group, has_fill) = input.section(length, |input| {
             let mask_length = input.length(false)?;
             let mask = if mask_length > 0 {
                 Some(input.section(mask_length, Mask::read)?)
@@ -200,33 +237,8 @@ impl Record {
             input.skip(((length + 1).next_multiple_of(4) - length - 1) as u64)?;
             let mut name = String::from_utf8_lossy(&name).into_owned();
             let mut group = 0;
-            while input.end.saturating_sub(input.position) >= 12 {
-                let signature = input.array::<4>()?;
-                if signature == [0; 4] {
-                    break;
-                }
-                if !matches!(&signature, b"8BIM" | b"8B64") {
-                    return Err("Invalid Photoshop tagged block signature".into());
-                }
-                let key = input.array::<4>()?;
-                let wide = large
-                    && matches!(
-                        &key,
-                        b"LMsk"
-                            | b"Lr16"
-                            | b"Lr32"
-                            | b"Layr"
-                            | b"Mt16"
-                            | b"Mt32"
-                            | b"Mtrn"
-                            | b"Alph"
-                            | b"FMsk"
-                            | b"lnk2"
-                            | b"FEid"
-                            | b"FXid"
-                            | b"PxSD"
-                    );
-                let length = input.length(wide)?;
+            let mut has_fill = false;
+            while let Some((key, length)) = input.tagged_header(large)? {
                 input.section(length, |input| {
                     match &key {
                         b"luni" => {
@@ -242,6 +254,7 @@ impl Record {
                                 .to_owned();
                         }
                         b"lsct" | b"lsdk" => group = input.u32()?,
+                        b"SoCo" | b"GdFl" | b"PtFl" => has_fill = true,
                         _ => {}
                     }
                     Ok(())
@@ -250,7 +263,7 @@ impl Record {
                     input.skip(1)?;
                 }
             }
-            Ok((mask, name, group))
+            Ok((mask, name, group, has_fill))
         })?;
         Ok(Self {
             bounds,
@@ -261,22 +274,68 @@ impl Record {
             opacity,
             blend,
             mask,
+            has_fill,
         })
     }
+}
+
+fn read_layer_section(
+    input: &mut Input,
+    doc: &mut Document,
+    colors: usize,
+    encoding: ChannelEncoding,
+) -> Result<ImportedLayers, String> {
+    let length = input.length(encoding.large)?;
+    let start = input.position;
+    if encoding.depth == SampleDepth::Byte && length != 0 {
+        let decoded = input.section(length, |input| read_layers(input, doc, colors, encoding))?;
+        if decoded != ImportedLayers::None {
+            return Ok(decoded);
+        }
+    } else {
+        input.skip(length)?;
+    }
+    if input.end - input.position >= 4 {
+        let mask_len = input.length(false)?;
+        input.skip(mask_len)?;
+        let wanted = match encoding.depth {
+            SampleDepth::Byte => b"Layr",
+            SampleDepth::Word => b"Lr16",
+            SampleDepth::Float => b"Lr32",
+        };
+        while let Some((key, length)) = input.tagged_header(encoding.large)? {
+            if &key == wanted {
+                let decoded =
+                    input.section(length, |input| read_layers(input, doc, colors, encoding))?;
+                if decoded != ImportedLayers::None {
+                    return Ok(decoded);
+                }
+            } else {
+                input.skip(length)?;
+            }
+            let padding = (4 - length % 4) % 4;
+            input.skip(padding.min(input.end - input.position))?;
+        }
+    }
+    if encoding.depth != SampleDepth::Byte && length != 0 {
+        input.seek_to(start)?;
+        return input.section(length, |input| read_layers(input, doc, colors, encoding));
+    }
+    Ok(ImportedLayers::None)
 }
 
 fn read_layers(
     input: &mut Input,
     doc: &mut Document,
     colors: usize,
-    large: bool,
-) -> Result<bool, String> {
+    encoding: ChannelEncoding,
+) -> Result<ImportedLayers, String> {
     let count = input.i16()?.unsigned_abs() as usize;
     if count == 0 {
-        return Ok(false);
+        return Ok(ImportedLayers::None);
     }
     let records = (0..count)
-        .map(|_| Record::read(input, large))
+        .map(|_| Record::read(input, encoding.large))
         .collect::<Result<Vec<_>, _>>()?;
     let mut index_map = vec![None; count];
     let mut retained = 0;
@@ -304,7 +363,7 @@ fn read_layers(
         )
     });
     if retained == 0 {
-        return Ok(false);
+        return Ok(ImportedLayers::None);
     }
     if area.saturating_mul(retained + masks) > MAX_DOCUMENT_PIXELS
         || channel_work > MAX_DOCUMENT_PIXELS * 4
@@ -313,13 +372,15 @@ fn read_layers(
     }
     let mut parents = vec![None; count];
     let mut groups = Vec::new();
+    let mut visible = vec![false; count];
     for (i, record) in records.iter().enumerate().rev() {
         if record.group == 3 {
             groups.pop().ok_or("Unbalanced Photoshop layer groups")?;
         } else {
-            parents[i] = groups.last().copied();
+            parents[i] = groups.last().map(|&(index, _)| index);
+            visible[i] = record.visible && groups.last().is_none_or(|&(_, visible)| visible);
             if matches!(record.group, 1 | 2) {
-                groups.push(index_map[i].unwrap());
+                groups.push((index_map[i].unwrap(), visible[i]));
             }
         }
     }
@@ -328,7 +389,8 @@ fn read_layers(
     }
 
     doc.layers.clear();
-    for (record, parent) in records.into_iter().zip(parents) {
+    let mut needs_preview = false;
+    for ((record, parent), visible) in records.into_iter().zip(parents).zip(visible) {
         let mut layer = Layer::new(record.name, doc.width, doc.height, 1);
         layer.parent = parent;
         layer.group = matches!(record.group, 1 | 2);
@@ -339,7 +401,7 @@ fn read_layers(
         let mut mask_pixels = None;
         for &(id, length) in &record.channels {
             input.section(length, |input| {
-                if record.group == 3 || length == 0 {
+                if record.group == 3 || length <= 2 {
                     return Ok(());
                 }
                 let (size, target) = match id {
@@ -357,7 +419,11 @@ fn read_layers(
                     return Ok(());
                 }
                 let compression = input.u16()?;
-                let plane = decode_planes(input, compression, size, 1, 1, large)?
+                let encoding = ChannelEncoding {
+                    color_planes: usize::from(target.is_some_and(|index| index < colors)),
+                    ..encoding
+                };
+                let plane = decode_planes(input, compression, size, 1, 1, encoding)?
                     .pop()
                     .unwrap();
                 if let Some(index) = target {
@@ -380,7 +446,15 @@ fn read_layers(
                     .collect(),
             );
         }
-        if !layer.group && planes[..colors].iter().all(|plane| !plane.is_empty()) {
+        let raster = planes[..colors].iter().all(|plane| !plane.is_empty());
+        if !layer.group
+            && visible
+            && !raster
+            && (record.has_fill || !record.bounds.size().contains(&0))
+        {
+            needs_preview = true;
+        }
+        if !layer.group && raster {
             let bounds = record.bounds;
             for y in 0..bounds.height {
                 for x in 0..bounds.width {
@@ -404,7 +478,11 @@ fn read_layers(
         }
         doc.layers.push(layer);
     }
-    Ok(true)
+    Ok(if needs_preview {
+        ImportedLayers::NeedsPreview
+    } else {
+        ImportedLayers::Editable
+    })
 }
 
 fn color_at(planes: &[Vec<u8>], colors: usize, index: usize) -> Pixel {
@@ -446,30 +524,143 @@ fn blend_mode(key: [u8; 4]) -> BlendMode {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ChannelEncoding {
+    large: bool,
+    depth: SampleDepth,
+    color_planes: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SampleDepth {
+    Byte,
+    Word,
+    Float,
+}
+
+impl SampleDepth {
+    fn parse(value: u16) -> Result<Self, String> {
+        match value {
+            8 => Ok(Self::Byte),
+            16 => Ok(Self::Word),
+            32 => Ok(Self::Float),
+            _ => Err("Unsupported Photoshop channel depth".into()),
+        }
+    }
+
+    fn bytes(self) -> usize {
+        match self {
+            Self::Byte => 1,
+            Self::Word => 2,
+            Self::Float => 4,
+        }
+    }
+
+    fn append_row(
+        self,
+        row: &mut [u8],
+        width: usize,
+        predict: bool,
+        color: bool,
+        out: &mut Vec<u8>,
+    ) {
+        let sum_bytes = |row: &mut [u8]| {
+            for i in 1..row.len() {
+                row[i] = row[i].wrapping_add(row[i - 1]);
+            }
+        };
+        match self {
+            Self::Byte => {
+                if predict {
+                    sum_bytes(row);
+                }
+                out.extend_from_slice(row);
+            }
+            Self::Word => {
+                let mut last = 0u16;
+                for sample in row.chunks_exact(2) {
+                    let mut value = u16::from_be_bytes(sample.try_into().unwrap());
+                    if predict {
+                        value = last.wrapping_add(value);
+                    }
+                    last = value;
+                    out.push(((u32::from(value) * 255 + 32767) / 65535) as u8);
+                }
+            }
+            Self::Float => {
+                let to_byte = |bytes| {
+                    let mut value = f32::from_be_bytes(bytes).clamp(0., 1.);
+                    if color {
+                        value = if value <= 0.003_130_8 {
+                            12.92 * value
+                        } else {
+                            1.055 * value.powf(1. / 2.4) - 0.055
+                        };
+                    }
+                    (value * 255.0).round() as u8
+                };
+                if predict {
+                    sum_bytes(row);
+                    for x in 0..width {
+                        out.push(to_byte([
+                            row[x],
+                            row[x + width],
+                            row[x + 2 * width],
+                            row[x + 3 * width],
+                        ]));
+                    }
+                } else {
+                    out.extend(
+                        row.chunks_exact(4)
+                            .map(|sample| to_byte(sample.try_into().unwrap())),
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn decode_planes(
     input: &mut Input,
     compression: u16,
     [width, height]: [usize; 2],
     count: usize,
     included: usize,
-    large: bool,
+    encoding: ChannelEncoding,
 ) -> Result<Vec<Vec<u8>>, String> {
     let area = width * height;
+    let mut row = vec![0; width * encoding.depth.bytes()];
+    let mut read_plane =
+        |plane_index, read_row: &mut dyn FnMut(&mut [u8]) -> Result<(), String>| {
+            let mut plane = Vec::with_capacity(area);
+            for _ in 0..height {
+                read_row(&mut row)?;
+                encoding.depth.append_row(
+                    &mut row,
+                    width,
+                    compression == 3,
+                    plane_index < encoding.color_planes,
+                    &mut plane,
+                );
+            }
+            Ok::<_, String>(plane)
+        };
     let mut planes = Vec::with_capacity(included);
     match compression {
         0 => {
-            input.end_for((area as u64) * (count as u64))?;
-            for _ in 0..included {
-                let mut data = vec![0; area];
-                input.read_exact(&mut data).map_err(io_text)?;
-                planes.push(data);
+            let bytes = (area as u64) * (encoding.depth.bytes() as u64);
+            input.end_for(bytes * count as u64)?;
+            for index in 0..included {
+                planes.push(read_plane(index, &mut |row| {
+                    input.read_exact(row).map_err(io_text)
+                })?);
             }
-            input.skip(((count - included) * area) as u64)?;
+            input.skip(bytes * (count - included) as u64)?;
         }
         1 => {
             let sizes = (0..count * height)
                 .map(|_| {
-                    if large {
+                    if encoding.large {
                         input.u32()
                     } else {
                         input.u16().map(u32::from)
@@ -480,28 +671,22 @@ fn decode_planes(
             for (index, rows) in sizes.chunks_exact(height).enumerate() {
                 if index >= included {
                     input.skip(rows.iter().map(|&size| u64::from(size)).sum())?;
-                    continue;
+                } else {
+                    let mut sizes = rows.iter().copied();
+                    planes.push(read_plane(index, &mut |row| {
+                        input.section(u64::from(sizes.next().unwrap()), |input| {
+                            unpack_row(input, row)
+                        })
+                    })?);
                 }
-                let mut data = vec![0; area];
-                for (row, &size) in data.chunks_exact_mut(width).zip(rows) {
-                    input.section(u64::from(size), |input| unpack_row(input, row))?;
-                }
-                planes.push(data);
             }
         }
         2 | 3 => {
             let mut zip = ZlibDecoder::new(input);
-            for _ in 0..included {
-                let mut data = vec![0; area];
-                zip.read_exact(&mut data).map_err(io_text)?;
-                if compression == 3 {
-                    for row in data.chunks_exact_mut(width) {
-                        for i in 1..row.len() {
-                            row[i] = row[i].wrapping_add(row[i - 1]);
-                        }
-                    }
-                }
-                planes.push(data);
+            for index in 0..included {
+                planes.push(read_plane(index, &mut |row| {
+                    zip.read_exact(row).map_err(io_text)
+                })?);
             }
         }
         _ => return Err("Unsupported Photoshop channel compression".into()),
@@ -563,6 +748,45 @@ impl Input {
         } else {
             self.u32().map(u64::from)
         }
+    }
+    fn tagged_header(&mut self, large: bool) -> Result<Option<([u8; 4], u64)>, String> {
+        if self.end - self.position < 12 {
+            return Ok(None);
+        }
+        let signature = self.array::<4>()?;
+        if signature == [0; 4] {
+            return Ok(None);
+        }
+        if !matches!(&signature, b"8BIM" | b"8B64") {
+            return Err("Invalid Photoshop tagged block signature".into());
+        }
+        let key = self.array::<4>()?;
+        let wide = large
+            && matches!(
+                &key,
+                b"LMsk"
+                    | b"Lr16"
+                    | b"Lr32"
+                    | b"Layr"
+                    | b"Mt16"
+                    | b"Mt32"
+                    | b"Mtrn"
+                    | b"Alph"
+                    | b"FMsk"
+                    | b"lnk2"
+                    | b"FEid"
+                    | b"FXid"
+                    | b"PxSD"
+            );
+        Ok(Some((key, self.length(wide)?)))
+    }
+    fn seek_to(&mut self, position: u64) -> Result<(), String> {
+        if position > self.end {
+            return Err("Photoshop seek exceeds the current section".into());
+        }
+        self.file.seek(SeekFrom::Start(position)).map_err(io_text)?;
+        self.position = position;
+        Ok(())
     }
     fn end_for(&self, length: u64) -> Result<u64, String> {
         self.position
