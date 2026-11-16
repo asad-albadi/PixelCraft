@@ -8,6 +8,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod tileset_atlas;
+pub use tileset_atlas::{TilesetAtlasEntry, TilesetAtlasLayout, TilesetAtlasScope, tileset_atlas};
+
 pub fn from_frames(
     frames: impl Iterator<Item = Result<image::Frame, image::ImageError>>,
 ) -> Result<Document, String> {

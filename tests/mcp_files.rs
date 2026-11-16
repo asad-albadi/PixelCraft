@@ -413,6 +413,38 @@ fn mcp_preflights_engine_sidecars_and_preserves_unity_identity_on_overwrite() {
 }
 
 #[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn restricted_mcp_tileset_atlas_respects_root_and_overwrite() {
+    let w = Workspace::new();
+    let mut doc = Document::new(1, 1);
+    doc.tilesets.push(pixelcraft::model::Tileset {
+        name: "Author palette".into(),
+        width: 1,
+        height: 1,
+        tiles: vec![vec![[20, 60, 200, 255]].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    formats::save(&w.project().join("tiles.pixel"), &doc).unwrap();
+    let args = json!({"input":"tiles.pixel","output":"atlas.png","format":"tileset-atlas"});
+    let reply = w.call("export", args.clone());
+    assert!(reply["isError"].is_null(), "{reply}");
+    let bytes = fs::read(w.project().join("atlas.png")).unwrap();
+    let reply = w.call("export", args);
+    assert_error(&reply, "overwrite");
+    assert_eq!(fs::read(w.project().join("atlas.png")).unwrap(), bytes);
+    assert_error(
+        &w.call(
+            "export",
+            json!({
+                "input":"tiles.pixel","output":"../escaped.png","format":"tileset-atlas",
+            }),
+        ),
+        "project root",
+    );
+    assert!(!w.0.join("escaped.png").exists());
+}
+
 #[test]
 fn mcp_sequence_overwrite_replaces_only_generated_frames() {
     let w = Workspace::new();

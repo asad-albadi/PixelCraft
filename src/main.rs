@@ -3013,6 +3013,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export PNG sequence…", "png-sequence"),
                         ("Export animation GIF…", "gif"),
                         ("Export video MP4…", "mp4"),
+                        ("Export tileset atlas…", "tileset-atlas"),
                         ("Export Tiled map…", "tiledexport"),
                         ("Export BMP…", "bmp"),
                         ("Open sample garden", "demo"),

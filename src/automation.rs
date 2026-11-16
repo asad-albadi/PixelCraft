@@ -742,6 +742,14 @@ fn file_operation(
                     }
                     let kind = v["format"].as_str().unwrap_or_else(|| extension(&out));
                     match kind {
+                        "tileset-atlas" if op == "export" => {
+                            check_tileset_atlas_path(&out)?;
+                            let mut metadata = write_operation_file(files, &out, |target| {
+                                write_tileset_atlas(target, &d, v, &document_revision(&d))
+                            })?;
+                            metadata["output"] = json!(out);
+                            return Ok(metadata);
+                        }
                         "png-sequence" => {
                             let replace = files.is_some_and(|files| files.overwrite);
                             if let Some(files) = files {
@@ -951,7 +959,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and split_slices (true uses output as a directory and writes a PNG sheet and metadata per authored slice).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and split_slices (true uses output as a directory and writes a PNG sheet and metadata per authored slice).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let mut v = json!({});
@@ -969,6 +977,7 @@ pub fn run_cli(args: &[String]) -> Result<Value, String> {
             let value = args.get(i + 1).ok_or("Missing argument value")?;
             v[key] = if [
                 "inputs", "options", "edits", "commands", "frame", "width", "height", "scale",
+                "layers", "columns",
             ]
             .contains(&key)
             {
@@ -1080,7 +1089,7 @@ fn rpc_with_root(
                         "live-commands" | "commands" => "Atomic edits with the current revision. Set frame name and/or timing with set-frame (frame,name,duration ms). Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
-                        "live-export" => "Export a revision-matched sprite to a PNG, GIF or MP4 file, or set format to png-sequence and output to a directory. Integer scale uses nearest-neighbor. Layers apply to all formats; region applies to PNG and PNG sequences; frame applies to single PNG only.",
+                        "live-export" => "Export a revision-matched sprite as PNG, GIF, MP4, a PNG sequence directory, or an authored tileset atlas PNG. Use format png-sequence or tileset-atlas for those exports. Layers apply to all formats. Region applies to PNG and PNG sequences. Frame applies to single-frame PNG.",
                         "live-cel-targets" => "List up to 512 cel IDs for a layer, starting at the requested frame.",
                         "live-export-progress" => "Report the completed and total frames of a running live export by job_id.",
                         "live-cancel-export" => "Request cancellation of a running live export by job_id.",
@@ -1105,6 +1114,12 @@ fn rpc_with_root(
                     props["region"] = json!({"type":"object","required":["x","y","width","height"],
                         "properties":{"x":{"type":"integer","minimum":0},"y":{"type":"integer","minimum":0},"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}},
                         "additionalProperties":false});
+                }
+                if matches!(*name, "export" | "live-export") {
+                    tool["inputSchema"]["properties"]["columns"] = json!({
+                        "type":"integer", "minimum":1, "maximum":MAX_DIMENSION,
+                        "description":"Columns for tileset-atlas PNG exports."
+                    });
                 }
                 if matches!(*name, "live-commands" | "live-edit") {
                     tool["inputSchema"]["properties"]["return_preview"] = json!({"type":"boolean"});
@@ -2021,6 +2036,48 @@ pub fn prepare_live_export_under(
     })
 }
 
+fn check_tileset_atlas_path(output: &Path) -> Result<(), String> {
+    if !extension(output).eq_ignore_ascii_case("png") {
+        return Err("Choose a .png path for the tileset atlas".into());
+    }
+    Ok(())
+}
+
+fn write_tileset_atlas(
+    path: &Path,
+    d: &Document,
+    args: &Value,
+    revision: &str,
+) -> Result<Value, String> {
+    if ["frame", "region", "scale"]
+        .iter()
+        .any(|key| args.get(key).is_some())
+    {
+        return Err("Tileset atlases use authored tiles at native size".into());
+    }
+    let layers = args
+        .get("layers")
+        .map(|value| {
+            serde_json::from_value::<Vec<usize>>(value.clone()).map_err(|_| "Invalid layer list")
+        })
+        .transpose()?;
+    let scope = layers.as_deref().map_or(
+        interchange::TilesetAtlasScope::Visible,
+        interchange::TilesetAtlasScope::Selected,
+    );
+    let columns = args
+        .get("columns")
+        .map(|_| number(args, "columns"))
+        .transpose()?;
+    let (image, layout) = interchange::tileset_atlas(d, scope, columns)?;
+    mcp_io::write_image_as(path, &image, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    let mut metadata = serde_json::to_value(layout).map_err(|error| error.to_string())?;
+    metadata["format"] = json!("tileset-atlas");
+    metadata["revision"] = json!(revision);
+    Ok(metadata)
+}
+
 fn prepare_live_export_inner(
     d: &Document,
     f: usize,
@@ -2039,6 +2096,15 @@ fn prepare_live_export_inner(
         overwrite: replace,
     }
     .check_file(&output)?;
+    if args["format"] == "tileset-atlas" {
+        check_tileset_atlas_path(&output)?;
+        return prepare_output_under(output, replace, root, false, |temporary| {
+            progress(0, 1)?;
+            let metadata = write_tileset_atlas(temporary, d, args, revision)?;
+            progress(1, 1)?;
+            Ok(metadata)
+        });
+    }
     let kind = extension(&output).to_ascii_lowercase();
     if args.get("format").is_some_and(|v| v != kind.as_str()) {
         return Err("Export format must match the output extension".into());
@@ -2078,7 +2144,10 @@ fn prepare_live_export_inner(
                     json!({"revision":revision,"format":kind,"width":width,"height":height,"scale":scale,"frames":d.durations.len()}),
                 )
             }
-            _ => Err("Choose a .png, .gif or .mp4 path, or set format to png-sequence".into()),
+            _ => Err(
+                "Choose a .png, .gif or .mp4 path, or set format to png-sequence or tileset-atlas"
+                    .into(),
+            ),
         }
     })
 }

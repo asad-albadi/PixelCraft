@@ -20,6 +20,7 @@ pub(super) struct Studio {
     pub open: bool,
     pub sheet_open: bool,
     pub tiles_open: bool,
+    tileset_atlas_export: Option<TilesetAtlasDialog>,
     tile_browser_set: usize,
     show_tile_indices: bool,
     pub seamless: WrapAxes,
@@ -68,6 +69,12 @@ struct CanvasResize {
     size: [usize; 2],
     anchor: usize,
     offset: [i32; 2],
+}
+
+#[derive(Clone, Copy, Default)]
+struct TilesetAtlasDialog {
+    visible: bool,
+    columns: usize,
 }
 
 struct TileConversionDialog {
@@ -135,6 +142,7 @@ impl Default for Studio {
             open: false,
             sheet_open: false,
             tiles_open: false,
+            tileset_atlas_export: None,
             tile_browser_set: 0,
             show_tile_indices: false,
             seamless: WrapAxes::NONE,
@@ -882,6 +890,15 @@ impl PixelCraft {
                     }
                 }
             }
+            "tileset-atlas" => {
+                let layer = &self.doc.layers[self.layer];
+                self.studio.tileset_atlas_export = Some(TilesetAtlasDialog {
+                    visible: self.timeline_layers.selected.is_empty()
+                        && !layer.group
+                        && layer.tileset.is_none(),
+                    ..TilesetAtlasDialog::default()
+                });
+            }
             "tiledexport" => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Tiled JSON map", &["tmj"])
@@ -1427,6 +1444,73 @@ impl PixelCraft {
         });
     }
 
+    fn start_tileset_atlas_export(&mut self, path: PathBuf, options: TilesetAtlasDialog) {
+        if self.export_job.is_some() {
+            self.status = "Wait for the current export to finish".into();
+            return;
+        }
+        let mut args = serde_json::json!({
+            "output": path, "format": "tileset-atlas", "overwrite": true,
+        });
+        if !options.visible {
+            let layers = if self.timeline_layers.selected.is_empty() {
+                vec![self.layer]
+            } else {
+                self.timeline_layers.selected.clone()
+            };
+            args["layers"] = serde_json::json!(layers);
+        }
+        if options.columns != 0 {
+            args["columns"] = serde_json::json!(options.columns);
+        }
+        let doc = self.doc.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.export_job = Some(rx);
+        self.status = "Exporting tileset atlas…".into();
+        std::thread::spawn(move || {
+            let result = pixelcraft::automation::prepare_live_export(&doc, 0, &args, "")
+                .and_then(|prepared| prepared.write())
+                .map(|_| ());
+            let _ = tx.send((path, result));
+        });
+    }
+
+    fn tileset_atlas_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut options) = self.studio.tileset_atlas_export else {
+            return;
+        };
+        let mut open = true;
+        let mut export = false;
+        egui::Window::new("Export Tileset Atlas")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.pc_selectable_value(&mut options.visible, false, "Selected layers");
+                    ui.pc_selectable_value(&mut options.visible, true, "Visible layers");
+                });
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut options.columns)
+                            .range(0..=MAX_DIMENSION)
+                            .prefix("Columns "),
+                    );
+                    ui.small("0 uses automatic columns");
+                });
+                export = ui.pc_button("Save PNG…").clicked();
+            });
+        if export
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("PNG tileset atlas", &["png"])
+                .set_file_name("tileset.png")
+                .save_file()
+        {
+            self.start_tileset_atlas_export(path, options);
+            open = false;
+        }
+        self.studio.tileset_atlas_export = open.then_some(options);
+    }
+
     fn tileset_browser(&mut self, ctx: &egui::Context) {
         if !self.studio.tiles_open {
             return;
@@ -1583,6 +1667,9 @@ impl PixelCraft {
                     });
                 if axes != self.studio.seamless {
                     self.set_seamless_axes(axes);
+                }
+                if ui.pc_command_button("tileset-atlas", "Export tileset atlas…").clicked() {
+                    self.studio_action("tileset-atlas");
                 }
                 if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked() {
                     self.studio_action("tiledexport");
@@ -1807,6 +1894,7 @@ if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::File
             self.studio.sheet_open = open;
         }
         self.tileset_browser(ctx);
+        self.tileset_atlas_dialog(ctx);
     }
 
     pub(super) fn stroke_line(&mut self, a: (i32, i32), b: (i32, i32), color: Pixel) {
@@ -2524,6 +2612,45 @@ mod tests {
         assert_eq!(a.doc.layers[0].cels[0][1], CLEAR);
         assert_eq!(a.doc.layers[0].cels[0][5], c);
     }
+    #[test]
+    fn tileset_atlas_gui_exports_selected_layers_on_the_worker() {
+        let mut editor = app();
+        editor.replace(Document::new(1, 1), None);
+        let visible = [190, 37, 31, 255];
+        let hidden = [10, 106, 205, 255];
+        for (index, color) in [visible, hidden].into_iter().enumerate() {
+            editor.doc.tilesets.push(Tileset {
+                name: index.to_string(),
+                width: 1,
+                height: 1,
+                tiles: vec![vec![color].into()],
+            });
+            editor.doc.add_tile_layer(index).unwrap();
+        }
+        editor.doc.layers[2].visible = false;
+        editor.timeline_layers.selected = vec![2];
+        editor.action("tileset-atlas");
+        let options = editor.studio.tileset_atlas_export.unwrap();
+        assert!(!options.visible);
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-gui-tileset-atlas-{}.png",
+            std::process::id()
+        ));
+        editor.start_tileset_atlas_export(path.clone(), options);
+        let (output, result) = editor
+            .export_job
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        result.unwrap();
+        assert_eq!(output, path);
+        let image = image::open(&path).unwrap().into_rgba8();
+        assert_eq!(image.dimensions(), (1, 1));
+        assert_eq!(image.get_pixel(0, 0).0, hidden);
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn advanced_dialogs_render() {
         let ctx = egui::Context::default();

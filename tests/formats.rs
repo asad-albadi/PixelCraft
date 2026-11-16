@@ -1,5 +1,114 @@
 use pixelcraft::{formats::*, model::*};
 #[test]
+fn tileset_atlas_file_and_live_exports_write_the_same_pixels_and_layout() {
+    use pixelcraft::automation::{prepare_live_export, run_cli};
+    use serde_json::json;
+    let base =
+        std::env::temp_dir().join(format!("pixelcraft-tileset-atlas-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let source = base.join("source.pixel");
+    let out = base.join("atlas.png");
+    let live_out = base.join("live.png");
+    let _ = std::fs::remove_file(&live_out);
+    let mut doc = Document::new(2, 1);
+    let a = [15, 62, 119, 255];
+    let b = [213, 28, 80, 255];
+    doc.tilesets.push(Tileset {
+        name: "Authored".into(),
+        width: 1,
+        height: 1,
+        tiles: vec![vec![a].into(), vec![b].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].visible = false;
+    save(&source, &doc).unwrap();
+    let args =
+        json!({"input":source,"output":out,"format":"tileset-atlas","layers":[1],"columns":1});
+    let file = run_cli(&["export".into(), args.to_string()]).unwrap();
+    let args = json!({"output":live_out,"format":"tileset-atlas","layers":[1],"columns":1});
+    let live = prepare_live_export(&doc, 0, &args, "rev")
+        .unwrap()
+        .write()
+        .unwrap();
+    for meta in [file, live] {
+        assert_eq!(meta["format"], "tileset-atlas");
+        assert_eq!(meta["width"], 1);
+        assert_eq!(meta["height"], 2);
+        assert_eq!(meta["tilesets"][0]["tile_count"], 2);
+    }
+    for path in [&out, &live_out] {
+        assert_eq!(
+            image::open(path).unwrap().into_rgba8().into_raw(),
+            [a, b].concat()
+        );
+    }
+    assert!(prepare_live_export(&doc, 0, &args, "rev").is_err());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(out).unwrap();
+    std::fs::remove_file(live_out).unwrap();
+    std::fs::remove_dir(base).unwrap();
+}
+
+#[test]
+fn tileset_atlas_exports_each_authored_set_once_and_honors_layer_scope() {
+    use pixelcraft::interchange::{TilesetAtlasScope, tileset_atlas};
+    let mut doc = Document::new(4, 4);
+    let red = [210, 20, 40, 255];
+    let blue = [20, 60, 220, 255];
+    let green = [50, 190, 60, 255];
+    doc.tilesets = vec![
+        Tileset {
+            name: "Ground".into(),
+            width: 2,
+            height: 1,
+            tiles: vec![vec![red, blue].into(), vec![blue, red].into()],
+        },
+        Tileset {
+            name: "Plants".into(),
+            width: 1,
+            height: 2,
+            tiles: vec![vec![green, red].into()],
+        },
+        Tileset {
+            name: "Unreferenced".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![vec![blue].into()],
+        },
+    ];
+    let hidden = doc.add_group("Hidden plants").unwrap();
+    doc.layers[hidden].visible = false;
+    doc.add_tile_layer(0).unwrap();
+    let ground = doc.layers.len() - 1;
+    doc.add_tile_layer(0).unwrap();
+    doc.add_tile_layer(1).unwrap();
+    doc.layers.last_mut().unwrap().parent = Some(hidden);
+    doc.paint_tile(ground, 0, 0, 0, 0x8000_0001).unwrap();
+
+    let (visible, layout) = tileset_atlas(&doc, TilesetAtlasScope::Visible, Some(2)).unwrap();
+    assert_eq!(visible.dimensions(), (4, 1));
+    assert_eq!(visible.into_raw(), [red, blue, blue, red].concat());
+    assert_eq!(layout.tilesets.len(), 1);
+    assert_eq!(layout.tilesets[0].tile_count, 2);
+
+    let (mixed, layout) = tileset_atlas(
+        &doc,
+        TilesetAtlasScope::Selected(&[hidden, ground]),
+        Some(2),
+    )
+    .unwrap();
+    assert_eq!(mixed.dimensions(), (4, 4));
+    assert_eq!(layout.cell_size, [2, 2]);
+    assert_eq!(layout.tilesets[1].first_cell, 2);
+    assert_eq!(mixed.get_pixel(0, 2).0, green);
+    assert_eq!(mixed.get_pixel(0, 3).0, red);
+    assert_eq!(mixed.get_pixel(1, 3).0, CLEAR);
+    assert!(tileset_atlas(&doc, TilesetAtlasScope::Selected(&[0]), None).is_err());
+    assert!(tileset_atlas(&doc, TilesetAtlasScope::Selected(&[100]), None).is_err());
+    assert!(tileset_atlas(&doc, TilesetAtlasScope::Visible, Some(0)).is_err());
+}
+
+#[test]
 fn native_and_ase_projects_preserve_editable_drawing_grid_geometry() {
     let mut doc = Document::new(8, 8);
     let grid = DrawingGrid {
