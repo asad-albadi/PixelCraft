@@ -6,6 +6,8 @@ use std::{borrow::Cow, ops::RangeInclusive};
 
 mod canvas_resize;
 mod rotsprite;
+mod sheet_split;
+pub(crate) use sheet_split::{SheetCrop, pack_split_sheet, split_sheet_work};
 mod sprite_resize;
 mod sprite_transform;
 
@@ -422,6 +424,8 @@ pub struct SheetOptions {
     pub tag: Option<usize>,
     pub frame_range: Option<[usize; 2]>,
     pub layers: Option<Vec<usize>>,
+    pub split_layers: bool,
+    pub split_grid: bool,
     pub preset: String,
 }
 impl Default for SheetOptions {
@@ -434,6 +438,8 @@ impl Default for SheetOptions {
             tag: None,
             frame_range: None,
             layers: None,
+            split_layers: false,
+            split_grid: false,
             preset: "Generic".into(),
         }
     }
@@ -481,6 +487,9 @@ pub(crate) fn pack_sheet_with_extrusion(
     let range = o.frames_for(d)?;
     let sprite = filter_layers_for_export(d, o.layers.as_deref())?;
     let d = sprite.as_ref();
+    if o.split_layers || o.split_grid {
+        return pack_split_sheet(d, o, extrude, range, None);
+    }
     let (first_frame, last_frame) = (*range.start(), *range.end());
     let count = last_frame - first_frame + 1;
     let cols = o.columns.clamp(1, count);

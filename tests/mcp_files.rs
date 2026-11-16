@@ -939,6 +939,139 @@ fn named_slice_sheet_uses_keyed_bounds_and_rejects_unresolvable_names() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn sheet_splits_layers_and_grid_cells_into_independent_animation_samples() {
+    use pixelcraft::model::{DrawingGrid, FrameTag, SliceKey, SpriteSlice};
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let mut sprite = Document::new(5, 1);
+    let group = sprite.add_group("Actors").unwrap();
+    sprite.add_layer();
+    sprite.layers[2].parent = Some(group);
+    sprite.layers[group].opacity = 128;
+    sprite.layers[0].name = "Sky".into();
+    sprite.layers[2].name = "Actor".into();
+    sprite.add_frame(0, false);
+    sprite.durations = vec![75, 125];
+    sprite.drawing_grid = Some(DrawingGrid {
+        origin: [1, 0],
+        size: [2, 1],
+    });
+    sprite.tags.push(FrameTag {
+        name: "Step".into(),
+        from: 0,
+        to: 1,
+        direction: 0,
+        repeat: 0,
+        color: [0; 3],
+    });
+    let colors = [[200, 80, 10, 255], [40, 150, 245, 255]];
+    for (f, color) in colors.into_iter().enumerate() {
+        sprite.set_pixel(0, f, 1, color);
+        sprite.set_pixel(2, f, 3, color);
+    }
+    sprite.slices.push(SpriteSlice {
+        name: "Stage".into(),
+        keys: vec![SliceKey {
+            frame: 0,
+            bounds: [1, 0, 4, 1],
+            center: None,
+            pivot: None,
+        }],
+    });
+    let input = root.join("art.pixel");
+    formats::save(&input, &sprite).unwrap();
+
+    let output = root.join("split.png");
+    let export = || {
+        workspace.call("export",json!({
+        "input":"art.pixel","output":"split.png","format":"sheet","overwrite":true,
+        "options":{"split_layers":true,"split_grid":true,"padding":0,"columns":8,"preset":"Unity"}
+    }))
+    };
+    let reply = export();
+    assert!(reply["isError"].is_null(), "{reply}");
+    let im = image::open(&output).unwrap().into_rgba8();
+    assert_eq!(im.dimensions(), (16, 1));
+    assert_eq!(im.get_pixel(0, 0).0, colors[0]);
+    assert_eq!(im.get_pixel(2, 0).0, colors[1]);
+    assert_eq!(im.get_pixel(4, 0).0, [0; 4]);
+    assert_eq!(im.get_pixel(8, 0).0, [0; 4]);
+    assert_eq!(im.get_pixel(12, 0).0, [200, 80, 10, 128]);
+    assert_eq!(im.get_pixel(14, 0).0, [40, 150, 245, 128]);
+    let json_path = output.with_extension("json");
+    let metadata: Value = serde_json::from_slice(&fs::read(&json_path).unwrap()).unwrap();
+    let entries = metadata["frames"].as_array().unwrap();
+    assert_eq!(entries.len(), 8);
+    assert_eq!(entries[7]["sourceLayer"], 2);
+    assert_eq!(entries[7]["sourceLayerName"], "Actor");
+    assert_eq!(entries[7]["gridCell"], json!({"x":3,"y":0,"w":2,"h":1}));
+    assert_eq!(entries[7]["sourceFrameId"], sprite.frame_export_id(1));
+    assert_eq!(entries[7]["sourceFrame"], 1);
+    assert_eq!(entries[7]["duration"], 125);
+    assert_eq!(metadata["meta"]["frameTags"][3]["from"], 6);
+    assert_eq!(metadata["meta"]["frameTags"][3]["to"], 7);
+    let ids = |items: &[Value]| {
+        items
+            .iter()
+            .map(|entry| entry["filename"].clone())
+            .collect::<Vec<_>>()
+    };
+    let names = ids(entries);
+    assert_eq!(
+        names
+            .iter()
+            .map(Value::to_string)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        8
+    );
+    let unity_path = output.with_extension("png.meta");
+    let unity_meta = fs::read(&unity_path).unwrap();
+    sprite.set_pixel(2, 1, 3, [123, 32, 200, 255]);
+    formats::save(&input, &sprite).unwrap();
+    let reply = export();
+    assert!(reply["isError"].is_null(), "{reply}");
+    let updated: Value = serde_json::from_slice(&fs::read(json_path).unwrap()).unwrap();
+    assert_eq!(names, ids(updated["frames"].as_array().unwrap()));
+    assert_eq!(fs::read(unity_path).unwrap(), unity_meta);
+
+    let reply = workspace.call("export",json!({
+        "input":"art.pixel","output":"cropped.png","format":"sheet",
+        "options":{"slice":"Stage","split_layers":true,"split_grid":true,"frame_range":[1,1],"padding":0}
+    }));
+    assert!(reply["isError"].is_null(), "{reply}");
+    let img = image::open(root.join("cropped.png")).unwrap().into_rgba8();
+    assert_eq!(img.dimensions(), (4, 1));
+    assert_eq!(img.get_pixel(3, 0).0, [123, 32, 200, 128]);
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(root.join("cropped.json")).unwrap()).unwrap();
+    assert_eq!(metadata["meta"]["sourceSlice"], "Stage");
+    assert_eq!(metadata["frames"][1]["sourceFrame"], 1);
+
+    for (options, message) in [
+        (
+            json!({"split_grid":true,"extrude":4294967295u64}),
+            "scale or extrusion",
+        ),
+        (json!({"split_grid":true,"scale":10000}), "image limits"),
+    ] {
+        let output = root.join("bad.png");
+        let error = automation::operation(
+            "batch",
+            &json!({
+                "dry_run":true,"steps":[{"operation":"export","arguments":{
+                    "input":input,"output":output,"format":"sheet","options":options
+                }}]
+            }),
+        )
+        .unwrap_err();
+        assert!(error.contains(message), "{error}");
+        assert!(!output.exists());
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

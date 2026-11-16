@@ -75,6 +75,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 32 in progress. The sheet exporter accepts one exact authored slice name in the editor, CLI, and file MCP. It reuses keyed sprite crops, preserves stable IDs, duration, and pivots, and retains the matching sidecars and existing split filenames. Tests cover moving bounds outside the canvas, ambiguous and unknown names, a batch dry run, the real CLI path, and the editor worker. Formatting, strict Clippy, and 494 Windows all-target tests passed. Per-layer and grid splitting and filename/tag templates remain open.
 
+- Item 32 in progress. The editor, CLI, and file MCP pack isolated raster/tilemap layers and complete drawing-grid cells as independent animated samples. Filters and named slice crops compose with both splits. Export metadata identifies each original layer, grid region, frame, and timing. Default split names use the source layer index and grid cell coordinates. Dry-run validation and crop budgets cover split layout limits. Tests cover pixels, parent opacity, grouped tag ranges, repeatable Unity importer IDs after a redraw, invalid batch plans, and the editor worker. Formatting, strict Clippy, and 495 Windows all-target tests passed. Filename and tag templates remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

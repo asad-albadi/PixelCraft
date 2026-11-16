@@ -2029,19 +2029,31 @@ impl PixelCraft {
                             }
                         });
                 }
+                ui.pc_checkbox(
+                    &mut self.studio.sheet.split_layers,
+                    "Split layers into samples",
+                );
+                ui.pc_checkbox(&mut self.studio.sheet.split_grid, "Split by drawing grid");
                 let options = self.sprite_sheet_options();
-                match interchange::pack_sheet_for_slice(
-                    &self.doc,
-                    &options,
-                    self.studio.sheet_slice.as_deref(),
-                ) {
-                    Ok((image, metadata)) => {
-                        ui.label(format!(
-                            "{} × {} · {} frames",
-                            image.width(),
-                            image.height(),
-                            metadata["frames"].as_array().unwrap().len()
-                        ));
+                let slice = self.studio.sheet_slice.as_deref();
+                let summary = if options.split_grid || options.split_layers {
+                    interchange::split_sheet_sample_count(&self.doc, &options, slice)
+                        .map(|count| format!("{count} samples"))
+                } else {
+                    interchange::pack_sheet_for_slice(&self.doc, &options, slice).map(
+                        |(image, metadata)| {
+                            format!(
+                                "{} × {} · {} frames",
+                                image.width(),
+                                image.height(),
+                                metadata["frames"].as_array().unwrap().len()
+                            )
+                        },
+                    )
+                };
+                match summary {
+                    Ok(summary) => {
+                        ui.label(summary);
                         if ui.pc_button("Export PNG + metadata…").clicked()
                             && let Some(path) = rfd::FileDialog::new()
                                 .add_filter("PNG sheet", &["png"])
@@ -2877,6 +2889,16 @@ mod tests {
         });
         editor.studio.sheet_slice = Some("Right".into());
         editor.studio.sheet.padding = 0;
+        editor.studio.sheet.split_layers = true;
+        assert_eq!(
+            interchange::split_sheet_sample_count(
+                &editor.doc,
+                &editor.sprite_sheet_options(),
+                Some("Right")
+            )
+            .unwrap(),
+            1
+        );
         let path = std::env::temp_dir().join(format!(
             "pixelcraft-gui-named-slice-sheet-{}.png",
             std::process::id()

@@ -88,7 +88,7 @@ impl Document {
         for frame in 0..self.durations.len() {
             reserve(&mut budget, area)?;
             let mut pixels = vec![fill; area];
-            scene.composite_into(frame, None, 0, &mut pixels);
+            scene.composite_into(frame, None, 0, None, &mut pixels);
             target.cels[frame] = pixels.into();
             let meta = &mut target.cel_meta[frame];
             meta.indices = None;

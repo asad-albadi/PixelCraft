@@ -305,6 +305,8 @@ For a filtered sprite sheet, pass `--layers '[2,5]'` and set `frame_range` to an
 
 To crop a sheet to a named slice, choose it in the editor's **Crop to slice** menu or pass `--options '{"slice":"Portrait"}'`. The export follows the slice keys across the selected frames and transparently pads any part outside the canvas. CLI and MCP accept the exact slice name.
 
+Enable **Split layers into samples** or **Split by drawing grid** in the sheet dialog. The corresponding CLI and file MCP options are `split_layers` and `split_grid`. Layer splits include visible raster and tilemap layers, with parent opacity and masks applied. Grid splits use complete cells from the sprite drawing grid. When you also crop to a named slice, the grid is relative to the cropped canvas. The JSON records the original frame IDs and layer or grid coordinates, while each sample has its own export name. Tag ranges are emitted separately per layer or cell.
+
 For one sheet per authored slice, pass an output directory and enable `split_slices`. Each sheet follows its slice’s keyed bounds and preserves the included frame timing. Add `extrude` to duplicate each frame’s edge pixels before scaling. The border sits outside the sprite rectangle in the JSON.
 
 ```bash

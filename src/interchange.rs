@@ -178,6 +178,23 @@ pub fn pack_sheet_for_slice(
     }
 }
 
+/// Count split samples without compositing pixels on the editor thread.
+pub fn split_sheet_sample_count(
+    doc: &Document,
+    options: &SheetOptions,
+    slice: Option<&str>,
+) -> Result<usize, String> {
+    doc.validate()?;
+    let filtered = filter_layers_for_export(doc, options.layers.as_deref())?;
+    let frames = options.frames_for(&filtered)?;
+    if let Some(slice) = slice {
+        let plans = plan_slice_sheets(&filtered, options, 0, Some(slice))?;
+        Ok(plans[0].samples)
+    } else {
+        Ok(split_sheet_work(&filtered, options, 0, &frames, None)?.samples)
+    }
+}
+
 pub fn export_sheet_for_slice(
     path: &Path,
     doc: &Document,
@@ -199,6 +216,7 @@ pub(crate) struct SliceSheet<'a> {
     width: usize,
     height: usize,
     pub file_name: String,
+    samples: usize,
 }
 
 pub(crate) fn plan_slice_sheets<'a>(
@@ -248,9 +266,6 @@ pub(crate) fn plan_slice_sheets<'a>(
             return Err("Split slice export supports at most 1024 sheets".into());
         }
         let count = last - first + 1;
-        source_budget = source_budget
-            .checked_sub(count.saturating_mul(d.width * d.height))
-            .ok_or("Split slice export exceeds the source pixel work limit; use a tag")?;
         let start_key = slice.keys.partition_point(|key| key.frame <= first) - 1;
         let end_key = slice.keys.partition_point(|key| key.frame <= last);
         let keys = &slice.keys[start_key..end_key];
@@ -264,40 +279,80 @@ pub(crate) fn plan_slice_sheets<'a>(
         {
             return Err(format!("Slice {:?} exceeds the export limits", slice.name));
         }
+        let split = if o.split_layers || o.split_grid {
+            Some(split_sheet_work(
+                d,
+                o,
+                extrude,
+                &(first..=last),
+                Some([width, height]),
+            )?)
+        } else {
+            None
+        };
+        let samples = split.as_ref().map_or(count, |work| work.samples);
+        source_budget = source_budget
+            .checked_sub(
+                split
+                    .as_ref()
+                    .map_or(count.saturating_mul(d.width * d.height), |work| {
+                        work.source_pixels
+                    }),
+            )
+            .ok_or("Split slice export exceeds the source pixel work limit; use a tag")?;
         crop_budget = crop_budget
-            .checked_sub(count.saturating_mul(width * height))
+            .checked_sub(
+                split
+                    .as_ref()
+                    .map_or(count.saturating_mul(width * height), |work| {
+                        work.cropped_pixels
+                    }),
+            )
             .ok_or("Split slice export exceeds the cropped pixel work limit; use a tag")?;
 
-        let columns = o.columns.clamp(1, count);
-        let rows = count.div_ceil(columns);
-        let axis = |cell: usize, cells: usize| {
-            (pad + cells * (cell + 2 * extrude + pad)).saturating_mul(o.scale)
+        let atlas_pixels = if let Some(split) = &split {
+            split.atlas_pixels
+        } else {
+            let columns = o.columns.clamp(1, count);
+            let rows = count.div_ceil(columns);
+            let axis = |cell: usize, cells: usize| {
+                (pad + cells * (cell + 2 * extrude + pad)).saturating_mul(o.scale)
+            };
+            let (atlas_width, atlas_height) = (axis(width, columns), axis(height, rows));
+            let atlas_pixels = atlas_width.saturating_mul(atlas_height);
+            if !o.trim
+                && (atlas_width > MAX_DIMENSION
+                    || atlas_height > MAX_DIMENSION
+                    || atlas_pixels > MAX_PIXELS)
+            {
+                return Err(format!(
+                    "Slice {:?} sheet exceeds the image limits",
+                    slice.name
+                ));
+            }
+            atlas_pixels
         };
-        let (atlas_width, atlas_height) = (axis(width, columns), axis(height, rows));
-        let atlas_pixels = atlas_width.saturating_mul(atlas_height);
-        if !o.trim
-            && (atlas_width > MAX_DIMENSION
-                || atlas_height > MAX_DIMENSION
-                || atlas_pixels > MAX_PIXELS)
-        {
-            return Err(format!(
-                "Slice {:?} sheet exceeds the image limits",
-                slice.name
-            ));
-        }
+        let groups = split.as_ref().map_or(1, |work| work.groups);
         // A trimmed sheet may be smaller, but can never exceed the packer's output limit.
         atlas_budget = atlas_budget
             .checked_sub(atlas_pixels.min(MAX_PIXELS))
             .ok_or("Split slice export exceeds the combined atlas pixel limit; use a tag")?;
         record_budget = record_budget
-            .checked_sub((count + keys.len()).saturating_add(d.tags.len()))
+            .checked_sub(
+                (samples + keys.len()).saturating_add(d.tags.len().max(1).saturating_mul(groups)),
+            )
             .ok_or("Split slice export exceeds the metadata record limit")?;
         let frame_label_bytes = (first..=last)
             .filter_map(|frame| d.frame_name(frame))
             .map(str::len)
             .sum::<usize>();
         label_budget = label_budget
-            .checked_sub(frame_label_bytes.saturating_add(slice.name.len()))
+            .checked_sub(
+                frame_label_bytes
+                    .saturating_mul(groups)
+                    .saturating_add(slice.name.len())
+                    .saturating_add(split.as_ref().map_or(0, |work| work.layer_label_bytes)),
+            )
             .ok_or("Split slice export exceeds the metadata label limit")?;
         let mut has_tag = false;
         for tag in &d.tags {
@@ -305,7 +360,7 @@ pub(crate) fn plan_slice_sheets<'a>(
             if from <= to {
                 has_tag = true;
                 label_budget = label_budget
-                    .checked_sub(tag.name.len())
+                    .checked_sub(tag.name.len().saturating_mul(groups))
                     .ok_or("Split slice export exceeds the metadata label limit")?;
                 if o.preset == "Godot" {
                     let span = to - from + 1;
@@ -315,7 +370,11 @@ pub(crate) fn plan_slice_sheets<'a>(
                         0
                     };
                     godot_budget = godot_budget
-                        .checked_sub((span + turn).saturating_mul(usize::from(tag.repeat.max(1))))
+                        .checked_sub(
+                            (span + turn)
+                                .saturating_mul(usize::from(tag.repeat.max(1)))
+                                .saturating_mul(groups),
+                        )
                         .ok_or(
                             "Split slice export exceeds the combined Godot animation key limit",
                         )?;
@@ -324,7 +383,7 @@ pub(crate) fn plan_slice_sheets<'a>(
         }
         if o.preset == "Godot" && !has_tag {
             godot_budget = godot_budget
-                .checked_sub(count)
+                .checked_sub(samples)
                 .ok_or("Split slice export exceeds the combined Godot animation key limit")?;
         }
         let label: String = slice
@@ -347,6 +406,7 @@ pub(crate) fn plan_slice_sheets<'a>(
             width,
             height,
             file_name: format!("{:03}-{label}.png", index + 1),
+            samples,
         });
     }
     if plans.is_empty() {
@@ -451,6 +511,19 @@ impl SliceSheet<'_> {
                 active
             })
             .collect();
+        if o.split_layers || o.split_grid {
+            return pack_split_sheet(
+                d,
+                o,
+                extrude,
+                self.first..=self.last,
+                Some(SheetCrop {
+                    size: [self.width, self.height],
+                    name: &self.slice.name,
+                    keys: &active_keys,
+                }),
+            );
+        }
         let (width, height) = (self.width, self.height);
 
         let mut cropped = Document::new(width, height);

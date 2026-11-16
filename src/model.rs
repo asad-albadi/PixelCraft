@@ -2754,14 +2754,36 @@ impl Document {
     }
 
     pub fn composite(&self, f: usize) -> Vec<Pixel> {
-        self.composite_group(f, None, 0)
+        self.composite_group(f, None, 0, None)
     }
-    fn composite_group(&self, f: usize, parent: Option<usize>, depth: usize) -> Vec<Pixel> {
+    pub(crate) fn composite_layer_for_export(&self, frame: usize, layer: usize) -> Vec<Pixel> {
+        let mut include = vec![false; self.layers.len()];
+        let mut index = Some(layer);
+        while let Some(layer) = index {
+            include[layer] = true;
+            index = self.layers[layer].parent;
+        }
+        self.composite_group(frame, None, 0, Some(&include))
+    }
+    fn composite_group(
+        &self,
+        f: usize,
+        parent: Option<usize>,
+        depth: usize,
+        include: Option<&[bool]>,
+    ) -> Vec<Pixel> {
         let mut out = vec![CLEAR; self.width * self.height];
-        self.composite_into(f, parent, depth, &mut out);
+        self.composite_into(f, parent, depth, include, &mut out);
         out
     }
-    fn composite_into(&self, f: usize, parent: Option<usize>, depth: usize, out: &mut Vec<Pixel>) {
+    fn composite_into(
+        &self,
+        f: usize,
+        parent: Option<usize>,
+        depth: usize,
+        include: Option<&[bool]>,
+        out: &mut Vec<Pixel>,
+    ) {
         if depth > self.layers.len() {
             return;
         }
@@ -2769,7 +2791,9 @@ impl Document {
             .layers
             .iter()
             .enumerate()
-            .filter(|(_, l)| l.parent == parent && l.visible)
+            .filter(|(index, layer)| {
+                layer.parent == parent && layer.visible && include.is_none_or(|flags| flags[*index])
+            })
             .map(|(i, l)| (i as i32 + l.cel_meta[f].z_index as i32, i))
             .collect();
         order.sort_by_key(|p| (p.0, self.layers[p.1].cel_meta[f].z_index));
@@ -2779,7 +2803,7 @@ impl Document {
             let key = self.sampled_cel_key(i, f);
             if l.group && !self.compose_groups && l.mask.is_none() && key == CelKeyframe::default()
             {
-                self.composite_into(f, Some(i), depth + 1, out);
+                self.composite_into(f, Some(i), depth + 1, include, out);
                 transparent_rgb_possible = out.iter().any(|p| p[3] == 0 && *p != CLEAR);
                 continue;
             }
@@ -2866,7 +2890,7 @@ impl Document {
             }
             let rendered;
             let pixels = if l.group {
-                rendered = self.composite_group(f, Some(i), depth + 1);
+                rendered = self.composite_group(f, Some(i), depth + 1, include);
                 &rendered
             } else if l.tileset.is_some() {
                 rendered = self.layer_pixels(i, f);
