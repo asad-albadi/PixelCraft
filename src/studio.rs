@@ -88,6 +88,8 @@ struct StoredTab {
     path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     live_save_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    live_save_root_identity: Option<(u64, u64)>,
     layer: usize,
     frame: usize,
     zoom: f32,
@@ -117,6 +119,7 @@ impl PixelCraft {
                         saved: t.saved.clone(),
                         path: t.path.clone(),
                         live_save_root: t.live_save_root.clone(),
+                        live_save_root_identity: t.live_save_root_identity,
                         layer: t.layer,
                         frame: t.frame,
                         zoom: t.zoom,
@@ -131,6 +134,7 @@ impl PixelCraft {
                         saved: self.saved.clone(),
                         path: self.path.clone(),
                         live_save_root: self.live_save_root.clone(),
+                        live_save_root_identity: self.live_save_root_identity,
                         layer: self.layer,
                         frame: self.frame,
                         zoom: self.zoom,
@@ -249,6 +253,7 @@ impl PixelCraft {
                             saved: t.saved.clone(),
                             path: t.path.clone(),
                             live_save_root: t.live_save_root.clone(),
+                            live_save_root_identity: t.live_save_root_identity,
                             layer: t.layer,
                             frame: t.frame,
                             undo: vec![],
@@ -266,6 +271,7 @@ impl PixelCraft {
                     let t = self.tabs[active].take().unwrap();
                     self.replace(t.doc, t.path);
                     self.live_save_root = t.live_save_root;
+                    self.live_save_root_identity = t.live_save_root_identity;
                     self.saved = t.saved;
                     self.layer = t.layer;
                     self.frame = t.frame;

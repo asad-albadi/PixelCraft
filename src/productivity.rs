@@ -1,4 +1,5 @@
 //! Shared drawing and interchange operations for the editor and headless tools.
+use crate::automation::mcp_io;
 use crate::model::*;
 use crate::{formats, interchange, workflows::SheetOptions};
 use image::RgbaImage;
@@ -232,7 +233,7 @@ pub struct ReferenceImage {
     pub visible: bool,
 }
 pub fn read_image(path: &Path) -> Result<RgbaImage, String> {
-    let mut reader = image::ImageReader::open(path)
+    let mut reader = mcp_io::image_reader(path)
         .map_err(|e| e.to_string())?
         .with_guessed_format()
         .map_err(|e| e.to_string())?;
@@ -693,7 +694,7 @@ pub(crate) fn batch_tags_with_previous(
     if d.tags.is_empty() {
         return Err("Add animation tags before batch exporting".into());
     }
-    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    mcp_io::create_dir_all(dir).map_err(|e| e.to_string())?;
     let paths = tag_export_paths(dir, d, gif);
     for (i, (tag, path)) in d.tags.iter().zip(&paths).enumerate() {
         if gif {
@@ -843,16 +844,13 @@ pub(crate) fn expand_atlas_inputs_with_path_check(
         out: &mut Vec<PathBuf>,
         check_path: &impl Fn(&Path) -> Result<(), String>,
     ) -> Result<(), String> {
-        let meta = std::fs::symlink_metadata(p).map_err(|e| e.to_string())?;
+        let meta = mcp_io::metadata(p).map_err(|e| e.to_string())?;
         if meta.file_type().is_symlink() {
             return Ok(());
         }
         if meta.is_dir() {
             check_path(p)?;
-            let mut children = std::fs::read_dir(p)
-                .map_err(|e| e.to_string())?
-                .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
-                .collect::<Result<Vec<_>, _>>()?;
+            let mut children = mcp_io::children(p).map_err(|e| e.to_string())?;
             children.sort();
             for child in children {
                 visit(&child, out, check_path)?;

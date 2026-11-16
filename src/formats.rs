@@ -1,3 +1,4 @@
+use crate::automation::mcp_io;
 use crate::model::*;
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use std::{
@@ -1445,14 +1446,17 @@ fn load_ase_path(
     check_path: &impl Fn(&Path) -> Result<(), String>,
 ) -> Result<Document, String> {
     check_path(path)?;
-    let path = path
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let path = if crate::automation::mcp_access::restricted() {
+        path.to_path_buf()
+    } else {
+        path.canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?
+    };
     if stack.len() >= 16 || stack.contains(&path) {
         return Err("External tileset reference cycle or depth limit".into());
     }
     stack.push(path.clone());
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let bytes = mcp_io::read(&path).map_err(|e| e.to_string())?;
     let result = decode_ase_with_resolver(&bytes, &mut |file, id| {
         let external = load_ase_path(
             &path.parent().unwrap().join(file.replace('\\', "/")),
@@ -1494,7 +1498,7 @@ pub(crate) fn load_with_path_check(
         .unwrap_or("")
         .to_lowercase();
     if ext == "pixel" {
-        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        let file = mcp_io::open(path).map_err(|error| error.to_string())?;
         return decode_project_reader(file);
     }
     if ext == "ase" || ext == "aseprite" {
@@ -1511,28 +1515,30 @@ pub(crate) fn load_with_path_check(
     }
     if ext == "json" {
         let meta: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            serde_json::from_slice(&mcp_io::read(path).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
         let name = meta["meta"]["image"]
             .as_str()
             .ok_or("Sheet JSON must name its image")?;
         let image_path = path.parent().unwrap_or(Path::new(".")).join(name);
         check_path(&image_path)?;
-        let im = image::open(image_path)
+        let im = mcp_io::open_image(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
         return crate::workflows::unpack_sheet(&im, &meta);
     }
     if ext == "png" {
         let dec = image::codecs::png::PngDecoder::new(std::io::BufReader::new(
-            std::fs::File::open(path).map_err(|e| e.to_string())?,
+            mcp_io::open(path).map_err(|e| e.to_string())?,
         ))
         .map_err(|e| e.to_string())?;
         if dec.is_apng().map_err(|e| e.to_string())? {
             return crate::interchange::load_animation(path);
         }
     }
-    let im = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
+    let im = mcp_io::open_image(path)
+        .map_err(|e| e.to_string())?
+        .to_rgba8();
     let (w, h) = im.dimensions();
     if w == 0
         || h == 0
@@ -1579,8 +1585,8 @@ fn write_project_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
         path.file_name().unwrap_or_default().to_string_lossy(),
         std::process::id()
     ));
-    std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&temp, path).map_err(|e| e.to_string())
+    mcp_io::write(&temp, bytes).map_err(|e| e.to_string())?;
+    mcp_io::rename(&temp, path).map_err(|e| e.to_string())
 }
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
     export_raster_scaled(path, d, f, sheet, 1)
@@ -1617,7 +1623,7 @@ pub fn export_raster_scaled(
         }
     }
     let im = crate::workflows::scale_image(&im, scale)?;
-    im.save(path).map_err(|e| e.to_string())?;
+    mcp_io::write_image(path, &im).map_err(|e| e.to_string())?;
     if path
         .extension()
         .is_some_and(|s| s.eq_ignore_ascii_case("png"))
@@ -1664,7 +1670,7 @@ fn encode_gif(
 ) -> Result<(), String> {
     d.validate()?;
     animation_dimensions(d, scale)?;
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let file = mcp_io::create(path).map_err(|e| e.to_string())?;
     let mut enc = image::codecs::gif::GifEncoder::new(file);
     enc.set_repeat(if repeat == 0 {
         image::codecs::gif::Repeat::Infinite
@@ -1716,13 +1722,29 @@ pub(crate) fn export_mp4_progress(
     d.validate()?;
     let (width, height) = animation_dimensions(d, scale)?;
     let size = format!("{width}x{height}");
-    let mut command = Command::new("ffmpeg");
+    let restricted_root = crate::automation::mcp_access::active_root();
+    let resolve = move || -> std::io::Result<Command> {
+        if let Some(root) = restricted_root {
+            let executable = crate::automation::mcp_access::find_ffmpeg(&root)?;
+            let mut command = Command::new(&executable);
+            command.current_dir(executable.parent().unwrap());
+            Ok(command)
+        } else {
+            Ok(Command::new("ffmpeg"))
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let command = crate::automation::mcp_linux::with_codec_runtime(resolve)?;
+    #[cfg(not(target_os = "linux"))]
+    let command = resolve();
+    let mut command = command.map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let mut child = command
+    let restricted = crate::automation::mcp_access::restricted();
+    command
         .args([
             "-hide_banner",
             "-loglevel",
@@ -1751,16 +1773,28 @@ pub(crate) fn export_mp4_progress(
             "-pix_fmt",
             "yuv420p",
             "-movflags",
-            "+faststart",
+            if restricted {
+                "+frag_keyframe+empty_moov+default_base_moof"
+            } else {
+                "+faststart"
+            },
             "-f",
             "mp4",
         ])
-        .arg(path)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("MP4 export requires FFmpeg on PATH with libx264: {e}"))?;
+        .stderr(Stdio::piped());
+    if restricted {
+        let output = mcp_io::create_new(path).map_err(|e| e.to_string())?;
+        command.arg("pipe:1").stdout(Stdio::from(output));
+    } else {
+        command.arg(path).stdout(Stdio::null());
+    }
+    #[cfg(target_os = "linux")]
+    let launch = crate::automation::mcp_linux::with_codec_runtime(move || command.spawn())?;
+    #[cfg(not(target_os = "linux"))]
+    let launch = command.spawn();
+    let mut child =
+        launch.map_err(|e| format!("MP4 export requires FFmpeg on PATH with libx264: {e}"))?;
     let errors = child.stderr.take().unwrap();
     let drain = std::thread::spawn(move || {
         let mut errors = BufReader::new(errors);
@@ -1852,7 +1886,7 @@ fn png_records(bytes: &[u8]) -> Result<Vec<PngRecord>, String> {
     Ok(out)
 }
 fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
-    for (kind, data) in png_records(&std::fs::read(path).map_err(|e| e.to_string())?)? {
+    for (kind, data) in png_records(&mcp_io::read(path).map_err(|e| e.to_string())?)? {
         if matches!(
             &kind,
             b"gAMA"
@@ -1916,7 +1950,7 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
     if stored.is_empty() && d.color_profile.is_empty() {
         return Ok(());
     }
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = mcp_io::read(path).map_err(|e| e.to_string())?;
     let records = png_records(&bytes)?;
     let mut out = bytes[..8].to_vec();
     for (kind, data) in records {
@@ -1947,7 +1981,13 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
             }
         }
     }
-    std::fs::write(path, out).map_err(|e| e.to_string())
+    if crate::automation::mcp_access::restricted() {
+        // The staged PNG is already present. Replace it with a newly created
+        // file so even a swapped hardlink cannot be opened for truncation.
+        write_project_bytes(path, out)
+    } else {
+        mcp_io::write(path, out).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]

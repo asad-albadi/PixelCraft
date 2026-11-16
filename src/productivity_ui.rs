@@ -1333,6 +1333,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         if op == "live-save" {
             request.arguments["output"] = serde_json::json!(self.path);
             request.project_root = self.live_save_root.clone();
+            request.project_identity = self.live_save_root_identity;
         }
         Some((self.doc.clone(), revision, self.frame))
     }
@@ -1368,6 +1369,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         args,
                         &revision,
                         request.project_root.as_deref(),
+                        request.project_identity,
                         |done, total| {
                             if Instant::now() >= request.deadline {
                                 return Err("Live request expired; no output published".into());
@@ -1388,6 +1390,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         &revision,
                         request.operation == "live-save" || args["overwrite"] == true,
                         request.project_root.as_deref(),
+                        request.project_identity,
                     )?;
                     return Ok(LiveResult::Save(prepared, doc));
                 }
@@ -1501,6 +1504,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     self.add_recent(path.clone());
                     self.path = Some(path);
                     self.live_save_root = prepared.request.project_root.clone();
+                    self.live_save_root_identity = prepared.request.project_identity;
                     self.status = "Saved sprite through MCP".into();
                     return Ok(result);
                 }
@@ -1674,6 +1678,7 @@ mod bridge_tests {
             operation: operation.into(),
             arguments,
             project_root,
+            project_identity: None,
             response: tx,
             export_progress: Default::default(),
         };
@@ -1702,7 +1707,7 @@ mod bridge_tests {
         let alias = root.join("alias");
         std::fs::create_dir_all(&original).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        symlink(&original, &alias).unwrap();
+        symlink("original", &alias).unwrap();
         let info = request(&mut app, "live-inspect", json!({}), false).unwrap();
         request_under(
             &mut app,
@@ -1743,7 +1748,7 @@ mod bridge_tests {
         let alias = root.join("alias");
         std::fs::create_dir_all(&original).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        symlink(&original, &alias).unwrap();
+        symlink("original", &alias).unwrap();
         let (response, result) = std::sync::mpsc::channel();
         let mut request = LiveRequest {
             deadline: Instant::now() + Duration::from_secs(3),
@@ -1753,6 +1758,7 @@ mod bridge_tests {
                 "output":alias.join("frames"), "overwrite":true
             }),
             project_root: Some(root.canonicalize().unwrap()),
+            project_identity: None,
             response,
             export_progress: Default::default(),
         };
@@ -2076,6 +2082,7 @@ mod bridge_tests {
             ]}),
             deadline: Instant::now() + Duration::from_secs(2),
             project_root: None,
+            project_identity: None,
             response,
             export_progress: Default::default(),
         };

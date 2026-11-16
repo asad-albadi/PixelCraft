@@ -148,6 +148,31 @@ fn openraster_keeps_layers_opacity_and_stacking() {
     assert_eq!(d.composite(0)[5], [0, 255, 0, 128]);
 }
 #[test]
+fn openraster_import_without_a_writable_temp_directory() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/workflows/layers.ora");
+    // A regular file cannot be used as an extraction directory.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pixelcraft"))
+        .env("TMPDIR", &path)
+        .env("TEMP", &path)
+        .env("TMP", &path)
+        .arg("--cli")
+        .arg("inspect")
+        .arg("--input")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["layers"][0]["name"], "Red");
+    assert_eq!(report["layers"][1]["name"], "Green");
+}
+
+#[test]
 fn engine_presets_write_resources_with_animation_timing() {
     let root = std::env::temp_dir().join(format!("pixelcraft-engines-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();

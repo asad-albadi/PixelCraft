@@ -2381,6 +2381,7 @@ dependencies = [
  "eframe",
  "flate2",
  "image",
+ "libc",
  "libloading",
  "moxcms",
  "png",

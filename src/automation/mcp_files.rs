@@ -1,7 +1,6 @@
-use super::{PreparedExport, prepare_output_under};
+use super::{PreparedExport, mcp_io, prepare_output_under};
 use serde_json::Value;
 use std::{
-    fs,
     io::ErrorKind,
     path::{Component, Path, PathBuf},
 };
@@ -34,7 +33,7 @@ fn same_component(a: Component<'_>, b: Component<'_>) -> bool {
             ) => server_a.eq_ignore_ascii_case(server_b) && share_a.eq_ignore_ascii_case(share_b),
             _ => false,
         },
-        (Component::Normal(a), Component::Normal(b)) => a.eq_ignore_ascii_case(b),
+        (Component::Normal(a), Component::Normal(b)) => a == b,
         _ => a == b,
     }
 }
@@ -73,50 +72,6 @@ fn project_suffix<'a>(root: &Path, path: &'a Path) -> Result<std::path::Componen
     Ok(suffix)
 }
 
-#[cfg(windows)]
-fn check_reparse_points(root: &Path, parts: std::path::Components<'_>) -> Result<(), String> {
-    use std::os::windows::fs::MetadataExt;
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    let check = |path: &Path| match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
-            Err(format!(
-                "Project-root access to Windows reparse points is disabled: {}",
-                path.display()
-            ))
-        }
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(format!("Could not inspect {}: {e}", path.display())),
-    };
-    let ancestors: Vec<_> = root
-        .ancestors()
-        .filter(|path| path.file_name().is_some())
-        .collect();
-    for ancestor in ancestors.into_iter().rev() {
-        if !check(ancestor)? {
-            return Err(format!(
-                "The project root no longer exists: {}",
-                root.display()
-            ));
-        }
-    }
-    let mut current = root.to_path_buf();
-    for part in parts {
-        match part {
-            Component::Normal(name) => current.push(name),
-            Component::ParentDir => {
-                current.pop();
-                continue;
-            }
-            _ => continue,
-        }
-        if !check(&current)? {
-            break;
-        }
-    }
-    Ok(())
-}
-
 pub(super) struct Files<'a> {
     pub(super) root: Option<&'a Path>,
     pub(super) overwrite: bool,
@@ -124,15 +79,24 @@ pub(super) struct Files<'a> {
 
 impl Files<'_> {
     pub(super) fn resolve(root: Option<&Path>, path: PathBuf) -> PathBuf {
-        match root {
-            Some(root) => root.join(path),
-            None => path,
+        let Some(root) = root else {
+            return path;
+        };
+        #[cfg(windows)]
+        if path.is_absolute()
+            && let Ok(suffix) = project_suffix(root, &path)
+        {
+            return root.join(suffix.as_path());
         }
+        root.join(path)
     }
 
     pub(super) fn check_read(&self, path: &Path) -> Result<(), String> {
         self.check_path(path, false)?;
-        if self.root.is_some() && !fs::metadata(path).map_err(|e| e.to_string())?.is_file() {
+        if self.root.is_some() && !mcp_io::metadata(path).map_err(|e| e.to_string())?.is_file() {
+            if mcp_io::open(path).is_ok() {
+                return Ok(());
+            }
             return Err(format!("Input must be a regular file: {}", path.display()));
         }
         Ok(())
@@ -141,7 +105,7 @@ impl Files<'_> {
     pub(super) fn check_atlas_input(&self, path: &Path) -> Result<(), String> {
         self.check_path(path, false)?;
         if self.root.is_some() {
-            let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
+            let metadata = mcp_io::metadata(path).map_err(|e| e.to_string())?;
             if !metadata.is_file() && !metadata.is_dir() {
                 return Err(format!(
                     "Atlas input must be a file or directory: {}",
@@ -162,31 +126,32 @@ impl Files<'_> {
         };
         let _suffix = project_suffix(root, path)?;
         #[cfg(windows)]
-        check_reparse_points(root, _suffix)?;
-        // Check the nearest existing ancestor for new paths. Use symlink metadata
-        // so a dangling link is treated as a link rather than as a missing name.
-        let mut ancestor = path;
-        while allow_missing
-            && ancestor.file_name().is_some()
-            && fs::symlink_metadata(ancestor).is_err_and(|e| e.kind() == ErrorKind::NotFound)
-        {
-            ancestor = ancestor.parent().unwrap();
+        if super::mcp_access::Project::active(root).is_some() {
+            let mut ancestor = path;
+            loop {
+                match mcp_io::metadata(ancestor) {
+                    Ok(_) => return Ok(()),
+                    Err(e) if allow_missing && e.kind() == ErrorKind::NotFound => {
+                        ancestor = ancestor.parent().ok_or_else(|| e.to_string())?;
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Could not access path inside the project root: {e}"
+                        ));
+                    }
+                }
+            }
         }
-        let canonical = ancestor.canonicalize().map_err(|e| {
-            format!(
-                "Could not resolve {} inside the project root: {e}",
-                path.display()
-            )
-        })?;
-        if !canonical.starts_with(root) {
-            return Err(format!("Path escapes the project root: {}", path.display()));
+        #[cfg(target_os = "linux")]
+        if let Some(project) = super::mcp_linux::Project::active(root) {
+            return project.check(_suffix.as_path(), allow_missing);
         }
-        Ok(())
+        Err("Restricted MCP filesystem access was not established".into())
     }
 
     pub(super) fn check_file(&self, path: &Path) -> Result<(), String> {
         self.check_write(path)?;
-        match fs::symlink_metadata(path) {
+        match mcp_io::metadata(path) {
             Ok(_) if !self.overwrite => Err(format!(
                 "Output already exists: {}. Set overwrite to true to replace it.",
                 path.display()
@@ -226,24 +191,26 @@ impl Files<'_> {
             }
         }
         if directory && let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            mcp_io::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        let staging_target = if directory && output.is_dir() {
-            output.join("files")
-        } else {
-            output.to_path_buf()
-        };
+        let staging_target =
+            if directory && mcp_io::metadata(output).is_ok_and(|entry| entry.is_dir()) {
+                output.join("files")
+            } else {
+                output.to_path_buf()
+            };
         let prepared = prepare_output_under(staging_target, true, self.root, |_| Ok(Value::Null))?;
         let result = encode(&prepared.temporary)?;
         // Recheck staging and destinations before publishing in case a path
         // changed while the encoder was running.
         self.check_write(&prepared.staging)?;
+        prepared.check_staging()?;
         for file in files {
             self.check_file(file)?;
         }
         if directory {
             self.check_write(output)?;
-            fs::create_dir_all(output).map_err(|e| e.to_string())?;
+            mcp_io::create_dir_all(output).map_err(|e| e.to_string())?;
         }
         publish_files(&prepared, files, directory, self.overwrite)?;
         Ok(result)
@@ -274,11 +241,11 @@ pub(super) fn publish_files(
     let mut previous = vec![None; files.len()];
     if let Some(backups) = &backups {
         for (index, file) in files.iter().enumerate() {
-            match fs::symlink_metadata(file) {
+            match mcp_io::metadata(file) {
                 Ok(metadata) if metadata.is_file() => {
                     let backup = backups.staging.join(index.to_string());
-                    fs::hard_link(file, &backup)
-                        .or_else(|_| fs::copy(file, &backup).map(|_| ()))
+                    mcp_io::hard_link(file, &backup)
+                        .or_else(|_| mcp_io::copy(file, &backup))
                         .map_err(|e| format!("Could not back up {}: {e}", file.display()))?;
                     previous[index] = Some(backup);
                 }
@@ -291,16 +258,16 @@ pub(super) fn publish_files(
     for (index, file) in files.iter().enumerate() {
         let staged = staging.join(file.file_name().ok_or("Invalid output filename")?);
         let written = if replace {
-            fs::rename(staged, file)
+            mcp_io::rename(&staged, file)
         } else {
-            fs::hard_link(staged, file)
+            mcp_io::hard_link(&staged, file)
         };
         if let Err(e) = written {
             let mut error = format!("Could not publish {}: {e}", file.display());
             for (published, backup) in files[..index].iter().zip(&previous).rev() {
                 let restored = match backup {
-                    Some(backup) => fs::rename(backup, published),
-                    None => fs::remove_file(published),
+                    Some(backup) => mcp_io::rename(backup, published),
+                    None => mcp_io::remove_file(published),
                 };
                 if let Err(e) = restored {
                     error.push_str(&format!(
@@ -327,6 +294,7 @@ Backup retained at {}",
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[cfg(unix)]
     #[test]
@@ -340,12 +308,12 @@ mod tests {
         let outside = workspace.join("outside");
         fs::create_dir_all(&parent).unwrap();
         fs::create_dir_all(&outside).unwrap();
-        let prepared = prepare_output_under(
-            parent.join("file.png"),
-            true,
-            Some(&root.canonicalize().unwrap()),
-            |_| Ok(Value::Null),
-        )
+        let canonical = root.canonicalize().unwrap();
+        let prepared = super::super::mcp_access::run(Some(&canonical), None, || {
+            prepare_output_under(parent.join("file.png"), true, Some(&canonical), |_| {
+                Ok(Value::Null)
+            })
+        })
         .unwrap();
         let unrelated = outside
             .join(prepared.staging.file_name().unwrap())
@@ -358,6 +326,33 @@ mod tests {
         let contents = fs::read(&unrelated);
         fs::remove_dir_all(workspace).unwrap();
         assert_eq!(contents.unwrap(), b"unrelated content");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restricted_cleanup_does_not_delete_a_replacement_directory_inside_the_project() {
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-staging-replacement-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let prepared = super::super::mcp_access::run(Some(&canonical), None, || {
+            prepare_output_under(root.join("file.png"), true, Some(&canonical), |_| {
+                Ok(Value::Null)
+            })
+        })
+        .unwrap();
+        let renamed = root.join("moved");
+        fs::rename(&prepared.staging, &renamed).unwrap();
+        fs::create_dir(&prepared.staging).unwrap();
+        let marker = prepared.staging.join("other");
+        fs::write(&marker, b"keep").unwrap();
+        let result = prepared.write().unwrap_err();
+        let contents = fs::read(marker);
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.contains("staging directory changed"), "{result}");
+        assert_eq!(contents.unwrap(), b"keep");
     }
 
     #[test]

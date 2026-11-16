@@ -2,7 +2,7 @@ name: Pull request checks
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/animation-workflows-mcp-safety-and-pr-ci]
 
 permissions:
   contents: read

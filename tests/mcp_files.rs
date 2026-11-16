@@ -326,3 +326,23 @@ fn restricted_mcp_rejects_external_unc_roots_before_probing_them() {
         );
     }
 }
+
+#[test]
+fn restricted_mp4_export_passes_an_open_destination_to_ffmpeg() {
+    if !Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok_and(|run| run.status.success())
+    {
+        return;
+    }
+    let w = Workspace::new();
+    let reply = w.call(
+        "export",
+        json!({"input":"art.pixel","output":"video.mp4","format":"mp4"}),
+    );
+    assert!(reply["isError"].is_null(), "{reply}");
+    let video = fs::read(w.project().join("video.mp4")).unwrap();
+    assert_eq!(&video[4..8], b"ftyp");
+    assert!(video.windows(4).any(|part| part == b"moof"));
+}

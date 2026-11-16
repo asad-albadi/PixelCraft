@@ -1,9 +1,10 @@
+use crate::automation::mcp_io;
 use crate::{model::*, workflows::*};
 use image::AnimationDecoder;
 use serde_json::{Value, json};
 use std::{
-    fs::{self, File},
-    io::{BufRead, BufReader, ErrorKind, Read},
+    collections::HashMap,
+    io::{BufRead, BufReader, Cursor, ErrorKind, Read},
     path::{Path, PathBuf},
 };
 
@@ -52,7 +53,7 @@ pub fn from_frames(
 }
 pub fn load_animation(path: &Path) -> Result<Document, String> {
     let file = || {
-        std::fs::File::open(path)
+        mcp_io::open(path)
             .map(BufReader::new)
             .map_err(|e| e.to_string())
     };
@@ -83,7 +84,7 @@ pub fn load_sequence(paths: &[PathBuf]) -> Result<Document, String> {
     let mut paths = paths.to_vec();
     paths.sort_by_key(|a| natural_key(a));
     let frames = paths.iter().map(|p| {
-        image::open(p).map(|im| {
+        mcp_io::open_image(p).map(|im| {
             image::Frame::from_parts(
                 im.to_rgba8(),
                 0,
@@ -163,7 +164,7 @@ pub(crate) fn export_sheet_with_previous(
         let mut header = String::new();
         if companion_exists(&resource)? {
             const MAX_HEADER_BYTES: usize = 4096;
-            let source = File::open(&resource).map_err(|e| e.to_string())?;
+            let source = mcp_io::open(&resource).map_err(|e| e.to_string())?;
             BufReader::new(source.take(MAX_HEADER_BYTES as u64 + 1))
                 .read_line(&mut header)
                 .map_err(|e| e.to_string())?;
@@ -191,7 +192,7 @@ pub(crate) fn export_sheet_with_previous(
         let meta_path = sheet_engine_sidecar(previous_path, &o.preset).unwrap();
         let mut previous = String::new();
         if companion_exists(&meta_path)? {
-            let source = File::open(&meta_path).map_err(|e| e.to_string())?;
+            let source = mcp_io::open(&meta_path).map_err(|e| e.to_string())?;
             let too_large = || "Previous Unity metadata exceeds 64 MiB".to_string();
             if source.metadata().map_err(|e| e.to_string())?.len() > MAX_UNITY_META_BYTES as u64 {
                 return Err(too_large());
@@ -213,17 +214,17 @@ pub(crate) fn export_sheet_with_previous(
     } else {
         None
     };
-    im.save(path).map_err(|e| e.to_string())?;
+    mcp_io::write_image(path, &im).map_err(|e| e.to_string())?;
     write_json(&json_path, &meta)?;
     if let Some(contents) = sidecar {
         let companion = sheet_engine_sidecar(path, &o.preset).unwrap();
-        fs::write(companion, contents).map_err(|e| e.to_string())?;
+        mcp_io::write(companion, contents).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
 fn companion_exists(path: &Path) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
+    match mcp_io::metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(true),
         Ok(_) => Err(format!(
             "Sprite-sheet companion is not a regular file: {}",
@@ -234,7 +235,7 @@ fn companion_exists(path: &Path) -> Result<bool, String> {
     }
 }
 pub fn write_json(path: &Path, v: &Value) -> Result<(), String> {
-    std::fs::write(
+    mcp_io::write(
         path,
         serde_json::to_vec_pretty(v).map_err(|e| e.to_string())?,
     )
@@ -491,130 +492,135 @@ fn unity(meta: &Value, name: &str, height: u32, previous: &str) -> Result<String
     Ok(s)
 }
 pub fn load_ora(path: &Path) -> Result<Document, String> {
-    let root = std::env::temp_dir().join(format!(
-        "pixelcraft-ora-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    let result = (|| {
-        crate::extensions::unzip(&std::fs::read(path).map_err(|e| e.to_string())?, &root)?;
-        let xml = std::fs::read_to_string(root.join("stack.xml")).map_err(|e| e.to_string())?;
-        let tree = roxmltree::Document::parse(&xml).map_err(|e| e.to_string())?;
-        let image = tree.root_element();
-        let w = image
-            .attribute("w")
-            .unwrap_or("0")
-            .parse::<usize>()
-            .map_err(|e| e.to_string())?;
-        let h = image
-            .attribute("h")
-            .unwrap_or("0")
-            .parse::<usize>()
-            .map_err(|e| e.to_string())?;
-        let count = image
-            .descendants()
-            .filter(|n| n.has_tag_name("layer") || n.has_tag_name("stack"))
-            .count();
-        if w == 0
-            || h == 0
-            || w > MAX_DIMENSION
-            || h > MAX_DIMENSION
-            || w.saturating_mul(h).saturating_mul(count) > MAX_PIXELS
-        {
-            return Err("OpenRaster exceeds limits".into());
-        }
-        let mut d = Document::new(w, h);
-        d.layers.clear();
-        fn visit(
-            node: roxmltree::Node,
-            parent: Option<usize>,
-            root: &Path,
-            d: &mut Document,
-        ) -> Result<(), String> {
-            for n in node.children().filter(|n| n.is_element()).rev() {
-                if !n.has_tag_name("layer") && !n.has_tag_name("stack") {
-                    continue;
-                }
-                let mut l = Layer::new(
-                    n.attribute("name").unwrap_or("Layer").into(),
-                    d.width,
-                    d.height,
-                    1,
-                );
-                l.parent = parent;
-                l.group = n.has_tag_name("stack");
-                l.visible = n.attribute("visibility") != Some("hidden");
-                l.opacity = (n
-                    .attribute("opacity")
-                    .unwrap_or("1")
-                    .parse::<f32>()
-                    .map_err(|e| e.to_string())?
-                    .clamp(0., 1.)
-                    * 255.)
-                    .round() as u8;
-                l.blend = match n.attribute("composite-op").unwrap_or("svg:src-over") {
-                    "svg:multiply" => BlendMode::Multiply,
-                    "svg:screen" => BlendMode::Screen,
-                    "svg:overlay" => BlendMode::Overlay,
-                    "svg:darken" => BlendMode::Darken,
-                    "svg:lighten" => BlendMode::Lighten,
-                    "svg:src-over" => BlendMode::Normal,
-                    v => return Err(format!("Unsupported OpenRaster blend: {v}")),
-                };
-                let index = d.layers.len();
-                if !l.group {
-                    let src = n.attribute("src").ok_or("Missing OpenRaster source")?;
-                    if Path::new(src)
-                        .components()
-                        .any(|c| !matches!(c, std::path::Component::Normal(_)))
-                    {
-                        return Err("Unsafe OpenRaster source".into());
-                    }
-                    let im = image::open(root.join(src))
-                        .map_err(|e| e.to_string())?
-                        .to_rgba8();
-                    let ox = n
-                        .attribute("x")
-                        .unwrap_or("0")
-                        .parse::<i32>()
-                        .map_err(|e| e.to_string())?;
-                    let oy = n
-                        .attribute("y")
-                        .unwrap_or("0")
-                        .parse::<i32>()
-                        .map_err(|e| e.to_string())?;
-                    for (x, y, p) in im.enumerate_pixels() {
-                        let (x, y) = (x as i32 + ox, y as i32 + oy);
-                        if let Some(i) = d.index(x, y) {
-                            l.cels[0][i] = p.0
-                        } else {
-                            l.cel_meta[0]
-                                .outside
-                                .push(OutsidePixel { x, y, color: p.0 });
-                        }
-                    }
-                }
-                d.layers.push(l);
-                if n.has_tag_name("stack") {
-                    visit(n, Some(index), root, d)?;
-                }
+    let mut entries = HashMap::new();
+    crate::extensions::visit_zip(
+        &mcp_io::read(path).map_err(|e| e.to_string())?,
+        |path, contents| {
+            if let Some(contents) = contents {
+                entries.insert(path, contents);
             }
             Ok(())
+        },
+    )?;
+    let xml = entries
+        .get(Path::new("stack.xml"))
+        .ok_or("Missing OpenRaster stack.xml")?;
+    let xml = std::str::from_utf8(xml).map_err(|e| e.to_string())?;
+    let tree = roxmltree::Document::parse(xml).map_err(|e| e.to_string())?;
+    let image = tree.root_element();
+    let w = image
+        .attribute("w")
+        .unwrap_or("0")
+        .parse::<usize>()
+        .map_err(|e| e.to_string())?;
+    let h = image
+        .attribute("h")
+        .unwrap_or("0")
+        .parse::<usize>()
+        .map_err(|e| e.to_string())?;
+    let count = image
+        .descendants()
+        .filter(|n| n.has_tag_name("layer") || n.has_tag_name("stack"))
+        .count();
+    if w == 0
+        || h == 0
+        || w > MAX_DIMENSION
+        || h > MAX_DIMENSION
+        || w.saturating_mul(h).saturating_mul(count) > MAX_PIXELS
+    {
+        return Err("OpenRaster exceeds limits".into());
+    }
+    let mut d = Document::new(w, h);
+    d.layers.clear();
+    fn visit(
+        node: roxmltree::Node,
+        parent: Option<usize>,
+        entries: &HashMap<PathBuf, Vec<u8>>,
+        d: &mut Document,
+    ) -> Result<(), String> {
+        for n in node.children().filter(|n| n.is_element()).rev() {
+            if !n.has_tag_name("layer") && !n.has_tag_name("stack") {
+                continue;
+            }
+            let mut l = Layer::new(
+                n.attribute("name").unwrap_or("Layer").into(),
+                d.width,
+                d.height,
+                1,
+            );
+            l.parent = parent;
+            l.group = n.has_tag_name("stack");
+            l.visible = n.attribute("visibility") != Some("hidden");
+            l.opacity = (n
+                .attribute("opacity")
+                .unwrap_or("1")
+                .parse::<f32>()
+                .map_err(|e| e.to_string())?
+                .clamp(0., 1.)
+                * 255.)
+                .round() as u8;
+            l.blend = match n.attribute("composite-op").unwrap_or("svg:src-over") {
+                "svg:multiply" => BlendMode::Multiply,
+                "svg:screen" => BlendMode::Screen,
+                "svg:overlay" => BlendMode::Overlay,
+                "svg:darken" => BlendMode::Darken,
+                "svg:lighten" => BlendMode::Lighten,
+                "svg:src-over" => BlendMode::Normal,
+                v => return Err(format!("Unsupported OpenRaster blend: {v}")),
+            };
+            let index = d.layers.len();
+            if !l.group {
+                let src = n.attribute("src").ok_or("Missing OpenRaster source")?;
+                if Path::new(src)
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
+                {
+                    return Err("Unsafe OpenRaster source".into());
+                }
+                let bytes = entries
+                    .get(Path::new(src))
+                    .ok_or_else(|| format!("Missing OpenRaster layer in archive: {src}"))?;
+                let im = image::ImageReader::new(Cursor::new(bytes))
+                    .with_guessed_format()
+                    .map_err(|e| e.to_string())?
+                    .decode()
+                    .map_err(|e| e.to_string())?
+                    .to_rgba8();
+                let ox = n
+                    .attribute("x")
+                    .unwrap_or("0")
+                    .parse::<i32>()
+                    .map_err(|e| e.to_string())?;
+                let oy = n
+                    .attribute("y")
+                    .unwrap_or("0")
+                    .parse::<i32>()
+                    .map_err(|e| e.to_string())?;
+                for (x, y, p) in im.enumerate_pixels() {
+                    let (x, y) = (x as i32 + ox, y as i32 + oy);
+                    if let Some(i) = d.index(x, y) {
+                        l.cels[0][i] = p.0
+                    } else {
+                        l.cel_meta[0]
+                            .outside
+                            .push(OutsidePixel { x, y, color: p.0 });
+                    }
+                }
+            }
+            d.layers.push(l);
+            if n.has_tag_name("stack") {
+                visit(n, Some(index), entries, d)?;
+            }
         }
-        let stack = image
-            .children()
-            .find(|n| n.has_tag_name("stack"))
-            .ok_or("Missing OpenRaster stack")?;
-        visit(stack, None, &root, &mut d)?;
-        d.validate()?;
-        Ok(d)
-    })();
-    let _ = std::fs::remove_dir_all(root);
-    result
+        Ok(())
+    }
+    let stack = image
+        .children()
+        .find(|n| n.has_tag_name("stack"))
+        .ok_or("Missing OpenRaster stack")?;
+    visit(stack, None, &entries, &mut d)?;
+    d.validate()?;
+    Ok(d)
 }
 
 pub fn load_webp(path: &Path) -> Result<Document, String> {
@@ -633,20 +639,38 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
         frame_count: u32,
         pad: [u32; 4],
     }
-    unsafe {
-        let mut library = None;
-        for name in [
-            "libwebpdemux.so.2",
-            "libwebpdemux.so",
-            "libwebpdemux.dylib",
-            "libwebpdemux.dll",
-        ] {
-            if let Ok(l) = libloading::Library::new(name) {
-                library = Some(l);
-                break;
-            }
+    #[cfg(not(windows))]
+    let load_runtime = || {
+        ["libwebpdemux.so.2", "libwebpdemux.so", "libwebpdemux.dylib"]
+            .into_iter()
+            // SAFETY: these are fixed runtime library names. The decoder keeps the
+            // library loaded until after all its symbols and decoder state are dropped.
+            .find_map(|name| unsafe { libloading::Library::new(name).ok() })
+            .ok_or("WebP import requires the libwebpdemux runtime on this system")
+    };
+    #[cfg(target_os = "linux")]
+    let lib = crate::automation::mcp_linux::with_codec_runtime(load_runtime)??;
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let lib = load_runtime()?;
+    #[cfg(windows)]
+    let lib: libloading::Library = {
+        use libloading::os::windows::{
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
+        };
+        // SAFETY: load only the shipped DLL or the system copy. Neither the
+        // current project directory nor entries from PATH are searched.
+        unsafe {
+            Library::load_with_flags(
+                "libwebpdemux.dll",
+                LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+            )
         }
-        let lib = library.ok_or("WebP import requires the libwebpdemux runtime on this system")?;
+        .map_err(|error| {
+            format!("WebP import requires libwebpdemux.dll beside PixelCraft: {error}")
+        })?
+        .into()
+    };
+    unsafe {
         let new: libloading::Symbol<
             unsafe extern "C" fn(
                 *const Data,
@@ -669,7 +693,7 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
         let delete: libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void)> = lib
             .get(b"WebPAnimDecoderDelete")
             .map_err(|e| e.to_string())?;
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let bytes = mcp_io::read(path).map_err(|e| e.to_string())?;
         let dec = new(
             &Data {
                 bytes: bytes.as_ptr(),
@@ -772,8 +796,7 @@ pub fn export_tiled(path: &Path, d: &Document, f: usize) -> Result<(), String> {
         }
         let png = format!("{stem}-tiles-{i}.png");
         let tsj = format!("{stem}-tiles-{i}.tsj");
-        im.save(path.with_file_name(&png))
-            .map_err(|e| e.to_string())?;
+        mcp_io::write_image(path.with_file_name(&png), &im).map_err(|e| e.to_string())?;
         write_json(
             &path.with_file_name(&tsj),
             &json!({"type":"tileset","version":"1.10","name":t.name,"tilewidth":t.width,"tileheight":t.height,"tilecount":t.tiles.len(),"columns":columns,"image":png,"imagewidth":im.width(),"imageheight":im.height(),"margin":0,"spacing":0}),
@@ -819,7 +842,7 @@ pub(crate) fn load_tiled_with_path_check(
     path: &Path,
     check_path: &impl Fn(&Path) -> Result<(), String>,
 ) -> Result<Document, String> {
-    let v: Value = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+    let v: Value = serde_json::from_slice(&mcp_io::read(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let num = |v: &Value, k: &str| {
         v[k].as_u64()
@@ -837,7 +860,7 @@ pub(crate) fn load_tiled_with_path_check(
         if let Some(source) = v["source"].as_str() {
             let p = base.join(source);
             check_path(&p)?;
-            v = serde_json::from_slice(&std::fs::read(&p).map_err(|e| e.to_string())?)
+            v = serde_json::from_slice(&mcp_io::read(&p).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
             base = p.parent().unwrap().into();
         }
@@ -857,7 +880,7 @@ pub(crate) fn load_tiled_with_path_check(
         }
         let image_path = base.join(v["image"].as_str().ok_or("Missing tileset image")?);
         check_path(&image_path)?;
-        let im = image::open(image_path)
+        let im = mcp_io::open_image(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
         let margin = v["margin"].as_u64().unwrap_or(0) as usize;

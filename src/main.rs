@@ -164,6 +164,7 @@ struct SpriteTab {
     saved: Document,
     path: Option<PathBuf>,
     live_save_root: Option<PathBuf>,
+    live_save_root_identity: Option<(u64, u64)>,
     layer: usize,
     frame: usize,
     undo: Vec<HistoryEntry>,
@@ -236,6 +237,7 @@ struct PixelCraft {
     saved: Document,
     path: Option<PathBuf>,
     live_save_root: Option<PathBuf>,
+    live_save_root_identity: Option<(u64, u64)>,
     layer: usize,
     frame: usize,
     tool: Tool,
@@ -395,6 +397,7 @@ impl PixelCraft {
             doc,
             path: None,
             live_save_root: None,
+            live_save_root_identity: None,
             layer: 1,
             frame: 0,
             tool: Tool::Pencil,
@@ -1408,6 +1411,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.saved = self.doc.clone();
         self.path = path;
         self.live_save_root = None;
+        self.live_save_root_identity = None;
         self.layer = 0;
         self.frame = 0;
         self.timeline_anchor = None;
@@ -1432,6 +1436,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             saved: self.saved.clone(),
             path: self.path.clone(),
             live_save_root: self.live_save_root.clone(),
+            live_save_root_identity: self.live_save_root_identity,
             layer: self.layer,
             frame: self.frame,
             undo: self.undo.clone(),
@@ -1461,6 +1466,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.saved, &mut tab.saved);
         std::mem::swap(&mut self.path, &mut tab.path);
         std::mem::swap(&mut self.live_save_root, &mut tab.live_save_root);
+        std::mem::swap(
+            &mut self.live_save_root_identity,
+            &mut tab.live_save_root_identity,
+        );
         std::mem::swap(&mut self.layer, &mut tab.layer);
         std::mem::swap(&mut self.frame, &mut tab.frame);
         std::mem::swap(&mut self.undo, &mut tab.undo);
@@ -1680,12 +1689,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 if tab == self.active_tab {
                     if self.path.as_ref() != Some(&path) {
                         self.live_save_root = None;
+                        self.live_save_root_identity = None;
                     }
                     self.path = Some(path);
                     self.saved = saving;
                 } else if let Some(Some(tab)) = self.tabs.get_mut(tab) {
                     if tab.path.as_ref() != Some(&path) {
                         tab.live_save_root = None;
+                        tab.live_save_root_identity = None;
                     }
                     tab.path = Some(path);
                     tab.saved = saving;
@@ -1709,6 +1720,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.add_recent(path.clone());
                 if self.path.as_ref() != Some(&path) {
                     self.live_save_root = None;
+                    self.live_save_root_identity = None;
                 }
                 self.path = Some(path);
                 self.saved = self.doc.clone();

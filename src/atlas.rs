@@ -322,6 +322,6 @@ pub fn save_packed_atlas(path: &Path, packed: &(RgbaImage, Value)) -> Result<(),
     let (image, meta) = packed;
     let mut meta = meta.clone();
     meta["meta"]["image"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
-    image.save(path).map_err(|e| e.to_string())?;
+    crate::automation::mcp_io::write_image(path, image).map_err(|e| e.to_string())?;
     crate::interchange::write_json(&path.with_extension("json"), &meta)
 }

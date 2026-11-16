@@ -1,6 +1,12 @@
 //! Headless commands and a newline-delimited JSON-RPC MCP stdio server.
 use crate::{atlas::*, formats, interchange, model::*, productivity::*, workflows::SheetOptions};
+pub(crate) mod mcp_access;
 mod mcp_files;
+pub(crate) mod mcp_io;
+#[cfg(target_os = "linux")]
+pub(crate) mod mcp_linux;
+#[cfg(windows)]
+mod mcp_windows;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -652,11 +658,11 @@ fn file_operation(
             let input = input_path("input")?;
             let output = argument_path("output")?;
             let p = parse_palette(
-                &std::fs::read(&input).map_err(|e| e.to_string())?,
+                &mcp_io::read(&input).map_err(|e| e.to_string())?,
                 extension(&input),
             )?;
             write_operation_file(files, &output, |target| {
-                std::fs::write(target, write_palette(&p, extension(target))?)
+                mcp_io::write(target, write_palette(&p, extension(target))?)
                     .map_err(|e| e.to_string())
             })?;
             Ok(json!({"colors":p.len(),"output":output}))
@@ -710,8 +716,7 @@ fn file_operation(
                         let (image, mut metadata) =
                             preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
                         write_operation_file(files, &out, |target| {
-                            image
-                                .save_with_format(target, image::ImageFormat::Png)
+                            mcp_io::write_image_as(target, &image, image::ImageFormat::Png)
                                 .map_err(|e| e.to_string())
                         })?;
                         metadata["output"] = json!(out);
@@ -779,8 +784,7 @@ fn file_operation(
                             let (image, mut metadata) =
                                 preview_image(&d, frame, v, &document_revision(&d), MAX_PIXELS)?;
                             write_operation_file(files, &out, |target| {
-                                image
-                                    .save_with_format(target, image::ImageFormat::Png)
+                                mcp_io::write_image_as(target, &image, image::ImageFormat::Png)
                                     .map_err(|e| e.to_string())
                             })?;
                             metadata["output"] = json!(out);
@@ -831,7 +835,7 @@ fn file_operation(
                 "palette-export" => {
                     let out = argument_path("output")?;
                     write_operation_file(files, &out, |target| {
-                        std::fs::write(target, write_palette(&d.palette, extension(target))?)
+                        mcp_io::write(target, write_palette(&d.palette, extension(target))?)
                             .map_err(|e| e.to_string())
                     })?;
                     Ok(json!({"output":out}))
@@ -839,7 +843,7 @@ fn file_operation(
                 "palette-import" => {
                     let p = input_path("palette")?;
                     let palette = parse_palette(
-                        &std::fs::read(&p).map_err(|e| e.to_string())?,
+                        &mcp_io::read(&p).map_err(|e| e.to_string())?,
                         extension(&p),
                     )?;
                     d.import_palette(palette)?;
@@ -918,6 +922,8 @@ pub fn serve_mcp(live: Option<&Path>) -> Result<(), String> {
 pub fn serve_mcp_with_root(live: Option<&Path>, root: Option<&Path>) -> Result<(), String> {
     let root = root.map(mcp_files::project_root).transpose()?;
     let root = root.as_deref();
+    let project = root.map(mcp_access::Project::new).transpose()?;
+    let project = project.as_ref();
     let stdin = std::io::stdin();
     std::thread::scope(|scope| {
         let stdout = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
@@ -954,11 +960,11 @@ pub fn serve_mcp_with_root(live: Option<&Path>, root: Option<&Path>) -> Result<(
                 }
                 let send = send.clone();
                 exports.push(scope.spawn(move || {
-                    if let Some(response) = rpc_with_root(&request, live, root) {
+                    if let Some(response) = rpc_with_root(&request, live, root, project) {
                         let _ = send(&response);
                     }
                 }));
-            } else if let Some(response) = rpc_with_root(&request, live, root) {
+            } else if let Some(response) = rpc_with_root(&request, live, root, project) {
                 send(&response)?;
             }
         }
@@ -967,10 +973,15 @@ pub fn serve_mcp_with_root(live: Option<&Path>, root: Option<&Path>) -> Result<(
 }
 
 pub fn rpc(r: &Value, live: Option<&Path>) -> Option<Value> {
-    rpc_with_root(r, live, None)
+    rpc_with_root(r, live, None, None)
 }
 
-fn rpc_with_root(r: &Value, live: Option<&Path>, root: Option<&Path>) -> Option<Value> {
+fn rpc_with_root(
+    r: &Value,
+    live: Option<&Path>,
+    root: Option<&Path>,
+    project: Option<&std::sync::Arc<mcp_access::Project>>,
+) -> Option<Value> {
     r.get("id")?;
     let method = r["method"].as_str().unwrap_or("");
     let result: Result<Value, String> = match method {
@@ -1083,16 +1094,34 @@ fn rpc_with_root(r: &Value, live: Option<&Path>, root: Option<&Path>) -> Option<
                     let mut args = args.clone();
                     if matches!(name, "live-export" | "live-save-as") {
                         let out = mcp_files::Files::resolve(root, path(&args, "output")?);
-                        if name == "live-export" && args["format"] == "png-sequence" {
-                            files.check_write(&out)?;
+                        let preflight = || {
+                            if name == "live-export" && args["format"] == "png-sequence" {
+                                files.check_write(&out)
+                            } else {
+                                files.check_file(&out)
+                            }
+                        };
+                        if let Some(project) = project {
+                            project.run(preflight)?;
                         } else {
-                            files.check_file(&out)?;
+                            preflight()?;
                         }
                         args["output"] = json!(out);
                     }
-                    live_call(bridge, name, &args, root)
+                    live_call(
+                        bridge,
+                        name,
+                        &args,
+                        root,
+                        project.and_then(|p| p.identity()),
+                    )
                 } else {
-                    file_operation(name, args, Some(&files))
+                    let operation = || file_operation(name, args, Some(&files));
+                    if let Some(project) = project {
+                        project.run(operation)
+                    } else {
+                        operation()
+                    }
                 }
             })();
             Ok(match value {
@@ -1180,6 +1209,7 @@ pub struct LiveRequest {
     pub operation: String,
     pub arguments: Value,
     pub project_root: Option<PathBuf>,
+    pub project_identity: Option<(u64, u64)>,
     pub response: mpsc::Sender<Result<Value, String>>,
     pub export_progress: LiveExportProgress,
 }
@@ -1230,7 +1260,7 @@ impl LiveBridge {
         write!(
             file,
             "{}",
-            json!({"address":addr.to_string(),"token":token})
+            json!({"address":addr.to_string(),"token":token,"restricted_filesystem":2})
         )
         .map_err(|e| e.to_string())?;
         let (tx, requests) = mpsc::channel();
@@ -1300,11 +1330,21 @@ impl LiveBridge {
                                 None
                             };
                             let _active_export = ActiveExport { jobs: &jobs, id: job_id };
+                            let project_root = v["project_root"].as_str().map(PathBuf::from);
+                            let project_identity: Option<(u64, u64)> =
+                                serde_json::from_value(v["project_identity"].clone())
+                                    .map_err(|_| "Invalid project root identity")?;
+                            if project_root.is_some() && project_identity.is_none()
+                                && matches!(operation, "live-save-as" | "live-export")
+                            {
+                                return Err("Restricted live file operations require the same PixelCraft version for the editor and MCP server".into());
+                            }
                             tx.send(LiveRequest {
                                 deadline,
                                 operation: operation.into(),
                                 arguments: arguments.clone(),
-                                project_root: v["project_root"].as_str().map(PathBuf::from),
+                                project_root,
+                                project_identity,
                                 response: res_tx,
                                 export_progress: export_progress.clone(),
                             })
@@ -1515,9 +1555,18 @@ pub fn check_live_response_size(value: &Value) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn live_call(config: &Path, op: &str, args: &Value, root: Option<&Path>) -> Result<Value, String> {
+fn live_call(
+    config: &Path,
+    op: &str,
+    args: &Value,
+    root: Option<&Path>,
+    identity: Option<(u64, u64)>,
+) -> Result<Value, String> {
     let v: Value = serde_json::from_slice(&std::fs::read(config).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
+    if root.is_some() && long_file_operation(op) && v["restricted_filesystem"] != 2 {
+        return Err("This editor does not support the restricted MCP filesystem protocol. Reopen the live bridge with the same PixelCraft version.".into());
+    }
     let addr: std::net::SocketAddr = v["address"]
         .as_str()
         .ok_or("Missing address")?
@@ -1536,7 +1585,7 @@ fn live_call(config: &Path, op: &str, args: &Value, root: Option<&Path>) -> Resu
     writeln!(
         stream,
         "{}",
-        json!({"token":v["token"],"operation":op,"arguments":args,"project_root":root})
+        json!({"token":v["token"],"operation":op,"arguments":args,"project_root":root,"project_identity":identity})
     )
     .map_err(|e| e.to_string())?;
     let mut line = String::new();
@@ -1613,22 +1662,36 @@ pub fn write_animation_export(
 pub struct PreparedExport {
     pub output: PathBuf,
     staging: PathBuf,
+    staging_identity: Option<(u64, u64)>,
     preserve_staging: bool,
     temporary: PathBuf,
     metadata: Value,
     replace: bool,
     sequence: Vec<String>,
     project_root: Option<PathBuf>,
+    access: Option<std::sync::Arc<mcp_access::Project>>,
 }
 
 impl Drop for PreparedExport {
     fn drop(&mut self) {
-        let guard = mcp_files::Files {
-            root: self.project_root.as_deref(),
-            overwrite: self.replace,
+        if self.preserve_staging {
+            return;
+        }
+        let root = self.project_root.as_deref();
+        let staging = &self.staging;
+        let staging_identity = self.staging_identity;
+        let cleanup = || {
+            mcp_files::Files {
+                root,
+                overwrite: true,
+            }
+            .check_write(staging)?;
+            mcp_io::remove_staging(staging, staging_identity).map_err(|error| error.to_string())
         };
-        if !self.preserve_staging && guard.check_write(&self.staging).is_ok() {
-            let _ = std::fs::remove_dir_all(&self.staging);
+        if let Some(access) = &self.access {
+            let _ = access.run(cleanup);
+        } else if root.is_none() {
+            let _ = cleanup();
         }
     }
 }
@@ -1651,9 +1714,15 @@ fn prepare_output_under(
         root,
         overwrite: replace,
     };
+    let access = root
+        .map(|root| {
+            mcp_access::Project::active(root)
+                .ok_or("Restricted MCP filesystem access was not established")
+        })
+        .transpose()?;
     files.check_write(&output)?;
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    if !replace && output.try_exists().map_err(|e| e.to_string())? {
+    if !replace && mcp_io::exists(&output).map_err(|e| e.to_string())? {
         return Err("Output already exists. Choose a new path.".into());
     }
     let parent = output.parent().ok_or("Invalid output path")?;
@@ -1664,43 +1733,42 @@ fn prepare_output_under(
     };
     let resolved_parent;
     let parent = if root.is_some() {
-        resolved_parent = parent.canonicalize().map_err(|e| e.to_string())?;
+        resolved_parent = mcp_io::directory_path(parent).map_err(|e| e.to_string())?;
         files.check_write(&resolved_parent)?;
         &resolved_parent
     } else {
         parent
     };
     let filename = output.file_name().ok_or("Invalid output filename")?;
-    #[cfg(unix)]
-    let builder = {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder
-    };
-    #[cfg(not(unix))]
-    let builder = std::fs::DirBuilder::new();
     let staging = loop {
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = parent.join(format!(".pixelcraft-output-{}-{n}", std::process::id()));
-        match builder.create(&dir) {
+        match mcp_io::create_private_dir(&dir) {
             Ok(()) => break dir,
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e.to_string()),
         }
     };
+    let staging_identity = if access.is_some() {
+        Some(mcp_io::directory_identity(&staging).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
     let temporary = staging.join(filename);
     let mut prepared = PreparedExport {
         output,
         staging,
+        staging_identity,
         preserve_staging: false,
         temporary,
         metadata: Value::Null,
         replace,
         sequence: vec![],
         project_root: root.map(Path::to_path_buf),
+        access,
     };
     prepared.metadata = encode(&prepared.temporary)?;
+    prepared.check_staging()?;
     Ok(prepared)
 }
 
@@ -1710,7 +1778,7 @@ pub fn prepare_live_save(
     revision: &str,
     replace: bool,
 ) -> Result<PreparedExport, String> {
-    prepare_live_save_under(d, output, revision, replace, None)
+    prepare_live_save_under(d, output, revision, replace, None, None)
 }
 
 pub fn prepare_live_save_under(
@@ -1719,11 +1787,14 @@ pub fn prepare_live_save_under(
     revision: &str,
     replace: bool,
     root: Option<&Path>,
+    identity: Option<(u64, u64)>,
 ) -> Result<PreparedExport, String> {
     let metadata = save_metadata(d, &output, revision)?;
-    prepare_output_under(output, replace, root, |temporary| {
-        formats::save(temporary, d)?;
-        Ok(metadata)
+    mcp_access::run(root, identity, || {
+        prepare_output_under(output, replace, root, |temporary| {
+            formats::save(temporary, d)?;
+            Ok(metadata)
+        })
     })
 }
 
@@ -1758,7 +1829,7 @@ fn check_sequence_outputs(
     files: &mcp_files::Files<'_>,
 ) -> Result<Vec<PathBuf>, String> {
     files.check_write(output)?;
-    match std::fs::symlink_metadata(output) {
+    match mcp_io::metadata(output) {
         Ok(metadata) if !metadata.is_dir() => {
             return Err(format!(
                 "Sequence output must be a directory: {}",
@@ -1801,20 +1872,19 @@ fn prepare_png_sequence_progress(
         check_sequence_outputs(&output, &names, &files)?;
     }
     let filtered = filter_export_layers(doc, args)?;
-    let staging_target = if replace && output.is_dir() {
+    let staging_target = if replace && mcp_io::metadata(&output).is_ok_and(|entry| entry.is_dir()) {
         output.join("frames")
     } else {
         output.clone()
     };
     let mut prepared = prepare_output_under(staging_target, replace, root, |temporary| {
-        std::fs::create_dir(temporary).map_err(|e| e.to_string())?;
+        mcp_io::create_dir(temporary).map_err(|e| e.to_string())?;
         let mut metadata = Value::Null;
         for (frame, name) in names.iter().enumerate() {
             progress(frame, names.len())?;
             let (image, frame_metadata) =
                 preview_composite(&filtered, frame, args, revision, MAX_PIXELS)?;
-            image
-                .save_with_format(temporary.join(name), image::ImageFormat::Png)
+            mcp_io::write_image_as(temporary.join(name), &image, image::ImageFormat::Png)
                 .map_err(|e| e.to_string())?;
             if frame == 0 {
                 metadata = frame_metadata;
@@ -1848,12 +1918,26 @@ pub fn prepare_live_export_with_progress(
     f: usize,
     args: &Value,
     revision: &str,
-    progress: impl FnMut(usize, usize) -> Result<(), String>,
+    progress: impl FnMut(usize, usize) -> Result<(), String> + Send,
 ) -> Result<PreparedExport, String> {
-    prepare_live_export_under(d, f, args, revision, None, progress)
+    prepare_live_export_under(d, f, args, revision, None, None, progress)
 }
 
 pub fn prepare_live_export_under(
+    d: &Document,
+    f: usize,
+    args: &Value,
+    revision: &str,
+    root: Option<&Path>,
+    identity: Option<(u64, u64)>,
+    progress: impl FnMut(usize, usize) -> Result<(), String> + Send,
+) -> Result<PreparedExport, String> {
+    mcp_access::run(root, identity, || {
+        prepare_live_export_inner(d, f, args, revision, root, progress)
+    })
+}
+
+fn prepare_live_export_inner(
     d: &Document,
     f: usize,
     args: &Value,
@@ -1879,8 +1963,7 @@ pub fn prepare_live_export_under(
         "png" => {
             progress(0, 1)?;
             let (image, metadata) = preview_image(d, f, args, revision, MAX_PIXELS)?;
-            image
-                .save_with_format(temporary, image::ImageFormat::Png)
+            mcp_io::write_image_as(temporary, &image, image::ImageFormat::Png)
                 .map_err(|e| e.to_string())?;
             progress(1, 1)?;
             Ok(metadata)
@@ -1915,27 +1998,48 @@ pub fn prepare_live_export_under(
 }
 
 impl PreparedExport {
-    pub fn write(mut self) -> Result<Value, String> {
+    fn check_staging(&self) -> Result<(), String> {
+        if let Some(identity) = self.staging_identity
+            && mcp_io::directory_identity(&self.staging).map_err(|error| error.to_string())?
+                != identity
+        {
+            return Err("The restricted export's staging directory changed".into());
+        }
+        Ok(())
+    }
+
+    pub fn write(self) -> Result<Value, String> {
+        if let Some(access) = self.access.clone() {
+            access.run(|| self.write_inner())
+        } else if self.project_root.is_some() {
+            Err("Restricted MCP filesystem access was not established".into())
+        } else {
+            self.write_inner()
+        }
+    }
+
+    fn write_inner(mut self) -> Result<Value, String> {
         let guard = mcp_files::Files {
             root: self.project_root.as_deref(),
             overwrite: self.replace,
         };
         guard.check_write(&self.output)?;
         guard.check_write(&self.staging)?;
+        self.check_staging()?;
         if !self.sequence.is_empty() && self.replace {
             let files = check_sequence_outputs(&self.output, &self.sequence, &guard)?;
-            std::fs::create_dir_all(&self.output).map_err(|e| e.to_string())?;
+            mcp_io::create_dir_all(&self.output).map_err(|e| e.to_string())?;
             mcp_files::publish_files(&self, &files, true, true)?;
         } else if !self.sequence.is_empty() {
-            std::fs::create_dir(&self.output).map_err(|e| e.to_string())?;
+            mcp_io::create_dir(&self.output).map_err(|e| e.to_string())?;
             for (index, name) in self.sequence.iter().enumerate() {
                 if let Err(error) =
-                    std::fs::rename(self.temporary.join(name), self.output.join(name))
+                    mcp_io::publish_new(&self.temporary.join(name), &self.output.join(name))
                 {
                     for written in &self.sequence[..index] {
-                        let _ = std::fs::remove_file(self.output.join(written));
+                        let _ = mcp_io::remove_file(&self.output.join(written));
                     }
-                    let _ = std::fs::remove_dir(&self.output);
+                    let _ = mcp_io::remove_dir(&self.output);
                     return Err(error.to_string());
                 }
             }
@@ -1944,9 +2048,9 @@ impl PreparedExport {
                 guard.check_file(&self.output)?;
             }
             if self.replace {
-                std::fs::rename(&self.temporary, &self.output)
+                mcp_io::rename(&self.temporary, &self.output)
             } else {
-                std::fs::hard_link(&self.temporary, &self.output)
+                mcp_io::publish_new(&self.temporary, &self.output)
             }
             .map_err(|e| e.to_string())?;
         }

@@ -379,7 +379,25 @@ fn copy_directory(
     }
     Ok(())
 }
-pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
+fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
+    visit_zip(b, |relative, contents| {
+        let path = dest.join(relative);
+        if let Some(bytes) = contents {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(path, bytes).map_err(|e| e.to_string())
+        } else {
+            std::fs::create_dir_all(path).map_err(|e| e.to_string())
+        }
+    })
+}
+
+/// Visit validated ZIP entries, with `None` for directory entries.
+pub(crate) fn visit_zip(
+    b: &[u8],
+    mut visit: impl FnMut(PathBuf, Option<Vec<u8>>) -> Result<(), String>,
+) -> Result<(), String> {
     fn w(b: &[u8], p: usize) -> Result<usize, String> {
         Ok(
             u16::from_le_bytes(b.get(p..p + 2).ok_or("Truncated ZIP")?.try_into().unwrap())
@@ -428,9 +446,8 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
         if total > 32 * 1024 * 1024 {
             return Err("Extension exceeds 32 MiB".into());
         }
-        let path = dest.join(relative);
         if name.ends_with('/') {
-            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+            visit(relative, None)?;
         } else {
             if b.get(local..local + 4) != Some(b"PK\x03\x04") {
                 return Err("Invalid local ZIP header".into());
@@ -440,7 +457,8 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
                 .get(offset..offset + compressed)
                 .ok_or("Truncated ZIP data")?;
             let bytes = match method {
-                0 => encoded.to_vec(),
+                0 if encoded.len() == size => encoded.to_vec(),
+                0 => return Err("ZIP size mismatch".into()),
                 8 => {
                     let mut out = vec![];
                     flate2::read::DeflateDecoder::new(encoded)
@@ -464,10 +482,7 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
             if !calculated != crc {
                 return Err("ZIP checksum mismatch".into());
             }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?
-            }
-            std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+            visit(relative, Some(bytes))?;
         }
         p += 46 + name_len + extra + comment;
     }
