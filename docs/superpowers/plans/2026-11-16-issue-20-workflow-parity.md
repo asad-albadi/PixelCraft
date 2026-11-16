@@ -111,6 +111,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 37 cropped/sequence checkpoint. File MCP, live MCP, and PNG sequence exports now use the same document-aware PNG writer as full-frame exports. Crops sample original palette slots using their canvas origin, including when scaled. PNG file exports retain stored samples and write available document color metadata, while previews continue to apply the display color transform. The regression covers file and live indexed crops and a cropped grayscale sequence with frame-specific luminance and alpha. Formatting, strict Clippy, and 515 Windows all-target tests passed. Mode preservation for animated PNG input and applicability to packed sheets remain open.
 
+- Item 37 animated-PNG checkpoint. Indexed APNG keeps original slots through separate posters, source/over blending, partial rectangles, and background/previous disposal. Exact blended colors use spare palette slots. The existing RGBA decoder handles palettes that cannot accommodate the result and can round alpha down by one in a partial blend. Grayscale APNG keeps Grayscale mode and authored frame delays. PNG and APNG metadata is now scanned without allocating a second copy of image data. The regressions cover both file extensions, poster exclusion, dynamic palettes, full-palette fallback, and grayscale gamma. Formatting, strict Clippy, and 518 Windows all-target tests passed. Packed sprite-sheet mode preservation remains open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

@@ -288,6 +288,8 @@ Choose **File → Repeat Last Export** to render a sprite again using its last s
 
 Still PNG imports preserve indexed palette slots and transparency, or open grayscale files in Grayscale mode. Full-frame, cropped, horizontal sheet, and PNG sequence exports retain the document's PNG color mode when the rendered pixels fit it. This includes file and live MCP exports. If the colors require RGBA, the export uses RGBA to preserve the appearance.
 
+Animated PNG imports retain grayscale or indexed mode where possible, along with frame delays and color metadata. Indexed animation keeps original palette slots and can add exact blended colors to unused slots. Imports that exceed indexed capacity use RGBA.
+
 The editor opens and exports ICO, QOI, and TGA. It also exports lossless WebP and JPEG. JPEG composites transparency on white. ICO accepts up to 256 × 256 pixels after scaling. Static WebP opens with the built-in decoder. Use the same extensions in CLI, file MCP, and live MCP raster export.
 
 PCX import reads indexed and planar RGB artwork. A single opaque indexed layer exports with its palette indices. Other PCX exports use 24-bit RGB with transparency composited on white. PCX is available in the editor, CLI, and both MCP export paths.

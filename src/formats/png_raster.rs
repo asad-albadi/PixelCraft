@@ -1,32 +1,21 @@
 use crate::{
     automation::mcp_io,
-    model::{ColorMode, Document, MAX_DIMENSION, MAX_PIXELS, Pixel},
+    model::{CLEAR, ColorMode, Document, MAX_DIMENSION, MAX_DOCUMENT_PIXELS, MAX_PIXELS, Pixel},
 };
-use png::{BitDepth, ColorType};
-use std::{collections::HashMap, io::BufReader, path::Path};
+use image::Pixel as _;
+use png::{BitDepth, BlendOp, ColorType, DisposeOp};
+use std::{
+    collections::HashMap,
+    io::{BufRead, BufReader, Seek},
+    path::Path,
+};
 
-pub(super) fn load(path: &Path) -> Result<Document, String> {
+pub(super) fn load(path: &Path, require_animation: bool) -> Result<Document, String> {
     let file = mcp_io::open(path).map_err(|e| e.to_string())?;
     let mut reader = png::Decoder::new(BufReader::new(file))
         .read_info()
         .map_err(|e| e.to_string())?;
     let info = reader.info();
-    if info.animation_control.is_some() {
-        return crate::interchange::load_animation(path);
-    }
-    if info.color_type != ColorType::Indexed {
-        let grayscale = matches!(
-            info.color_type,
-            ColorType::Grayscale | ColorType::GrayscaleAlpha
-        );
-        drop(reader);
-        let mut doc = super::raster::load_static(path, "png")?;
-        if grayscale {
-            doc.color_mode = ColorMode::Grayscale;
-        }
-        return Ok(doc);
-    }
-
     let (width, height) = (info.width as usize, info.height as usize);
     if width == 0
         || height == 0
@@ -36,6 +25,53 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     {
         return Err("PNG exceeds canvas limits".into());
     }
+    let animation = info.animation_control;
+    if require_animation && animation.is_none() {
+        return Err("Not an animated PNG".into());
+    }
+    if info.color_type != ColorType::Indexed {
+        let grayscale = matches!(
+            info.color_type,
+            ColorType::Grayscale | ColorType::GrayscaleAlpha
+        );
+        drop(reader);
+        let mut doc = if animation.is_some() {
+            crate::interchange::load_animation(path)?
+        } else {
+            super::raster::load_static(path, "png")?
+        };
+        if grayscale {
+            doc.color_mode = ColorMode::Grayscale;
+        }
+        return Ok(doc);
+    }
+
+    let palette = rgba_palette(info)?;
+    if let Some(animation) = animation {
+        return match load_indexed_animation(
+            reader,
+            palette,
+            [width, height],
+            animation.num_frames as usize,
+        )? {
+            Some(doc) => Ok(doc),
+            None => crate::interchange::load_animation(path),
+        };
+    }
+    let size = reader
+        .output_buffer_size()
+        .ok_or("Indexed PNG exceeds buffer limits")?;
+    let mut packed = vec![0; size];
+    let frame = reader.next_frame(&mut packed).map_err(|e| e.to_string())?;
+    let indices = packed_indices(&frame, &packed).collect::<Vec<_>>();
+    let mut doc = Document::new(width, height);
+    set_indexed_cel(&mut doc, 0, &palette, indices)?;
+    set_palette(&mut doc, palette);
+    doc.validate()?;
+    Ok(doc)
+}
+
+fn rgba_palette(info: &png::Info<'_>) -> Result<Vec<Pixel>, String> {
     let colors = info
         .palette
         .as_deref()
@@ -48,41 +84,207 @@ pub(super) fn load(path: &Path) -> Result<Document, String> {
     {
         return Err("Invalid indexed PNG palette".into());
     }
-    let palette: Vec<Pixel> = colors
+    Ok(colors
         .chunks_exact(3)
         .enumerate()
         .map(|(i, rgb)| [rgb[0], rgb[1], rgb[2], alpha.get(i).copied().unwrap_or(255)])
-        .collect();
-    let size = reader
-        .output_buffer_size()
-        .ok_or("Indexed PNG exceeds buffer limits")?;
-    let mut packed = vec![0; size];
-    let frame = reader.next_frame(&mut packed).map_err(|e| e.to_string())?;
+        .collect())
+}
+
+fn packed_indices<'a>(
+    frame: &'a png::OutputInfo,
+    packed: &'a [u8],
+) -> impl Iterator<Item = u8> + 'a {
     let bits = frame.bit_depth as usize;
     let mask = ((1u16 << bits) - 1) as u8;
-    let mut indices = Vec::with_capacity(width * height);
-    let mut pixels = Vec::with_capacity(width * height);
-    for row in packed[..frame.buffer_size()].chunks_exact(frame.line_size) {
-        for x in 0..width {
-            let bit = x * bits;
-            let slot = (row[bit / 8] >> (8 - bits - bit % 8)) & mask;
-            let pixel = palette
+    packed[..frame.buffer_size()]
+        .chunks_exact(frame.line_size)
+        .flat_map(move |row| {
+            (0..frame.width as usize).map(move |x| {
+                let bit = x * bits;
+                (row[bit / 8] >> (8 - bits - bit % 8)) & mask
+            })
+        })
+}
+
+fn set_indexed_cel(
+    doc: &mut Document,
+    frame: usize,
+    palette: &[Pixel],
+    indices: Vec<u8>,
+) -> Result<(), String> {
+    let pixels = indices
+        .iter()
+        .map(|&slot| {
+            palette
                 .get(slot as usize)
-                .ok_or("Indexed PNG uses an undefined palette slot")?;
-            pixels.push(*pixel);
-            indices.push(slot);
-        }
-    }
+                .copied()
+                .ok_or("Indexed PNG uses an undefined palette slot")
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    doc.layers[0].cels[frame] = pixels.into();
+    doc.layers[0].cel_meta[frame].indices = Some(indices.into());
+    Ok(())
+}
+
+fn set_palette(doc: &mut Document, palette: Vec<Pixel>) {
     let transparent = palette.iter().position(|color| color[3] == 0);
-    let mut doc = Document::new(width, height);
     doc.color_mode = ColorMode::Indexed;
     doc.palette = palette;
     doc.transparent_index = transparent.unwrap_or(0);
     doc.layers[0].background = transparent.is_none();
-    doc.layers[0].cels[0] = pixels.into();
-    doc.layers[0].cel_meta[0].indices = Some(indices.into());
+}
+
+/// Return None if compositing needs more slots than the indexed model can hold.
+fn load_indexed_animation(
+    mut reader: png::Reader<impl BufRead + Seek>,
+    mut palette: Vec<Pixel>,
+    [width, height]: [usize; 2],
+    frame_count: usize,
+) -> Result<Option<Document>, String> {
+    const EMPTY: u16 = 256;
+    let area = width * height;
+    if frame_count == 0
+        || frame_count > 65_535
+        || frame_count.saturating_mul(area) > MAX_DOCUMENT_PIXELS
+    {
+        return Err("Animated PNG exceeds frame or pixel limits".into());
+    }
+    if frame_count.saturating_mul(area + area.div_ceil(4)) > MAX_DOCUMENT_PIXELS {
+        return Ok(None);
+    }
+    let mut packed = vec![
+        0;
+        reader
+            .output_buffer_size()
+            .ok_or("Animated PNG exceeds buffer limits")?
+    ];
+    if reader.info().frame_control.is_none() {
+        // A separate default image is a poster, not a timeline frame.
+        reader.next_frame(&mut packed).map_err(|e| e.to_string())?;
+    }
+    let source_colors = palette.len();
+    let mut clear = palette
+        .iter()
+        .position(|color| color[3] == 0)
+        .map(|i| i as u8);
+    let mut mapped = HashMap::new();
+    for (slot, &pixel) in palette.iter().enumerate() {
+        mapped.entry(pixel).or_insert(slot as u8);
+    }
+    let mut canvas = vec![EMPTY; area];
+    let mut doc = Document::new(width, height);
+    doc.layers[0].name = "Animation".into();
+    for n in 0..frame_count {
+        let frame = reader.next_frame(&mut packed).map_err(|e| e.to_string())?;
+        let control = reader
+            .info()
+            .frame_control
+            .ok_or("Animated PNG frame has no control chunk")?;
+        let [left, top, w, h] = [
+            control.x_offset,
+            control.y_offset,
+            frame.width,
+            frame.height,
+        ]
+        .map(|v| v as usize);
+        if w == 0 || h == 0 || left > width || top > height || w > width - left || h > height - top
+        {
+            return Err("Animated PNG frame exceeds its canvas".into());
+        }
+        let row = |y| (top + y) * width + left..(top + y) * width + left + w;
+        let previous = (control.dispose_op == DisposeOp::Previous).then(|| {
+            (0..h)
+                .flat_map(|y| canvas[row(y)].iter().copied())
+                .collect::<Vec<_>>()
+        });
+        for (index, slot) in packed_indices(&frame, &packed).enumerate() {
+            if slot as usize >= source_colors {
+                return Err("Indexed PNG uses an undefined palette slot".into());
+            }
+            let target = &mut canvas[(top + index / w) * width + left + index % w];
+            if control.blend_op == BlendOp::Source {
+                *target = u16::from(slot);
+                continue;
+            }
+            let source = palette[slot as usize];
+            if source[3] == 0 {
+                continue;
+            }
+            let dest = palette.get(*target as usize).copied().unwrap_or(CLEAR);
+            if source[3] == 255 || dest[3] == 0 {
+                *target = u16::from(slot);
+                continue;
+            }
+            let mut blended = image::Rgba(dest);
+            blended.blend(&image::Rgba(source));
+            if blended.0 != dest {
+                let Some(index) = palette_slot(&mut palette, &mut mapped, blended.0) else {
+                    return Ok(None);
+                };
+                *target = u16::from(index);
+            }
+        }
+        if clear.is_none() && canvas.contains(&EMPTY) {
+            clear = palette_slot(&mut palette, &mut mapped, CLEAR);
+            if clear.is_none() {
+                return Ok(None);
+            }
+        }
+        let indices = canvas
+            .iter()
+            .map(|&slot| {
+                if slot == EMPTY {
+                    clear.unwrap()
+                } else {
+                    slot as u8
+                }
+            })
+            .collect();
+        if n > 0 {
+            doc.add_frame(n - 1, false);
+        }
+        let den = if control.delay_den == 0 {
+            100
+        } else {
+            control.delay_den
+        };
+        doc.durations[n] =
+            (u32::from(control.delay_num) * 1000 / u32::from(den)).clamp(1, 65_535) as u16;
+        set_indexed_cel(&mut doc, n, &palette, indices)?;
+        match control.dispose_op {
+            DisposeOp::None => {}
+            DisposeOp::Background => {
+                for y in 0..h {
+                    canvas[row(y)].fill(EMPTY);
+                }
+            }
+            DisposeOp::Previous => {
+                let previous = previous.unwrap();
+                for (y, saved) in previous.chunks_exact(w).enumerate() {
+                    canvas[row(y)].copy_from_slice(saved);
+                }
+            }
+        }
+    }
+    reader.finish().map_err(|e| e.to_string())?;
+    set_palette(&mut doc, palette);
     doc.validate()?;
-    Ok(doc)
+    Ok(Some(doc))
+}
+
+fn palette_slot(
+    palette: &mut Vec<Pixel>,
+    mapped: &mut HashMap<Pixel, u8>,
+    pixel: Pixel,
+) -> Option<u8> {
+    if let Some(&slot) = mapped.get(&pixel) {
+        return Some(slot);
+    }
+    let slot = u8::try_from(palette.len()).ok()?;
+    palette.push(pixel);
+    mapped.insert(pixel, slot);
+    Some(slot)
 }
 
 pub(super) fn write(

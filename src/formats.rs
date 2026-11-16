@@ -1567,7 +1567,7 @@ pub(crate) fn load_with_path_check(
     if ext == "ase" || ext == "aseprite" {
         return load_ase_path(path, &mut Vec::new(), check_path);
     }
-    if matches!(ext.as_str(), "gif" | "apng") {
+    if ext == "gif" {
         return crate::interchange::load_animation(path);
     }
     if matches!(ext.as_str(), "fli" | "flc") {
@@ -1596,11 +1596,9 @@ pub(crate) fn load_with_path_check(
             .to_rgba8();
         return crate::workflows::unpack_sheet(&im, &meta);
     }
-    if ext == "png" {
-        let mut doc = png_raster::load(path)?;
-        if doc.durations.len() == 1 {
-            read_png_metadata(path, &mut doc)?;
-        }
+    if matches!(ext.as_str(), "png" | "apng") {
+        let mut doc = png_raster::load(path, ext == "apng")?;
+        read_png_metadata(path, &mut doc)?;
         return Ok(doc);
     }
     raster::load_static(path, &ext)
@@ -1975,9 +1973,29 @@ fn png_records(bytes: &[u8]) -> Result<Vec<PngRecord>, String> {
     Ok(out)
 }
 fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
-    for (kind, data) in png_records(&mcp_io::read(path).map_err(|e| e.to_string())?)? {
+    let file = mcp_io::open(path).map_err(|e| e.to_string())?;
+    let end = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut reader = BufReader::new(file);
+    let mut signature = [0; 8];
+    reader
+        .read_exact(&mut signature)
+        .map_err(|e| e.to_string())?;
+    if &signature != b"\x89PNG\r\n\x1a\n" {
+        return Err("Invalid PNG signature".into());
+    }
+    let mut offset = 8u64;
+    let mut copied = 0u64;
+    while offset < end {
+        let mut header = [0; 8];
+        reader.read_exact(&mut header).map_err(|e| e.to_string())?;
+        let length = u32::from_be_bytes(header[..4].try_into().unwrap());
+        let kind = &header[4..];
+        offset += u64::from(length) + 12;
+        if offset > end {
+            return Err("Invalid PNG chunk".into());
+        }
         if matches!(
-            &kind,
+            kind,
             b"gAMA"
                 | b"cHRM"
                 | b"sRGB"
@@ -1989,7 +2007,16 @@ fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
                 | b"pHYs"
                 | b"tIME"
         ) {
-            if &kind == b"iCCP" {
+            copied += u64::from(length) + 12;
+            if copied > 32 * 1024 * 1024 {
+                return Err("PNG metadata exceeds budget".into());
+            }
+            let mut data = header.to_vec();
+            data.resize(length as usize + 12, 0);
+            reader
+                .read_exact(&mut data[8..])
+                .map_err(|e| e.to_string())?;
+            if kind == b"iCCP" {
                 let raw = &data[8..data.len() - 4];
                 if let Some(n) = raw.iter().position(|v| *v == 0)
                     && raw.get(n + 1) == Some(&0)
@@ -2015,6 +2042,13 @@ fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
                 data,
                 owner: "png".into(),
             });
+        } else {
+            reader
+                .seek_relative(i64::from(length) + 4)
+                .map_err(|e| e.to_string())?;
+        }
+        if kind == b"IEND" {
+            break;
         }
     }
     Ok(())
