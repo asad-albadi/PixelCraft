@@ -55,6 +55,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 24 in progress. The timeline has draggable previous/next onion range handles aligned to frames, with arrow-key adjustment and preference persistence. Tests cover both pointer handles, keyboard input, the resulting onion image, and artwork history. Formatting, strict Clippy, and 473 Windows all-target tests passed. Subtag playback remains open.
 
+- Item 24 complete. Play Subtags and Play Subtags Once stream nested tag directions, repeat counts, and overlapping ranges through the existing frame cache and playback clock. Explicit subtag playback starts at the beginning of the active tag or sprite. Tests cover nested reversals, ping-pong turns, overlaps, large repeats, and stopping after the last frame. Formatting, strict Clippy, and 477 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -86,7 +88,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
 - [x] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.
 - [x] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.
-- [ ] **24. Expand playback and onion skin controls.** Add selected-range playback, play once, subtags, rewind on stop, and draggable onion ranges.
+- [x] **24. Expand playback and onion skin controls.** Add selected-range playback, play once, subtags, rewind on stop, and draggable onion ranges.
 - [ ] **25. Add an Undo History panel.** Inspect entries and jump to a point in the active document’s history.
 - [ ] **26. Add split views and a configurable drawing grid.** Show multiple views of the same document, configure grid geometry and snapping, and set the grid from a selection.
 

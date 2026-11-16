@@ -10,6 +10,7 @@ mod productivity_ui;
 
 mod script_ui;
 mod studio;
+mod subtag_playback;
 mod system_appearance;
 mod system_clipboard;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
@@ -313,7 +314,27 @@ fn playback_seconds(duration: u16, percent: u16) -> f64 {
 struct PlaybackRun {
     origin: usize,
     frames: Option<Vec<usize>>,
+    subtags: Option<SubtagRun>,
     once: bool,
+}
+
+struct SubtagRun {
+    cursor: subtag_playback::SubtagFrames,
+    following: Option<usize>,
+    frame_count: usize,
+}
+
+impl SubtagRun {
+    fn prepare_next(&mut self, once: bool) {
+        self.following = self.cursor.next().or_else(|| {
+            if once {
+                None
+            } else {
+                self.cursor.rewind();
+                self.cursor.next()
+            }
+        });
+    }
 }
 
 struct PixelCraft {
@@ -1091,6 +1112,11 @@ impl PixelCraft {
             return;
         };
         (self.frame, self.playback_reverse) = next;
+        if let Some(run) = &mut self.playback_run
+            && let Some(subtags) = &mut run.subtags
+        {
+            subtags.prepare_next(run.once);
+        }
         self.timeline_anchor = None;
         self.selected_cels = None;
         self.timeline_frames = TimelineHeaders::default();
@@ -1127,11 +1153,38 @@ impl PixelCraft {
         } else if once {
             self.frame = 0;
         }
-        self.playback_run = Some(PlaybackRun {
+        self.begin_playback_run(PlaybackRun {
             origin,
             frames,
+            subtags: None,
             once,
         });
+    }
+
+    fn start_subtag_playback(&mut self, once: bool) {
+        let origin = self.frame;
+        let frame_count = self.doc.durations.len();
+        let mut cursor =
+            subtag_playback::SubtagFrames::new(frame_count, &self.doc.tags, self.active_tag);
+        let Some(first) = cursor.next() else { return };
+        let mut run = SubtagRun {
+            cursor,
+            following: None,
+            frame_count,
+        };
+        run.prepare_next(once);
+        self.frame = first;
+        self.playback_reverse = false;
+        self.begin_playback_run(PlaybackRun {
+            origin,
+            frames: None,
+            subtags: Some(run),
+            once,
+        });
+    }
+
+    fn begin_playback_run(&mut self, run: PlaybackRun) {
+        self.playback_run = Some(run);
         self.playing = true;
         self.playback_waiting_for_frame = false;
         self.last_tick = Instant::now();
@@ -1150,6 +1203,16 @@ impl PixelCraft {
     }
 
     fn next_playback_frame(&self) -> Option<(usize, bool)> {
+        if let Some(subtags) = self
+            .playback_run
+            .as_ref()
+            .and_then(|run| run.subtags.as_ref())
+        {
+            return subtags
+                .following
+                .filter(|_| subtags.frame_count == self.doc.durations.len())
+                .map(|frame| (frame, false));
+        }
         let once = self.playback_run.as_ref().is_some_and(|run| run.once);
         if let Some(frames) = self
             .playback_run
@@ -2435,6 +2498,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "play-once" => self.start_playback(false, true),
             "play-selection" => self.start_playback(true, false),
             "play-selection-once" => self.start_playback(true, true),
+            "play-subtags" => self.start_subtag_playback(false),
+            "play-subtags-once" => self.start_subtag_playback(true),
             "rewind-on-stop" => self.toggle_rewind_on_stop(),
             "prev" | "next" => {
                 let count = self.doc.durations.len();
@@ -2834,6 +2899,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Play once", "play-once"),
                         ("Play selection", "play-selection"),
                         ("Play selection once", "play-selection-once"),
+                        ("Play subtags", "play-subtags"),
+                        ("Play subtags once", "play-subtags-once"),
                         ("Rewind on stop", "rewind-on-stop"),
                         ("Previous frame   ,", "prev"),
                         ("Next frame   .", "next"),
@@ -3544,6 +3611,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     ("Play once", "play-once"),
                     ("Play selection", "play-selection"),
                     ("Play selection once", "play-selection-once"),
+                    ("Play subtags", "play-subtags"),
+                    ("Play subtags once", "play-subtags-once"),
                 ] {
                     if ui.pc_command_button(command, label).clicked() {
                         a = Some(command);
@@ -7227,6 +7296,52 @@ mod tests {
         assert_eq!(a.frame, 3);
         assert_eq!(a.doc, before);
         assert!(a.undo.is_empty());
+    }
+
+    #[test]
+    fn subtag_playback_clock_prefetches_nested_order_and_loops_only_when_requested() {
+        let mut a = app();
+        if a.rewind_on_stop() {
+            a.action("rewind-on-stop");
+        }
+        a.replace(Document::new(1, 1), None);
+        for frame in 0..4 {
+            a.doc.add_frame(frame, false);
+        }
+        for (from, to, direction, repeat) in [(1, 4, 0, 2), (1, 3, 1, 2)] {
+            a.doc.tags.push(FrameTag {
+                name: "Animation".into(),
+                from,
+                to,
+                direction,
+                repeat,
+                color: [0; 3],
+            });
+        }
+        a.action("play-subtags-once");
+        assert!(a.playing);
+        assert_eq!(a.frame, 0);
+        let ctx = egui::Context::default();
+        for frame in 0..5 {
+            let _ = a.frame_texture(&ctx, frame);
+        }
+        let start = a.last_tick;
+        let expected = [3, 2, 1, 3, 2, 1, 4, 3, 2, 1, 3, 2, 1, 4];
+        for (tick, frame) in expected.into_iter().enumerate() {
+            assert_eq!(a.next_playback_frame().map(|step| step.0), Some(frame));
+            a.update_playback_clock(start + Duration::from_millis(100 * (tick as u64 + 1)));
+            assert_eq!(a.frame, frame);
+            assert!(a.playing);
+        }
+        a.update_playback_clock(start + Duration::from_millis(1500));
+        assert!(!a.playing);
+        assert_eq!(a.frame, 4);
+        a.action("play-subtags");
+        for _ in 0..15 {
+            a.advance_playback();
+        }
+        assert!(a.playing);
+        assert_eq!(a.frame, 0);
     }
 
     #[test]
