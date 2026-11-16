@@ -140,6 +140,26 @@ fn native_and_ase_projects_preserve_editable_drawing_grid_geometry() {
 }
 
 #[test]
+fn pixel_aspect_round_trips_and_edits_override_legacy_header() {
+    let mut bytes = encode_ase(&Document::new(4, 3)).unwrap();
+    bytes[34..36].copy_from_slice(&[2, 3]);
+    let mut doc = decode_ase(&bytes).unwrap();
+    assert_eq!(doc.pixel_aspect, Some([2, 3]));
+    doc.pixel_aspect = None; // Older native documents stored only the header.
+    let mut restored = decode_project(&encode_project(&doc).unwrap()).unwrap();
+    assert_eq!(restored.pixel_aspect(), [2, 3]);
+    restored.pixel_aspect = Some([1, 1]);
+    let output = encode_ase(&restored).unwrap();
+    assert_eq!(decode_ase(&output).unwrap().pixel_aspect(), [1, 1]);
+    assert_eq!(&output[34..36], &[1, 1]);
+    bytes[34] = 0;
+    assert_eq!(decode_ase(&bytes).unwrap().pixel_aspect(), [1, 1]);
+    restored.pixel_aspect = Some([0, 2]);
+    assert!(encode_project(&restored).is_err());
+    assert!(encode_ase(&restored).is_err());
+}
+
+#[test]
 fn ase_roundtrip_preserves_pixels_layers_visibility_and_timing() {
     let mut d = Document::new(4, 3);
     d.layers[0].name = "Colors".into();

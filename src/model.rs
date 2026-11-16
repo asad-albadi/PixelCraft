@@ -1072,6 +1072,8 @@ pub struct Document {
     pub palette_snap: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drawing_grid: Option<DrawingGrid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_aspect: Option<[u8; 2]>,
     #[serde(default)]
     pub references: Vec<crate::productivity::ReferenceImage>,
 }
@@ -1305,19 +1307,35 @@ impl Document {
             wraparound: false,
             palette_snap: false,
             drawing_grid: None,
+            pixel_aspect: None,
             references: vec![],
         }
     }
     pub fn drawing_grid(&self) -> DrawingGrid {
+        self.stored_drawing_grid().unwrap_or_default()
+    }
+
+    pub(crate) fn stored_drawing_grid(&self) -> Option<DrawingGrid> {
         self.drawing_grid
-            .or_else(|| {
-                let header = self
-                    .metadata
-                    .iter()
-                    .find(|chunk| chunk.owner == "ase:header")?;
-                DrawingGrid::from_ase_header(&header.data)
-            })
-            .unwrap_or_default()
+            .or_else(|| DrawingGrid::from_ase_header(self.ase_header()?))
+    }
+
+    fn ase_header(&self) -> Option<&[u8]> {
+        self.metadata
+            .iter()
+            .find(|chunk| chunk.owner == "ase:header")
+            .map(|chunk| chunk.data.as_slice())
+    }
+
+    pub(crate) fn pixel_aspect_from_ase_header(header: &[u8]) -> Option<[u8; 2]> {
+        let ratio: [u8; 2] = header.get(34..36)?.try_into().ok()?;
+        (!ratio.contains(&0) && ratio != [1, 1]).then_some(ratio)
+    }
+
+    pub fn pixel_aspect(&self) -> [u8; 2] {
+        self.pixel_aspect
+            .or_else(|| Self::pixel_aspect_from_ase_header(self.ase_header()?))
+            .unwrap_or([1, 1])
     }
 
     pub fn frame_name(&self, frame: usize) -> Option<&str> {
@@ -1400,6 +1418,9 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.pixel_aspect.is_some_and(|ratio| ratio.contains(&0)) {
+            return Err("Invalid pixel aspect ratio".into());
+        }
         if self.drawing_grid.is_some_and(|grid| !grid.valid()) {
             return Err("Invalid drawing grid".into());
         }

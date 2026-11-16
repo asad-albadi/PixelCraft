@@ -686,14 +686,15 @@ impl PixelCraft {
         let Some(mask) = &self.studio.mask else {
             return;
         };
-        let step = (1. / self.zoom).ceil().max(1.) as i32;
-        let x0 = (((view.min.x - board.min.x) / self.zoom).floor() as i32)
+        let pixel_size = self.canvas_pixel_size();
+        let step = (1. / pixel_size.x.max(pixel_size.y)).ceil().max(1.) as i32;
+        let x0 = (((view.min.x - board.min.x) / pixel_size.x).floor() as i32)
             .clamp(0, self.doc.width as i32);
-        let y0 = (((view.min.y - board.min.y) / self.zoom).floor() as i32)
+        let y0 = (((view.min.y - board.min.y) / pixel_size.y).floor() as i32)
             .clamp(0, self.doc.height as i32);
-        let x1 = (((view.max.x - board.min.x) / self.zoom).ceil() as i32)
+        let x1 = (((view.max.x - board.min.x) / pixel_size.x).ceil() as i32)
             .clamp(0, self.doc.width as i32);
-        let y1 = (((view.max.y - board.min.y) / self.zoom).ceil() as i32)
+        let y1 = (((view.max.y - board.min.y) / pixel_size.y).ceil() as i32)
             .clamp(0, self.doc.height as i32);
         let selected = |x, y| {
             self.doc
@@ -713,8 +714,8 @@ impl PixelCraft {
                 ] {
                     if !selected(neighbor.0, neighbor.1) {
                         let pts = [
-                            board.min + Vec2::new(a.0 as f32, a.1 as f32) * self.zoom,
-                            board.min + Vec2::new(b.0 as f32, b.1 as f32) * self.zoom,
+                            board.min + Vec2::new(a.0 as f32, a.1 as f32) * pixel_size,
+                            board.min + Vec2::new(b.0 as f32, b.1 as f32) * pixel_size,
                         ];
                         painter.line_segment(pts, Stroke::new(2., Color32::BLACK));
                         painter.line_segment(pts, Stroke::new(1., Color32::WHITE));
@@ -1432,9 +1433,10 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 }
                 continue;
             }
+            let pixel_size = self.canvas_pixel_size();
             let rect = Rect::from_min_size(
-                board.min + Vec2::new(r.x, r.y) * self.zoom,
-                Vec2::new(r.width as f32, r.height as f32) * r.scale * self.zoom,
+                board.min + Vec2::new(r.x, r.y) * pixel_size,
+                Vec2::new(r.width as f32, r.height as f32) * r.scale * pixel_size,
             );
             ui.painter().image(
                 tex.id(),
@@ -1466,7 +1468,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     let Some(pointer) = response.interact_pointer_pos() else {
                         continue;
                     };
-                    let delta = (pointer - origin) / self.zoom;
+                    let delta = (pointer - origin) / pixel_size;
                     let reference = &mut self.doc.references[i];
                     if ui.input(|i| i.modifiers.shift) {
                         reference.scale = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);

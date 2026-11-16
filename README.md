@@ -199,6 +199,8 @@ The ASE implementation follows the [published format specification](https://gith
 
 Imported ASE reference layers use their precise per-cel position and size in the editor. The canvas samples them at sprite resolution, and the eyedropper includes them when reference sampling is enabled. ASE and PixelCraft saves preserve the original cel and its placement. Raster artwork exports omit reference layers.
 
+ASE imports apply the stored pixel aspect ratio to the canvas and Preview and use the stored drawing-grid origin and spacing. Edit both in **Sprite properties**. PixelCraft and ASE saves retain these settings. Raster export dimensions follow the sprite's pixel dimensions and export scale.
+
 ## Independent extensions and storage
 
 **Extensions → Extensions & scripts** runs Lua scripts and installs `.lua`, `.zip`, `.aseprite-extension`, or folders containing `package.json`. Manifest contributions include `scripts`, `themes`, `palettes`, `keys`/`shortcuts`, `languages`, and `ditheringMatrices`, each with a `path`. Original theme directory paths beginning with `./` are accepted. Installed packages can be enabled, disabled and uninstalled here; registered plugin commands run in this interface. ZIP extraction supports stored/deflated entries, checks CRC and size, and rejects path traversal, symlinks and encryption. Installation is staged; existing packages are not overwritten.

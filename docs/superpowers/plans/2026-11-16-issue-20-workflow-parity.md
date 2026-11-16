@@ -115,6 +115,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 37 complete. Packed sprite sheets write grayscale or indexed PNG when the packed samples fit the mode. The exporter uses source-frame and placement geometry to retain exact palette slots through trimming, scale, slices, grid splits, and extrusion, and can add spare palette entries for composited colors and padding. Reopening a PNG sheet through its JSON companion retains mode, palette slots, color metadata, and animation timing. An external Pillow check confirmed every scaled index and transparency entry through the CLI sheet/JSON round trip. Formatting, strict Clippy, and 520 Windows all-target tests passed. The separate multi-file sequence and grid import workflows still combine their source images as RGBA and can be revisited with the remaining import workflow work.
 
+- Item 38 complete. ASE pixel width/height is now an editable sprite property alongside the imported drawing-grid origin and spacing. The ratio applies to the canvas, Preview, split and repeated views, pointer mapping, grid rendering, selections, rotation handles, tile labels, and reference placements. Native and ASE saves retain edits, including explicit square pixels overriding a legacy header. Raster export continues to use the stored pixel grid. The Windows canvas regression paints through a 2:1 viewport with imported snapping, and the file regression verifies legacy headers, edited values, and zero handling. Formatting, strict Clippy, and 522 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -163,7 +165,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **35. Expand interchange formats.** Add PSD and PSB import, FLI/FLC, ICO, PCX, QOI, and TGA reading and writing, JPEG and WebP writing, and SVG and CSS output.
 - [x] **36. Render scaled reference cels with precise bounds.** Honor the stored floating-point bounds of imported reference layers.
 - [x] **37. Preserve indexed and grayscale PNG modes.** Retain palette indices, transparency, and grayscale data where applicable on import and export.
-- [ ] **38. Apply imported pixel aspect ratios and grid defaults.** Use the stored values as editable sprite properties.
+- [x] **38. Apply imported pixel aspect ratios and grid defaults.** Use the stored values as editable sprite properties.
 - [ ] **39. Expand grid sheet import.** Add column-major order, optional trailing partial cells, and deriving cell dimensions from row and column counts.
 - [ ] **40. Export Unity and Godot sidecars together.** Generate both engine sidecars and JSON from the same sheet export.
 - [ ] **41. Import a raster file into the current document.** Add a direct Import as Layer action with defined crop and transparent-padding behavior.

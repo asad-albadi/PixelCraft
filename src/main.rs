@@ -1009,9 +1009,27 @@ impl PixelCraft {
                 } else {
                     1.
                 },
-        );
+        ) * self.pixel_aspect_scale();
         let zoom = (view.x / size.x).min(view.y / size.y);
-        (if zoom >= 1. { zoom.floor() } else { zoom }).clamp(0.02, 32.)
+        (if zoom >= 1. { zoom.floor() } else { zoom }).clamp(self.minimum_canvas_zoom(), 32.)
+    }
+
+    fn pixel_aspect_scale(&self) -> Vec2 {
+        let [width, height] = self.doc.pixel_aspect();
+        Vec2::new(f32::from(width), f32::from(height))
+    }
+
+    fn canvas_pixel_size(&self) -> Vec2 {
+        self.pixel_aspect_scale() * self.zoom
+    }
+
+    fn minimum_canvas_zoom(&self) -> f32 {
+        let aspect = self.pixel_aspect_scale();
+        0.02 / aspect.x.max(aspect.y)
+    }
+
+    fn sprite_display_size(&self) -> Vec2 {
+        Vec2::new(self.doc.width as f32, self.doc.height as f32) * self.pixel_aspect_scale()
     }
 
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
@@ -1632,6 +1650,22 @@ impl PixelCraft {
             egui::ComboBox::from_label("Color mode").selected_text(format!("{:?}",mode)).show_ui(ui,|ui|{for value in [ColorMode::Rgba,ColorMode::Indexed,ColorMode::Grayscale]{ui.pc_selectable_value(&mut mode,value,format!("{:?}",value));}});if mode!=edited.color_mode{edited.set_color_mode(mode);}
             let mut palette_size=edited.palette.len();ui.add(egui::DragValue::new(&mut palette_size).range(1..=256).prefix("Palette entries "));if palette_size!=edited.palette.len(){edited.palette.resize(palette_size,[0,0,0,255]);edited.palette_names.resize(palette_size,String::new());for p in &mut edited.frame_palettes{p.resize(palette_size,[0,0,0,255]);}let mode=edited.color_mode;edited.set_color_mode(mode);self.palette_index=self.palette_index.min(palette_size-1);}
             ui.small(format!("Canvas: {} × {} · Limit: 16384 per side, 128 million pixels across layers and frames",edited.width,edited.height));
+            let mut aspect = edited.pixel_aspect();
+            ui.horizontal(|ui| {
+                ui.label("Pixel aspect ratio");
+                ui.add(egui::DragValue::new(&mut aspect[0]).range(1..=255).prefix("Width "));
+                ui.add(egui::DragValue::new(&mut aspect[1]).range(1..=255).prefix("Height "));
+            });
+            if aspect != edited.pixel_aspect() {
+                edited.pixel_aspect = Some(aspect);
+            }
+            ui.collapsing("Drawing grid", |ui| {
+                let mut grid = edited.drawing_grid();
+                Self::drawing_grid_controls(ui, &mut grid);
+                if grid != edited.drawing_grid() {
+                    edited.drawing_grid = Some(grid);
+                }
+            });
             ui.small(format!("Preserved: {} metadata chunks · {} profile bytes · {} off-canvas pixels",edited.metadata.len(),edited.color_profile.len(),edited.layers.iter().flat_map(|l|&l.cel_meta).map(|m|m.outside.len()).sum::<usize>()));
             ui.separator();ui.heading("Active layer & cel");ui.label(&edited.layers[self.layer].name);
             let mut blend=edited.layers[self.layer].blend;
@@ -1997,9 +2031,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.power.reference_edit = None;
         self.studio.polygon.clear();
         self.pan = Vec2::ZERO;
-        self.zoom = (480. / self.doc.width.max(self.doc.height) as f32)
-            .floor()
-            .clamp(1., 16.);
+        let display = self.sprite_display_size();
+        self.zoom = (480. / display.x.max(display.y)).floor().clamp(1., 16.);
         self.stop_playback(false);
     }
     fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
@@ -2701,9 +2734,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 let view = self.active_canvas_view();
                 let zoom = if self.split_canvas.is_none() && self.studio.seamless == WrapAxes::NONE
                 {
-                    (480. / self.doc.width.max(self.doc.height) as f32)
-                        .floor()
-                        .clamp(0.02, 32.)
+                    let display = self.sprite_display_size();
+                    let fit = 480. / display.x.max(display.y);
+                    (if fit >= 1. { fit.floor() } else { fit })
+                        .clamp(self.minimum_canvas_zoom(), 32.)
                 } else {
                     self.canvas_fit_scale(view.size)
                 };
@@ -4740,7 +4774,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 scale / 1.2
             };
         }
-        scale.clamp(0.02 * points, (40. * points).floor().max(1.)) / points
+        scale.clamp(
+            self.minimum_canvas_zoom() * points,
+            (40. * points).floor().max(1.),
+        ) / points
     }
 
     fn set_drawing_grid(&mut self, grid: DrawingGrid) {
@@ -4762,20 +4799,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .open(&mut open)
             .resizable(false)
             .show(ctx, |ui| {
-                for (axis, name) in ["X", "Y"].into_iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut grid.origin[axis])
-                                .range(i32::from(i16::MIN)..=i32::from(i16::MAX))
-                                .prefix(format!("{name} origin ")),
-                        );
-                        ui.add(
-                            egui::DragValue::new(&mut grid.size[axis])
-                                .range(1..=u32::from(u16::MAX))
-                                .prefix(format!("{name} spacing ")),
-                        );
-                    });
-                }
+                Self::drawing_grid_controls(ui, &mut grid);
                 ui.horizontal(|ui| {
                     apply = ui
                         .add_enabled(grid.valid(), egui::Button::new("Apply grid"))
@@ -4787,6 +4811,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.set_drawing_grid(grid);
         }
         self.grid_settings = (open && !apply && !cancel).then_some(grid);
+    }
+
+    fn drawing_grid_controls(ui: &mut egui::Ui, grid: &mut DrawingGrid) {
+        for (axis, name) in ["X", "Y"].into_iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut grid.origin[axis])
+                        .range(i32::from(i16::MIN)..=i32::from(i16::MAX))
+                        .prefix(format!("{name} origin ")),
+                );
+                ui.add(
+                    egui::DragValue::new(&mut grid.size[axis])
+                        .range(1..=u32::from(u16::MAX))
+                        .prefix(format!("{name} spacing ")),
+                );
+            });
+        }
     }
 
     fn snapped_canvas_point(&self, point: (i32, i32), repeats: WrapAxes) -> (i32, i32) {
@@ -4815,15 +4856,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn paint_drawing_grid(&self, painter: &egui::Painter, board: Rect, view: Rect) {
         let grid = self.doc.drawing_grid();
         let visible = view.intersect(board);
-        for (axis, from, to, base) in [
-            (0, visible.left(), visible.right(), board.left()),
-            (1, visible.top(), visible.bottom(), board.top()),
+        let size = self.canvas_pixel_size();
+        for (axis, from, to, base, pixel_extent) in [
+            (0, visible.left(), visible.right(), board.left(), size.x),
+            (1, visible.top(), visible.bottom(), board.top(), size.y),
         ] {
-            let step = grid.size[axis] as f32 * self.zoom;
+            let step = grid.size[axis] as f32 * pixel_extent;
             if step < 5. {
                 continue;
             }
-            let phase = base + grid.origin[axis] as f32 * self.zoom;
+            let phase = base + grid.origin[axis] as f32 * pixel_extent;
             let first = ((from - phase) / step).ceil() as i32;
             let last = ((to - phase) / step).floor() as i32;
             for index in first..=last {
@@ -4841,7 +4883,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn paint_canvas_checker(&self, painter: &egui::Painter, board: Rect, r: Rect) {
         // Draw only visible checker squares, including at high zoom and while panning.
         let check = self.power.checker_size();
-        let check_size = check * self.zoom;
+        let check_size = self.canvas_pixel_size() * check;
         let cols = (self.doc.width as f32 / check).ceil() as i32;
         let rows = (self.doc.height as f32 / check).ceil() as i32;
         painter.rect_filled(
@@ -4855,16 +4897,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }),
         );
-        for y in (((r.min.y - board.min.y) / check_size).floor() as i32).clamp(0, rows)
-            ..(((r.max.y - board.min.y) / check_size).ceil() as i32).clamp(0, rows)
+        for y in (((r.min.y - board.min.y) / check_size.y).floor() as i32).clamp(0, rows)
+            ..(((r.max.y - board.min.y) / check_size.y).ceil() as i32).clamp(0, rows)
         {
-            for x in (((r.min.x - board.min.x) / check_size).floor() as i32).clamp(0, cols)
-                ..(((r.max.x - board.min.x) / check_size).ceil() as i32).clamp(0, cols)
+            for x in (((r.min.x - board.min.x) / check_size.x).floor() as i32).clamp(0, cols)
+                ..(((r.max.x - board.min.x) / check_size.x).ceil() as i32).clamp(0, cols)
             {
                 if (x + y) % 2 == 0 {
                     let q = Rect::from_min_size(
-                        board.min + Vec2::new(x as f32 * check_size, y as f32 * check_size),
-                        Vec2::splat(check_size),
+                        board.min + Vec2::new(x as f32, y as f32) * check_size,
+                        check_size,
                     )
                     .intersect(board);
                     painter.rect_filled(
@@ -5072,7 +5114,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.wheel_zoom_steps = 0.;
                 let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                 if scroll.abs() > 0.01 {
-                    (old * (scroll * 0.003).exp()).clamp(0.02, 40.)
+                    (old * (scroll * 0.003).exp()).clamp(self.minimum_canvas_zoom(), 40.)
                 } else {
                     old
                 }
@@ -5098,20 +5140,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 let limit = if pane == CanvasPane::Secondary {
                     self.canvas_fit_scale(Some(r.size()))
                 } else {
-                    ((r.width() - 16.) / self.doc.width as f32)
-                        .min((r.height() - 16.) / self.doc.height as f32)
+                    let display = self.sprite_display_size();
+                    ((r.width() - 16.) / display.x)
+                        .min((r.height() - 16.) / display.y)
                         .floor()
                         .max(1.)
                 };
                 self.zoom = self.zoom.min(limit);
             }
         }
+        let pixel_size = self.canvas_pixel_size();
         let board = Rect::from_center_size(
             r.center() + self.pan,
-            Vec2::new(
-                self.doc.width as f32 * self.zoom,
-                self.doc.height as f32 * self.zoom,
-            ),
+            self.sprite_display_size() * self.zoom,
         );
         if view_changed || self.pan != previous_pan || self.zoom != previous_zoom {
             ctx.request_repaint();
@@ -5184,16 +5225,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Stroke::new(1., self.colors().ink),
             egui::StrokeKind::Outside,
         );
-        if self.grid && self.zoom >= 5. {
+        if self.grid && pixel_size.x.min(pixel_size.y) >= 5. {
             for x in 1..self.doc.width {
-                let px = board.min.x + x as f32 * self.zoom;
+                let px = board.min.x + x as f32 * pixel_size.x;
                 painter.line_segment(
                     [Pos2::new(px, board.min.y), Pos2::new(px, board.max.y)],
                     Stroke::new(0.5, Color32::from_black_alpha(45)),
                 );
             }
             for y in 1..self.doc.height {
-                let py = board.min.y + y as f32 * self.zoom;
+                let py = board.min.y + y as f32 * pixel_size.y;
                 painter.line_segment(
                     [Pos2::new(board.min.x, py), Pos2::new(board.max.x, py)],
                     Stroke::new(0.5, Color32::from_black_alpha(45)),
@@ -5202,8 +5243,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         let pos = pointer.filter(|p| r.contains(*p)).map(|p| {
             (
-                ((p.x - board.min.x) / self.zoom).floor() as i32,
-                ((p.y - board.min.y) / self.zoom).floor() as i32,
+                ((p.x - board.min.x) / pixel_size.x).floor() as i32,
+                ((p.y - board.min.y) / pixel_size.y).floor() as i32,
             )
         });
         let w = self.doc.width as i32;
@@ -5427,15 +5468,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .polygon
                 .iter()
                 .chain(self.studio.polygon.first())
-                .map(|p| board.min + Vec2::new(p.0 as f32 + 0.5, p.1 as f32 + 0.5) * self.zoom)
+                .map(|p| board.min + Vec2::new(p.0 as f32 + 0.5, p.1 as f32 + 0.5) * pixel_size)
                 .collect();
             painter.add(egui::Shape::line(points, Stroke::new(1., Color32::WHITE)));
         }
         self.draw_selection_mask(&painter, board, r);
         if let Some((x0, y0, x1, y1)) = self.selection.filter(|_| self.studio.mask.is_none()) {
             let sr = Rect::from_min_max(
-                board.min + Vec2::new(x0 as f32, y0 as f32) * self.zoom,
-                board.min + Vec2::new((x1 + 1) as f32, (y1 + 1) as f32) * self.zoom,
+                board.min + Vec2::new(x0 as f32, y0 as f32) * pixel_size,
+                board.min + Vec2::new((x1 + 1) as f32, (y1 + 1) as f32) * pixel_size,
             );
             painter.rect_stroke(
                 sr,
@@ -5454,11 +5495,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && matches!(self.tool, Tool::Pencil | Tool::Eraser)
         {
             let (x, y) = self.snapped_canvas_point((x, y), repeats);
-            let size = self.brush as f32 * self.zoom;
+            let size = pixel_size * self.brush as f32;
             let p = board.min
-                + Vec2::new((x - self.brush / 2) as f32, (y - self.brush / 2) as f32) * self.zoom;
+                + Vec2::new((x - self.brush / 2) as f32, (y - self.brush / 2) as f32) * pixel_size;
             painter.rect_stroke(
-                Rect::from_min_size(p, Vec2::splat(size)),
+                Rect::from_min_size(p, size),
                 0,
                 Stroke::new(1., Color32::WHITE),
                 egui::StrokeKind::Outside,
@@ -7368,6 +7409,60 @@ mod tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc.drawing_grid(), DrawingGrid::default());
+    }
+
+    #[test]
+    fn imported_pixel_aspect_maps_pointer_and_grid_in_sprite_coordinates() {
+        let mut bytes = formats::encode_ase(&Document::new(4, 4)).unwrap();
+        bytes[34..36].copy_from_slice(&[2, 1]);
+        bytes[36..44].copy_from_slice(&[1, 0, 1, 0, 2, 0, 2, 0]);
+        let doc = formats::decode_ase(&bytes).unwrap();
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(doc, None);
+        a.zoom = 10.;
+        a.action("snap-to-grid");
+        assert_eq!(
+            a.doc.drawing_grid(),
+            DrawingGrid {
+                origin: [1, 1],
+                size: [2, 2]
+            },
+        );
+        let draw = |a: &mut PixelCraft, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| a.canvas(ui));
+                },
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut a, vec![]);
+        let pos = Pos2::new(329., 316.);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        a.fg = [20, 30, 90, 255];
+        draw(&mut a, vec![egui::Event::PointerMoved(pos), button(true)]);
+        draw(&mut a, vec![button(false)]);
+        assert_eq!(a.doc.layers[0].cels[0][15], a.fg);
+        assert_eq!(
+            a.doc.layers[0].cels[0]
+                .iter()
+                .filter(|&&pixel| pixel != CLEAR)
+                .count(),
+            1
+        );
     }
 
     #[test]

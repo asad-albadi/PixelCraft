@@ -1087,7 +1087,8 @@ impl PixelCraft {
             return None;
         }
         let mut pivot = self.studio.rotation_pivot?;
-        let center = board.min + Vec2::new(pivot[0] as f32, pivot[1] as f32) * self.zoom;
+        let pixel_size = self.canvas_pixel_size();
+        let center = board.min + Vec2::new(pivot[0] as f32, pivot[1] as f32) * pixel_size;
         let response = ui.interact(
             Rect::from_center_size(center, Vec2::splat(20.)),
             ui.id().with("rotation-pivot"),
@@ -1095,8 +1096,8 @@ impl PixelCraft {
         );
         let delta = response.drag_delta();
         if delta != Vec2::ZERO {
-            pivot[0] += f64::from(delta.x / self.zoom);
-            pivot[1] += f64::from(delta.y / self.zoom);
+            pivot[0] += f64::from(delta.x / pixel_size.x);
+            pivot[1] += f64::from(delta.y / pixel_size.y);
             self.studio.rotation_pivot = Some(pivot);
         }
         let bounds = self.selection_bounds();
@@ -1173,7 +1174,8 @@ impl PixelCraft {
         if self.rotation_preview_active()
             && let Some(pivot) = self.studio.rotation_pivot
         {
-            let center = board.min + Vec2::new(pivot[0] as f32, pivot[1] as f32) * self.zoom;
+            let center =
+                board.min + Vec2::new(pivot[0] as f32, pivot[1] as f32) * self.canvas_pixel_size();
             painter.circle_stroke(center, 7., Stroke::new(3., Color32::BLACK));
             painter.circle_stroke(center, 7., Stroke::new(1., Color32::WHITE));
         }
@@ -1680,7 +1682,8 @@ impl PixelCraft {
         let Some(set) = layer.tileset.and_then(|set| self.doc.tilesets.get(set)) else {
             return;
         };
-        let step = Vec2::new(set.width as f32, set.height as f32) * self.zoom;
+        let pixel_size = self.canvas_pixel_size();
+        let step = Vec2::new(set.width as f32, set.height as f32) * pixel_size;
         let digits = set.tiles.len().max(1).ilog10() as f32 + 1.;
         if step.x < digits * 7. + 6. || step.y < 18. {
             return;
@@ -1690,7 +1693,7 @@ impl PixelCraft {
         let rows = geometry.map_or(self.doc.height.div_ceil(set.height), |g| g.rows);
         let origin = board.min
             + geometry.map_or(Vec2::ZERO, |g| {
-                Vec2::new(g.x as f32, g.y as f32) * self.zoom
+                Vec2::new(g.x as f32, g.y as f32) * pixel_size
             });
         let clip = painter.clip_rect().intersect(board);
         if !clip.is_positive() {

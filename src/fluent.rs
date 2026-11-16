@@ -799,7 +799,7 @@ impl PixelCraft {
             self.update_preview_texture(ui.ctx(), frame);
             let (r, response) = ui.allocate_exact_size(
                 Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::click_and_drag());
-            let source = Vec2::new(self.doc.width as f32, self.doc.height as f32);
+            let source = self.sprite_display_size();
             let scale = if self.preview_settings.zoom == 0 {
                 (r.width() / source.x).min(r.height() / source.y)
             } else { self.preview_settings.zoom as f32 / ui.ctx().pixels_per_point() };
@@ -1068,7 +1068,7 @@ impl PixelCraft {
                     ui.pc_selectable_value(&mut zoom, scale, format!("{:.0}%", scale * 100.));
                 }
                 ui.add(
-                    egui::Slider::new(&mut zoom, 0.02..=32.)
+                    egui::Slider::new(&mut zoom, self.minimum_canvas_zoom()..=32.)
                         .logarithmic(true)
                         .show_value(false),
                 );

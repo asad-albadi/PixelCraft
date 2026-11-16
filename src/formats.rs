@@ -500,7 +500,8 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         baked.durations = d.durations.clone();
         baked.tags = d.tags.clone();
         baked.slices = d.slices.clone();
-        baked.drawing_grid = d.drawing_grid;
+        baked.drawing_grid = d.stored_drawing_grid();
+        baked.pixel_aspect = Some(d.pixel_aspect());
         baked.color_profile = d.color_profile.clone();
         baked.layers[0].cel_meta = vec![CelMeta::default(); d.durations.len()];
         baked.layers[0].tile_cels = vec![vec![]; d.durations.len()];
@@ -543,12 +544,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
     out[18..20].copy_from_slice(&100u16.to_le_bytes());
     out[28] = d.transparent_index as u8;
     out[32..34].copy_from_slice(&(d.palette.len() as u16).to_le_bytes());
-    if out[34] == 0 {
-        out[34] = 1;
-    }
-    if out[35] == 0 {
-        out[35] = 1;
-    }
+    out[34..36].copy_from_slice(&d.pixel_aspect());
     if let Some(grid) = d.drawing_grid {
         out[36..38].copy_from_slice(&(grid.origin[0] as i16).to_le_bytes());
         out[38..40].copy_from_slice(&(grid.origin[1] as i16).to_le_bytes());
@@ -931,6 +927,7 @@ pub fn decode_ase_with_resolver(
     let mut d = Document::new(w, h);
     d.compose_groups = u32at(b, 14)? & 2 != 0;
     d.drawing_grid = DrawingGrid::from_ase_header(b);
+    d.pixel_aspect = Document::pixel_aspect_from_ase_header(b);
     d.layers.clear();
     d.durations = vec![100; frames];
     d.color_mode = match depth {
