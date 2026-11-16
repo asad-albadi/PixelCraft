@@ -45,6 +45,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 21 complete. Layer headers support interval and nonadjacent selection. Drops restack selection branches above or below a sibling or inside a group, keeping children, editor IDs, and layer/cel metadata together. The background stays at the bottom and invalid cycles are rejected. Tests exercise pointer selection and dragging, Undo, grouping, metadata, and project save/reopen. Formatting, strict Clippy, and 460 Windows all-target tests passed.
 
+- Item 22 in progress. The tileset browser adds independent duplication, deletion, and ID reordering across shared layers and frames, plus brush flips, square-tile quarter turns, and a clipped tile-index overlay. Tests cover ASE round trips, transformed rendering, selection and Undo history, and overlay geometry. Formatting, strict Clippy, and 465 Windows all-target tests passed. Always-create variants remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

@@ -6,10 +6,13 @@ mod frame_order;
 mod layer_conversion;
 mod layer_operations;
 mod layer_order;
+mod tile_operations;
 pub use cel_selection::CelSelection;
 pub use layer_conversion::LayerConversion;
 pub use layer_order::LayerDrop;
+pub use tile_operations::{TileDefinitionEdit, TileTransform};
 pub type Pixel = [u8; 4];
+pub const TILE_ID_MASK: u32 = 0x1fff_ffff;
 pub const CLEAR: Pixel = [0; 4];
 pub const DEFAULT_DURATION: u16 = 100;
 pub const MAX_FRAME_NAME_CHARS: usize = 256;
@@ -2430,23 +2433,13 @@ impl Document {
             };
             for y in 0..t.height {
                 for x in 0..t.width {
-                    let (mut sx, mut sy) = (x, y);
-                    if id & 0x2000_0000 != 0 {
-                        std::mem::swap(&mut sx, &mut sy);
-                    }
-                    if sx >= t.width || sy >= t.height {
+                    let Some(offset) = t.source_offset(id, x, y) else {
                         continue;
-                    }
-                    if id & 0x8000_0000 != 0 {
-                        sx = t.width - 1 - sx;
-                    }
-                    if id & 0x4000_0000 != 0 {
-                        sy = t.height - 1 - sy;
-                    }
+                    };
                     visit(
                         ox + (i % cols * t.width + x) as i32,
                         oy + (i / cols * t.height + y) as i32,
-                        tile[sy * t.width + sx],
+                        tile[offset],
                     );
                 }
             }
@@ -3089,26 +3082,16 @@ impl Document {
         let columns = geometry.map_or(self.width.div_ceil(set.width), |g| g.columns);
         let rows = geometry.map_or(self.height.div_ceil(set.height), |g| g.rows);
         let (x, y) = cell;
-        let (mut px, mut py) = pixel;
+        let (px, py) = pixel;
         if x >= columns || y >= rows || px >= set.width || py >= set.height {
             return Err("Tile or pixel is outside the map".into());
         }
         let slot = y * columns + x;
         let placed = self.layers[layer].tile_cels[frame][slot];
-        let id = (placed & 0x1fff_ffff) as usize;
-        if placed & 0x2000_0000 != 0 {
-            std::mem::swap(&mut px, &mut py);
-        }
-        if px >= set.width || py >= set.height {
-            return Err("This pixel is outside the flipped tile".into());
-        }
-        if placed & 0x8000_0000 != 0 {
-            px = set.width - 1 - px;
-        }
-        if placed & 0x4000_0000 != 0 {
-            py = set.height - 1 - py;
-        }
-        let offset = py * set.width + px;
+        let id = (placed & TILE_ID_MASK) as usize;
+        let offset = set
+            .source_offset(placed, px, py)
+            .ok_or("This pixel is outside the flipped tile")?;
         if id == 0 && color == CLEAR {
             return Ok(());
         }

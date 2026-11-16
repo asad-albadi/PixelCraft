@@ -20,6 +20,8 @@ pub(super) struct Studio {
     pub open: bool,
     pub sheet_open: bool,
     pub tiles_open: bool,
+    tile_browser_set: usize,
+    show_tile_indices: bool,
     pub seamless: bool,
     pub mirror_x: bool,
     pub mirror_y: bool,
@@ -133,6 +135,8 @@ impl Default for Studio {
             open: false,
             sheet_open: false,
             tiles_open: false,
+            tile_browser_set: 0,
+            show_tile_indices: false,
             seamless: false,
             mirror_x: false,
             mirror_y: false,
@@ -606,6 +610,7 @@ impl PixelCraft {
                 live_save_root_identity: t.live_save_root_identity,
                 layer: t.layer,
                 frame: t.frame,
+                selected_tile: 1,
                 undo: vec![],
                 redo: vec![],
                 zoom: t.zoom,
@@ -728,7 +733,10 @@ impl PixelCraft {
         match s {
             "studio" => self.studio.open = true,
             "sheet" => self.studio.sheet_open = true,
-            "tiles" => self.studio.tiles_open = true,
+            "tiles" => {
+                self.studio.tile_browser_set = self.doc.layers[self.layer].tileset.unwrap_or(0);
+                self.studio.tiles_open = true;
+            }
             "seamless" => self.studio.seamless = !self.studio.seamless,
             "lasso" => self.tool = Tool::Lasso,
             "move" => self.tool = Tool::Move,
@@ -1402,6 +1410,197 @@ impl PixelCraft {
         });
     }
 
+    fn tileset_browser(&mut self, ctx: &egui::Context) {
+        if !self.studio.tiles_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Tileset browser")
+            .open(&mut open)
+            .default_width(350.)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.pc_button("Import PNG tilesheet…").clicked() {
+                        match self.import_tileset() {
+                            Ok(()) => {
+                                if let Some(index) = self.doc.layers[self.layer].tileset {
+                                    self.studio.tile_browser_set = index;
+                                }
+                            }
+                            Err(error) => self.status = error,
+                        }
+                    }
+                    ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));
+                });
+                if self.doc.tilesets.is_empty() {
+                    ui.label("Import a tilesheet to browse and paint tiles.");
+                    return;
+                }
+                self.studio.tile_browser_set = self.studio.tile_browser_set.min(self.doc.tilesets.len() - 1);
+                egui::ComboBox::from_label("Tileset")
+                    .selected_text(&self.doc.tilesets[self.studio.tile_browser_set].name)
+                    .show_ui(ui, |ui| {
+                        for (index, set) in self.doc.tilesets.iter().enumerate() {
+                            ui.pc_selectable_value(&mut self.studio.tile_browser_set, index, &set.name);
+                        }
+                    });
+                let tileset = self.studio.tile_browser_set;
+                let set = &self.doc.tilesets[tileset];
+                let count = set.tiles.len();
+                let active_set = self.doc.layers[self.layer].tileset == Some(tileset);
+                let selected = self.selected_tile & TILE_ID_MASK;
+                let thumb_size = 32.;
+                let row_height = 46.;
+                let columns = (ui.available_width() / row_height).floor().max(1.) as usize;
+                let mut clicked = None;
+                egui::ScrollArea::vertical()
+                    .id_salt(("tiles", tileset))
+                    .max_height(345.)
+                    .show_rows(ui, row_height, count.div_ceil(columns), |ui, rows| {
+                        for row in rows {
+                            ui.horizontal(|ui| {
+                                for index in row * columns..((row + 1) * columns).min(count) {
+                                    let id = index as u32 + 1;
+                                    // Sample at thumbnail size without expanding sparse or oversized tiles.
+                                    let preview_w = set.width.min(thumb_size as usize);
+                                    let preview_h = set.height.min(thumb_size as usize);
+                                    let placement = if active_set && selected == id { self.selected_tile } else { id };
+                                    let pixels = (0..preview_h).flat_map(|row| {
+                                        (0..preview_w).map(move |col| {
+                                            set.placement_pixel(placement, col * set.width / preview_w, row * set.height / preview_h)
+                                        })
+                                    }).collect::<Vec<_>>();
+                                    let texture = ctx.load_texture(
+                                        format!("tile-{tileset}-{index}"),
+                                        color_image(&pixels, preview_w, preview_h),
+                                        egui::TextureOptions::NEAREST,
+                                    );
+                                    let button = egui::Button::image(egui::Image::new(&texture).fit_to_exact_size(Vec2::splat(thumb_size)))
+                                        .selected(active_set && selected == id);
+                                    if ui.add(button).on_hover_text(format!("Tile {id}")).clicked() {
+                                        clicked = Some(id);
+                                    }
+                                }
+                            });
+                        }
+                    });
+                if let Some(id) = clicked {
+                    if !active_set {
+                        let layer = self.doc.layers.iter().position(|layer| layer.tileset == Some(tileset));
+                        if let Some(layer) = layer {
+                            self.timeline_select(layer, self.frame, false);
+                        } else if self.edit_timeline(|doc| doc.add_tile_layer(tileset)) {
+                            self.timeline_select(self.doc.layers.len() - 1, self.frame, false);
+                        }
+                    }
+                    if self.doc.layers[self.layer].tileset == Some(tileset) {
+                        self.tool = Tool::Pencil;
+                        self.selected_tile = id;
+                    }
+                }
+                let selected = self.selected_tile & TILE_ID_MASK;
+                if self.doc.layers[self.layer].tileset == Some(tileset)
+                    && selected > 0
+                    && selected as usize <= count
+                {
+                    ui.label(format!("Tile {selected}"));
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, transform) in [
+                            ("Flip horizontally", TileTransform::FlipHorizontal),
+                            ("Flip vertically", TileTransform::FlipVertical),
+                            ("Rotate clockwise", TileTransform::RotateClockwise),
+                        ] {
+                            let transformed = transform.apply(self.selected_tile, &self.doc.tilesets[tileset]);
+                            let tooltip = match &transformed {
+                                Ok(_) => "Change tile brush orientation",
+                                Err(reason) => reason,
+                            };
+                            if ui.add_enabled(transformed.is_ok(), egui::Button::new(label)).on_disabled_hover_text(tooltip)
+                                .on_hover_text(tooltip).clicked()
+                                && let Ok(placement) = transformed
+                            {
+                                self.selected_tile = placement;
+                            }
+                        }
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.pc_button("Duplicate tile").clicked() {
+                            self.apply_tile_definition_edit(tileset, TileDefinitionEdit::Duplicate);
+                        }
+                        if ui.pc_button("Delete tile").on_hover_text("Clear placements of this tile from every frame and layer using the tileset").clicked() {
+                            self.apply_tile_definition_edit(tileset, TileDefinitionEdit::Delete);
+                        }
+                        if ui.add_enabled(selected > 1, egui::Button::new("Move earlier")).clicked() {
+                            self.apply_tile_definition_edit(tileset, TileDefinitionEdit::MoveTo(selected - 1));
+                        }
+                        if ui.add_enabled((selected as usize) < count, egui::Button::new("Move later")).clicked() {
+                            self.apply_tile_definition_edit(tileset, TileDefinitionEdit::MoveTo(selected + 1));
+                        }
+                        ui.menu_button("Move to index…", |ui| {
+                            let key = ui.id().with((self.active_tab, tileset, selected));
+                            let mut position = ui.data_mut(|data| data.get_temp::<u32>(key))
+                                .unwrap_or(selected).min(count as u32);
+                            ui.add(egui::DragValue::new(&mut position).range(1..=count as u32).prefix("Tile "));
+                            ui.data_mut(|data| data.insert_temp(key, position));
+                            if ui.add_enabled(position != selected, egui::Button::new("Move tile")).clicked() {
+                                self.apply_tile_definition_edit(tileset, TileDefinitionEdit::MoveTo(position));
+                                ui.close();
+                            }
+                        });
+                    });
+                }
+                ui.pc_checkbox(&mut self.studio.show_tile_indices, "Show tile indices on canvas");
+                ui.pc_checkbox(&mut self.studio.seamless, "Seamless preview");
+                if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked() {
+                    self.studio_action("tiledexport");
+                }
+            });
+        self.studio.tiles_open = open;
+    }
+
+    pub(super) fn paint_tile_indices(&self, painter: &egui::Painter, board: Rect) {
+        let layer = &self.doc.layers[self.layer];
+        if !self.studio.show_tile_indices || self.playing || !layer.visible {
+            return;
+        }
+        let Some(set) = layer.tileset.and_then(|set| self.doc.tilesets.get(set)) else {
+            return;
+        };
+        let step = Vec2::new(set.width as f32, set.height as f32) * self.zoom;
+        let digits = set.tiles.len().max(1).ilog10() as f32 + 1.;
+        if step.x < digits * 7. + 6. || step.y < 18. {
+            return;
+        }
+        let geometry = layer.cel_meta[self.frame].tilemap.as_ref();
+        let columns = geometry.map_or(self.doc.width.div_ceil(set.width), |g| g.columns);
+        let rows = geometry.map_or(self.doc.height.div_ceil(set.height), |g| g.rows);
+        let origin = board.min
+            + geometry.map_or(Vec2::ZERO, |g| {
+                Vec2::new(g.x as f32, g.y as f32) * self.zoom
+            });
+        let clip = painter.clip_rect().intersect(board);
+        if !clip.is_positive() {
+            return;
+        }
+        let first = (clip.min - origin) / step;
+        let end = (clip.max - origin) / step;
+        let placements = &layer.tile_cels[self.frame];
+        let font = egui::FontId::monospace(11.);
+        for y in (first.y.floor() as usize).min(rows)..(end.y.ceil() as usize).min(rows) {
+            for x in (first.x.floor() as usize).min(columns)..(end.x.ceil() as usize).min(columns) {
+                let id = placements[y * columns + x] & TILE_ID_MASK;
+                if id == 0 {
+                    continue;
+                }
+                let pos = origin + Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * step;
+                let galley = painter.layout_no_wrap(id.to_string(), font.clone(), Color32::WHITE);
+                let label = Rect::from_center_size(pos, galley.size());
+                painter.rect_filled(label.expand(2.), 2., Color32::from_black_alpha(180));
+                painter.galley(label.min, galley, Color32::WHITE);
+            }
+        }
+    }
+
     fn tile_conversion_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut dialog) = self.studio.tile_conversion.take() else {
             return;
@@ -1574,11 +1773,7 @@ impl PixelCraft {
 if ui.pc_button("Export PNG + metadata…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("PNG sheet",&["png"]).set_file_name("sprite.png").save_file(){self.status=match interchange::export_sheet(&path,&self.doc,&self.studio.sheet){Ok(())=>"Exported sprite sheet and metadata".into(),Err(e)=>format!("Export failed: {e}")};}ui.small("To import an atlas, open its JSON metadata. Use File → Import PNG sequence for numbered frames.");});
             self.studio.sheet_open = open;
         }
-        if self.studio.tiles_open {
-            let mut open = true;
-            egui::Window::new("Tileset browser").open(&mut open).default_width(330.).show(ctx,|ui|{if ui.pc_button("Import PNG tilesheet…").clicked()&& let Err(e)=self.import_tileset(){self.status=e}ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if self.doc.tilesets.is_empty(){ui.label("Import a tilesheet to browse and paint tiles.");}let mut choose=None;egui::ScrollArea::vertical().max_height(450.).show(ui,|ui|{for(ti,t)in self.doc.tilesets.iter().enumerate(){ui.strong(&t.name);ui.horizontal_wrapped(|ui|{for(i,tile)in t.tiles.iter().enumerate(){let tex=ctx.load_texture(format!("tile-{ti}-{i}"),color_image(&tile.to_vec(),t.width,t.height),egui::TextureOptions::NEAREST);let selected=self.doc.layers[self.layer].tileset==Some(ti)&&(self.selected_tile & TILE_ID_MASK)==i as u32+1;let button=egui::Button::image(egui::Image::new(&tex).fit_to_exact_size(Vec2::splat(32.))).selected(selected);if ui.add(button).on_hover_text(format!("Tile {}",i+1)).clicked(){choose=Some((ti,i as u32+1));}}});}});if let Some((ti,id))=choose{if self.doc.layers[self.layer].tileset!=Some(ti){if let Some(l)=self.doc.layers.iter().position(|l|l.tileset==Some(ti)){self.layer=l}else{self.remember();if self.doc.add_tile_layer(ti).is_ok(){self.layer=self.doc.layers.len()-1}}}self.selected_tile=id;self.tool=Tool::Pencil;}ui.pc_checkbox(&mut self.studio.seamless,"Seamless preview");if ui.pc_command_button("tiledexport", "Export Tiled map…").clicked(){self.studio_action("tiledexport");}ui.small("Open .tmj / .tsj for finite orthogonal Tiled JSON maps and image tilesets.");});
-            self.studio.tiles_open = open;
-        }
+        self.tileset_browser(ctx);
         if self.studio.seamless {
             egui::Window::new("Seamless preview")
                 .default_width(350.)
@@ -1788,6 +1983,55 @@ fn write_recovery_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tile_indices_use_active_geometry_and_canvas_clip() {
+        let mut editor = app();
+        editor.doc = Document::new(3, 1);
+        editor.doc.tilesets.push(Tileset {
+            name: "Numbers".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![vec![[45, 12, 77, 255]].into(); 2],
+        });
+        editor.doc.add_tile_layer(0).unwrap();
+        editor.layer = 1;
+        editor.zoom = 32.;
+        editor.studio.show_tile_indices = true;
+        editor.doc.layers[1].cel_meta[0].tilemap = Some(TilemapGeometry {
+            x: -1,
+            y: 0,
+            columns: 3,
+            rows: 1,
+        });
+        editor.doc.layers[1].tile_cels[0] = vec![1, 2, 0];
+        let ctx = egui::Context::default();
+        let board = Rect::from_min_size(Pos2::ZERO, Vec2::new(96., 32.));
+        let shown = |editor: &PixelCraft| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(board),
+                    ..Default::default()
+                },
+                |ui| {
+                    let painter = ui.painter().with_clip_rect(board);
+                    editor.paint_tile_indices(&painter, board);
+                },
+            );
+            output.textures_delta.clear();
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shown(&editor), ["2"]);
+        editor.studio.show_tile_indices = false;
+        assert!(shown(&editor).is_empty());
+    }
 
     #[test]
     fn layer_conversion_actions_use_the_secondary_color_and_are_undoable() {

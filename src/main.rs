@@ -8,7 +8,6 @@ mod ui_icons;
 use ui_icons::UiIcons;
 mod productivity_ui;
 
-const TILE_ID_MASK: u32 = 0x1fff_ffff;
 mod script_ui;
 mod studio;
 mod system_appearance;
@@ -213,6 +212,7 @@ struct HistoryEntry {
     polygon: Vec<(i32, i32)>,
     layer: usize,
     frame: usize,
+    selected_tile: u32,
     timeline_anchor: Option<(usize, usize)>,
     selected_cels: Option<CelSelection>,
     timeline_frames: TimelineHeaders,
@@ -226,6 +226,7 @@ struct SpriteTab {
     live_save_root_identity: Option<(u64, u64)>,
     layer: usize,
     frame: usize,
+    selected_tile: u32,
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     zoom: f32,
@@ -1196,6 +1197,24 @@ impl PixelCraft {
         self.status = format!("Applied {kind} from {id}");
         Ok(())
     }
+    fn apply_tile_definition_edit(&mut self, tileset: usize, edit: TileDefinitionEdit) {
+        let id = self.selected_tile & TILE_ID_MASK;
+        let mut next = self.doc.clone();
+        let result = next.edit_tile_definition(tileset, id, edit);
+        match result {
+            Ok(next_id) => {
+                let selected = if matches!(edit, TileDefinitionEdit::Delete) {
+                    next_id
+                } else {
+                    (self.selected_tile & !TILE_ID_MASK) | next_id
+                };
+                self.apply_document_edit(Ok(Some(next)));
+                self.selected_tile = selected;
+            }
+            Err(error) => self.status = error,
+        }
+    }
+
     fn import_tileset(&mut self) -> Result<(), String> {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG tilesheet", &["png"])
@@ -1538,6 +1557,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             polygon: self.studio.polygon.clone(),
             layer: self.layer,
             frame: self.frame,
+            selected_tile: self.selected_tile,
             timeline_anchor: self.timeline_anchor,
             selected_cels: self.selected_cels.clone(),
             timeline_frames: self.timeline_frames.clone(),
@@ -1551,6 +1571,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.clamp();
         self.layer = entry.layer.min(self.doc.layers.len() - 1);
         self.frame = entry.frame.min(self.doc.durations.len() - 1);
+        self.selected_tile = entry.selected_tile;
         self.timeline_anchor = entry.timeline_anchor;
         self.selected_cels = entry.selected_cels;
         self.timeline_frames = entry.timeline_frames;
@@ -1589,6 +1610,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.live_save_root_identity = None;
         self.layer = 0;
         self.frame = 0;
+        self.selected_tile = 1;
         self.timeline_anchor = None;
         self.selected_cels = None;
         self.timeline_frames = TimelineHeaders::default();
@@ -1617,6 +1639,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             live_save_root_identity: self.live_save_root_identity,
             layer: self.layer,
             frame: self.frame,
+            selected_tile: self.selected_tile,
             undo: self.undo.clone(),
             redo: self.redo.clone(),
             zoom: self.zoom,
@@ -1653,6 +1676,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         );
         std::mem::swap(&mut self.layer, &mut tab.layer);
         std::mem::swap(&mut self.frame, &mut tab.frame);
+        std::mem::swap(&mut self.selected_tile, &mut tab.selected_tile);
         std::mem::swap(&mut self.undo, &mut tab.undo);
         std::mem::swap(&mut self.redo, &mut tab.redo);
         std::mem::swap(&mut self.zoom, &mut tab.zoom);
@@ -3071,7 +3095,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let next = self
             .doc
             .with_moved_cels(selection, target.0, target.1, duplicate);
-        if self.apply_timeline_edit(next) {
+        if self.apply_document_edit(next) {
             let active = if selection.contains(self.layer, self.frame) {
                 (self.layer, self.frame)
             } else {
@@ -3140,7 +3164,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn drop_layers(&mut self, drag: &LayerHeaderDrag, drop: LayerDrop) {
         match self.doc.with_layers_restacked(&drag.layers, drop) {
             Ok(Some((next, positions))) => {
-                if self.apply_timeline_edit(Ok(Some(next))) {
+                if self.apply_document_edit(Ok(Some(next))) {
                     let active = if drag.layers.binary_search(&self.layer).is_ok() {
                         self.layer
                     } else {
@@ -3225,10 +3249,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let result = edit(&mut next)
             .and_then(|()| next.validate())
             .map(|()| Some(next));
-        self.apply_timeline_edit(result)
+        self.apply_document_edit(result)
     }
 
-    fn apply_timeline_edit(&mut self, next: Result<Option<Document>, String>) -> bool {
+    fn apply_document_edit(&mut self, next: Result<Option<Document>, String>) -> bool {
         match next {
             Ok(Some(next)) if next != self.doc || !next.same_editor_targets(&self.doc) => {
                 self.power.bridge_generation += 1;
@@ -4385,6 +4409,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             );
         }
         self.draw_references(ui, board);
+        self.paint_tile_indices(&painter, board);
         self.paint_rotation_pivot(&painter, board);
         painter.rect_stroke(
             board.expand(1.),
@@ -6876,6 +6901,42 @@ mod tests {
         assert_eq!(app.preview.as_ref().unwrap().id(), detached);
         assert_eq!(app.frame_texture_order.len(), 1);
     }
+    #[test]
+    fn tileset_editor_reorders_duplicates_and_deletes_with_brush_history() {
+        let mut editor = app();
+        editor.doc = Document::new(2, 1);
+        editor.doc.tilesets.push(Tileset {
+            name: "Stone".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![
+                vec![[20, 60, 110, 255]].into(),
+                vec![[80, 90, 100, 255]].into(),
+            ],
+        });
+        editor.doc.add_tile_layer(0).unwrap();
+        editor.layer = 1;
+        editor.doc.layers[1].tile_cels[0] = vec![0x8000_0001, 2];
+        editor.selected_tile = 0x8000_0001;
+        editor.apply_tile_definition_edit(0, TileDefinitionEdit::MoveTo(2));
+        assert_eq!(editor.selected_tile, 0x8000_0002);
+        assert_eq!(editor.doc.layers[1].tile_cels[0], [0x8000_0002, 1]);
+        editor.apply_tile_definition_edit(0, TileDefinitionEdit::Duplicate);
+        assert_eq!(editor.selected_tile, 0x8000_0003);
+        editor.apply_tile_definition_edit(0, TileDefinitionEdit::Delete);
+        assert_eq!(editor.selected_tile, 2);
+        assert_eq!(editor.undo.len(), 3);
+        editor.undo();
+        assert_eq!(editor.selected_tile, 0x8000_0003);
+        assert_eq!(editor.doc.tilesets[0].tiles.len(), 3);
+        editor.undo();
+        editor.undo();
+        assert_eq!(editor.selected_tile, 0x8000_0001);
+        assert_eq!(editor.doc.layers[1].tile_cels[0], [0x8000_0001, 2]);
+        editor.redo();
+        assert_eq!(editor.selected_tile, 0x8000_0002);
+    }
+
     #[test]
     fn tile_painting_changes_ids_and_eraser_clears_whole_tile() {
         let mut a = app();
