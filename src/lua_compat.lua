@@ -58,19 +58,84 @@ getmetatable(sprite).__index=function(t,k)
  if k=='spec' then
   return ImageSpec{width=doc.width,height=doc.height,colorMode=doc.color_mode,transparentColor=doc.transparent_index}
  end
- if k=='selection' then return spriteSelection elseif k=='events' then return spriteEvents elseif k=='bounds' then return Rectangle(0,0,doc.width,doc.height) elseif k=='filename' then return filename elseif k=='transparentColor' then return doc.transparent_index elseif k=='id' then return 1 end
+ if k=='selection' then return spriteSelection elseif k=='events' then return spriteEvents elseif k=='bounds' then return Rectangle(0,0,doc.width,doc.height) elseif k=='filename' then return filename elseif k=='transparentColor' then return doc.transparent_index end
  return spriteIndex(t,k)
 end
 local oldSpriteAssign=getmetatable(sprite).__newindex
-getmetatable(sprite).__newindex=function(t,k,v) if k=='selection' then spriteSelection=Selection(v) elseif k=='filename' then filename=v elseif k=='transparentColor' then doc.transparent_index=v else oldSpriteAssign(t,k,v) end end
+getmetatable(sprite).__newindex=function(t,k,v) if k=='selection' then spriteSelection=bindSpriteHandle(Selection(v),t) elseif k=='filename' then filename=v elseif k=='transparentColor' then doc.transparent_index=v else oldSpriteAssign(t,k,v) end end
 local undo,redo={},{}
+local activeSprite=sprite
+local workspace={sprite}
+local contexts={[sprite]={id=1}}
+local nextSpriteId=2
+local spriteMeta=getmetatable(sprite)
+local documentIndex=spriteMeta.__index
+spriteMeta.__index=function(handle,key)
+ local context=contexts[handle]
+ if key=='id' then return context.id end
+ if key=='palettes' then
+  context.palette=context.palette or bindSpriteHandle(setmetatable({},{
+   __index=function(_,k)return palette[k]end,__len=function()return #palette end,
+  }),handle)
+  return {context.palette}
+ end
+ return documentIndex(handle,key)
+end
+bindSpriteHandle(sprite,sprite)
+spriteSelection=bindSpriteHandle(spriteSelection,sprite)
+
+local function saveSpriteContext()
+ local current=contexts[sprite]
+ if not current then return end
+ current.document,current.filename=doc,filename
+ current.frames,current.layers=frameHandles,layerHandles
+ current.frame,current.layer=activeFrame,activeLayer
+ current.selection,current.events=spriteSelection,spriteEvents
+ current.undo,current.redo=undo,redo
+end
+local function loadSpriteContext(handle)
+ local context=assert(contexts[handle],'Sprite is closed or belongs to another workspace')
+ if handle==sprite then return end
+ saveSpriteContext()
+ sprite,doc,filename=handle,context.document,context.filename
+ frameHandles,layerHandles=context.frames,context.layers
+ activeFrame,activeLayer=context.frame,context.layer
+ spriteSelection,spriteEvents=context.selection,context.events
+ undo,redo=context.undo,context.redo
+end
+withSprite=function(handle,fn,...)
+ assert(contexts[handle],'Sprite is closed or belongs to another workspace')
+ if handle==sprite then return fn(...) end
+ local before=sprite
+ loadSpriteContext(handle)
+ local result=table.pack(raw_pcall(fn,...))
+ if contexts[before] then loadSpriteContext(before) end
+ if expired then fail('Script instruction/time budget exceeded') end
+ if not result[1] then error(result[2],2) end
+ return table.unpack(result,2,result.n)
+end
+local function activateSprite(handle)
+ loadSpriteContext(handle)
+ if activeSprite~=handle then
+  activeSprite=handle
+  appEvents:_emit('sitechange')
+ end
+end
 local function snapshot() return {document=copy(doc),mask=copy(spriteSelection._mask),frame=activeFrame,layer=activeLayer} end
-local function restore(s) doc=copy(s.document);spriteSelection=selection(copy(s.mask));activeFrame=s.frame;activeLayer=s.layer;rebuildHandles() end
+local function restore(s) doc=copy(s.document);spriteSelection=bindSpriteHandle(selection(copy(s.mask)),sprite);activeFrame=s.frame;activeLayer=s.layer;rebuildHandles() end
 local transactionDepth=0
 rawset(app,'transaction',function(a,b)
- local before=snapshot();transactionDepth=transactionDepth+1;local result=table.pack(pcall(b or a));transactionDepth=transactionDepth-1
- if not result[1] then restore(before);error(result[2]) end
- if transactionDepth==0 then undo[#undo+1]=before;redo={};spriteEvents:_emit('change') end
+ local owner,before=sprite,snapshot()
+ transactionDepth=transactionDepth+1
+ local result=table.pack(pcall(b or a))
+ transactionDepth=transactionDepth-1
+ if contexts[owner] then
+  withSprite(owner,function()
+   if not result[1] then restore(before)
+   elseif transactionDepth==0 then undo[#undo+1]=before;redo={};spriteEvents:_emit('change') end
+  end)
+ end
+ if not result[1] then error(result[2]) end
  return table.unpack(result,2,result.n)
 end)
 local function command(fn) return function(p) return app.transaction(function()return fn(p or {})end) end end
@@ -196,6 +261,9 @@ rawset(app,'events',appEvents)
 rawset(app,'preferences',preferences)
 rawset(app,'apiVersion',24)
 getmetatable(app).__index=function(t,k)
+ if k=='activeSprite' then return activeSprite end
+ if k=='sprites' then return {table.unpack(workspace)} end
+ if not activeSprite and (k=='activeLayer' or k=='activeFrame' or k=='activeCel' or k=='activeImage') then return nil end
  if k=='editor' then return {sprite=sprite,frame=frameHandles[activeFrame],zoom=(_pw_options or {}).zoom or 1,scroll=Point(),mousePos=Point()} elseif k=='site' then return {sprite=sprite,layer=layerHandles[activeLayer],frame=frameHandles[activeFrame],cel=cel(activeLayer,activeFrame)} elseif k=='range' then local range=(_pw_options or {}).timelineRange
  local result={sprite=sprite,layers={},frames={},cels={},isEmpty=false}
  local firstLayer,lastLayer,firstFrame,lastFrame=activeLayer,activeLayer,activeFrame,activeFrame
@@ -222,7 +290,8 @@ getmetatable(app).__index=function(t,k)
  return appIndex(t,k)
 end
 getmetatable(app).__newindex=function(t,k,v)
- if k=='fgColor' then scriptColors[1]=unpackColor(v);appEvents:_emit('fgcolorchange') elseif k=='bgColor' then scriptColors[2]=unpackColor(v);appEvents:_emit('bgcolorchange') elseif k=='tool' then tool=type(v)=='string' and {id=v} or v
+ if k=='activeSprite' then activateSprite(v)
+ elseif k=='fgColor' then scriptColors[1]=unpackColor(v);appEvents:_emit('fgcolorchange') elseif k=='bgColor' then scriptColors[2]=unpackColor(v);appEvents:_emit('bgcolorchange') elseif k=='tool' then tool=type(v)=='string' and {id=v} or v
  else appAssign(t,k,v);if k=='activeFrame' or k=='activeLayer' then appEvents:_emit('sitechange') end end
 end
 app.pixelColor.graya=function(g,a)return (pixelInteger(g)&255)|((pixelInteger(a==nil and 255 or a)&255)<<8)end
@@ -235,12 +304,16 @@ TileFlags={XFLIP=0x80000000,YFLIP=0x40000000,DFLIP=0x20000000}
 MouseButton={NONE=0,LEFT=1,RIGHT=2,MIDDLE=4};SelectMode={REPLACE=0,ADD=1,SUBTRACT=2,INTERSECT=3}
 local imageGet,imageDraw=imageMethods.getPixel,imageMethods.drawPixel
 function imageMethods:getPixel(x,y)
+ if self._sprite and self._sprite~=sprite then return withSprite(self._sprite,imageMethods.getPixel,self,x,y) end
+ if self._sprite then assert(contexts[self._sprite],'Sprite is closed') end
  local p=imageGet(self,x,y)
  if self.colorMode=='Grayscale' then local c=unpackColor(p);return app.pixelColor.graya(c[1],c[4])
  elseif self.colorMode=='Indexed' then local c=unpackColor(p);if c[4]==0 then return self._transparent end;return Color(c).index end
  return p
 end
 function imageMethods:drawPixel(x,y,p)
+ if self._sprite and self._sprite~=sprite then return withSprite(self._sprite,imageMethods.drawPixel,self,x,y,p) end
+ if self._sprite then assert(contexts[self._sprite],'Sprite is closed') end
  if type(p)=='number' then if self.colorMode=='Grayscale' then local g=p&255;p=rgba(g,g,g,(p>>8)&255) elseif self.colorMode=='Indexed' then local c=copy(doc.palette[p+1] or {0,0,0,0});if p==self._transparent then c[4]=0 end;p=c end end
  imageDraw(self,x,y,p)
 end
@@ -248,11 +321,45 @@ function imageMethods:isEqual(other)if self.width~=other.width or self.height~=o
 function imageMethods:drawSprite(s,f,pos)assert(s==sprite);pos=pos or Point();for li,l in ipairs(doc.layers)do if l.visible and not l.group then self:drawImage(cel(li,frameNumber(f)).image,pos,l.opacity)end end end
 function spriteMethods:saveAs(path)host{op='save',path=path,document=doc};filename=path;return true end
 function spriteMethods:saveCopyAs(path)host{op='save',path=type(path)=='table' and path.filename or path,document=doc};return true end
-function spriteMethods:close()host{op='close'}end
+function spriteMethods:close()
+ assert(contexts[self],'Sprite is closed')
+ host{op='close'}
+ for index,handle in ipairs(workspace)do
+  if handle==self then
+   contexts[self]=nil
+   table.remove(workspace,index)
+   if activeSprite==self then
+    local nextSprite=workspace[math.min(index,#workspace)]
+    if nextSprite then activateSprite(nextSprite)
+    else activeSprite=nil;appEvents:_emit('sitechange') end
+   end
+   return
+  end
+ end
+end
 app.command.SaveFile=function()assert(filename~='','Sprite has no filename');sprite:saveAs(filename)end
 app.command.SaveFileAs=function(p)assert(p and p.filename,'SaveFileAs requires filename');sprite:saveAs(p.filename)end
 app.command.SaveFileCopyAs=function(p)sprite:saveCopyAs(p.filename)end
-rawset(app,'open',function(path) local loaded=host{op='open',path=path};doc=expandDocumentPixels(loaded.document);filename=path;activeFrame=1;activeLayer=1;rebuildHandles();appEvents:_emit('sitechange');return sprite end)
+rawset(app,'open',function(path)
+ local loaded=host{op='open',path=path}
+ local total=0
+ local function area(document)
+  return document.width*document.height*#document.layers*#document.durations
+ end
+ saveSpriteContext()
+ for _,context in pairs(contexts)do total=total+area(context.document)end
+ assert(total+area(loaded.document)<=1000000,'Lua workspace exceeds the script pixel budget')
+ local handle=setmetatable({},spriteMeta)
+ bindSpriteHandle(handle,handle)
+ contexts[handle]={id=nextSpriteId,document=expandDocumentPixels(loaded.document),filename=path,
+  frame=1,layer=1,selection=bindSpriteHandle(Selection(),handle),events=events(),undo={},redo={}}
+ nextSpriteId=nextSpriteId+1
+ workspace[#workspace+1]=handle
+ loadSpriteContext(handle)
+ rebuildHandles()
+ activateSprite(handle)
+ return handle
+end)
 local timers,dialogs={},{}
 function Timer(t)
  assert(type(t)=='table' and type(t.ontick)=='function','Timer needs ontick');local timer={interval=t.interval or 0.1,isRunning=false,_callback=t.ontick,_next=0}

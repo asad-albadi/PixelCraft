@@ -60,6 +60,72 @@ fn actual_file_bridge_saves_and_reopens_a_project() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 #[test]
+fn interactive_file_workspace_keeps_sprites_and_inactive_handles_independent() {
+    let original = Document::new(3, 1);
+    let opened = Document::new(2, 2);
+    let fixture = serde_json::to_value(opened).unwrap();
+    let full_budget = serde_json::to_value(Document::new(1000, 1000)).unwrap();
+    let result = run_source_with_host(
+        &original,
+        r##"
+ local first=app.activeSprite
+ local firstFrame=app.activeFrame
+ local firstImage=app.activeImage
+ firstImage:drawPixel(2,0,Color('#561234'))
+ local second=app.open('second.pixel')
+ assert(second~=first and second.id~=first.id and app.activeSprite==second)
+ assert(#app.sprites==2 and first.width==3 and second.width==2)
+ assert(not pcall(function()first:newCel(second.layers[1],first.frames[1])end))
+ first.selection:selectAll()
+ assert(first.selection.bounds.width==3 and second.selection.isEmpty)
+ first.palettes[1]:setColor(1,Color('#1199dd'))
+ assert(first.palettes[1]:getColor(1).red==17 and second.palettes[1]:getColor(1).red~=17)
+ firstFrame.duration=0.125
+ firstImage:drawPixel(1,0,Color('#083060'))
+ assert(first.layers[1]:cel(1).image:getPixel(1,0)==Color('#083060').rgbaPixel)
+ app.activeImage:drawPixel(1,1,Color('#004480'))
+ first:saveCopyAs('first.pixel')
+ app.activeSprite=first
+ assert(app.activeFrame.duration==0.125 and app.activeImage:getPixel(2,0)==Color('#561234').rgbaPixel)
+ assert(second.layers[1]:cel(1).image:getPixel(1,1)==Color('#004480').rgbaPixel)
+ second:close()
+ assert(#app.sprites==1 and app.activeSprite==first)
+ assert(not pcall(function()app.activeSprite=second end))
+ assert(not pcall(function()return second.width end))
+ local third=app.open('third.pixel')
+ assert(not pcall(function()app.open('large.pixel')end))
+ assert(app.activeSprite==third and #app.sprites==2)
+ third:close()
+ assert(app.activeSprite==first and #app.sprites==1)
+ "##,
+        0,
+        0,
+        None,
+        None,
+        json!({}),
+        Box::new(move |request| {
+            match request["op"].as_str() {
+                Some("open") if request["path"] == "large.pixel" => {
+                    Ok(json!({"document":full_budget}))
+                }
+                Some("open") => Ok(json!({"document":fixture})),
+                Some("save") => {
+                    assert_eq!(request["path"], "first.pixel");
+                    assert_eq!(request["document"]["width"], 3);
+                    assert_eq!(request["document"]["durations"][0], 125);
+                    Ok(json!({}))
+                }
+                Some("close" | "preferences") => Ok(json!({})),
+                _ => panic!("Unexpected host request: {request}"),
+            }
+        }),
+    ).unwrap();
+    assert_eq!(result.durations, [125]);
+    assert_eq!(result.composite(0)[1], [8, 48, 96, 255]);
+    assert_eq!(result.composite(0)[2], [86, 18, 52, 255]);
+}
+
+#[test]
 fn host_selection_is_available_to_existing_scripts() {
     let doc = Document::new(4, 4);
     run_source_with_host(&doc,"local s=app.activeSprite.selection;assert(s:contains(2,1));assert(not s:contains(0,0));s:deselect()",0,0,None,None,json!({"selection":{"x":2,"y":1,"width":1,"height":1}}),Box::new(|r|{assert_eq!(r["op"],"preferences");assert_eq!(r["selection"]["width"],0);Ok(json!({}))})).unwrap();

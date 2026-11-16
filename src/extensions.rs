@@ -566,7 +566,15 @@ pub fn script_file_request(
     use serde_json::json;
     let path = base.join(request["path"].as_str().unwrap_or(""));
     match request["op"].as_str().unwrap_or("") {
-        "open" => Ok(json!({"document":formats::load(&path)?})),
+        "open" => {
+            let document = formats::load(&path)?;
+            if document.logical_pixels() > crate::lua::MAX_SCRIPT_PIXELS {
+                return Err(
+                    "Native scripts are limited to one million pixels per invocation".into(),
+                );
+            }
+            Ok(json!({"document":document}))
+        }
         "readScript" => {
             let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
             if bytes.len() > 2 * 1024 * 1024 {

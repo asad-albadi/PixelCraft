@@ -448,8 +448,37 @@ function imageMethods:drawImage(src,pos,opacity)
 end
 function imageMethods:pixels(rect) rect=rect or Rectangle(0,0,self.width,self.height);local x,y=rect.x-1,rect.y;return function() x=x+1;if x>=rect.x+rect.width then x=rect.x;y=y+1 end;if y>=rect.y+rect.height then return nil end;return setmetatable({x=x,y=y},{__call=function(_,v)if v==nil then return self:getPixel(x,y) else self:drawPixel(x,y,v) end end}) end end
 local sprite,layerHandles,frameHandles={}, {}, {}
-local function frameNumber(f) return type(f)=='table' and f.frameNumber or tonumber(f) end
-local function layerNumber(l) return type(l)=='table' and l._index or tonumber(l) end
+local withSprite=function(_,fn,...)return fn(...)end
+local spriteOwners=setmetatable({},{__mode='k'})
+local function bindSpriteHandle(handle,owner)
+ local meta=getmetatable(handle)
+ spriteOwners[handle]=owner
+ return setmetatable(handle,{
+  __index=function(self,key)
+   local value=withSprite(owner,meta.__index,self,key)
+   if type(value)=='function' and key~='close' then
+    return function(...)return withSprite(owner,value,...)end
+   end
+   return value
+  end,
+  __newindex=meta.__newindex and function(...)return withSprite(owner,meta.__newindex,...)end,
+  __len=meta.__len and function(...)return withSprite(owner,meta.__len,...)end,
+ })
+end
+local function frameNumber(f)
+ if type(f)=='table' then
+  assert(not spriteOwners[f] or spriteOwners[f]==sprite,'Frame belongs to another sprite')
+  return f.frameNumber
+ end
+ return tonumber(f)
+end
+local function layerNumber(l)
+ if type(l)=='table' then
+  assert(not spriteOwners[l] or spriteOwners[l]==sprite,'Layer belongs to another sprite')
+  return l._index
+ end
+ return tonumber(l)
+end
 local function frameMilliseconds(seconds)
  -- Frame_set_duration 0x3ce440: double multiply, CVTTSD2SI to signed
  -- int32, then Sprite::setFrameDuration 0x61a420 clamps to 1..65535.
@@ -459,19 +488,21 @@ local function frameMilliseconds(seconds)
  return math.max(1,math.min(65535,ms))
 end
 local function celImage(l,fi)
+ local document=doc
  local m=l.cel_meta[fi];local b=m.bounds or {0,0,doc.width,doc.height};local p={}
  for y=0,b[4]-1 do for x=0,b[3]-1 do local px,py=x+b[1],y+b[2];local color={0,0,0,0}
   if px>=0 and py>=0 and px<doc.width and py<doc.height then color=l.cels[fi][py*doc.width+px+1]
   else for _,o in ipairs(m.outside)do if o.x==px and o.y==py then color=o.color;break end end end;p[#p+1]=copy(color)
  end end
  local im=image(p,b[3],b[4])
- im._put=function(x,y,color)
+ local owner=sprite
+ local function put(x,y,color)
   local link=m.artwork_link
   for frame,target in ipairs(l.cel_meta) do
    if frame==fi or (link and target.artwork_link==link) then
-    local bounds=target.bounds or {0,0,doc.width,doc.height}
+    local bounds=target.bounds or {0,0,document.width,document.height}
     local px,py=x+bounds[1],y+bounds[2]
-    if px>=0 and py>=0 and px<doc.width and py<doc.height then l.cels[frame][py*doc.width+px+1]=copy(color)
+    if px>=0 and py>=0 and px<document.width and py<document.height then l.cels[frame][py*document.width+px+1]=copy(color)
     else
      local found=false
      for _,o in ipairs(target.outside)do
@@ -482,6 +513,8 @@ local function celImage(l,fi)
    end
   end
  end
+ im._put=function(...)return withSprite(owner,put,...)end
+ im._sprite=owner
  return im
 end
 local function putCelImage(l,fi,im,pos)
@@ -494,7 +527,7 @@ local function putCelImage(l,fi,im,pos)
 end
 local function cel(li,fi)
  local l=assert(doc.layers[li],'Missing layer');assert(doc.durations[fi],'Missing frame');local m=l.cel_meta[fi]
- return setmetatable({},{__index=function(_,k)
+ return bindSpriteHandle(setmetatable({},{__index=function(_,k)
   if k=='image' then return celImage(l,fi) elseif k=='opacity' then return m.opacity elseif k=='zIndex' then return m.z_index
   elseif k=='position' then return m.bounds and Point(m.bounds[1],m.bounds[2]) or Point()
   elseif k=='bounds' then local b=m.bounds or {0,0,doc.width,doc.height};return Rectangle(table.unpack(b))
@@ -503,11 +536,13 @@ local function cel(li,fi)
   if k=='opacity' then m.opacity=opacityByte(v) elseif k=='zIndex' then m.z_index=math.max(-32768,math.min(32767,math.floor(v)))
   elseif k=='image' then putCelImage(l,fi,v,m.bounds and Point(m.bounds[1],m.bounds[2]) or Point())
   elseif k=='position' then putCelImage(l,fi,celImage(l,fi),Point(v)) else error('Unsupported cel field: '..k) end
- end})
+ end}),sprite)
 end
 local function rebuildHandles()
  layerHandles={} for i,l in ipairs(doc.layers) do layerHandles[i]=setmetatable({_index=i},{__index=function(_,k)if k=='name' then return l.name elseif k=='opacity' then return l.opacity elseif k=='isVisible' then return l.visible elseif k=='isEditable' then return not l.locked elseif k=='isTransparent' then return not l.background elseif k=='isBackground' then return l.background elseif k=='isImage' then return not l.group and not l.tileset elseif k=='isTilemap' then return l.tileset~=nil elseif k=='isGroup' then return l.group elseif k=='blendMode' then return l.blend elseif k=='sprite' then return sprite elseif k=='cels' then local c={} for f=1,#doc.durations do c[f]=cel(i,f) end return c elseif k=='cel' then return function(_,f)return cel(i,frameNumber(f))end elseif k=='parent' then return l.parent and layerHandles[l.parent+1] or sprite end end,__newindex=function(_,k,v)if k=='name' then l.name=tostring(v) elseif k=='opacity' then l.opacity=opacityByte(v) elseif k=='isVisible' then l.visible=not not v elseif k=='isEditable' then l.locked=not v elseif k=='blendMode' then l.blend=v elseif k=='parent' then if v==sprite then l.parent=nil else l.parent=layerNumber(v)-1 end else error('Unsupported layer field: '..k) end end}) end
  frameHandles={} for i in ipairs(doc.durations) do frameHandles[i]=setmetatable({frameNumber=i},{__index=function(_,k)if k=='duration' then return doc.durations[i]/1000 elseif k=='sprite' then return sprite end end,__newindex=function(_,k,v)if k=='duration' then doc.durations[i]=frameMilliseconds(v) else error('Unsupported frame field: '..k) end end}) end
+ for _,layer in ipairs(layerHandles)do bindSpriteHandle(layer,sprite)end
+ for _,frame in ipairs(frameHandles)do bindSpriteHandle(frame,sprite)end
 end
 local palette={}
 function palette:getColor(i) return Color(doc.palette[i+1]) end
