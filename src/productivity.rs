@@ -900,7 +900,7 @@ pub fn reference_to_layer(
 /// Expand folders deterministically. Symlinks are not followed to avoid cycles.
 pub const ATLAS_EXTENSIONS: &[&str] = &[
     "pixel", "ase", "aseprite", "png", "gif", "bmp", "jpg", "jpeg", "jfif", "webp", "json", "ora",
-    "apng", "tmj", "tsj", "ico", "pcx", "qoi", "tga", "fli", "flc",
+    "apng", "tmj", "tsj", "ico", "pcx", "qoi", "tga", "fli", "flc", "psd", "psb",
 ];
 pub fn expand_atlas_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     expand_atlas_inputs_with_path_check(inputs, |_| Ok(()))

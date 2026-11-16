@@ -292,6 +292,8 @@ PCX import reads indexed and planar RGB artwork. A single opaque indexed layer e
 
 The editor and headless import tools open 8-bit FLI and FLC animations as indexed sprites. Import preserves palette changes and frame timing. Loop-transition frames stored after the authored timeline are skipped. Export both formats from the editor, CLI, or MCP. FLC supports custom dimensions and per-frame delays. Classic FLI uses 320 × 200 output, 6-bit color channels, and timing in 1/70-second ticks. Longer holds can repeat frames. Both formats use up to 256 colors per frame and composite transparency on white.
 
+PSD and PSB import opens 8-bit RGB and grayscale Photoshop documents. Raster layers, groups, Unicode names, opacity, and raster masks remain editable. The importer reads raw, PackBits, ZIP, and ZIP-predicted image channels.
+
 ### Headless CLI
 
 No graphical display is needed. `pixelcraft --help` lists the operations and arguments. Run `--cli OPERATION` with a JSON argument object, or named flags; command errors go to stderr and exit with a nonzero status. Layer/frame indices are zero-based.

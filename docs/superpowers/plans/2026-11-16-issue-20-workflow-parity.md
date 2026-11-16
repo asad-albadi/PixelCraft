@@ -95,6 +95,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 in progress. 8-bit FLI/FLC export is available from the editor, CLI, and MCP. Exact indexed artwork retains palette slots. RGB exports preserve fitting colors and quantize palettes above 256 colors, using a white matte for transparency. FLC keeps per-frame delays and custom canvas sizes. FLI uses classic 320 × 200 dimensions and repeats frames to represent longer holds in 70 Hz ticks. Output uses compressed scanlines and writes the loop-transition frame. All 417 exported frames from three sample animations decoded pixel-for-pixel in FFmpeg. Formatting, strict Clippy, and 505 Windows all-target tests passed. PSD/PSB import remains open.
 
+- Item 35 in progress. PSD and PSB import now opens common 8-bit RGB and grayscale files with editable raster layers, group hierarchy, Unicode names, opacity, blend modes, and raster masks. The decoder supports raw, PackBits, ZIP, and byte prediction, and bounds nested sections before reading channels. Tests cover both versions, raw grayscale composite fallback, mixing compression methods, proper mask density, and truncated files. Six external group/mask fixtures matched the merged image exactly or within one channel value. Formatting, strict Clippy, and 506 Windows all-target tests passed. The remaining Photoshop import work includes higher channel depths and layer features beyond the raster model.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

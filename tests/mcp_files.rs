@@ -1887,6 +1887,173 @@ fn flic_exports_authored_palettes_renders_and_timing() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn photoshop_psd_and_psb_import_editable_layers_masks_and_groups() {
+    fn n(out: &mut Vec<u8>, size: usize, large: bool) {
+        if large {
+            out.extend_from_slice(&(size as u64).to_be_bytes());
+        } else {
+            out.extend_from_slice(&(size as u32).to_be_bytes());
+        }
+    }
+    fn block(out: &mut Vec<u8>, key: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(b"8BIM");
+        out.extend_from_slice(key);
+        n(out, data.len(), false);
+        out.extend_from_slice(data);
+        if !data.len().is_multiple_of(2) {
+            out.push(0);
+        }
+    }
+    fn record(
+        out: &mut Vec<u8>,
+        rect: [i32; 4],
+        name: &[u8],
+        channels: &[(i16, Vec<u8>)],
+        extra: &[u8],
+        large: bool,
+    ) {
+        for x in rect {
+            out.extend_from_slice(&x.to_be_bytes());
+        }
+        out.extend_from_slice(&(channels.len() as u16).to_be_bytes());
+        for (id, data) in channels {
+            out.extend_from_slice(&id.to_be_bytes());
+            n(out, data.len(), large);
+        }
+        out.extend_from_slice(b"8BIMnorm");
+        out.extend_from_slice(&[255, 0, 0, 0]);
+        n(
+            out,
+            extra.len() + 4 + (name.len() + 1).next_multiple_of(4),
+            false,
+        );
+        out.extend_from_slice(&extra[..4]);
+        let mask_len = u32::from_be_bytes(extra[..4].try_into().unwrap()) as usize;
+        out.extend_from_slice(&extra[4..4 + mask_len]);
+        n(out, 0, false);
+        out.push(name.len() as u8);
+        out.extend_from_slice(name);
+        out.resize(
+            out.len() + (name.len() + 1).next_multiple_of(4) - name.len() - 1,
+            0,
+        );
+        out.extend_from_slice(&extra[4 + mask_len..]);
+    }
+    use std::io::Write;
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    for large in [false, true] {
+        let mut start = vec![0; 4];
+        block(&mut start, b"lsct", &1u32.to_be_bytes());
+        let mut end = vec![0; 4];
+        block(&mut end, b"lsct", &3u32.to_be_bytes());
+        let mut named = Vec::new();
+        n(&mut named, 20, false);
+        for x in [0i32, 1, 1, 3] {
+            named.extend_from_slice(&x.to_be_bytes());
+        }
+        named.extend_from_slice(&[255, 16, 1, 128]);
+        let name = "Élan";
+        let mut unicode = Vec::new();
+        n(&mut unicode, name.encode_utf16().count(), false);
+        for c in name.encode_utf16() {
+            unicode.extend_from_slice(&c.to_be_bytes());
+        }
+        block(&mut named, b"luni", &unicode);
+        let mut red = vec![0, 1];
+        if large {
+            n(&mut red, 3, false);
+        } else {
+            red.extend_from_slice(&3u16.to_be_bytes());
+        }
+        red.extend_from_slice(&[1, 150, 220]);
+        let mut zip = flate2::write::ZlibEncoder::new(vec![], flate2::Compression::default());
+        zip.write_all(&[20, 10]).unwrap(); // ZIP prediction restores 20,30.
+        let mut blue = vec![0, 3];
+        blue.extend(zip.finish().unwrap());
+        let channels = [
+            (0, red),
+            (1, vec![0, 0, 40, 60]),
+            (2, blue),
+            (-1, vec![0, 0, 255, 200]),
+            (-2, vec![0, 0, 128, 255]),
+        ];
+        let mut layers = 3i16.to_be_bytes().to_vec();
+        record(&mut layers, [0; 4], b"</Group>", &[], &end, large);
+        record(
+            &mut layers,
+            [0, 1, 1, 3],
+            b"Layer",
+            &channels,
+            &named,
+            large,
+        );
+        record(&mut layers, [0; 4], b"Group", &[], &start, large);
+        for (_, data) in channels {
+            layers.extend(data);
+        }
+        if !layers.len().is_multiple_of(2) {
+            layers.push(0);
+        }
+        let mut section = Vec::new();
+        n(&mut section, layers.len(), large);
+        section.extend(layers);
+        n(&mut section, 0, false);
+
+        let mut bytes = b"8BPS".to_vec();
+        bytes.extend_from_slice(&(if large { 2u16 } else { 1 }).to_be_bytes());
+        bytes.extend_from_slice(&[0; 6]);
+        bytes.extend_from_slice(&3u16.to_be_bytes());
+        n(&mut bytes, 1, false);
+        n(&mut bytes, 3, false);
+        bytes.extend_from_slice(&[0, 8, 0, 3]);
+        n(&mut bytes, 0, false);
+        n(&mut bytes, 0, false);
+        n(&mut bytes, section.len(), large);
+        bytes.extend(section);
+        let ext = if large { "psb" } else { "psd" };
+        let input = root.join(format!("edit.{ext}"));
+        fs::write(&input, &bytes).unwrap();
+        let reply = workspace.call(
+            "import",
+            json!({"input":format!("edit.{ext}"),"output":format!("edit-{ext}.pixel")}),
+        );
+        assert!(reply["isError"].is_null(), "{reply}");
+        let doc = formats::load(&root.join(format!("edit-{ext}.pixel"))).unwrap();
+        assert_eq!((doc.width, doc.height), (3, 1));
+        assert_eq!(doc.layers.len(), 2);
+        assert_eq!(doc.layers[0].name, name);
+        assert_eq!(doc.layers[0].parent, Some(1));
+        assert!(doc.layers[1].group);
+        assert_eq!(doc.layers[0].cels[0][1], [150, 40, 20, 255]);
+        assert_eq!(doc.layers[0].mask.as_ref().unwrap()[1][3], 191);
+        assert_eq!(
+            doc.composite(0),
+            [[0; 4], [150, 40, 20, 191], [220, 60, 30, 200]]
+        );
+        bytes.truncate(bytes.len() - 5);
+        fs::write(&input, bytes).unwrap();
+        assert!(formats::load(&input).is_err());
+    }
+
+    let mut flat = b"8BPS".to_vec();
+    flat.extend_from_slice(&[0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+    n(&mut flat, 1, false);
+    n(&mut flat, 2, false);
+    flat.extend_from_slice(&[0, 8, 0, 1]);
+    for _ in 0..3 {
+        n(&mut flat, 0, false);
+    }
+    flat.extend_from_slice(&[0, 0, 50, 120]);
+    let input = root.join("flat-gray.psd");
+    fs::write(&input, flat).unwrap();
+    let gray = formats::load(&input).unwrap();
+    assert_eq!(gray.color_mode, pixelcraft::model::ColorMode::Grayscale);
+    assert_eq!(gray.composite(0), [[50, 50, 50, 255], [120, 120, 120, 255]]);
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

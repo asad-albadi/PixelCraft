@@ -7,6 +7,7 @@ use std::{
 };
 pub(crate) mod flic;
 mod pcx;
+mod psd;
 mod raster;
 mod vector;
 pub(crate) use raster::{raster_format, validate_raster_size, write_raster_image};
@@ -1523,6 +1524,9 @@ pub(crate) fn load_with_path_check(
     }
     if matches!(ext.as_str(), "fli" | "flc") {
         return flic::load(path);
+    }
+    if matches!(ext.as_str(), "psd" | "psb") {
+        return psd::load(path);
     }
     if ext == "ora" {
         return crate::interchange::load_ora(path);
