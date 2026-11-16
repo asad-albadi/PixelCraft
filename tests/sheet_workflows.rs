@@ -150,6 +150,21 @@ fn saving_atlas_preserves_previewed_pixels_and_placements() {
 }
 
 #[test]
+fn single_source_atlas_roundtrip_does_not_reuse_retired_frame_ids() {
+    let mut doc = Document::new(1, 1);
+    doc.add_frame(0, false);
+    let retired = doc.frame_export_id(1);
+    doc.remove_frame(1);
+    let (image, metadata) =
+        pack_atlas(&[("sprite.pixel".into(), doc)], &AtlasOptions::default()).unwrap();
+
+    let mut reopened = unpack_sheet(&image, &metadata).unwrap();
+    assert_eq!(reopened.frame_export_id(0), 0);
+    reopened.add_frame(0, false);
+    assert_eq!(reopened.frame_export_id(1), retired + 1);
+}
+
+#[test]
 fn multi_source_atlas_reopens_with_distinct_frame_identities() {
     let mut first = Document::new(1, 1);
     first.set_frame_name(0, "Takeoff").unwrap();

@@ -746,7 +746,7 @@ impl PixelCraft {
             } else {
                 self.frame
             };
-            self.preview = Some(self.frame_texture(ui.ctx(), frame));
+            self.update_preview_texture(ui.ctx(), frame);
             let (r, response) = ui.allocate_exact_size(
                 Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::click_and_drag());
             let source = Vec2::new(self.doc.width as f32, self.doc.height as f32);

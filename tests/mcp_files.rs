@@ -175,6 +175,102 @@ fn project_root_checks_images_referenced_by_input_documents() {
 }
 
 #[test]
+fn malformed_tiled_geometry_returns_mcp_error() {
+    let w = Workspace::new();
+    image::RgbaImage::new(2, 2)
+        .save(w.project().join("tiles.png"))
+        .unwrap();
+    image::RgbaImage::new(16_385, 1)
+        .save(w.project().join("wide.png"))
+        .unwrap();
+    let tiles = json!({
+        "type":"tileset", "tilewidth":1, "tileheight":1, "tilecount":1,
+        "columns":1, "image":"tiles.png"
+    });
+    let mut oversized = tiles.clone();
+    oversized["tilewidth"] = json!(16_385);
+    oversized["image"] = json!("wide.png");
+    let mut huge_margin = tiles.clone();
+    huge_margin["margin"] = json!(u64::MAX);
+    let mut huge_spacing = tiles.clone();
+    huge_spacing["spacing"] = json!(u64::MAX);
+    let mut huge_tile_table = tiles.clone();
+    huge_tile_table["tilecount"] = json!(64_000_000);
+    for (input, value, error) in [
+        ("wide.tsj", oversized, "Tileset exceeds limits"),
+        ("margin.tsj", huge_margin, "Tile outside image"),
+        ("spacing.tsj", huge_spacing, "Invalid tileset spacing"),
+        ("huge-table.tsj", huge_tile_table, "storage budget"),
+    ] {
+        fs::write(w.project().join(input), value.to_string()).unwrap();
+        assert_error(&w.call("inspect", json!({"input":input})), error);
+    }
+
+    fs::write(w.project().join("tiles.tsj"), tiles.to_string()).unwrap();
+    let map = json!({
+        "orientation":"orthogonal", "width":1, "height":1, "tilewidth":1, "tileheight":1,
+        "tilesets":[{"firstgid":1, "source":"tiles.tsj"}],
+        "layers":[{"type":"tilelayer", "width":1, "height":1, "data":[1]}]
+    });
+    let mut invalid_gid = map.clone();
+    invalid_gid["tilesets"][0]["firstgid"] = json!(u32::MAX);
+    let mut overlapping = map.clone();
+    overlapping["tilesets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"firstgid":1,"source":"tiles.tsj"}));
+    let mut invalid_offset = map;
+    invalid_offset["layers"][0]["x"] = json!(i64::MAX);
+    invalid_offset["layers"][0]["offsetx"] = json!(1);
+    for (input, value, error) in [
+        ("gid.tmj", invalid_gid, "Invalid first global tile ID"),
+        ("offset.tmj", invalid_offset, "Invalid tile layer offset"),
+        (
+            "overlap.tmj",
+            overlapping,
+            "Overlapping global tile ID ranges",
+        ),
+    ] {
+        fs::write(w.project().join(input), value.to_string()).unwrap();
+        assert_error(&w.call("inspect", json!({"input":input})), error);
+    }
+}
+
+#[test]
+fn tiled_map_keeps_layer_order_when_tileset_ids_are_unsorted() {
+    let w = Workspace::new();
+    let dir = w.project();
+    let mut image = image::RgbaImage::new(1, 1);
+    for (name, color) in [
+        ("red.png", [255, 0, 0, 255]),
+        ("green.png", [0, 255, 0, 255]),
+    ] {
+        image.put_pixel(0, 0, image::Rgba(color));
+        image.save(dir.join(name)).unwrap();
+    }
+    let tileset = |image, firstgid| {
+        json!({
+            "firstgid":firstgid, "tilewidth":1, "tileheight":1, "tilecount":1,
+            "columns":1, "image":image,
+        })
+    };
+    let map = json!({
+        "orientation":"orthogonal", "width":2, "height":1, "tilewidth":1, "tileheight":1,
+        "tilesets":[tileset("red.png", 10), tileset("green.png", 1)],
+        "layers":[{"type":"tilelayer", "width":2, "height":1, "data":[1, 10]}]
+    });
+    let path = dir.join("map.tmj");
+    fs::write(&path, map.to_string()).unwrap();
+    let decoded = formats::load(&path).unwrap();
+    assert_eq!(decoded.layers[0].tileset, Some(0));
+    assert_eq!(decoded.layers[1].tileset, Some(1));
+    assert_eq!(
+        decoded.composite(0),
+        vec![[0, 255, 0, 255], [255, 0, 0, 255]]
+    );
+}
+
+#[test]
 fn mcp_preflights_every_sheet_output_and_cli_can_reexport() {
     let w = Workspace::new();
     let input = w.project().join("art.pixel");

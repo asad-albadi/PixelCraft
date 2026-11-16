@@ -299,15 +299,20 @@ pub fn pack_atlas(
             entry
         })
         .collect();
+    let next_frame_id = match sources {
+        [(_, document)] => Some(document.next_frame_export_id()),
+        _ => None,
+    };
     let sources: Vec<_> = sources
         .iter()
         .enumerate()
         .map(|(i, (name, d))| json!({"id":i,"name":name,"tags":d.tags}))
         .collect();
-    Ok((
-        im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","image":"atlas.png","size":{"w":w,"h":h},"padding":pad,"layout":o.layout,"sources":sources}}),
-    ))
+    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","image":"atlas.png","size":{"w":w,"h":h},"padding":pad,"layout":o.layout,"sources":sources}});
+    if let Some(next_frame_id) = next_frame_id {
+        metadata["meta"]["nextFrameId"] = json!(next_frame_id);
+    }
+    Ok((im, metadata))
 }
 pub fn export_atlas(
     path: &Path,
