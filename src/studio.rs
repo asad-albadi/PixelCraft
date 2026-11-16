@@ -69,7 +69,12 @@ struct CanvasResize {
 struct SpriteJob {
     source: Document,
     title: &'static str,
-    worker: std::thread::JoinHandle<Result<Document, String>>,
+    worker: std::thread::JoinHandle<Result<SpriteJobOutput, String>>,
+}
+
+struct SpriteJobOutput {
+    doc: Document,
+    layer: Option<usize>,
 }
 
 const CANVAS_ANCHORS: [&str; 10] = [
@@ -734,6 +739,27 @@ impl PixelCraft {
                 self.saved = baseline;
                 self.status = "Opened a duplicate sprite".into();
             }
+            "layer-duplicate" | "layer-merge" => {
+                let layer = self.layer;
+                let duplicate = s == "layer-duplicate";
+                let title = if duplicate {
+                    "Duplicate layer"
+                } else {
+                    "Merge down"
+                };
+                self.start_document_job(title, move |source| {
+                    let mut doc = source.clone();
+                    let layer = if duplicate {
+                        doc.duplicate_layer(layer)?
+                    } else {
+                        doc.merge_down(layer)?
+                    };
+                    Ok(SpriteJobOutput {
+                        doc,
+                        layer: Some(layer),
+                    })
+                });
+            }
             "trimsprite" => self.start_sprite_job("Auto-trim sprite", workflows::trim_sprite),
             "rotatespriteright" | "rotatespriteleft" | "rotatespritehalf" | "flipspritex"
             | "flipspritey" => {
@@ -1162,6 +1188,16 @@ impl PixelCraft {
         title: &'static str,
         operation: impl FnOnce(&Document) -> Result<Document, String> + Send + 'static,
     ) {
+        self.start_document_job(title, move |source| {
+            operation(source).map(|doc| SpriteJobOutput { doc, layer: None })
+        });
+    }
+
+    fn start_document_job(
+        &mut self,
+        title: &'static str,
+        operation: impl FnOnce(&Document) -> Result<SpriteJobOutput, String> + Send + 'static,
+    ) {
         if self.studio.sprite_job.is_some() {
             self.status = "A sprite operation is already running".into();
             return;
@@ -1192,7 +1228,7 @@ impl PixelCraft {
         }
         let job = self.studio.sprite_job.take().unwrap();
         match job.worker.join() {
-            Ok(Ok(doc)) => {
+            Ok(Ok(SpriteJobOutput { doc, layer })) => {
                 if !self.doc.same_editor_targets(&job.source)
                     || self.doc.differs_from_saved(&job.source)
                 {
@@ -1203,6 +1239,11 @@ impl PixelCraft {
                 } else {
                     if self.doc.differs_from_saved(&doc) {
                         self.apply_sprite_geometry(doc);
+                        if let Some(layer) = layer {
+                            self.layer = layer;
+                            self.timeline_anchor = None;
+                            self.timeline_destination = None;
+                        }
                     }
                     self.status = format!("{} complete", job.title);
                 }
@@ -1634,6 +1675,34 @@ fn write_recovery_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_commands_select_the_result_and_keep_each_edit_undoable() {
+        let mut editor = app();
+        let mut doc = Document::new(2, 2);
+        doc.set_pixel(0, 0, 0, [30, 42, 74, 255]);
+        editor.replace(doc.clone(), None);
+        let ctx = egui::Context::default();
+
+        for (action, layer_count, active) in [("layer-duplicate", 2, 1), ("layer-merge", 1, 0)] {
+            assert!(editor.studio_action(action));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while editor.studio.sprite_job.is_some() {
+                assert!(Instant::now() < deadline);
+                editor.poll_sprite_job(&ctx);
+                std::thread::yield_now();
+            }
+            assert_eq!(editor.doc.layers.len(), layer_count);
+            assert_eq!(editor.layer, active);
+        }
+        assert_eq!(editor.doc.composite(0), doc.composite(0));
+        editor.undo();
+        assert_eq!(editor.doc.layers.len(), 2);
+        assert_eq!(editor.layer, 1);
+        editor.undo();
+        assert_eq!(editor.doc, doc);
+        assert_eq!(editor.layer, 0);
+    }
 
     #[test]
     fn whole_sprite_actions_apply_as_one_edit_and_duplicate_in_a_new_tab() {

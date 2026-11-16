@@ -33,6 +33,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 12 complete. Sprite-wide nearest-neighbor resampling, visible-frame auto-trim, orthogonal rotation and flips, and independent duplication are available from the Sprite menu. Tilemaps stay editable. For rotation and flips, rectangular tile placements with diagonal flags use an equivalent generated tile. Tests cover exact indexed slots, slice geometry, tilemap appearance and resampling, active-tab isolation, undo, and edits made during a background transform. Formatting, strict Clippy, and 438 Windows all-target tests passed.
 
+- Item 19 complete. Layer-menu and timeline commands duplicate nested groups or bake two sibling artwork layers across all frames. The merge uses the existing renderer for the pair in isolation and retains off-canvas pixels. Tile content becomes raster artwork in the merged layer. Tests cover hierarchy and metadata remapping, fresh edit targets, frame-dependent opacity and blending, off-canvas save/reopen, selected layer, and undo. Formatting, strict Clippy, and 442 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -59,7 +61,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 ## Layers, timeline, and tilemaps
 
-- [ ] **19. Duplicate and merge layers.** Duplicate complete layers and group trees across frames and merge layers down with correct blending and opacity.
+- [x] **19. Duplicate and merge layers.** Duplicate complete layers and group trees across frames and merge layers down with correct blending and opacity.
 - [ ] **20. Expand layer organization.** Add flatten all or visible, layer via copy or cut, compatible layer type conversions, and collapsible groups.
 - [ ] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
 - [ ] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.

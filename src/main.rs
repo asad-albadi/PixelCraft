@@ -2530,6 +2530,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     "Layer",
                     vec![
                         ("New layer", "layer"),
+                        ("Duplicate layer or group", "layer-duplicate"),
+                        ("Merge down", "layer-merge"),
                         ("Delete layer", "deletelayer"),
                         ("Move layer up", "up"),
                         ("Move layer down", "down"),
@@ -3322,6 +3324,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.timeline_select(layer, frame, extend);
         }
         ui.menu_button("Layer & frame actions", |ui| {
+            for (label, command) in [
+                ("Duplicate layer or group", "layer-duplicate"),
+                ("Merge down", "layer-merge"),
+            ] {
+                if ui.pc_command_button(command, label).clicked() {
+                    self.action(command);
+                    ui.close();
+                }
+            }
             if ui.pc_button("Rename current frame…").clicked() {
                 self.start_rename_frame(self.frame);
                 ui.close();

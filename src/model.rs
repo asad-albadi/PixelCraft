@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+mod layer_operations;
 pub type Pixel = [u8; 4];
 pub const CLEAR: Pixel = [0; 4];
 pub const DEFAULT_DURATION: u16 = 100;
