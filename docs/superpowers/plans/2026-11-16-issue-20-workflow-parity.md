@@ -99,6 +99,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 high-depth checkpoint. PSD and PSB now import 16-bit integer and 32-bit float RGB and grayscale channels, including layers stored in `Lr16` and `Lr32` blocks. The importer converts float color to sRGB while retaining linear alpha and mask coverage. Visible fills without raster data use the embedded composite when present and preserve the layer stack in a hidden group. Tests cover tagged-layer ZIP prediction and the unrasterized fill fallback. Six external high-depth fixtures rendered within one 8-bit channel value for the four small raster fixtures and within five values for the two shape fixtures. Formatting, strict Clippy, and 508 Windows all-target tests passed. Indexed Photoshop files and additional Photoshop-specific layer and color profile behavior remain open.
 
+- Item 35 indexed checkpoint. PSD and PSB import now reads planar 8-bit color tables, the defined palette length, and the optional transparency index. Exact per-pixel slots are retained so duplicate swatches stay independently editable. The tests cover tagged transparency in PSD, an opaque slot zero in PSB, and editing duplicate slots. An external indexed PSD fixture matched all exported pixels, including transparency. Formatting, strict Clippy, and 509 Windows all-target tests passed. The remaining Photoshop validation includes merged transparency versus saved alpha channels and color profiles.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

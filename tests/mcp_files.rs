@@ -2154,6 +2154,68 @@ fn photoshop_unrasterized_fill_uses_merged_preview_and_retains_source_layers() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn photoshop_indexed_import_retains_duplicate_slots_and_transparency() {
+    let w = Workspace::new();
+    for (version, transparent) in [(1u16, Some(2u16)), (2, None)] {
+        let mut src = b"8BPS".to_vec();
+        src.extend_from_slice(&version.to_be_bytes());
+        src.extend_from_slice(&[0; 6]);
+        src.extend_from_slice(b"\0\x01\0\0\0\x01\0\0\0\x03\0\x08\0\x02");
+        let mut palette = [0; 768];
+        for (channel, value) in [90, 120, 40].into_iter().enumerate() {
+            let start = channel * 256;
+            palette[start..start + 2].fill(value);
+        }
+        src.extend_from_slice(&768u32.to_be_bytes());
+        src.extend_from_slice(&palette);
+        let mut resources = b"8BIM\x04\x16\0\0\0\0\0\x02\0\x03".to_vec();
+        if let Some(slot) = transparent {
+            resources.extend_from_slice(b"8BIM\x04\x17\x02id\0\0\0\0\x02");
+            resources.extend_from_slice(&slot.to_be_bytes());
+        }
+        src.extend_from_slice(&(resources.len() as u32).to_be_bytes());
+        src.extend(resources);
+        src.extend_from_slice(if version == 1 { &[0; 4][..] } else { &[0; 8] });
+        src.extend_from_slice(b"\0\0\0\x01\x02");
+        let path = w.project().join(if version == 1 {
+            "slots.psd"
+        } else {
+            "slots.psb"
+        });
+        fs::write(&path, src).unwrap();
+
+        let mut loaded = formats::load(&path).unwrap();
+        assert_eq!(loaded.color_mode, pixelcraft::model::ColorMode::Indexed);
+        assert_eq!(
+            loaded.palette,
+            [[90, 120, 40, 255], [90, 120, 40, 255], [0, 0, 0, 255]]
+        );
+        assert_eq!(
+            loaded.layers[0].cel_meta[0]
+                .indices
+                .as_ref()
+                .unwrap()
+                .as_slice(),
+            [0, 1, 2]
+        );
+        assert_eq!(loaded.layers[0].background, transparent.is_none());
+        if let Some(slot) = transparent {
+            assert_eq!(loaded.transparent_index, usize::from(slot));
+        }
+        loaded.set_palette_color(1, [20, 30, 40, 255]);
+        assert_eq!(
+            loaded.composite(0),
+            [
+                [90, 120, 40, 255],
+                [20, 30, 40, 255],
+                [0, 0, 0, if transparent.is_some() { 0 } else { 255 }],
+            ]
+        );
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(
