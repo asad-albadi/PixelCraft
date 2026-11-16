@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod layer_conversion;
 mod layer_operations;
+pub use layer_conversion::LayerConversion;
 pub type Pixel = [u8; 4];
 pub const CLEAR: Pixel = [0; 4];
 pub const DEFAULT_DURATION: u16 = 100;
@@ -2398,19 +2400,28 @@ impl Document {
         }
     }
     pub fn layer_pixels(&self, l: usize, f: usize) -> Vec<Pixel> {
+        if self.layers[l].tileset.is_none() {
+            return self.layers[l].cels[f].to_vec();
+        }
+        let mut out = vec![CLEAR; self.width * self.height];
+        self.visit_tile_pixels(l, f, |x, y, color| {
+            if let Some(index) = self.index(x, y) {
+                out[index] = color;
+            }
+        });
+        out
+    }
+
+    fn visit_tile_pixels(&self, l: usize, f: usize, mut visit: impl FnMut(i32, i32, Pixel)) {
         let layer = &self.layers[l];
-        let Some(ti) = layer.tileset else {
-            return layer.cels[f].to_vec();
-        };
-        let Some(t) = self.tilesets.get(ti) else {
-            return vec![CLEAR; self.width * self.height];
+        let Some(t) = layer.tileset.and_then(|index| self.tilesets.get(index)) else {
+            return;
         };
         let geometry = layer.cel_meta[f].tilemap.as_ref();
         let cols = geometry.map_or(self.width.div_ceil(t.width), |g| g.columns);
         let (ox, oy) = geometry.map_or((0, 0), |g| (g.x, g.y));
-        let mut out = vec![CLEAR; self.width * self.height];
         for (i, &id) in layer.tile_cels[f].iter().enumerate() {
-            let n = (id & 0x1fffffff) as usize;
+            let n = (id & 0x1fff_ffff) as usize;
             if n == 0 {
                 continue;
             }
@@ -2420,28 +2431,26 @@ impl Document {
             for y in 0..t.height {
                 for x in 0..t.width {
                     let (mut sx, mut sy) = (x, y);
-                    if id & 0x20000000 != 0 {
+                    if id & 0x2000_0000 != 0 {
                         std::mem::swap(&mut sx, &mut sy);
                     }
                     if sx >= t.width || sy >= t.height {
                         continue;
                     }
-                    if id & 0x80000000 != 0 {
-                        sx = t.width - 1 - sx
+                    if id & 0x8000_0000 != 0 {
+                        sx = t.width - 1 - sx;
                     }
-                    if id & 0x40000000 != 0 {
-                        sy = t.height - 1 - sy
+                    if id & 0x4000_0000 != 0 {
+                        sy = t.height - 1 - sy;
                     }
-                    if let Some(p) = self.index(
+                    visit(
                         ox + (i % cols * t.width + x) as i32,
                         oy + (i / cols * t.height + y) as i32,
-                    ) {
-                        out[p] = tile[sy * t.width + sx];
-                    }
+                        tile[sy * t.width + sx],
+                    );
                 }
             }
         }
-        out
     }
     /// Compare only the inputs used to composite this frame. Shared raster
     /// buffers and layer metadata make the common unchanged check cheap.
@@ -2664,6 +2673,37 @@ impl Document {
                             transparent_rgb_possible |= target[3] == 0 && *target != CLEAR;
                         }
                     }
+                }
+            }
+            if let Some(set) = l.tileset.and_then(|index| self.tilesets.get(index))
+                && (key.x != 0 || key.y != 0)
+                && l.mask.is_none()
+            {
+                let (x, y, columns, rows) = l.cel_meta[f].tilemap.as_ref().map_or_else(
+                    || {
+                        (
+                            0,
+                            0,
+                            self.width.div_ceil(set.width),
+                            self.height.div_ceil(set.height),
+                        )
+                    },
+                    |g| (g.x, g.y, g.columns, g.rows),
+                );
+                if x < 0
+                    || y < 0
+                    || i64::from(x) + (columns * set.width) as i64 > self.width as i64
+                    || i64::from(y) + (rows * set.height) as i64 > self.height as i64
+                {
+                    self.visit_tile_pixels(i, f, |x, y, color| {
+                        if self.index(x, y).is_none()
+                            && let Some(index) = self.index(x + key.x, y + key.y)
+                            && (color[3] != 0 || (color != CLEAR && out[index][3] == 0))
+                        {
+                            out[index] = blend(out[index], color, opacity, l.blend);
+                            transparent_rgb_possible |= out[index][3] == 0 && out[index] != CLEAR;
+                        }
+                    });
                 }
             }
             let rendered;

@@ -37,6 +37,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 20 in progress. Flatten All and Flatten Visible bake the animation, Layer via Copy/Cut preserves selected indexed slots, and collapsing groups hides nested timeline rows without affecting the canvas. Tests confirm hidden subtree preservation, raster selection transfer, and rendered group disclosure. Formatting, strict Clippy, and 445 Windows all-target tests passed. Compatible layer-type conversions remain open.
 
+- Item 20 complete. Added undoable raster, opaque background, and animated tilemap conversions. Indexed conversion requires the destination palette to represent the rendered colors. Windows verification passed all 450 all-target tests, rustfmt, and strict Clippy.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -64,7 +66,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 ## Layers, timeline, and tilemaps
 
 - [x] **19. Duplicate and merge layers.** Duplicate complete layers and group trees across frames and merge layers down with correct blending and opacity.
-- [ ] **20. Expand layer organization.** Add flatten all or visible, layer via copy or cut, compatible layer type conversions, and collapsible groups.
+- [x] **20. Expand layer organization.** Add flatten all or visible, layer via copy or cut, compatible layer type conversions, and collapsible groups.
 - [ ] **21. Expand timeline editing.** Drag ranges of cels, frames, and layers. Support nonadjacent selection, frame reordering, and frame reversal.
 - [ ] **22. Expand tile management.** Add direct flips and rotation, reusable tile duplication, an always-create variant mode, tile deletion and reordering with remapping, and tile index display.
 - [ ] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.

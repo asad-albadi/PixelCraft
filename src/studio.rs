@@ -44,6 +44,7 @@ pub(super) struct Studio {
     rotation_preview: bool,
     rotation_texture: Option<RotationPreview>,
     canvas_resize: Option<CanvasResize>,
+    tile_conversion: Option<TileConversionDialog>,
     sprite_job: Option<SpriteJob>,
     adjustment_input: Adjustment,
     recovery_root: PathBuf,
@@ -65,6 +66,12 @@ struct CanvasResize {
     size: [usize; 2],
     anchor: usize,
     offset: [i32; 2],
+}
+
+struct TileConversionDialog {
+    layer: String,
+    width: usize,
+    height: usize,
 }
 
 struct SpriteJob {
@@ -150,6 +157,7 @@ impl Default for Studio {
             rotation_preview: false,
             rotation_texture: None,
             canvas_resize: None,
+            tile_conversion: None,
             sprite_job: None,
             adjustment_input: Adjustment::Levels {
                 black: 0,
@@ -799,6 +807,17 @@ impl PixelCraft {
                     })
                 });
             }
+            "convert-raster" => self.start_layer_conversion(LayerConversion::Raster),
+            "convert-background" => {
+                self.start_layer_conversion(LayerConversion::Background(self.bg))
+            }
+            "convert-tilemap" => {
+                self.studio.tile_conversion = Some(TileConversionDialog {
+                    layer: self.doc.layers[self.layer].editor_id.to_string(),
+                    width: self.tile_size,
+                    height: self.tile_size,
+                });
+            }
             "trimsprite" => self.start_sprite_job("Auto-trim sprite", workflows::trim_sprite),
             "rotatespriteright" | "rotatespriteleft" | "rotatespritehalf" | "flipspritex"
             | "flipspritey" => {
@@ -1365,9 +1384,58 @@ impl PixelCraft {
         }
     }
 
+    fn start_layer_conversion(&mut self, conversion: LayerConversion) {
+        let layer = self.layer;
+        self.start_document_job("Convert layer", move |source| {
+            let mut doc = source.clone();
+            let layer = doc.convert_layer(layer, conversion)?;
+            Ok(SpriteJobOutput {
+                doc,
+                layer: Some(layer),
+            })
+        });
+    }
+
+    fn tile_conversion_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut dialog) = self.studio.tile_conversion.take() else {
+            return;
+        };
+        if self.doc.layers[self.layer].editor_id.to_string() != dialog.layer {
+            return;
+        }
+        let mut open = true;
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Convert layer to tilemap")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Tile width");
+                    ui.add(egui::DragValue::new(&mut dialog.width).range(1..=MAX_DIMENSION));
+                    ui.label("Tile height");
+                    ui.add(egui::DragValue::new(&mut dialog.height).range(1..=MAX_DIMENSION));
+                });
+                ui.small("Identical tiles share one tileset entry across frames.");
+                ui.horizontal(|ui| {
+                    apply = ui.pc_button("Convert").clicked();
+                    cancel = ui.pc_button("Cancel").clicked();
+                });
+            });
+        if apply {
+            self.start_layer_conversion(LayerConversion::Tilemap {
+                width: dialog.width,
+                height: dialog.height,
+            });
+        } else if open && !cancel {
+            self.studio.tile_conversion = Some(dialog);
+        }
+    }
+
     pub(super) fn studio_dialogs(&mut self, ctx: &egui::Context) {
         self.poll_sprite_job(ctx);
         self.canvas_resize_dialog(ctx);
+        self.tile_conversion_dialog(ctx);
         if self.studio.open {
             let mut open = true;
             egui::Window::new("Drawing & selection studio")
@@ -1714,6 +1782,36 @@ fn write_recovery_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_conversion_actions_use_the_secondary_color_and_are_undoable() {
+        let mut editor = app();
+        let mut doc = Document::new(2, 2);
+        doc.add_layer();
+        doc.layers[1].name = "Paper".into();
+        editor.replace(doc.clone(), None);
+        editor.layer = 1;
+        editor.bg = [24, 68, 93, 150];
+        assert!(editor.studio_action("convert-background"));
+
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while editor.studio.sprite_job.is_some() {
+            assert!(Instant::now() < deadline);
+            editor.poll_sprite_job(&ctx);
+            std::thread::yield_now();
+        }
+        assert_eq!(editor.layer, 0);
+        assert!(editor.doc.layers[0].background);
+        assert_eq!(editor.doc.composite(0)[3], [24, 68, 93, 255]);
+        editor.undo();
+        assert_eq!(editor.layer, 1);
+        assert_eq!(editor.doc, doc);
+        assert!(editor.studio_action("convert-tilemap"));
+        let dialog = editor.studio.tile_conversion.as_ref().unwrap();
+        assert_eq!(dialog.layer, editor.doc.layers[1].editor_id.to_string());
+        assert_eq!([dialog.width, dialog.height], [editor.tile_size; 2]);
+    }
 
     #[test]
     fn layer_commands_select_the_result_and_keep_each_edit_undoable() {
