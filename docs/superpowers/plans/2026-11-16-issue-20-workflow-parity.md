@@ -41,6 +41,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 21 in progress. Frame headers support interval and nonadjacent selection, insertion-gap dragging, and reversal. The shared permutation moves cels, durations, palettes, slice keys, names, stable export IDs, and metadata in one undoable edit. Tags retain their timeline positions. Tests exercise the model, pointer drag, selection, and Undo. Formatting, strict Clippy, and 454 Windows all-target tests passed. Cel and layer drag ranges and nonadjacent selection remain open.
 
+- Item 21 in progress. Shift selects cel rectangles and Ctrl or Command toggles individual cels. Dragging moves the selected artwork and metadata while retaining gaps and the grabbed cel offset. The same selection works with the clear, link, timing, move, and duplicate controls. Tests cover pointer gestures, overlapping drops, locked and unselected gaps, links, metadata, and Undo. Formatting, strict Clippy, and 457 Windows all-target tests passed. Layer range dragging and nonadjacent layer selection remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

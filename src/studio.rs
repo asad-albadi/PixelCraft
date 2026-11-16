@@ -616,6 +616,7 @@ impl PixelCraft {
                 palette_index: 0,
                 active_tag: None,
                 timeline_anchor: None,
+                selected_cels: None,
                 timeline_frames: TimelineFrames::default(),
             }));
         }
@@ -1301,6 +1302,7 @@ impl PixelCraft {
                         if let Some(layer) = layer {
                             self.layer = layer;
                             self.timeline_anchor = None;
+                            self.selected_cels = None;
                             self.timeline_frames = TimelineFrames::default();
                             self.timeline_destination = None;
                         }

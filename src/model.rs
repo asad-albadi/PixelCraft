@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod cel_selection;
 mod frame_order;
 mod layer_conversion;
 mod layer_operations;
+pub use cel_selection::CelSelection;
 pub use layer_conversion::LayerConversion;
 pub type Pixel = [u8; 4];
 pub const CLEAR: Pixel = [0; 4];
@@ -649,11 +651,6 @@ impl CelRange {
             && self.first_frame <= self.last_frame
             && self.last_layer < document.layers.len()
             && self.last_frame < document.durations.len()
-    }
-
-    fn editable(self, document: &Document) -> bool {
-        self.fits(document)
-            && (self.first_layer..=self.last_layer).all(|layer| document.editable(layer))
     }
 }
 
@@ -2779,144 +2776,6 @@ impl Document {
             tilemap: geometry,
             ..CelMeta::default()
         };
-    }
-
-    pub fn clear_cel_range(&mut self, range: CelRange) -> Result<(), String> {
-        if !range.editable(self) {
-            return Err("Choose a valid range of unlocked image or tile layers".into());
-        }
-        for layer in range.first_layer..=range.last_layer {
-            for frame in range.first_frame..=range.last_frame {
-                self.clear_cel(layer, frame);
-            }
-            self.layers[layer].prune_cel_links();
-        }
-        self.metadata.retain(|chunk| {
-            chunk
-                .owner
-                .strip_prefix("cel:")
-                .and_then(|layer| layer.parse().ok())
-                .is_none_or(|layer| !range.contains(layer, chunk.frame))
-        });
-        Ok(())
-    }
-
-    pub fn move_cel_range(
-        &mut self,
-        range: CelRange,
-        to_layer: usize,
-        to_frame: usize,
-        duplicate: bool,
-    ) -> Result<(), String> {
-        if !range.editable(self) {
-            return Err("Source range contains a locked, missing, or group layer".into());
-        }
-        let last_layer = to_layer.saturating_add(range.last_layer - range.first_layer);
-        let last_frame = to_frame.saturating_add(range.last_frame - range.first_frame);
-        let target = CelRange {
-            first_layer: to_layer,
-            last_layer,
-            first_frame: to_frame,
-            last_frame,
-        };
-        if !target.editable(self) {
-            return Err("Destination range contains a locked, missing, or group layer".into());
-        }
-        if range == target {
-            return Ok(());
-        }
-        let mut next = self.clone();
-        let applies = |owner: &str, frame: usize, range: CelRange| {
-            owner
-                .strip_prefix("cel:")
-                .and_then(|layer| layer.parse::<usize>().ok())
-                .filter(|&layer| range.contains(layer, frame))
-        };
-        next.metadata
-            .retain(|chunk| applies(&chunk.owner, chunk.frame, target).is_none());
-        if !duplicate {
-            for layer in range.first_layer..=range.last_layer {
-                for frame in range.first_frame..=range.last_frame {
-                    next.clear_cel(layer, frame);
-                    next.layers[layer].cel_meta[frame].editor_id = EditorId::default();
-                }
-            }
-            next.metadata
-                .retain(|chunk| applies(&chunk.owner, chunk.frame, range).is_none());
-        }
-        for (source, target) in (range.first_layer..=range.last_layer).zip(to_layer..=last_layer) {
-            let source_layer = &self.layers[source];
-            let target_layer = &mut next.layers[target];
-            if source_layer.tileset != target_layer.tileset {
-                return Err(
-                    "Source and destination layers must use the same image or tile format".into(),
-                );
-            }
-            for (from, to) in (range.first_frame..=range.last_frame).zip(to_frame..=last_frame) {
-                target_layer.cels[to] = source_layer.cels[from].clone();
-                target_layer.tile_cels[to] = source_layer.tile_cels[from].clone();
-                let mut meta = source_layer.cel_meta[from].clone();
-                if duplicate {
-                    meta.editor_id = target_layer.cel_meta[to].editor_id;
-                }
-                if source != target || duplicate && !target_layer.link_duplicates {
-                    meta.artwork_link = None;
-                }
-                target_layer.cel_meta[to] = meta;
-            }
-            if duplicate && source == target && target_layer.link_duplicates {
-                // Resolve links after copying so overlapping sources still read the original artwork.
-                if (range.first_frame..=range.last_frame)
-                    .any(|f| (to_frame..=last_frame).contains(&f))
-                {
-                    return Err(
-                        "Choose a non-overlapping destination when duplicating linked cels".into(),
-                    );
-                }
-                for (from, to) in (range.first_frame..=range.last_frame).zip(to_frame..=last_frame)
-                {
-                    next.set_cel_link(source, to, from);
-                }
-            }
-        }
-        for chunk in &self.metadata {
-            if let Some(layer) = applies(&chunk.owner, chunk.frame, range) {
-                let mut chunk = chunk.clone();
-                chunk.owner = format!("cel:{}", to_layer + layer - range.first_layer);
-                chunk.frame = to_frame + chunk.frame - range.first_frame;
-                next.metadata.push(chunk);
-            }
-        }
-        for layer in &mut next.layers {
-            layer.prune_cel_links();
-        }
-        next.validate()?;
-        *self = next;
-        Ok(())
-    }
-
-    pub fn set_range_duration(&mut self, range: CelRange, duration: u16) -> Result<(), String> {
-        if duration == 0 || !range.fits(self) {
-            return Err("Choose a valid timeline range and positive duration".into());
-        }
-        self.durations[range.first_frame..=range.last_frame].fill(duration);
-        Ok(())
-    }
-
-    pub fn set_range_linked(&mut self, range: CelRange, linked: bool) -> Result<(), String> {
-        if !range.editable(self) {
-            return Err("Choose a valid range of unlocked image or tile layers".into());
-        }
-        for layer in range.first_layer..=range.last_layer {
-            for frame in range.first_frame..=range.last_frame {
-                if !linked {
-                    self.unlink_cel(layer, frame)?;
-                } else if frame != range.first_frame {
-                    self.link_cel(layer, frame, range.first_frame)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn can_add_frame(&self, frame: usize, duplicate: bool) -> bool {
