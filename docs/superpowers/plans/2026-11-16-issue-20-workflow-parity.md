@@ -61,6 +61,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 26 in progress. The drawing grid supports editable origin and spacing, selection bounds, and snap-to-grid for raster brush and shape input, with a clipped overlay on the main and seamless canvas. Geometry round-trips through .pixel and ASE, covering the grid portion of item 38. Tests cover pointer snapping, repeated copies, Undo, negative origins, and legacy headers. Formatting, strict Clippy, and 481 Windows all-target tests passed. Split views remain open.
 
+- Item 26 complete. Split Canvas provides two resizable, editable views with independent pan and zoom. The active pane receives Fit, toolbar zoom, and preview navigation. Both panes share the document, Undo history, and frame texture. The pointer test covers resizing, drawing, crossing the divider safely, shared Undo, and tab isolation. Formatting, strict Clippy, and 482 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -94,7 +96,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **23. Make seamless preview editable.** Paint on the repeated canvas and choose horizontal, vertical, or both axes.
 - [x] **24. Expand playback and onion skin controls.** Add selected-range playback, play once, subtags, rewind on stop, and draggable onion ranges.
 - [x] **25. Add an Undo History panel.** Inspect entries and jump to a point in the active document’s history.
-- [ ] **26. Add split views and a configurable drawing grid.** Show multiple views of the same document, configure grid geometry and snapping, and set the grid from a selection.
+- [x] **26. Add split views and a configurable drawing grid.** Show multiple views of the same document, configure grid geometry and snapping, and set the grid from a selection.
 
 ## Files and export
 

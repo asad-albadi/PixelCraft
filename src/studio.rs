@@ -615,6 +615,8 @@ impl PixelCraft {
                 redo: vec![],
                 zoom: t.zoom,
                 pan: Vec2::new(t.pan[0], t.pan[1]),
+                split_canvas: None,
+                active_canvas: CanvasPane::Primary,
                 selection: t.selection,
                 polygon: t.polygon.clone(),
                 mask: t.mask.clone(),

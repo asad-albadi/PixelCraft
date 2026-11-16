@@ -592,6 +592,7 @@ fn button_named(
                 | "hand"
                 | "grid"
                 | "drawing-grid"
+                | "split-canvas"
                 | "snap-to-grid"
                 | "onion"
                 | "seamless"

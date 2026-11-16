@@ -820,7 +820,7 @@ impl PixelCraft {
                 && response.clicked()
                 && image.contains(picked)
             {
-                self.pan = (image.center() - picked) * (self.zoom / scale);
+                self.set_active_canvas_pan((image.center() - picked) * (self.active_canvas_view().zoom / scale));
                 ui.ctx().request_repaint();
             }
             if limit != Vec2::ZERO {
@@ -841,9 +841,10 @@ impl PixelCraft {
             if let Some(t) = &self.preview {
                 painter.image(t.id(), image, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.,1.)), Color32::WHITE);
             }
-            if let Some(canvas_size) = self.canvas_view_size {
-                let factor = scale / self.zoom;
-                let view = Rect::from_center_size(image.center() - self.pan * factor, canvas_size * factor);
+            let camera = self.active_canvas_view();
+            if let Some(canvas_size) = camera.size {
+                let factor = scale / camera.zoom;
+                let view = Rect::from_center_size(image.center() - camera.pan * factor, canvas_size * factor);
                 let clip = r.intersect(image);
                 if view.intersects(clip) {
                     // Clamp to the sprite so the navigator also shows an entirely visible sprite.
@@ -1057,19 +1058,24 @@ impl PixelCraft {
 
     fn fluent_view_controls(&mut self, ui: &mut egui::Ui) {
         self.shade_direction_controls(ui);
+        let current_zoom = self.active_canvas_view().zoom;
+        let mut zoom = current_zoom;
         egui::ComboBox::from_id_salt("canvas_zoom")
             .width(90.)
-            .selected_text(format!("{:.0}%", self.zoom * 100.))
+            .selected_text(format!("{:.0}%", zoom * 100.))
             .show_ui(ui, |ui| {
-                for zoom in [0.25, 0.5, 1., 2., 4., 6., 8., 10., 12., 16., 24., 32.] {
-                    ui.pc_selectable_value(&mut self.zoom, zoom, format!("{:.0}%", zoom * 100.));
+                for scale in [0.25, 0.5, 1., 2., 4., 6., 8., 10., 12., 16., 24., 32.] {
+                    ui.pc_selectable_value(&mut zoom, scale, format!("{:.0}%", scale * 100.));
                 }
                 ui.add(
-                    egui::Slider::new(&mut self.zoom, 0.02..=32.)
+                    egui::Slider::new(&mut zoom, 0.02..=32.)
                         .logarithmic(true)
                         .show_value(false),
                 );
             });
+        if zoom != current_zoom {
+            self.set_active_canvas_zoom(zoom);
+        }
         if ui.pc_command_button("fit", "Fit").clicked() {
             self.action("fit");
         }

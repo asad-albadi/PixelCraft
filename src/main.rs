@@ -220,6 +220,28 @@ struct HistoryEntry {
     timeline_frames: TimelineHeaders,
     timeline_layers: TimelineHeaders,
 }
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+enum CanvasPane {
+    #[default]
+    Primary,
+    Secondary,
+}
+
+#[derive(Clone, Copy)]
+struct CanvasView {
+    zoom: f32,
+    pan: Vec2,
+    size: Option<Vec2>,
+    initial_view: u8,
+    wheel_zoom_steps: f32,
+}
+
+#[derive(Clone, Copy)]
+struct SplitCanvas {
+    view: CanvasView,
+    fraction: f32,
+}
+
 struct SpriteTab {
     doc: Document,
     saved: Document,
@@ -233,6 +255,8 @@ struct SpriteTab {
     redo: Vec<HistoryEntry>,
     zoom: f32,
     pan: Vec2,
+    split_canvas: Option<SplitCanvas>,
+    active_canvas: CanvasPane,
     selection: Option<(i32, i32, i32, i32)>,
     palette_index: usize,
     active_tag: Option<usize>,
@@ -399,6 +423,9 @@ struct PixelCraft {
     preview_pan: Vec2,
     preview_playback: Option<fluent::PreviewPlayback>,
     canvas_view_size: Option<Vec2>,
+    split_canvas: Option<SplitCanvas>,
+    active_canvas: CanvasPane,
+    gesture_canvas: Option<CanvasPane>,
     preview_settings_path: Option<PathBuf>,
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
@@ -570,6 +597,9 @@ impl PixelCraft {
             preview_pan: Vec2::ZERO,
             preview_playback: None,
             canvas_view_size: None,
+            split_canvas: None,
+            active_canvas: CanvasPane::Primary,
+            gesture_canvas: None,
             preview_settings_path: None,
             render_snapshot: None,
             frame_textures: vec![],
@@ -947,13 +977,20 @@ impl PixelCraft {
         self.cancel_gesture();
         self.studio.seamless = axes;
         if axes != WrapAxes::NONE {
-            self.zoom = self.zoom.min(self.canvas_fit_scale());
+            self.zoom = self.zoom.min(self.canvas_fit_scale(self.canvas_view_size));
             self.pan = Vec2::ZERO;
+            if let Some(split) = self.split_canvas {
+                let zoom = split.view.zoom.min(self.canvas_fit_scale(split.view.size));
+                if let Some(split) = &mut self.split_canvas {
+                    split.view.zoom = zoom;
+                    split.view.pan = Vec2::ZERO;
+                }
+            }
         }
     }
 
-    fn canvas_fit_scale(&self) -> f32 {
-        let view = self.canvas_view_size.unwrap_or(Vec2::splat(512.)) - Vec2::splat(32.);
+    fn canvas_fit_scale(&self, viewport: Option<Vec2>) -> f32 {
+        let view = viewport.unwrap_or(Vec2::splat(512.)) - Vec2::splat(32.);
         let size = Vec2::new(
             self.doc.width as f32
                 * if self.studio.seamless.horizontal {
@@ -1765,6 +1802,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.status.starts_with("Export failed")
     }
     fn cancel_gesture(&mut self) {
+        self.gesture_canvas = None;
         self.start = None;
         self.last = None;
         self.stroke_base = None;
@@ -1925,6 +1963,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
     fn replace(&mut self, d: Document, path: Option<PathBuf>) {
         self.power.bridge_generation += 1;
+        self.cancel_gesture();
+        self.split_canvas = None;
+        self.active_canvas = CanvasPane::Primary;
         self.extension_session = None;
         self.active_tag = None;
         self.preview_playback = None;
@@ -1970,6 +2011,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             redo: self.redo.clone(),
             zoom: self.zoom,
             pan: self.pan,
+            split_canvas: self.split_canvas,
+            active_canvas: self.active_canvas,
             selection: self.selection,
             palette_index: self.palette_index,
             active_tag: self.active_tag,
@@ -2007,6 +2050,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.redo, &mut tab.redo);
         std::mem::swap(&mut self.zoom, &mut tab.zoom);
         std::mem::swap(&mut self.pan, &mut tab.pan);
+        std::mem::swap(&mut self.split_canvas, &mut tab.split_canvas);
+        std::mem::swap(&mut self.active_canvas, &mut tab.active_canvas);
         std::mem::swap(&mut self.selection, &mut tab.selection);
         std::mem::swap(&mut self.studio.polygon, &mut tab.polygon);
         std::mem::swap(&mut self.studio.mask, &mut tab.mask);
@@ -2657,15 +2702,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
             "onion" => self.onion = !self.onion,
+            "split-canvas" => self.toggle_split_canvas(),
             "fit" => {
-                self.zoom = if self.studio.seamless == WrapAxes::NONE {
+                let view = self.active_canvas_view();
+                let zoom = if self.split_canvas.is_none() && self.studio.seamless == WrapAxes::NONE
+                {
                     (480. / self.doc.width.max(self.doc.height) as f32)
                         .floor()
                         .clamp(0.02, 32.)
                 } else {
-                    self.canvas_fit_scale()
+                    self.canvas_fit_scale(view.size)
                 };
-                self.pan = Vec2::ZERO;
+                self.set_active_canvas_zoom(zoom);
+                self.set_active_canvas_pan(Vec2::ZERO);
             }
             "properties" => self.properties_open = true,
             "pencil" => self.tool = Tool::Pencil,
@@ -3058,6 +3107,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Set drawing grid from selection", "grid-from-selection"),
                         ("Toggle onion skin", "onion"),
                         ("Fit canvas", "fit"),
+                        ("Split canvas", "split-canvas"),
                         ("Seamless canvas · both axes", "seamless"),
                         ("Seamless canvas · horizontal", "seamless-horizontal"),
                         ("Seamless canvas · vertical", "seamless-vertical"),
@@ -3147,6 +3197,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         let label = label.split("   ").next().unwrap_or(label);
                         let selected = match a {
                             "grid" => self.grid,
+                            "split-canvas" => self.split_canvas.is_some(),
                             "drawing-grid" => self.show_drawing_grid,
                             "snap-to-grid" => self.snap_to_grid,
                             "onion" => self.onion,
@@ -4825,11 +4876,157 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
 
+    fn toggle_split_canvas(&mut self) {
+        self.cancel_gesture();
+        if self.split_canvas.take().is_some() {
+            self.active_canvas = CanvasPane::Primary;
+        } else {
+            self.split_canvas = Some(SplitCanvas {
+                view: CanvasView {
+                    zoom: self.zoom,
+                    pan: Vec2::ZERO,
+                    size: None,
+                    initial_view: 1,
+                    wheel_zoom_steps: 0.,
+                },
+                fraction: 0.5,
+            });
+        }
+    }
+
+    fn active_canvas_view(&self) -> CanvasView {
+        if self.active_canvas == CanvasPane::Secondary
+            && let Some(split) = &self.split_canvas
+        {
+            split.view
+        } else {
+            CanvasView {
+                zoom: self.zoom,
+                pan: self.pan,
+                size: self.canvas_view_size,
+                initial_view: self.initial_view,
+                wheel_zoom_steps: self.wheel_zoom_steps,
+            }
+        }
+    }
+
+    fn set_active_canvas_zoom(&mut self, zoom: f32) {
+        if self.active_canvas == CanvasPane::Secondary
+            && let Some(split) = &mut self.split_canvas
+        {
+            split.view.zoom = zoom;
+            split.view.initial_view = 0;
+        } else {
+            self.zoom = zoom;
+        }
+    }
+
+    fn set_active_canvas_pan(&mut self, pan: Vec2) {
+        if self.active_canvas == CanvasPane::Secondary
+            && let Some(split) = &mut self.split_canvas
+        {
+            split.view.pan = pan;
+        } else {
+            self.pan = pan;
+        }
+    }
+
+    fn swap_canvas_view(&mut self, alternate: &mut CanvasView) {
+        std::mem::swap(&mut self.zoom, &mut alternate.zoom);
+        std::mem::swap(&mut self.pan, &mut alternate.pan);
+        std::mem::swap(&mut self.canvas_view_size, &mut alternate.size);
+        std::mem::swap(&mut self.initial_view, &mut alternate.initial_view);
+        std::mem::swap(&mut self.wheel_zoom_steps, &mut alternate.wheel_zoom_steps);
+    }
+
+    fn canvas_workspace(&mut self, ui: &mut egui::Ui) {
+        let Some(mut split) = self.split_canvas.take() else {
+            self.canvas(ui);
+            return;
+        };
+        if ui.available_width() <= 40. || ui.available_height() <= 0. {
+            self.active_canvas = CanvasPane::Primary;
+            if self.gesture_canvas == Some(CanvasPane::Secondary) {
+                self.cancel_gesture();
+            }
+            self.canvas(ui);
+            self.split_canvas = Some(split);
+            return;
+        }
+        self.hover = None;
+        let (area, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        let divider_width = 6.;
+        let divider_x = area.left() + split.fraction * area.width();
+        let divider = Rect::from_center_size(
+            Pos2::new(divider_x, area.center().y),
+            Vec2::new(divider_width, area.height()),
+        );
+        let response = ui
+            .interact(
+                divider,
+                ui.id().with("canvas-splitter"),
+                egui::Sense::drag(),
+            )
+            .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+        if response.dragged_by(egui::PointerButton::Primary)
+            && let Some(pointer) = response.interact_pointer_pos()
+        {
+            let minimum = (100. / area.width()).clamp(0.15, 0.45);
+            split.fraction =
+                ((pointer.x - area.left()) / area.width()).clamp(minimum, 1. - minimum);
+            ui.ctx().request_repaint();
+        }
+        let primary = Rect::from_min_max(area.min, Pos2::new(divider.left(), area.bottom()));
+        let secondary = Rect::from_min_max(Pos2::new(divider.right(), area.top()), area.max);
+        for (pane, rect) in [
+            (CanvasPane::Primary, primary),
+            (CanvasPane::Secondary, secondary),
+        ] {
+            let mut child = ui.new_child(egui::UiBuilder::new().id_salt(pane).max_rect(rect));
+            child.set_clip_rect(ui.clip_rect().intersect(rect));
+            if pane == CanvasPane::Secondary {
+                // Render the second camera through the same tools and frame cache.
+                self.swap_canvas_view(&mut split.view);
+                self.canvas_pane(&mut child, pane);
+                self.swap_canvas_view(&mut split.view);
+            } else {
+                self.canvas_pane(&mut child, pane);
+            }
+        }
+        let active = if self.active_canvas == CanvasPane::Primary {
+            primary
+        } else {
+            secondary
+        };
+        ui.painter().rect_stroke(
+            active.shrink(0.5),
+            0.,
+            Stroke::new(1., self.colors().accent),
+            egui::StrokeKind::Inside,
+        );
+        let divider_fill = if response.hovered() || response.dragged() {
+            self.colors().accent
+        } else {
+            ui.visuals().widgets.noninteractive.bg_stroke.color
+        };
+        ui.painter().rect_filled(divider, 0., divider_fill);
+        self.split_canvas = Some(split);
+    }
+
     fn canvas(&mut self, ui: &mut egui::Ui) {
+        self.hover = None;
+        self.canvas_pane(ui, CanvasPane::Primary);
+    }
+
+    fn canvas_pane(&mut self, ui: &mut egui::Ui, pane: CanvasPane) {
         let (r, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         #[cfg(test)]
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(egui::Id::new("canvas-bounds"), r));
+        ui.ctx().data_mut(|d| {
+            if pane == CanvasPane::Primary {
+                d.insert_temp(egui::Id::new("canvas-bounds"), r);
+            }
+            d.insert_temp(egui::Id::new(("canvas-pane", pane)), r);
+        });
         let view_changed = self.canvas_view_size.replace(r.size()) != Some(r.size());
         let previous_pan = self.pan;
         let previous_zoom = self.zoom;
@@ -4839,6 +5036,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let pointer = ctx.input(|i| i.pointer.hover_pos());
         let can_edit =
             ui.is_enabled() && !self.dialog_open() && self.power.reference_edit.is_none();
+        if can_edit && response.hovered() && ctx.input(|i| i.pointer.any_pressed()) {
+            self.active_canvas = pane;
+        }
         if let Some(force) = ctx.input(|i| {
             i.events.iter().rev().find_map(|e| {
                 if let egui::Event::Touch { force, .. } = e {
@@ -4888,12 +5088,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if self.initial_view > 0 && self.start.is_none() && !ctx.input(|i| i.pointer.any_down()) {
             self.initial_view -= 1;
             if self.initial_view == 0 {
-                self.zoom = self.zoom.min(
+                let limit = if pane == CanvasPane::Secondary {
+                    self.canvas_fit_scale(Some(r.size()))
+                } else {
                     ((r.width() - 16.) / self.doc.width as f32)
                         .min((r.height() - 16.) / self.doc.height as f32)
                         .floor()
-                        .max(1.),
-                );
+                        .max(1.)
+                };
+                self.zoom = self.zoom.min(limit);
             }
         }
         let board = Rect::from_center_size(
@@ -4925,8 +5128,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         let copies = &copies[..count];
-        self.draw_references_pass(ui, board, true);
-        if self.onion && !self.playing {
+        self.draw_references_pass(ui, board, true, false);
+        if self.onion && !self.playing && pane == CanvasPane::Primary {
             let pixels = pixelcraft::productivity::onion_pixels(
                 &self.doc,
                 self.frame,
@@ -4942,7 +5145,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     Some(ctx.load_texture("onion", im, egui::TextureOptions::NEAREST));
             }
             self.texture = self.onion_texture.clone();
-        } else {
+        } else if !self.onion || self.playing {
             self.texture = Some(self.frame_texture(&ctx, self.frame));
         }
         let rotation_preview = self.rotation_preview(ui, board);
@@ -4956,7 +5159,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 );
             }
         }
-        self.draw_references(ui, board);
+        if pane == CanvasPane::Primary {
+            self.draw_references(ui, board);
+        } else {
+            self.draw_references_pass(ui, board, false, false);
+        }
         if self.show_drawing_grid {
             for &copy in copies {
                 self.paint_drawing_grid(&painter, copy, r);
@@ -4998,7 +5205,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let on_canvas = pos.filter(|&(x, y)| {
             (limits.0..=limits.1).contains(&x) && (limits.2..=limits.3).contains(&y)
         });
-        self.hover = on_canvas.and_then(|p| repeats.position((self.doc.width, self.doc.height), p));
+        let hover = on_canvas.and_then(|p| repeats.position((self.doc.width, self.doc.height), p));
+        if pointer.is_some_and(|p| r.contains(p)) {
+            self.hover = hover;
+        }
         let draws = matches!(
             self.tool,
             Tool::Pencil | Tool::Eraser | Tool::Line | Tool::Rect | Tool::Ellipse
@@ -5013,6 +5223,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let down = ctx.input(|i| i.pointer.primary_down() || i.pointer.secondary_down());
         if can_edit
             && pressed
+            && self.gesture_canvas.is_none()
             && response.hovered()
             && let Some(raw) = on_canvas
             && (accepts_copies || self.doc.index(raw.0, raw.1).is_some())
@@ -5022,12 +5233,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let p = if draws {
                 self.snapped_canvas_point(raw, repeats)
             } else {
-                self.hover.unwrap()
+                hover.unwrap()
             };
             self.stroke_color = self.fg;
             let sample_color = ctx.input(|i| i.modifiers.alt);
             if sample_color || self.tool == Tool::Picker {
-                let p = self.hover.unwrap();
+                let p = hover.unwrap();
                 if sample_color || self.tile_pixel_mode.is_some() || !self.pick_tile(p) {
                     self.set_active_color(self.sample_color(p.0, p.1));
                 }
@@ -5044,6 +5255,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.wand_at(p, op);
             } else if matches!(self.tool, Tool::Select | Tool::Lasso) {
                 self.studio.mask = None;
+                self.gesture_canvas = Some(pane);
                 self.start = Some(p);
                 self.studio.polygon.clear();
                 if self.tool == Tool::Lasso {
@@ -5064,6 +5276,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     Tool::Ellipse => "Ellipse",
                     _ => "Paint",
                 });
+                self.gesture_canvas = Some(pane);
                 self.start = Some(p);
                 self.last = Some(p);
                 self.stroke_base = Some(self.doc.clone());
@@ -5088,8 +5301,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
                     self.power_fill(p, self.stroke_color);
                     self.doc.drawing_index = None;
-                    self.start = None;
-                    self.stroke_base = None;
+                    self.cancel_gesture();
                 } else if matches!(self.tool, Tool::Pencil | Tool::Eraser) {
                     let color = if self.tool == Tool::Eraser {
                         CLEAR
@@ -5100,7 +5312,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         }
-        if can_edit && down {
+        let owns_gesture = self.gesture_canvas == Some(pane);
+        if owns_gesture && can_edit && down {
             if let (Some(a), Some(mut b)) = (self.start, pos) {
                 if draws && repeats != WrapAxes::NONE {
                     b.0 = b.0.clamp(limits.0, limits.1);
@@ -5190,7 +5403,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     _ => {}
                 }
             }
-        } else {
+        } else if owns_gesture {
             if self.tool == Tool::Move
                 && let (Some(a), Some(b)) = (self.start, self.last)
             {
@@ -5199,9 +5412,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     p.1 += b.1 - a.1;
                 }
             }
-            self.start = None;
-            self.last = None;
-            self.stroke_base = None;
+            self.cancel_gesture();
         }
         if self.studio.polygon.len() > 1 {
             let points: Vec<_> = self
@@ -5974,7 +6185,7 @@ impl PixelCraft {
         let _ = timeline_panel;
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(self.colors().canvas))
-            .show(ui, |ui| self.canvas(ui));
+            .show(ui, |ui| self.canvas_workspace(ui));
         self.dialogs(&ctx);
         self.history_panel(&ctx);
         self.drawing_grid_dialog(&ctx);
@@ -6994,6 +7205,102 @@ mod tests {
         assert!(!a.dirty());
         assert!(a.undo.is_empty());
     }
+    #[test]
+    fn split_canvas_shares_artwork_and_undo_but_keeps_independent_views() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(8, 8), None);
+        a.zoom = 10.;
+        a.action("split-canvas");
+        a.split_canvas.as_mut().unwrap().view.zoom = 20.;
+        let draw = |a: &mut PixelCraft, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(950., 600.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| a.canvas_workspace(ui));
+                },
+            );
+            output.textures_delta.clear();
+            output.shapes
+        };
+        for _ in 0..4 {
+            draw(&mut a, vec![]);
+        }
+        let bounds = |pane| {
+            ctx.data_mut(|d| d.get_temp::<Rect>(egui::Id::new(("canvas-pane", pane))))
+                .unwrap()
+        };
+        let left = bounds(CanvasPane::Primary);
+        let right = bounds(CanvasPane::Secondary);
+        assert!(left.right() < right.left());
+        assert_eq!(a.zoom, 10.);
+        assert_eq!(a.split_canvas.as_ref().unwrap().view.zoom, 20.);
+        let p = right.center() + Vec2::splat(10.);
+        let q = left.center() + Vec2::splat(5.);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let color = [50, 160, 102, 255];
+        a.fg = color;
+        draw(&mut a, vec![egui::Event::PointerMoved(p), button(p, true)]);
+        draw(&mut a, vec![egui::Event::PointerMoved(q)]);
+        draw(&mut a, vec![button(q, false)]);
+        let cels = &a.doc.layers[0].cels[0];
+        assert_eq!(cels[36], color);
+        assert_eq!(cels.iter().filter(|&&p| p == color).count(), 1);
+        assert_eq!(a.active_canvas, CanvasPane::Secondary);
+        assert_eq!(a.undo.len(), 1);
+        let shapes = draw(&mut a, vec![]);
+        let texture = a.texture.as_ref().unwrap().id();
+        let mesh_count = shapes
+            .iter()
+            .filter(|shape| {
+                matches!(
+                    &shape.shape, egui::Shape::Mesh(mesh) if mesh.texture_id == texture
+                )
+            })
+            .count();
+        assert_eq!(mesh_count, 2);
+
+        let divider = Pos2::new((left.right() + right.left()) / 2., left.center().y);
+        let moved = divider + Vec2::new(100., 0.);
+        draw(
+            &mut a,
+            vec![egui::Event::PointerMoved(divider), button(divider, true)],
+        );
+        draw(&mut a, vec![egui::Event::PointerMoved(moved)]);
+        draw(&mut a, vec![button(moved, false)]);
+        assert!(bounds(CanvasPane::Primary).right() > left.right() + 95.);
+        assert_eq!(a.undo.len(), 1);
+
+        a.set_active_canvas_zoom(12.);
+        a.set_active_canvas_pan(Vec2::new(40., 24.));
+        assert_eq!(a.zoom, 10.);
+        assert_eq!(a.pan, Vec2::ZERO);
+        assert_eq!(a.split_canvas.as_ref().unwrap().view.zoom, 12.);
+        assert_eq!(
+            a.split_canvas.as_ref().unwrap().view.pan,
+            Vec2::new(40., 24.)
+        );
+        a.open_document(Document::new(2, 2), None);
+        assert!(a.split_canvas.is_none());
+        a.switch_tab(0);
+        assert_eq!(a.active_canvas, CanvasPane::Secondary);
+        assert_eq!(
+            a.split_canvas.as_ref().unwrap().view.pan,
+            Vec2::new(40., 24.)
+        );
+        a.undo();
+        assert_eq!(a.doc.layers[0].cels[0][36], CLEAR);
+    }
+
     #[test]
     fn selection_sets_the_grid_and_pointer_starts_on_a_grid_intersection() {
         let ctx = egui::Context::default();

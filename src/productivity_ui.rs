@@ -1320,14 +1320,20 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         )
     }
     pub(super) fn draw_references(&mut self, ui: &mut egui::Ui, board: Rect) {
-        self.draw_references_pass(ui, board, false);
+        self.draw_references_pass(ui, board, false, true);
     }
-    pub(super) fn draw_references_pass(&mut self, ui: &mut egui::Ui, board: Rect, behind: bool) {
+    pub(super) fn draw_references_pass(
+        &mut self,
+        ui: &mut egui::Ui,
+        board: Rect,
+        behind: bool,
+        show_floating: bool,
+    ) {
         for i in 0..self.doc.references.len() {
             let r = self.doc.references[i].clone();
             if !r.visible
                 || (if r.floating {
-                    behind
+                    behind || !show_floating
                 } else {
                     r.behind != behind
                 })
