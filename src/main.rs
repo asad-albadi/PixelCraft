@@ -5401,12 +5401,9 @@ mod tests {
             all_frames: true,
             selection_only: true,
         });
-        for layer in 0..2 {
-            for frame in 0..2 {
-                assert_eq!(
-                    a.doc.layers[layer].cels[frame].to_vec(),
-                    vec![replacement, source, replacement]
-                );
+        for layer in &a.doc.layers[..2] {
+            for cel in &layer.cels[..2] {
+                assert_eq!(cel.to_vec(), vec![replacement, source, replacement]);
             }
         }
         assert_eq!(a.doc.layers[2], before.layers[2]);

@@ -281,7 +281,7 @@ pixelcraft --cli palette-convert --input colors.hex --output colors.gpl
 
 Configure an MCP client to launch the executable with `--mcp`. The newline-delimited stdio JSON-RPC server advertises file inspection, PNG rendering, revision-checked edits, import/export, palettes, tag batches and atlases. Rendering returns an MCP image. File tools operate on explicitly supplied local paths and do not require the editor to be open.
 
-Add `--project-root DIRECTORY` to restrict file tools and explicit live output paths to a project directory. Relative paths resolve from that directory. Absolute paths, symlinks, and external files referenced by imports must resolve inside it. This option can be combined with `--live BRIDGE_CONFIG`.
+Add `--project-root DIRECTORY` to restrict file tools and explicit live output paths to a project directory. Relative paths resolve from that directory. Absolute paths, symlinks, and external files referenced by imports must resolve inside it. This option can be combined with `--live BRIDGE_CONFIG`. Use a project directory you control. Path checks assume other processes leave the directory and its symlinks in place during each file operation.
 
 MCP file writes require `"overwrite": true` to replace an existing file. This applies to every generated atlas, sprite-sheet, and batch sidecar.
 

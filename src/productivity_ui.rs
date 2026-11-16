@@ -839,16 +839,29 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             .min(8.);
         let response = ui.add(egui::Image::new(texture).fit_to_exact_size(dimensions * scale));
         let painter = ui.painter_at(response.rect);
-        for &(x, y) in preview.cells.iter().take(4096) {
-            painter.rect_stroke(
-                Rect::from_min_size(
-                    response.rect.min + Vec2::new(x as f32, y as f32) * scale,
-                    Vec2::new(grid.width as f32, grid.height as f32) * scale,
-                ),
-                0,
-                Stroke::new(1., Color32::from_rgb(255, 200, 60)),
-                egui::StrokeKind::Inside,
-            );
+        let cell_size = Vec2::new(grid.width as f32, grid.height as f32) * scale;
+        let cell_rect = |x, y| {
+            Rect::from_min_size(
+                response.rect.min + Vec2::new(x as f32, y as f32) * scale,
+                cell_size,
+            )
+        };
+        let marker = Color32::from_rgb(255, 200, 60);
+        if cell_size.x.min(cell_size.y) < 3. {
+            let mut markers = egui::Mesh::default();
+            for &(x, y) in &preview.cells {
+                markers.add_colored_rect(cell_rect(x, y), marker.gamma_multiply(0.45));
+            }
+            painter.add(egui::Shape::mesh(markers));
+        } else {
+            for &(x, y) in &preview.cells {
+                painter.rect_stroke(
+                    cell_rect(x, y),
+                    0,
+                    Stroke::new(1., marker),
+                    egui::StrokeKind::Inside,
+                );
+            }
         }
         if ui
             .add_enabled_ui(!preview.cells.is_empty(), |ui| {
