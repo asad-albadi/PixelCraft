@@ -368,6 +368,9 @@ struct PixelCraft {
     wheel_zoom_steps: f32,
     pan: Vec2,
     grid: bool,
+    show_drawing_grid: bool,
+    snap_to_grid: bool,
+    grid_settings: Option<DrawingGrid>,
     onion: bool,
     filled: bool,
     playing: bool,
@@ -536,6 +539,9 @@ impl PixelCraft {
             wheel_zoom_steps: 0.,
             pan: Vec2::ZERO,
             grid: false,
+            show_drawing_grid: false,
+            snap_to_grid: false,
+            grid_settings: None,
             onion: false,
             filled: false,
             playing: false,
@@ -1748,6 +1754,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.rename_frame.is_some()
             || self.help
             || self.properties_open
+            || self.grid_settings.is_some()
             || self.animation_export.is_some()
             || self.studio.open
             || self.studio.sheet_open
@@ -2629,6 +2636,26 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "settings" => self.settings_open = true,
             "grid" => self.grid = !self.grid,
+            "drawing-grid" => self.show_drawing_grid = !self.show_drawing_grid,
+            "snap-to-grid" => self.snap_to_grid = !self.snap_to_grid,
+            "drawing-grid-settings" => self.grid_settings = Some(self.doc.drawing_grid()),
+            "grid-from-selection" => {
+                if self.selection.is_some()
+                    && self
+                        .studio
+                        .mask
+                        .as_ref()
+                        .is_none_or(|mask| mask.iter().any(|&pixel| pixel))
+                {
+                    let [x, y, w, h] = self.selection_bounds();
+                    self.set_drawing_grid(DrawingGrid {
+                        origin: [x, y],
+                        size: [w as u32, h as u32],
+                    });
+                } else {
+                    self.status = "Select an area to set the drawing grid".into();
+                }
+            }
             "onion" => self.onion = !self.onion,
             "fit" => {
                 self.zoom = if self.studio.seamless == WrapAxes::NONE {
@@ -3025,6 +3052,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     "View",
                     vec![
                         ("Toggle pixel grid", "grid"),
+                        ("Show drawing grid", "drawing-grid"),
+                        ("Snap to drawing grid", "snap-to-grid"),
+                        ("Drawing grid settings…", "drawing-grid-settings"),
+                        ("Set drawing grid from selection", "grid-from-selection"),
                         ("Toggle onion skin", "onion"),
                         ("Fit canvas", "fit"),
                         ("Seamless canvas · both axes", "seamless"),
@@ -3116,6 +3147,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         let label = label.split("   ").next().unwrap_or(label);
                         let selected = match a {
                             "grid" => self.grid,
+                            "drawing-grid" => self.show_drawing_grid,
+                            "snap-to-grid" => self.snap_to_grid,
                             "onion" => self.onion,
                             "rewind-on-stop" => self.rewind_on_stop(),
                             "play" => self.playing,
@@ -4652,6 +4685,101 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         scale.clamp(0.02 * points, (40. * points).floor().max(1.)) / points
     }
 
+    fn set_drawing_grid(&mut self, grid: DrawingGrid) {
+        if self.doc.drawing_grid() != grid && grid.valid() {
+            self.remember_action("Set drawing grid");
+            self.doc.drawing_grid = Some(grid);
+        }
+        self.show_drawing_grid = true;
+    }
+
+    fn drawing_grid_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut grid) = self.grid_settings else {
+            return;
+        };
+        let mut open = true;
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("Drawing Grid")
+            .open(&mut open)
+            .resizable(false)
+            .show(ctx, |ui| {
+                for (axis, name) in ["X", "Y"].into_iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut grid.origin[axis])
+                                .range(i32::from(i16::MIN)..=i32::from(i16::MAX))
+                                .prefix(format!("{name} origin ")),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut grid.size[axis])
+                                .range(1..=u32::from(u16::MAX))
+                                .prefix(format!("{name} spacing ")),
+                        );
+                    });
+                }
+                ui.horizontal(|ui| {
+                    apply = ui
+                        .add_enabled(grid.valid(), egui::Button::new("Apply grid"))
+                        .clicked();
+                    cancel = ui.pc_button("Cancel").clicked();
+                });
+            });
+        if apply {
+            self.set_drawing_grid(grid);
+        }
+        self.grid_settings = (open && !apply && !cancel).then_some(grid);
+    }
+
+    fn snapped_canvas_point(&self, point: (i32, i32), repeats: WrapAxes) -> (i32, i32) {
+        if !self.snap_to_grid || self.doc.layers[self.layer].tileset.is_some() {
+            return point;
+        }
+        let w = self.doc.width as i32;
+        let h = self.doc.height as i32;
+        let offset = (
+            if repeats.horizontal {
+                point.0.div_euclid(w) * w
+            } else {
+                0
+            },
+            if repeats.vertical {
+                point.1.div_euclid(h) * h
+            } else {
+                0
+            },
+        );
+        let local = (point.0 - offset.0, point.1 - offset.1);
+        let snapped = self.doc.drawing_grid().snap(local, (0, w - 1, 0, h - 1));
+        (snapped.0 + offset.0, snapped.1 + offset.1)
+    }
+
+    fn paint_drawing_grid(&self, painter: &egui::Painter, board: Rect, view: Rect) {
+        let grid = self.doc.drawing_grid();
+        let visible = view.intersect(board);
+        for (axis, from, to, base) in [
+            (0, visible.left(), visible.right(), board.left()),
+            (1, visible.top(), visible.bottom(), board.top()),
+        ] {
+            let step = grid.size[axis] as f32 * self.zoom;
+            if step < 5. {
+                continue;
+            }
+            let phase = base + grid.origin[axis] as f32 * self.zoom;
+            let first = ((from - phase) / step).ceil() as i32;
+            let last = ((to - phase) / step).floor() as i32;
+            for index in first..=last {
+                let line = phase + index as f32 * step;
+                let stroke = Stroke::new(0.75, self.colors().accent.linear_multiply(0.65));
+                if axis == 0 {
+                    painter.vline(line, visible.y_range(), stroke);
+                } else {
+                    painter.hline(visible.x_range(), line, stroke);
+                }
+            }
+        }
+    }
+
     fn paint_canvas_checker(&self, painter: &egui::Painter, board: Rect, r: Rect) {
         // Draw only visible checker squares, including at high zoom and while panning.
         let check = self.power.checker_size();
@@ -4829,6 +4957,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         self.draw_references(ui, board);
+        if self.show_drawing_grid {
+            for &copy in copies {
+                self.paint_drawing_grid(&painter, copy, r);
+            }
+        }
         self.paint_tile_indices(&painter, board);
         self.paint_rotation_pivot(&painter, board);
         painter.rect_stroke(
@@ -4886,7 +5019,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && self.tool != Tool::Hand
         {
             self.stop_playback(false);
-            let p = if draws { raw } else { self.hover.unwrap() };
+            let p = if draws {
+                self.snapped_canvas_point(raw, repeats)
+            } else {
+                self.hover.unwrap()
+            };
             self.stroke_color = self.fg;
             let sample_color = ctx.input(|i| i.modifiers.alt);
             if sample_color || self.tool == Tool::Picker {
@@ -4971,6 +5108,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 } else if !draws || !self.doc.wraparound {
                     b.0 = b.0.clamp(0, w - 1);
                     b.1 = b.1.clamp(0, h - 1);
+                }
+                if draws {
+                    b = self.snapped_canvas_point(b, repeats);
                 }
                 match self.tool {
                     Tool::Lasso => {
@@ -5095,6 +5235,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if let Some((x, y)) = on_canvas
             && matches!(self.tool, Tool::Pencil | Tool::Eraser)
         {
+            let (x, y) = self.snapped_canvas_point((x, y), repeats);
             let size = self.brush as f32 * self.zoom;
             let p = board.min
                 + Vec2::new((x - self.brush / 2) as f32, (y - self.brush / 2) as f32) * self.zoom;
@@ -5836,6 +5977,7 @@ impl PixelCraft {
             .show(ui, |ui| self.canvas(ui));
         self.dialogs(&ctx);
         self.history_panel(&ctx);
+        self.drawing_grid_dialog(&ctx);
         self.workspace_recovery_dialog(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
@@ -6852,6 +6994,59 @@ mod tests {
         assert!(!a.dirty());
         assert!(a.undo.is_empty());
     }
+    #[test]
+    fn selection_sets_the_grid_and_pointer_starts_on_a_grid_intersection() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(8, 8), None);
+        a.zoom = 10.;
+        a.selection = Some((1, 2, 3, 4));
+        a.action("grid-from-selection");
+        assert_eq!(a.doc.drawing_grid().origin, [1, 2]);
+        assert_eq!(a.doc.drawing_grid().size, [3, 3]);
+        a.action("snap-to-grid");
+        a.selection = None;
+        let draw = |a: &mut PixelCraft, events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| a.canvas(ui));
+                },
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut a, vec![]);
+        let p = Pos2::new(315., 295.); // Canvas pixel (5, 3), near grid intersection (4, 2).
+        let button = |pressed| egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        a.fg = [44, 50, 150, 255];
+        draw(&mut a, vec![egui::Event::PointerMoved(p), button(true)]);
+        draw(&mut a, vec![button(false)]);
+        assert_eq!(a.doc.layers[0].cels[0][20], a.fg);
+        assert_eq!(a.doc.layers[0].cels[0][29], CLEAR);
+        assert_eq!(
+            a.snapped_canvas_point((13, 3), WrapAxes::HORIZONTAL),
+            (12, 2)
+        );
+        assert_eq!(
+            a.snapped_canvas_point((-3, 3), WrapAxes::HORIZONTAL),
+            (-4, 2)
+        );
+        a.undo();
+        a.undo();
+        assert_eq!(a.doc.drawing_grid(), DrawingGrid::default());
+    }
+
     #[test]
     fn seamless_fill_and_brush_footprints_honor_the_view_axes() {
         let mut a = app();

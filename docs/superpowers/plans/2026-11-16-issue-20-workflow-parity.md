@@ -59,6 +59,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 25 complete. Edit → Undo History lists named steps for the active sprite, including the redo branch. Jumping reuses the retained snapshots, restores editor selection and position, and preserves the frame export ID counter. Tests exercise actual row clicks, tab isolation, multi-step restore, branching, and existing keyboard/live Undo regressions. Formatting, strict Clippy, and 479 Windows all-target tests passed.
 
+- Item 26 in progress. The drawing grid supports editable origin and spacing, selection bounds, and snap-to-grid for raster brush and shape input, with a clipped overlay on the main and seamless canvas. Geometry round-trips through .pixel and ASE, covering the grid portion of item 38. Tests cover pointer snapping, repeated copies, Undo, negative origins, and legacy headers. Formatting, strict Clippy, and 481 Windows all-target tests passed. Split views remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

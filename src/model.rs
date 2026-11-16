@@ -22,6 +22,68 @@ pub const MAX_DIMENSION: usize = 16384;
 pub const MAX_PIXELS: usize = 64_000_000;
 pub const MAX_DOCUMENT_PIXELS: usize = 128_000_000;
 pub(crate) const MAX_CEL_SLOTS: usize = 1_000_000;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DrawingGrid {
+    pub origin: [i32; 2],
+    pub size: [u32; 2],
+}
+
+impl Default for DrawingGrid {
+    fn default() -> Self {
+        Self {
+            origin: [0, 0],
+            size: [16, 16],
+        }
+    }
+}
+
+impl DrawingGrid {
+    pub fn valid(self) -> bool {
+        self.origin
+            .iter()
+            .all(|&value| i16::try_from(value).is_ok())
+            && self
+                .size
+                .iter()
+                .all(|&value| value != 0 && u16::try_from(value).is_ok())
+    }
+
+    pub fn snap(self, point: (i32, i32), bounds: (i32, i32, i32, i32)) -> (i32, i32) {
+        let axis = |point: i32, origin: i32, step: u32, low: i32, high: i32| {
+            let (p, o, s) = (i64::from(point), i64::from(origin), i64::from(step));
+            if s == 0 {
+                return point;
+            }
+            let first = (i64::from(low) - o + s - 1).div_euclid(s);
+            let last = (i64::from(high) - o).div_euclid(s);
+            if first > last {
+                return point;
+            }
+            let nearest = (p - o + s / 2).div_euclid(s).clamp(first, last);
+            (o + nearest * s) as i32
+        };
+        (
+            axis(point.0, self.origin[0], self.size[0], bounds.0, bounds.1),
+            axis(point.1, self.origin[1], self.size[1], bounds.2, bounds.3),
+        )
+    }
+
+    pub(crate) fn from_ase_header(header: &[u8]) -> Option<Self> {
+        let bytes: &[u8; 8] = header.get(36..44)?.try_into().ok()?;
+        let grid = Self {
+            origin: [
+                i16::from_le_bytes([bytes[0], bytes[1]]) as i32,
+                i16::from_le_bytes([bytes[2], bytes[3]]) as i32,
+            ],
+            size: [
+                u16::from_le_bytes([bytes[4], bytes[5]]) as u32,
+                u16::from_le_bytes([bytes[6], bytes[7]]) as u32,
+            ],
+        };
+        grid.valid().then_some(grid)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WrapAxes {
     pub horizontal: bool,
@@ -1000,6 +1062,8 @@ pub struct Document {
     pub wraparound: bool,
     #[serde(default)]
     pub palette_snap: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_grid: Option<DrawingGrid>,
     #[serde(default)]
     pub references: Vec<crate::productivity::ReferenceImage>,
 }
@@ -1232,9 +1296,22 @@ impl Document {
             dithering: None,
             wraparound: false,
             palette_snap: false,
+            drawing_grid: None,
             references: vec![],
         }
     }
+    pub fn drawing_grid(&self) -> DrawingGrid {
+        self.drawing_grid
+            .or_else(|| {
+                let header = self
+                    .metadata
+                    .iter()
+                    .find(|chunk| chunk.owner == "ase:header")?;
+                DrawingGrid::from_ase_header(&header.data)
+            })
+            .unwrap_or_default()
+    }
+
     pub fn frame_name(&self, frame: usize) -> Option<&str> {
         self.frame_names
             .get(frame)
@@ -1315,6 +1392,9 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.drawing_grid.is_some_and(|grid| !grid.valid()) {
+            return Err("Invalid drawing grid".into());
+        }
         let mut reference_pixels = 0usize;
         for r in &self.references {
             reference_pixels = reference_pixels.saturating_add(r.width.saturating_mul(r.height));

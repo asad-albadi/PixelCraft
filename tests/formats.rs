@@ -1,5 +1,36 @@
 use pixelcraft::{formats::*, model::*};
 #[test]
+fn native_and_ase_projects_preserve_editable_drawing_grid_geometry() {
+    let mut doc = Document::new(8, 8);
+    let grid = DrawingGrid {
+        origin: [-12, 9],
+        size: [36, 17],
+    };
+    doc.drawing_grid = Some(grid);
+    let native = decode_project(&encode_project(&doc).unwrap()).unwrap();
+    assert_eq!(native.drawing_grid(), grid);
+    let ase = encode_ase(&doc).unwrap();
+    assert_eq!(&ase[36..44], &[244, 255, 9, 0, 36, 0, 17, 0]);
+    let reopened = decode_ase(&ase).unwrap();
+    assert_eq!(reopened.drawing_grid(), grid);
+
+    // A zero-height grid is treated as absent in older ASE headers.
+    let mut legacy = ase;
+    legacy[42..44].fill(0);
+    let reopened = decode_ase(&legacy).unwrap();
+    assert_eq!(reopened.drawing_grid, None);
+    assert_eq!(reopened.drawing_grid(), DrawingGrid::default());
+    assert_eq!(&encode_ase(&reopened).unwrap()[36..44], &legacy[36..44]);
+
+    doc.drawing_grid = Some(DrawingGrid {
+        size: [0, 16],
+        ..grid
+    });
+    assert!(encode_project(&doc).is_err());
+    assert!(encode_ase(&doc).is_err());
+}
+
+#[test]
 fn ase_roundtrip_preserves_pixels_layers_visibility_and_timing() {
     let mut d = Document::new(4, 3);
     d.layers[0].name = "Colors".into();

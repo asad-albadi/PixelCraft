@@ -52,6 +52,7 @@ pub fn icon_name(action: &str) -> &str {
         "up" => "arrow-up",
         "down" => "arrow-down",
         "onion" => "onion-skin",
+        "drawing-grid" | "drawing-grid-settings" | "grid-from-selection" | "snap-to-grid" => "grid",
         "seamless" | "seamless-horizontal" | "seamless-vertical" => "wrap",
         "rotate" => "rotate-cw",
         "flipx" | "selectionflipx" => "flip-horizontal",
@@ -590,6 +591,8 @@ fn button_named(
                 | "gradient"
                 | "hand"
                 | "grid"
+                | "drawing-grid"
+                | "snap-to-grid"
                 | "onion"
                 | "seamless"
                 | "seamless-horizontal"

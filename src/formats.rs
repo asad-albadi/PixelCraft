@@ -449,6 +449,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         baked.durations = d.durations.clone();
         baked.tags = d.tags.clone();
         baked.slices = d.slices.clone();
+        baked.drawing_grid = d.drawing_grid;
         baked.color_profile = d.color_profile.clone();
         baked.layers[0].cel_meta = vec![CelMeta::default(); d.durations.len()];
         baked.layers[0].tile_cels = vec![vec![]; d.durations.len()];
@@ -496,6 +497,12 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
     }
     if out[35] == 0 {
         out[35] = 1;
+    }
+    if let Some(grid) = d.drawing_grid {
+        out[36..38].copy_from_slice(&(grid.origin[0] as i16).to_le_bytes());
+        out[38..40].copy_from_slice(&(grid.origin[1] as i16).to_le_bytes());
+        out[40..42].copy_from_slice(&(grid.size[0] as u16).to_le_bytes());
+        out[42..44].copy_from_slice(&(grid.size[1] as u16).to_le_bytes());
     }
     fn visit(d: &Document, p: Option<usize>, depth: u16, out: &mut Vec<(usize, u16)>) {
         for (i, l) in d.layers.iter().enumerate() {
@@ -869,6 +876,7 @@ pub fn decode_ase_with_resolver(
     }
     let mut d = Document::new(w, h);
     d.compose_groups = u32at(b, 14)? & 2 != 0;
+    d.drawing_grid = DrawingGrid::from_ase_header(b);
     d.layers.clear();
     d.durations = vec![100; frames];
     d.color_mode = match depth {
