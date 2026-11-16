@@ -78,6 +78,7 @@ fn headless_grid_import_skips_alpha_zero_cells_and_initializes_duration() {
     assert_eq!(doc.layers[0].cels[1][0], [40, 50, 60, 1]);
 
     let mut layers = args.clone();
+    layers["overwrite"] = json!(true);
     layers["options"]["layers"] = json!(true);
     let result = rpc(
         &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"import-grid","arguments":layers}}),
