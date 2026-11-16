@@ -346,3 +346,19 @@ fn restricted_mp4_export_passes_an_open_destination_to_ffmpeg() {
     assert_eq!(&video[4..8], b"ftyp");
     assert!(video.windows(4).any(|part| part == b"moof"));
 }
+
+#[test]
+fn restricted_webp_import_keeps_the_shipped_decoder_available() {
+    let w = Workspace::new();
+    fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/workflows/animation.webp"),
+        w.project().join("animation.webp"),
+    )
+    .unwrap();
+    let reply = w.call("inspect", json!({"input":"animation.webp"}));
+    assert!(reply["isError"].is_null(), "{reply}");
+    let sprite: Value =
+        serde_json::from_str(reply["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(sprite["frames"].as_array().unwrap().len(), 2);
+}

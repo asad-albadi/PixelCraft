@@ -655,20 +655,41 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
     #[cfg(windows)]
     let lib: libloading::Library = {
         use libloading::os::windows::{
-            LOAD_LIBRARY_SEARCH_APPLICATION_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
+            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
         };
-        // SAFETY: load only the shipped DLL or the system copy. Neither the
-        // current project directory nor entries from PATH are searched.
-        unsafe {
-            Library::load_with_flags(
-                "libwebpdemux.dll",
-                LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-            )
-        }
-        .map_err(|error| {
-            format!("WebP import requires libwebpdemux.dll beside PixelCraft: {error}")
-        })?
-        .into()
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let installed = executable.with_file_name("libwebpdemux.dll");
+        // Cargo can run debug test binaries in hashed build directories. The
+        // build script also puts the matching runtime in this compile-time
+        // source location. Released executables only load the installed copy.
+        #[cfg(debug_assertions)]
+        let candidates = [
+            installed,
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/webp/libwebpdemux.dll"),
+        ];
+        #[cfg(not(debug_assertions))]
+        let candidates = [installed];
+        let mut error = String::new();
+        let library = candidates.iter().find_map(|path| {
+            // SAFETY: only fixed names at absolute trusted runtime locations
+            // are loaded. Dependency lookup is limited to that directory and
+            // the system directory.
+            match unsafe {
+                Library::load_with_flags(
+                    path,
+                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
+                )
+            } {
+                Ok(library) => Some(library),
+                Err(cause) => {
+                    error = format!("{} ({cause:?})", path.display());
+                    None
+                }
+            }
+        });
+        library
+            .ok_or_else(|| format!("WebP import requires the installed runtime at {error}"))?
+            .into()
     };
     unsafe {
         let new: libloading::Symbol<
