@@ -12,6 +12,7 @@ use std::{
     },
     path::{Component, Path, PathBuf, Prefix},
     ptr,
+    sync::Mutex,
 };
 
 const FILE_READ_DATA: u32 = 0x0001;
@@ -133,28 +134,7 @@ unsafe extern "system" {
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn ReOpenFile(handle: RawHandle, access: u32, share: u32, flags: u32) -> RawHandle;
     fn GetFileInformationByHandle(handle: RawHandle, information: *mut FileInformation) -> i32;
-}
-
-fn reopen_directory(directory: &File) -> io::Result<File> {
-    // SAFETY: ReOpenFile keeps the same directory object but sets up a
-    // separate enumeration cursor. The existing handle remains open.
-    let handle = unsafe {
-        ReOpenFile(
-            directory.as_raw_handle(),
-            DIRECTORY_ACCESS,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
-        )
-    };
-    if handle as isize == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: success returns a new handle owned by the caller.
-    let file = unsafe { File::from_raw_handle(handle) };
-    reject_reparse(&file)?;
-    Ok(file)
 }
 
 fn file_information(file: &File) -> io::Result<FileInformation> {
@@ -403,6 +383,7 @@ pub(super) struct Guard {
     root: PathBuf,
     _ancestors: Vec<File>,
     directory: File,
+    root_listing: Mutex<()>,
 }
 
 struct Directory {
@@ -466,6 +447,7 @@ impl Guard {
             root: root.into(),
             _ancestors: ancestors,
             directory,
+            root_listing: Mutex::new(()),
         })
     }
 
@@ -573,7 +555,14 @@ impl Guard {
 
     pub(super) fn read_dir(&self, path: &Path) -> io::Result<Vec<OsString>> {
         if self.suffix(path)?.as_os_str().is_empty() {
-            return directory_names(&reopen_directory(&self.directory)?);
+            // NTFS can reject ReOpenFile on handles obtained through a
+            // relative open. Serialize queries on the anchored handle and
+            // restart its directory cursor for every listing.
+            let _listing = self
+                .root_listing
+                .lock()
+                .map_err(|_| io::Error::other("The project directory listing was interrupted"))?;
+            return directory_names(&self.directory);
         }
         let directory = self.walk(path, false)?;
         directory_names(&directory.file)
@@ -904,7 +893,16 @@ mod tests {
             names.sort();
             assert_eq!(names, expected);
         }
-        request.remove_dir_all(&stage).unwrap();
+        request
+            .remove_owned_dir_all(
+                &stage,
+                request.directory_identity(&stage).unwrap(),
+                Some((
+                    OsStr::new("assets"),
+                    request.directory_identity(&assets).unwrap(),
+                )),
+            )
+            .unwrap();
         assert!(!stage.exists());
         assert_eq!(fs::read(&output).unwrap(), b"new");
         request.remove_file(&output).unwrap();
