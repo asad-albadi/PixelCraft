@@ -1,6 +1,55 @@
 use pixelcraft::{extensions::*, model::*};
 use std::fs;
 #[test]
+fn headless_lua_passes_params_and_writes_only_a_successful_result() {
+    use pixelcraft::{automation, formats};
+    use serde_json::json;
+    let folder =
+        std::env::temp_dir().join(format!("pixelcraft-headless-script-{}", std::process::id()));
+    fs::create_dir_all(&folder).unwrap();
+    let script = folder.join("paint.lua");
+    let input = folder.join("input.pixel");
+    let output = folder.join("output.pixel");
+    let _ = fs::remove_file(&output);
+    formats::save(&input, &Document::new(2, 1)).unwrap();
+    fs::write(
+        &script,
+        r#"
+        assert(not app.isUIAvailable and io == nil and os.execute == nil)
+        assert(app.params.label == 'quote: "safe"' and app.params.paint)
+        print(app.params.label, app.params.rgb[1])
+        app.activeImage:drawPixel(1, 0, Color{r=app.params.rgb[1],g=42,b=24})
+    "#,
+    )
+    .unwrap();
+    let args = json!({
+        "input":input, "script":script, "output":output,
+        "params":{"label":r#"quote: "safe""#,"paint":true,"rgb":[160]},
+    });
+    let run = |args: &serde_json::Value| automation::run_cli(&["lua".into(), args.to_string()]);
+    let result = run(&args).unwrap();
+    assert_eq!(result["stdout"], concat!(r#"quote: "safe""#, "\t160\n"));
+    assert_eq!(
+        formats::load(&output).unwrap().layers[0].cels[0][1],
+        [160, 42, 24, 255]
+    );
+    assert_eq!(formats::load(&input).unwrap().layers[0].cels[0][1], CLEAR);
+    let saved = fs::read(&output).unwrap();
+    assert!(run(&args).unwrap_err().contains("overwrite"));
+
+    fs::write(
+        &script,
+        "app.activeImage:drawPixel(1, 0, Color{r=23}); error('script failed')",
+    )
+    .unwrap();
+    let mut replace = args;
+    replace["overwrite"] = json!(true);
+    assert!(run(&replace).unwrap_err().contains("script failed"));
+    assert_eq!(fs::read(&output).unwrap(), saved);
+    fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
 fn lua_gray_assignment_preserves_signed_state_and_alpha() {
     // Saturating gray before packing loses the native low byte.
     for (value, gray, expected) in [

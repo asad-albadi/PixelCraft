@@ -40,6 +40,14 @@ pub fn projects_directory() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
     Ok(p)
 }
+pub(crate) fn decode_script_document(json: &str) -> Result<Document, String> {
+    let mut edited: Document =
+        serde_json::from_str(json).map_err(|e| format!("Invalid script result: {e}"))?;
+    edited.validate()?;
+    edited.set_color_mode(edited.color_mode);
+    Ok(edited)
+}
+
 pub fn run_source(
     doc: &Document,
     source: &str,
@@ -60,11 +68,7 @@ pub fn run_source_with_colors(
     colors: Option<[[u8; 4]; 2]>,
 ) -> Result<Document, String> {
     let json = crate::lua::execute(doc, source, frame, layer, command, false, colors)?;
-    let mut edited: Document =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
-    edited.validate()?;
-    edited.set_color_mode(edited.color_mode);
-    Ok(edited)
+    decode_script_document(&json)
 }
 pub fn run_lua(
     doc: &Document,
@@ -550,11 +554,7 @@ pub fn run_source_with_host(
         options,
         Some(host),
     )?;
-    let mut edited: Document =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
-    edited.validate()?;
-    edited.set_color_mode(edited.color_mode);
-    Ok(edited)
+    decode_script_document(&json)
 }
 
 /// Filesystem bridge used only by explicitly executed scripts. Relative filenames

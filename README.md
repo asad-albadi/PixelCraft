@@ -307,6 +307,14 @@ For one sheet per authored slice, pass an output directory and enable `split_sli
 pixelcraft --cli export --input hero.pixel --output slice-sheets --format sheet --options '{"split_slices":true,"extrude":1}'
 ```
 
+Run a Lua file against an existing sprite, or omit the input to start with a 16×16 sprite. Pass script parameters as a JSON object and read them in Lua through `app.params`. Select the starting cel with `--frame` and `--layer`, or leave both at zero.
+
+```sh
+pixelcraft --cli lua --script recolor.lua --input hero.pixel --output recolored.pixel --params '{"target":"#c7794b"}'
+```
+
+The JSON result includes captured `print` output in `stdout`. Omit `--output` for inspection scripts. An output can be a `.pixel`, `.ase`, `.aseprite`, or `.png` file. Use `--scale` to scale PNG output and `--overwrite true` to allow replacing an existing output after the script succeeds. Script execution uses the native extension sandbox.
+
 ### MCP and live editor access
 
 Configure an MCP client to launch the executable with `--mcp`. The newline-delimited stdio JSON-RPC server advertises file inspection, PNG rendering, revision-checked edits, import/export, palettes, tag batches and atlases. Rendering returns an MCP image. File tools operate on explicitly supplied local paths and do not require the editor to be open.

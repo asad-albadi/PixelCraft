@@ -189,34 +189,83 @@ impl Runtime {
             ) != 0
                 || call(self.state, 0, 0, 0, 0, std::ptr::null()) != 0
             {
-                return Err(self.string_at(-1)?);
+                return Err(self.take_string()?);
             }
             Ok(())
         }
     }
-    fn string_at(&self, index: c_int) -> Result<String, String> {
+    fn take_string(&self) -> Result<String, String> {
         unsafe {
+            let mut length = 0;
             let p = self
                 .library
                 .get::<unsafe extern "C" fn(State, c_int, *mut usize) -> *const c_char>(
                     b"lua_tolstring\0",
                 )
-                .map_err(|e| e.to_string())?(
-                self.state, index, std::ptr::null_mut()
-            );
-            if p.is_null() {
-                return Err("Lua returned no result".into());
-            }
-            Ok(CStr::from_ptr(p).to_string_lossy().into_owned())
+                .map_err(|e| e.to_string())?(self.state, -1, &mut length);
+            let value = if p.is_null() {
+                Err("Lua returned no result".into())
+            } else {
+                Ok(
+                    String::from_utf8_lossy(std::slice::from_raw_parts(p.cast::<u8>(), length))
+                        .into_owned(),
+                )
+            };
+            self.library
+                .get::<unsafe extern "C" fn(State, c_int)>(b"lua_settop\0")
+                .map_err(|e| e.to_string())?(self.state, -2);
+            value
         }
     }
-    fn result(&self) -> Result<String, String> {
+
+    fn global_string(&self, name: &CStr) -> Result<String, String> {
         unsafe {
             self.library
                 .get::<unsafe extern "C" fn(State, *const c_char) -> c_int>(b"lua_getglobal\0")
-                .map_err(|e| e.to_string())?(self.state, c"_pw_result".as_ptr());
+                .map_err(|e| e.to_string())?(self.state, name.as_ptr());
         }
-        self.string_at(-1)
+        self.take_string()
+    }
+
+    fn take_global_function(&self, name: &CStr) -> Result<c_int, String> {
+        unsafe {
+            self.library
+                .get::<unsafe extern "C" fn(State, *const c_char) -> c_int>(b"lua_getglobal\0")
+                .map_err(|e| e.to_string())?(self.state, name.as_ptr());
+            let reference = self
+                .library
+                .get::<unsafe extern "C" fn(State, c_int) -> c_int>(b"luaL_ref\0")
+                .map_err(|e| e.to_string())?(self.state, -1001000);
+            self.library
+                .get::<unsafe extern "C" fn(State)>(b"lua_pushnil\0")
+                .map_err(|e| e.to_string())?(self.state);
+            self.library
+                .get::<unsafe extern "C" fn(State, *const c_char)>(b"lua_setglobal\0")
+                .map_err(|e| e.to_string())?(self.state, name.as_ptr());
+            Ok(reference)
+        }
+    }
+
+    fn push_function(&self, reference: c_int) -> Result<(), String> {
+        unsafe {
+            self.library
+                .get::<unsafe extern "C" fn(State, c_int, i64) -> c_int>(b"lua_rawgeti\0")
+                .map_err(|e| e.to_string())?(self.state, -1001000, i64::from(reference));
+        }
+        Ok(())
+    }
+
+    fn call(&self, arguments: c_int, results: c_int) -> Result<(), String> {
+        let status = unsafe {
+            self.library.get::<unsafe extern "C" fn(State, c_int, c_int, c_int, isize, *const c_void) -> c_int>(
+                b"lua_pcallk\0",
+            ).map_err(|e| e.to_string())?(self.state, arguments, results, 0, 0, std::ptr::null())
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(self.take_string()?)
+        }
     }
 }
 impl Drop for Runtime {
@@ -300,78 +349,106 @@ pub fn execute_with_host(
     options: serde_json::Value,
     host: Option<HostCallback>,
 ) -> Result<String, String> {
-    doc.validate()?;
-    if frame >= doc.durations.len() || layer >= doc.layers.len() {
-        return Err("Invalid script context".into());
-    }
-    if doc.logical_pixels() > 1_000_000 {
-        return Err(
-            "Native scripts are limited to one million stored pixels per invocation".into(),
-        );
-    }
-    let runtime = Runtime::new(host)?;
-    runtime.eval(&format!("_pw_options={}", literal(&options)))?;
-    runtime.eval(&format!(
-        "_pw_document={}; _pw_frame={frame}; _pw_layer={layer}; _pw_colors={}",
-        literal(&serde_json::to_value(doc).map_err(|e| e.to_string())?),
-        literal(&serde_json::json!(
-            colors.unwrap_or([[255, 255, 255, 255], [0, 0, 0, 255]])
-        ))
-    ))?;
-    runtime.eval(&format!(
-        "{}\n{}",
-        include_str!("lua_api.lua"),
-        include_str!("lua_compat.lua")
-    ))?;
-    let finish_ref = unsafe {
-        runtime
-            .library
-            .get::<unsafe extern "C" fn(State, *const c_char) -> c_int>(b"lua_getglobal\0")
-            .map_err(|e| e.to_string())?(runtime.state, c"_pw_finish".as_ptr());
-        let reference = runtime
-            .library
-            .get::<unsafe extern "C" fn(State, c_int) -> c_int>(b"luaL_ref\0")
-            .map_err(|e| e.to_string())?(runtime.state, -1001000);
-        runtime
-            .library
-            .get::<unsafe extern "C" fn(State)>(b"lua_pushnil\0")
-            .map_err(|e| e.to_string())?(runtime.state);
-        runtime
-            .library
-            .get::<unsafe extern "C" fn(State, *const c_char)>(b"lua_setglobal\0")
-            .map_err(|e| e.to_string())?(runtime.state, c"_pw_finish".as_ptr());
-        reference
-    };
-    runtime.eval(source)?;
-    unsafe {
-        runtime
-            .library
-            .get::<unsafe extern "C" fn(State, c_int, i64) -> c_int>(b"lua_rawgeti\0")
-            .map_err(|e| e.to_string())?(runtime.state, -1001000, finish_ref as i64);
-        let command = command.unwrap_or("");
-        runtime
-            .library
-            .get::<unsafe extern "C" fn(State, *const c_char, usize) -> *const c_char>(
-                b"lua_pushlstring\0",
-            )
-            .map_err(|e| e.to_string())?(
-            runtime.state, command.as_ptr().cast(), command.len()
-        );
-        runtime
-            .library
-            .get::<unsafe extern "C" fn(State, c_int)>(b"lua_pushboolean\0")
-            .map_err(|e| e.to_string())?(runtime.state, i32::from(discover));
-        let status = runtime
-            .library
-            .get::<unsafe extern "C" fn(State, c_int, c_int, c_int, isize, *const c_void) -> c_int>(
-                b"lua_pcallk\0",
-            )
-            .map_err(|e| e.to_string())?(
-            runtime.state, 2, 0, 0, 0, std::ptr::null()
-        );
-        if status != 0 {
-            return Err(runtime.string_at(-1)?);
+    let runtime = ScriptRuntime::new(doc, (frame, layer), colors, options, host, false)?;
+    runtime.runtime.eval(source)?;
+    runtime.finish(command, discover)
+}
+
+pub(crate) const MAX_SCRIPT_PIXELS: usize = 1_000_000;
+
+pub(crate) fn execute_headless(
+    doc: &Document,
+    source: &str,
+    context: (usize, usize),
+    options: serde_json::Value,
+) -> Result<(String, String), String> {
+    let runtime = ScriptRuntime::new(doc, context, None, options, None, true)?;
+    runtime.runtime.eval(source)?;
+    let document = runtime.finish(None, false)?;
+    Ok((document, runtime.take_output()?))
+}
+
+struct ScriptRuntime {
+    runtime: Runtime,
+    finish_reference: c_int,
+    output_reference: Option<c_int>,
+}
+
+impl ScriptRuntime {
+    fn new(
+        doc: &Document,
+        (frame, layer): (usize, usize),
+        colors: Option<[[u8; 4]; 2]>,
+        options: serde_json::Value,
+        host: Option<HostCallback>,
+        capture_output: bool,
+    ) -> Result<Self, String> {
+        doc.validate()?;
+        if frame >= doc.durations.len() || layer >= doc.layers.len() {
+            return Err("Invalid script context".into());
         }
+        if doc.logical_pixels() > MAX_SCRIPT_PIXELS {
+            return Err(
+                "Native scripts are limited to one million stored pixels per invocation".into(),
+            );
+        }
+        let runtime = Runtime::new(host)?;
+        runtime.eval(&format!("_pw_options={}", literal(&options)))?;
+        runtime.eval(&format!(
+            "_pw_document={}; _pw_frame={frame}; _pw_layer={layer}; _pw_colors={}",
+            literal(&serde_json::to_value(doc).map_err(|e| e.to_string())?),
+            literal(&serde_json::json!(
+                colors.unwrap_or([[255, 255, 255, 255], [0, 0, 0, 255]])
+            ))
+        ))?;
+        runtime.eval(&format!(
+            "{}\n{}",
+            include_str!("lua_api.lua"),
+            include_str!("lua_compat.lua")
+        ))?;
+        let finish_reference = runtime.take_global_function(c"_pw_finish")?;
+        let output_reference = if capture_output {
+            runtime.eval(include_str!("lua_output.lua"))?;
+            Some(runtime.take_global_function(c"_pw_take_output")?)
+        } else {
+            None
+        };
+        Ok(Self {
+            runtime,
+            finish_reference,
+            output_reference,
+        })
     }
-    runtime.result()
+
+    fn finish(&self, command: Option<&str>, discover: bool) -> Result<String, String> {
+        self.runtime.push_function(self.finish_reference)?;
+        let command = command.unwrap_or("");
+        unsafe {
+            self.runtime
+                .library
+                .get::<unsafe extern "C" fn(State, *const c_char, usize) -> *const c_char>(
+                    b"lua_pushlstring\0",
+                )
+                .map_err(|e| e.to_string())?(
+                self.runtime.state,
+                command.as_ptr().cast(),
+                command.len(),
+            );
+            self.runtime
+                .library
+                .get::<unsafe extern "C" fn(State, c_int)>(b"lua_pushboolean\0")
+                .map_err(|e| e.to_string())?(self.runtime.state, i32::from(discover));
+        }
+        self.runtime.call(2, 0)?;
+        self.runtime.global_string(c"_pw_result")
+    }
+
+    fn take_output(&self) -> Result<String, String> {
+        let reference = self
+            .output_reference
+            .ok_or("Lua output capture is unavailable")?;
+        self.runtime.push_function(reference)?;
+        self.runtime.call(0, 1)?;
+        self.runtime.take_string()
+    }
 }
