@@ -303,6 +303,8 @@ pixelcraft --cli palette-convert --input colors.hex --output colors.gpl
 
 For a filtered sprite sheet, pass `--layers '[2,5]'` and set `frame_range` to an inclusive pair in `--options`, such as `{"frame_range":[6,11]}`. An explicit group includes its visible descendants. An explicitly selected layer can be exported even when hidden. Ancestor masks, opacity, and blending still apply. The range intersects any selected tag. The editor's **Export sprite sheet** dialog uses the timeline's current layer selection and displays frame numbers starting at one. File MCP accepts the same export arguments as the CLI.
 
+To crop a sheet to a named slice, choose it in the editor's **Crop to slice** menu or pass `--options '{"slice":"Portrait"}'`. The export follows the slice keys across the selected frames and transparently pads any part outside the canvas. CLI and MCP accept the exact slice name.
+
 For one sheet per authored slice, pass an output directory and enable `split_slices`. Each sheet follows its slice’s keyed bounds and preserves the included frame timing. Add `extrude` to duplicate each frame’s edge pixels before scaling. The border sits outside the sprite rectangle in the JSON.
 
 ```bash

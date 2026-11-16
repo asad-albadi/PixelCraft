@@ -73,6 +73,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 32 in progress. Editor, CLI, and file MCP sprite sheets honor explicit layers or groups and inclusive frame intervals, including tag intersections. The editor uses timeline layer selection and runs file export on the background worker. CLI and MCP slice splits inherit the filters. Tests verify compositing, stable frame IDs, rebased tags/slices, invalid filters, dry-run paths, and editor worker output. Formatting, strict Clippy, and 492 Windows all-target tests passed. Named-slice selection, per-layer and grid splitting, and filename/tag templates remain open.
 
+- Item 32 in progress. The sheet exporter accepts one exact authored slice name in the editor, CLI, and file MCP. It reuses keyed sprite crops, preserves stable IDs, duration, and pivots, and retains the matching sidecars and existing split filenames. Tests cover moving bounds outside the canvas, ambiguous and unknown names, a batch dry run, the real CLI path, and the editor worker. Formatting, strict Clippy, and 494 Windows all-target tests passed. Per-layer and grid splitting and filename/tag templates remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

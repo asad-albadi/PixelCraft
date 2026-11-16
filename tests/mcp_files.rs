@@ -852,6 +852,93 @@ fn sheet_filters_groups_and_frame_ranges_in_cli_and_mcp() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn named_slice_sheet_uses_keyed_bounds_and_rejects_unresolvable_names() {
+    use pixelcraft::model::{CLEAR, SliceKey, SpriteSlice};
+    let workspace = Workspace::new();
+    let root = workspace.project();
+    let mut sprite = Document::new(4, 1);
+    sprite.add_frame(0, false);
+    sprite.durations = vec![70, 140];
+    let red = [200, 20, 10, 255];
+    let blue = [10, 40, 210, 255];
+    sprite.set_pixel(0, 0, 0, red);
+    sprite.set_pixel(0, 1, 3, blue);
+    sprite.set_frame_name(1, "second").unwrap();
+    let key = |frame, x| SliceKey {
+        frame,
+        bounds: [x, 0, 2, 1],
+        center: None,
+        pivot: Some([1, 0]),
+    };
+    sprite.slices = vec![
+        SpriteSlice {
+            name: "Other".into(),
+            keys: vec![key(0, 1)],
+        },
+        SpriteSlice {
+            name: "Portrait".into(),
+            keys: vec![key(0, -1), key(1, 3)],
+        },
+    ];
+    let path = root.join("art.pixel");
+    formats::save(&path, &sprite).unwrap();
+    let export = |name: &str, file: &str| {
+        workspace.call(
+            "export",
+            json!({"input":"art.pixel","output":file,"format":"sheet",
+          "options":{"slice":name,"columns":2,"padding":0,"preset":"Unity"}}),
+        )
+    };
+    let reply = export("Portrait", "portrait.png");
+    assert!(reply["isError"].is_null(), "{reply}");
+    let png = image::open(root.join("portrait.png")).unwrap().into_rgba8();
+    assert_eq!(png.dimensions(), (4, 1));
+    assert_eq!(
+        png.pixels().map(|p| p.0).collect::<Vec<_>>(),
+        vec![CLEAR, red, blue, CLEAR]
+    );
+    assert!(root.join("portrait.png.meta").exists());
+    let metadata: Value =
+        serde_json::from_slice(&fs::read(root.join("portrait.json")).unwrap()).unwrap();
+    assert_eq!(metadata["frames"][1]["frameId"], sprite.frame_export_id(1));
+    assert_eq!(metadata["frames"][1]["frameName"], "second");
+    assert_eq!(metadata["frames"][1]["duration"], 140);
+    assert_eq!(metadata["meta"]["slices"][0]["name"], "Portrait");
+    assert_eq!(
+        metadata["meta"]["slices"][0]["keys"][1]["pivot"],
+        json!([1, 0])
+    );
+    assert_eq!(metadata["meta"]["slices"].as_array().unwrap().len(), 1);
+
+    let request = json!({
+        "input":path,"output":root.join("split"),"format":"sheet",
+        "options":{"slice":"Portrait","split_slices":true,"padding":0}
+    });
+    let dry_run = automation::operation(
+        "batch",
+        &json!({"dry_run":true,"steps":[{"operation":"export","arguments":request}]}),
+    )
+    .unwrap();
+    let files = dry_run.to_string();
+    assert!(files.contains("002-Portrait.png") && files.contains("002-Portrait.json"));
+    assert!(!files.contains("001-Other"));
+    assert!(!root.join("split").exists());
+    automation::run_cli(&["export".into(), request.to_string()]).unwrap();
+    assert!(root.join("split/002-Portrait.png").exists());
+    assert!(!root.join("split/001-Other.png").exists());
+
+    let reply = export("Missing", "missing.png");
+    assert_error(&reply, "Unknown slice");
+    assert!(!root.join("missing.png").exists());
+    sprite.slices[0].name = "Portrait".into();
+    formats::save(&path, &sprite).unwrap();
+    let reply = export("Portrait", "ambiguous.png");
+    assert_error(&reply, "Ambiguous slice");
+    assert!(!root.join("ambiguous.png").exists());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

@@ -31,6 +31,7 @@ pub(super) struct Studio {
     pub force: f32,
     pub sheet: SheetOptions,
     sheet_use_timeline_layers: bool,
+    sheet_slice: Option<String>,
     pub polygon: Vec<(i32, i32)>,
     pub mask: Option<Vec<bool>>,
     pub move_mask: Option<Vec<bool>>,
@@ -154,6 +155,7 @@ impl Default for Studio {
             force: 1.,
             sheet: SheetOptions::default(),
             sheet_use_timeline_layers: false,
+            sheet_slice: None,
             polygon: vec![],
             mask: None,
             move_mask: None,
@@ -1913,11 +1915,13 @@ impl PixelCraft {
         }
         let doc = self.doc.clone();
         let options = self.sprite_sheet_options();
+        let slice = self.studio.sheet_slice.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         self.export_job = Some(rx);
         self.status = "Exporting sprite sheet…".into();
         std::thread::spawn(move || {
-            let result = interchange::export_sheet(&path, &doc, &options);
+            let result =
+                interchange::export_sheet_for_slice(&path, &doc, &options, slice.as_deref());
             let _ = tx.send((path, result));
         });
     }
@@ -2008,8 +2012,29 @@ impl PixelCraft {
                             );
                         }
                     });
+                let slice = &mut self.studio.sheet_slice;
+                if slice
+                    .as_ref()
+                    .is_some_and(|name| !self.doc.slices.iter().any(|item| item.name == *name))
+                {
+                    *slice = None;
+                }
+                if !self.doc.slices.is_empty() {
+                    egui::ComboBox::from_label("Crop to slice")
+                        .selected_text(slice.as_deref().unwrap_or("Whole sprite"))
+                        .show_ui(ui, |ui| {
+                            ui.pc_selectable_value(slice, None, "Whole sprite");
+                            for item in &self.doc.slices {
+                                ui.pc_selectable_value(slice, Some(item.name.clone()), &item.name);
+                            }
+                        });
+                }
                 let options = self.sprite_sheet_options();
-                match workflows::pack_sheet(&self.doc, &options) {
+                match interchange::pack_sheet_for_slice(
+                    &self.doc,
+                    &options,
+                    self.studio.sheet_slice.as_deref(),
+                ) {
                     Ok((image, metadata)) => {
                         ui.label(format!(
                             "{} × {} · {} frames",
@@ -2830,6 +2855,45 @@ mod tests {
         let metadata = path.with_extension("json");
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(metadata).unwrap();
+    }
+
+    #[test]
+    fn sprite_sheet_worker_crops_to_the_selected_named_slice() {
+        use std::time::Duration;
+
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.doc = Document::new(2, 1);
+        let ink = [40, 90, 220, 255];
+        editor.doc.set_pixel(0, 0, 1, ink);
+        editor.doc.slices.push(SpriteSlice {
+            name: "Right".into(),
+            keys: vec![SliceKey {
+                frame: 0,
+                bounds: [1, 0, 1, 1],
+                center: None,
+                pivot: None,
+            }],
+        });
+        editor.studio.sheet_slice = Some("Right".into());
+        editor.studio.sheet.padding = 0;
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-gui-named-slice-sheet-{}.png",
+            std::process::id()
+        ));
+        editor.start_sprite_sheet_export(path.clone());
+        let (_, result) = editor
+            .export_job
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        result.unwrap();
+        let image = image::open(&path).unwrap().into_rgba8();
+        assert_eq!(image.dimensions(), (1, 1));
+        assert_eq!(image.get_pixel(0, 0).0, ink);
+        std::fs::remove_file(path.with_extension("json")).unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

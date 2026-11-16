@@ -162,6 +162,36 @@ pub(crate) fn export_sheet_extruded(
     )
 }
 
+/// Pack the frame range cropped to one authored slice, or the whole sprite.
+pub fn pack_sheet_for_slice(
+    doc: &Document,
+    options: &SheetOptions,
+    slice: Option<&str>,
+) -> Result<(image::RgbaImage, Value), String> {
+    if let Some(name) = slice {
+        doc.validate()?;
+        let plans = plan_slice_sheets(doc, options, 0, Some(name))?;
+        let filtered = filter_layers_for_export(doc, options.layers.as_deref())?;
+        plans[0].pack(&filtered, options, 0)
+    } else {
+        pack_sheet(doc, options)
+    }
+}
+
+pub fn export_sheet_for_slice(
+    path: &Path,
+    doc: &Document,
+    options: &SheetOptions,
+    slice: Option<&str>,
+) -> Result<(), String> {
+    write_packed_sheet(
+        path,
+        path,
+        options,
+        pack_sheet_for_slice(doc, options, slice)?,
+    )
+}
+
 pub(crate) struct SliceSheet<'a> {
     slice: &'a SpriteSlice,
     first: usize,
@@ -175,10 +205,27 @@ pub(crate) fn plan_slice_sheets<'a>(
     d: &'a Document,
     o: &SheetOptions,
     extrude: usize,
+    slice_name: Option<&str>,
 ) -> Result<Vec<SliceSheet<'a>>, String> {
     if o.scale == 0 || o.scale > MAX_DIMENSION || extrude > 256 {
         return Err("Invalid split slice sheet scale or extrusion".into());
     }
+    let target = if let Some(name) = slice_name {
+        let mut matches = d
+            .slices
+            .iter()
+            .enumerate()
+            .filter(|(_, slice)| slice.name == name);
+        let (index, _) = matches
+            .next()
+            .ok_or_else(|| format!("Unknown slice: {name:?}"))?;
+        if matches.next().is_some() {
+            return Err(format!("Ambiguous slice name: {name:?}"));
+        }
+        Some(index)
+    } else {
+        None
+    };
     let frames = o.frames_for(d)?;
     let (first, last) = (*frames.start(), *frames.end());
     let mut plans = Vec::new();
@@ -190,6 +237,9 @@ pub(crate) fn plan_slice_sheets<'a>(
     let mut godot_budget = MAX_CEL_SLOTS;
     let pad = o.padding.min(256);
     for (index, slice) in d.slices.iter().enumerate() {
+        if target.is_some_and(|target| index != target) {
+            continue;
+        }
         let Some(key) = slice.keys.first().filter(|key| key.frame <= last) else {
             continue;
         };
@@ -330,7 +380,7 @@ mod slice_sheet_limits {
         let options = SheetOptions::default();
         let doc = sliced(3, 7_998);
         assert!(
-            matches!(plan_slice_sheets(&doc, &options, 0), Err(error) if error.contains("cropped pixel work"))
+            matches!(plan_slice_sheets(&doc, &options, 0, None), Err(error) if error.contains("cropped pixel work"))
         );
 
         let options = SheetOptions {
@@ -339,16 +389,16 @@ mod slice_sheet_limits {
         };
         let doc = sliced(3, 996);
         assert!(
-            matches!(plan_slice_sheets(&doc, &options, 1), Err(error) if error.contains("combined atlas pixel"))
+            matches!(plan_slice_sheets(&doc, &options, 1, None), Err(error) if error.contains("combined atlas pixel"))
         );
-        assert!(plan_slice_sheets(&sliced(2, 996), &options, 1).is_ok());
+        assert!(plan_slice_sheets(&sliced(2, 996), &options, 1, None).is_ok());
     }
 
     #[test]
     fn split_sheets_cap_output_file_count_and_combined_godot_timing() {
         let doc = sliced(1_025, 1);
         assert!(
-            matches!(plan_slice_sheets(&doc, &SheetOptions::default(), 0), Err(error) if error.contains("1024 sheets"))
+            matches!(plan_slice_sheets(&doc, &SheetOptions::default(), 0, None), Err(error) if error.contains("1024 sheets"))
         );
 
         let mut doc = sliced(3, 1);
@@ -368,7 +418,7 @@ mod slice_sheet_limits {
             ..Default::default()
         };
         assert!(
-            matches!(plan_slice_sheets(&doc, &options, 0), Err(error) if error.contains("combined Godot animation key"))
+            matches!(plan_slice_sheets(&doc, &options, 0, None), Err(error) if error.contains("combined Godot animation key"))
         );
     }
 }
@@ -382,6 +432,15 @@ impl SliceSheet<'_> {
         o: &SheetOptions,
         extrude: usize,
     ) -> Result<(), String> {
+        write_packed_sheet(path, previous_path, o, self.pack(d, o, extrude)?)
+    }
+
+    fn pack(
+        &self,
+        d: &Document,
+        o: &SheetOptions,
+        extrude: usize,
+    ) -> Result<(image::RgbaImage, Value), String> {
         let mut keys = self.slice.keys.iter().peekable();
         let mut active = keys.next().unwrap();
         let active_keys: Vec<_> = (self.first..=self.last)
@@ -471,7 +530,7 @@ impl SliceSheet<'_> {
         {
             frame["sourceFrame"] = json!(self.first + n);
         }
-        write_packed_sheet(path, previous_path, &options, (image, metadata))
+        Ok((image, metadata))
     }
 }
 

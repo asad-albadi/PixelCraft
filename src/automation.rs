@@ -558,6 +558,7 @@ struct SheetExportOptions {
     #[serde(flatten)]
     sheet: SheetOptions,
     split_slices: bool,
+    slice: Option<String>,
     extrude: usize,
 }
 
@@ -849,12 +850,17 @@ fn file_operation_mode(
                             let sprite =
                                 workflows::filter_layers_for_export(&d, layers.as_deref())?;
                             options.sheet.frames_for(&sprite)?;
-                            if options.split_slices {
-                                let plans = interchange::plan_slice_sheets(
+                            let plans = if options.split_slices || options.slice.is_some() {
+                                interchange::plan_slice_sheets(
                                     &sprite,
                                     &options.sheet,
                                     options.extrude,
-                                )?;
+                                    options.slice.as_deref(),
+                                )?
+                            } else {
+                                Vec::new()
+                            };
+                            if options.split_slices {
                                 let paths: Vec<_> =
                                     plans.iter().map(|plan| out.join(&plan.file_name)).collect();
                                 let destinations: Vec<_> = paths
@@ -899,13 +905,23 @@ fn file_operation_mode(
                                 );
                             }
                             let export = |target: &Path| {
-                                interchange::export_sheet_extruded(
-                                    target,
-                                    &out,
-                                    &sprite,
-                                    &options.sheet,
-                                    options.extrude,
-                                )
+                                if let Some(slice) = plans.first() {
+                                    slice.export(
+                                        target,
+                                        &out,
+                                        &sprite,
+                                        &options.sheet,
+                                        options.extrude,
+                                    )
+                                } else {
+                                    interchange::export_sheet_extruded(
+                                        target,
+                                        &out,
+                                        &sprite,
+                                        &options.sheet,
+                                        options.extrude,
+                                    )
+                                }
                             };
                             if let Some(files) = files {
                                 files.write_files(
@@ -1061,7 +1077,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and split_slices (true uses output as a directory and writes a PNG sheet and metadata per authored slice).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|gif|mp4|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height,offset_x,offset_y,spacing_x,spacing_y,layers,skip_transparent,duration (ms, default 100).\nSheet options: scale,columns,padding,trim,tag,preset (Generic/Godot/Unity),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), and split_slices (true uses output as a directory).\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let v = cli_arguments(&args[1..])?;
