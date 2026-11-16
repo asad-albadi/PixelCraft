@@ -290,6 +290,8 @@ PCX import reads indexed and planar RGB artwork. A single opaque indexed layer e
 
 **Export SVG** and **Export CSS** write the selected frame as crisp, scaled pixel art with transparency. SVG files use rectangles. CSS files define the `.pixel-art` class, ready to attach to an empty element such as `<div class="pixel-art"></div>`. CLI and MCP accept `svg` and `css` as export formats and support layer filtering and cropping.
 
+The editor and headless import tools open 8-bit FLI and FLC animations as indexed sprites. Import preserves palette changes and frame timing. Loop-transition frames stored after the authored timeline are skipped.
+
 ### Headless CLI
 
 No graphical display is needed. `pixelcraft --help` lists the operations and arguments. Run `--cli OPERATION` with a JSON argument object, or named flags; command errors go to stderr and exit with a nonzero status. Layer/frame indices are zero-based.

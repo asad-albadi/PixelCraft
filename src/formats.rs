@@ -5,6 +5,7 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
+mod flic;
 mod pcx;
 mod raster;
 mod vector;
@@ -1519,6 +1520,9 @@ pub(crate) fn load_with_path_check(
     }
     if matches!(ext.as_str(), "gif" | "apng") {
         return crate::interchange::load_animation(path);
+    }
+    if matches!(ext.as_str(), "fli" | "flc") {
+        return flic::load(path);
     }
     if ext == "ora" {
         return crate::interchange::load_ora(path);

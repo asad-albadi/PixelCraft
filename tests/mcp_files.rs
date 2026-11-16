@@ -1664,6 +1664,127 @@ fn svg_and_css_export_scaled_rectangles_with_alpha() {
 
 #[cfg(any(target_os = "linux", windows))]
 #[test]
+fn flic_import_keeps_indexed_deltas_palettes_and_timing() {
+    use pixelcraft::model::ColorMode;
+    fn chunk(kind: u16, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(body.len() as u32 + 6).to_le_bytes());
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(body);
+        out
+    }
+    fn frame(delay: u16, chunks: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = vec![0; 16];
+        out[4..6].copy_from_slice(&0xf1fau16.to_le_bytes());
+        out[6..8].copy_from_slice(&(chunks.len() as u16).to_le_bytes());
+        out[8..10].copy_from_slice(&delay.to_le_bytes());
+        out.extend(chunks.iter().flatten().copied());
+        let size = out.len() as u32;
+        out[..4].copy_from_slice(&size.to_le_bytes());
+        out
+    }
+    fn file(
+        kind: u16,
+        count: u16,
+        width: u16,
+        height: u16,
+        speed: u16,
+        payload: &[Vec<u8>],
+    ) -> Vec<u8> {
+        let mut out = vec![0; 128];
+        for (offset, value) in [
+            (4, kind),
+            (6, count),
+            (8, width),
+            (10, height),
+            (12, 8),
+            (16, speed),
+        ] {
+            out[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        out.extend(payload.iter().flatten().copied());
+        let size = out.len() as u32;
+        out[..4].copy_from_slice(&size.to_le_bytes());
+        out
+    }
+
+    let w = Workspace::new();
+    let root = w.project();
+    let black = [0, 0, 0, 255];
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let green = [0, 255, 0, 255];
+    let frame0 = frame(
+        0,
+        &[
+            chunk(4, &[1, 0, 0, 3, 0, 0, 0, 255, 0, 0, 0, 0, 255]),
+            chunk(15, &[1, 3, 1, 1, 253, 0, 1, 0]),
+        ],
+    );
+    let frame1 = frame(
+        120,
+        &[
+            chunk(4, &[1, 0, 1, 1, 0, 255, 0]),
+            // SS2 skips the first row, writes its final pixel, then copies a pair.
+            chunk(7, &[1, 0, 255, 255, 2, 128, 1, 0, 0, 1, 2, 0]),
+        ],
+    );
+    let flc = file(
+        0xaf12,
+        2,
+        3,
+        2,
+        75,
+        &[
+            chunk(0xf100, &[0; 10]),
+            frame0,
+            frame1,
+            frame(0, &[chunk(13, &[])]), // ring frame is outside the authored timeline
+        ],
+    );
+    fs::write(root.join("demo.flc"), flc).unwrap();
+    let reply = w.call("import", json!({"input":"demo.flc","output":"demo.pixel"}));
+    assert!(reply["isError"].is_null(), "{reply}");
+    let loaded = formats::load(&root.join("demo.pixel")).unwrap();
+    assert_eq!(loaded.color_mode, ColorMode::Indexed);
+    assert_eq!(loaded.durations, [75, 120]);
+    assert_eq!(loaded.composite(0), [red, red, red, black, red, black]);
+    assert_eq!(
+        loaded.composite(1),
+        [green, green, green, blue, black, blue]
+    );
+    assert_eq!(
+        loaded.layers[0].cel_meta[1]
+            .indices
+            .as_deref()
+            .unwrap()
+            .as_slice(),
+        [1, 1, 1, 2, 0, 2]
+    );
+
+    let initial = frame(
+        0,
+        &[
+            chunk(11, &[1, 0, 0, 2, 0, 0, 0, 63, 0, 0]),
+            chunk(16, &[0, 1, 0]),
+        ],
+    );
+    let next = frame(0, &[chunk(12, &[0, 0, 1, 0, 1, 0, 254, 1])]);
+    let fli = file(0xaf11, 2, 3, 1, 5, &[initial, next]);
+    fs::write(root.join("demo.fli"), fli).unwrap();
+    let result = formats::load(&root.join("demo.fli")).unwrap();
+    assert_eq!(result.durations, [71, 71]);
+    assert_eq!(result.composite(1), [red, red, black]);
+
+    let invalid = file(0xaf12, 1, 2, 1, 75, &[frame(0, &[chunk(15, &[1, 3, 0])])]);
+    fs::write(root.join("bad.flc"), invalid).unwrap();
+    let reply = w.call("import", json!({"input":"bad.flc","output":"bad.pixel"}));
+    assert_error(&reply, "scanline");
+    assert!(!root.join("bad.pixel").exists());
+}
+
+#[cfg(any(target_os = "linux", windows))]
+#[test]
 fn atlas_metadata_can_be_keyed_or_omitted_without_touching_existing_sidecars() {
     let w = Workspace::new();
     let reply = w.call(

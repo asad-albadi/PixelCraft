@@ -91,6 +91,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 35 in progress. SVG and CSS export the current frame with exact positions and alpha at integer scale in the editor, CLI, and MCP. The writers merge identical horizontal runs across rows and stream native geometry without allocating an enlarged bitmap. CSS emits a fixed-size .pixel-art class. Tests reconstruct SVG pixels, check CSS crop geometry and alpha, and cover an empty sprite. Formatting, strict Clippy, and 503 Windows all-target tests passed. PSD/PSB and FLI/FLC remain open.
 
+- Item 35 in progress. FLI and FLC imports preserve indexed pixels, palette changes, and authored frame timing. The decoder handles palette packets, byte runs, byte and word deltas, literal and black frames, optional prefix data, and ring frames. Chunk and canvas bounds are checked before publication. The MCP regression uses mixed encodings and malformed packets. All 417 frames of three independent FFmpeg fixtures matched its RGBA output exactly. Formatting, strict Clippy, and 504 Windows all-target tests passed. FLI/FLC encoding and PSD/PSB import remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

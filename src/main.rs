@@ -2108,6 +2108,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         &[
                             "pixel", "aseprite", "ase", "png", "gif", "webp", "apng", "ora",
                             "json", "tmj", "tsj", "bmp", "jpg", "jpeg", "ico", "pcx", "qoi", "tga",
+                            "fli", "flc",
                         ],
                     )
                     .set_directory(
