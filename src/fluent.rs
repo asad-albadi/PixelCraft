@@ -250,9 +250,14 @@ impl Default for PreviewSettings {
     }
 }
 
+enum PreviewTime {
+    Playing(f64),
+    Paused(f64),
+}
+
 pub(super) struct PreviewPlayback {
     frame: usize,
-    deadline: f64,
+    time: PreviewTime,
 }
 
 fn frame_seconds(durations: &[u16], frame: usize) -> f64 {
@@ -263,21 +268,36 @@ impl PreviewPlayback {
     fn new(frame: usize, now: f64, durations: &[u16]) -> Self {
         Self {
             frame,
-            deadline: now + frame_seconds(durations, frame),
+            time: PreviewTime::Playing(now + frame_seconds(durations, frame)),
         }
+    }
+
+    fn toggle(&mut self, now: f64) {
+        self.time = match self.time {
+            PreviewTime::Playing(deadline) => PreviewTime::Paused(deadline - now),
+            PreviewTime::Paused(remaining) => PreviewTime::Playing(now + remaining),
+        };
     }
 
     fn update(&mut self, now: f64, durations: &[u16]) {
         if self.frame >= durations.len() {
-            *self = Self::new(0, now, durations);
-        } else if now >= self.deadline {
+            self.frame = durations.len() - 1;
+            let duration = frame_seconds(durations, self.frame);
+            self.time = match self.time {
+                PreviewTime::Playing(_) => PreviewTime::Playing(now + duration),
+                PreviewTime::Paused(_) => PreviewTime::Paused(duration),
+            };
+        }
+        if let PreviewTime::Playing(deadline) = &mut self.time
+            && now >= *deadline
+        {
             // Skip entire cycles after a delayed repaint, then find the current cel.
             let cycle_ms: u64 = durations.iter().map(|d| u64::from((*d).max(1))).sum();
             let cycle = cycle_ms as f64 / 1000.;
-            self.deadline += ((now - self.deadline) / cycle).floor() * cycle;
-            while now >= self.deadline {
+            *deadline += ((now - *deadline) / cycle).floor() * cycle;
+            while now >= *deadline {
                 self.frame = (self.frame + 1) % durations.len();
-                self.deadline += frame_seconds(durations, self.frame);
+                *deadline += frame_seconds(durations, self.frame);
             }
         }
     }
@@ -671,6 +691,12 @@ impl PixelCraft {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 0)).show(ui, |ui| {
             let old_zoom = self.preview_settings.zoom;
             let now = ui.input(|input| input.time);
+            if self.doc.durations.len() <= 1 {
+                self.preview_playback = None;
+            }
+            if let Some(playback) = &mut self.preview_playback {
+                playback.update(now, &self.doc.durations);
+            }
             let controls = ui.horizontal(|ui| {
                 ui.strong("Preview");
                 egui::ComboBox::from_id_salt("preview_zoom")
@@ -684,7 +710,8 @@ impl PixelCraft {
                             ui.selectable_value(&mut self.preview_settings.zoom, zoom, label);
                         }
                     }).response.on_hover_text("Fit the whole sprite, or zoom in physical pixels. Drag artwork to pan.");
-                let playing = self.preview_playback.is_some();
+                let playing = self.preview_playback.as_ref()
+                    .is_some_and(|playback| matches!(playback.time, PreviewTime::Playing(_)));
                 let play = ui.add_enabled_ui(self.doc.durations.len() > 1, |ui| {
                     let (icon, label) = if playing {
                         ("pause", "Pause preview animation")
@@ -696,21 +723,21 @@ impl PixelCraft {
                 #[cfg(test)]
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("preview-play"), play.rect));
                 if play.clicked() {
-                    self.preview_playback = if playing { None } else {
-                        Some(PreviewPlayback::new(self.frame, now, &self.doc.durations))
-                    };
+                    if let Some(playback) = &mut self.preview_playback {
+                        playback.toggle(now);
+                    } else {
+                        self.preview_playback = Some(PreviewPlayback::new(self.frame, now, &self.doc.durations));
+                    }
                 }
             });
             if old_zoom != self.preview_settings.zoom {
                 self.preview_pan = Vec2::ZERO;
                 self.save_preview_settings();
             }
-            if self.doc.durations.len() <= 1 {
-                self.preview_playback = None;
-            }
-            let frame = if let Some(playback) = &mut self.preview_playback {
-                playback.update(now, &self.doc.durations);
-                ui.ctx().request_repaint_after(Duration::from_secs_f64(playback.deadline - now));
+            let frame = if let Some(playback) = &self.preview_playback {
+                if let PreviewTime::Playing(deadline) = playback.time {
+                    ui.ctx().request_repaint_after(Duration::from_secs_f64((deadline - now).max(0.)));
+                }
                 playback.frame
             } else {
                 self.frame

@@ -1564,9 +1564,11 @@ fn independent_preview_uses_authored_durations_and_keeps_edit_frame() {
     assert!(render(0.055, vec![]));
     assert!(!render(0.09, vec![]));
     assert!(!render(0.29, vec![]));
-    assert!(render(0.32, vec![]));
-    assert!(render(0.33, click(play)));
-    assert!(render(0.43, vec![]));
+    assert!(!render(0.295, click(play)));
+    assert!(!render(0.68, vec![]));
+    assert!(!render(0.75, click(play)));
+    assert!(!render(0.76, vec![]));
+    assert!(render(0.78, vec![]));
 }
 
 #[test]
