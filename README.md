@@ -147,6 +147,8 @@ Canvases support up to 16384 pixels per side and 64 million pixels per canvas an
 
 ### Timeline and scene editing
 
+Use **Play preview animation** in the Preview panel to play the authored frame timings while the timeline stays on your editing frame. The preview shows the main canvas viewport. Click the artwork in the preview to center the canvas there. The timeline marks tagged frames, and **Sprite → Properties, layers, tiles & ranges** edits a tag’s repeat count for batch and engine exports.
+
 - Shift-click a timeline cel, or use Shift and the arrow keys with a cel focused, to select a rectangle. **Layer & frame actions → Selected cels** clears, links, unlinks, changes timing, or previews a move or duplicate at the chosen destination. Operations use one Undo step.
 - **Layer & frame actions → Link cel to frame** shares artwork within one layer. **Link duplicated cels** makes frame duplication link artwork on that layer. Unlink a cel before editing it independently.
 - **Position and opacity keyframe** animates offsets and opacity. Position snaps to whole pixels. Linear keys interpolate using frame durations, including the loop boundary. Enable **Hold until next keyframe** to step between values.
@@ -199,6 +201,8 @@ Lua runs transactionally on a separate document copy; successful results import 
 
 ## Verification
 
+Pull requests targeting main run formatting, strict Clippy, and Rust tests on Linux and Windows. The Windows check opens the application and verifies that it renders. Tagged builds run the separate release packaging workflow.
+
 `cargo test --offline` covers model behavior, real pointer editing, undo, rendering caches, palettes, groups, tilemaps, tags, file round trips, PNG metadata, embedded Lua, package lifecycle and error rollback. `cargo build --offline` builds the app; Craft Anything's `rebuild_check` builds and captures its window.
 
 `target/debug/pixelcraft --standalone-check /tmp/workshop-check` exercises drawing, project save/open, PNG/sheet/GIF exports, embedded Lua plugin installation/execution, theme/palette/shortcut application, disable and uninstall without opening a window. `checks/standalone.sh` runs it in an otherwise empty Bubblewrap filesystem containing only the binary, basic Linux libraries and a writable output directory—no original editor, system Lua interpreter, home configuration or assets are mounted.
@@ -227,7 +231,9 @@ The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LI
 
 ## About and updates
 
-**Help → About** shows the developer, installed version (from Cargo), latest stable GitHub release, and a download link when an update is available. The GitHub icon beside PixelCraft opens the project repository. A centered **New version found** link appears when a newer release is confirmed. Checks run in the background at startup, hourly while the editor is open, and through **Check for updates**; failed checks never announce an update.
+Open **Edit → Settings** to set new sprite size, the default pixel grid, interface scale, checkerboard, onion skin, recovery, and update preferences. **Reset settings to defaults** restores those defaults. Enable **Download and verify updates in the background** to show **Update ready** once the download passes verification. Open the notification to review and install it when you are ready.
+
+**Help → About** shows the developer, installed version (from Cargo), latest stable GitHub release, and a download link when an update is available. The GitHub icon beside PixelCraft opens the project repository. A centered **New version found** notice opens the update controls when a newer release is confirmed. Checks run in the background at startup, hourly while the editor is open, and through **Check for updates**; failed checks never announce an update.
 
 The developer credit defaults to Asad, the author recorded in `Cargo.toml`. Tagged GitHub Actions builds automatically embed their repository and keep this developer credit. For local builds, set `PIXELCRAFT_REPOSITORY=owner/repository` and optionally `PIXELCRAFT_DEVELOPER` when building. The About dialog includes a read-only Developer and repository section, without editable fields or a save button. Previously saved developer and repository values in `about.json` are ignored; the build identity always supplies these fields. No repository URL was present in the source project, so local builds require the build-time repository setting before GitHub links and release checks can work.
 
@@ -246,7 +252,7 @@ Open **Tools…** beside the brush controls, or **Edit → Brushes, references &
 - **Grid sprite-sheet import** previews complete cells in row-major order with independent cell size, offset and spacing. Import into a new document as frames or layers; incomplete edge cells are omitted.
 - **Batch tag export** writes one GIF or PNG/JSON sheet per animation tag. GIFs contain the requested forward, reverse or ping-pong playback order and original durations (subject to GIF's 10 ms precision). Sheets retain direction metadata and reuse the current columns/padding/trim and Generic/Godot/Unity options. Indexed filename prefixes avoid name collisions and unsafe tag names.
 - **Multi-file atlas** packs every frame of selected sprites with Rows or MaxRects, optional trimming, padding, exact pixel deduplication and power-of-two dimensions. JSON keeps every frame's timing, source identity, original canvas size, trim offsets and source tags even when frames share one packed region. The width is an upper bound; power-of-two mode uses a width no larger than that bound. Existing image/pixel limits apply.
-- **File → Recent files** remembers the last 15 successfully opened/saved files. Workflow tools also provide PixelCraft, Aseprite and Photoshop shortcut presets for supported commands and an editable binding list. Choosing a preset replaces the current bindings; edits and removals are saved.
+- **File → Recent files** remembers the last 15 successfully opened or saved files. Duplicate filenames show a folder hint and missing files are marked. Workflow tools also provide PixelCraft, Aseprite and Photoshop shortcut presets for supported commands and an editable binding list. Choosing a preset replaces the current bindings; edits and removals are saved.
 
 ### Headless CLI
 
