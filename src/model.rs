@@ -2094,6 +2094,50 @@ impl Document {
         let (color, n) = self.drawing_color(l, f, color);
         self.draw_pixel(l, f, i, color, n);
     }
+    /// Replace an exact RGBA match in one editable raster cel.
+    pub fn replace_color_in_cel(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        source: Pixel,
+        replacement: Pixel,
+        mask: Option<&[bool]>,
+    ) -> usize {
+        if source == replacement
+            || frame >= self.durations.len()
+            || !self.editable(layer)
+            || self.layers[layer].tileset.is_some()
+            || mask.is_some_and(|mask| mask.len() != self.width * self.height)
+        {
+            return 0;
+        }
+        let (color, slot) = self.drawing_color(layer, frame, replacement);
+        if color == source {
+            return 0;
+        }
+        let cel = self.layers[layer].cels[frame].clone();
+        let mut changed = 0;
+        let mut replace = |i, pixel| {
+            if pixel == source && mask.is_none_or(|mask| mask[i]) {
+                if changed == 0 && self.layers[layer].cel_meta[frame].artwork_link.is_some() {
+                    // An edit with explicit frame or selection limits must not propagate to linked cels.
+                    self.layers[layer].cel_meta[frame].artwork_link = None;
+                    self.layers[layer].prune_cel_links();
+                }
+                self.draw_pixel(layer, frame, i, color, slot);
+                changed += 1;
+            }
+        };
+        if source == CLEAR {
+            for (i, &pixel) in cel.iter().enumerate() {
+                replace(i, pixel);
+            }
+        } else {
+            cel.visit_nonclear(replace);
+        }
+        changed
+    }
+
     pub fn editable(&self, l: usize) -> bool {
         self.layer_unlocked(l) && !self.layers[l].group
     }

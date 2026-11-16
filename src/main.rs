@@ -212,6 +212,14 @@ struct FramePrefetch {
     result: std::sync::mpsc::Receiver<(egui::ColorImage, Option<String>)>,
 }
 
+#[derive(Clone, Copy)]
+struct ReplaceColor {
+    source: Pixel,
+    replacement: Pixel,
+    all_cels: bool,
+    selection_only: bool,
+}
+
 struct PixelCraft {
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
@@ -247,6 +255,7 @@ struct PixelCraft {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
+    replace_color: Option<ReplaceColor>,
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
     clipboard_target: Option<ClipboardTarget>,
@@ -399,6 +408,7 @@ impl PixelCraft {
             undo: vec![],
             redo: vec![],
             selection: None,
+            replace_color: None,
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
             clipboard_target: None,
@@ -1305,6 +1315,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.new_dialog
             || self.settings_open
             || self.rename.is_some()
+            || self.replace_color.is_some()
             || self.help
             || self.properties_open
             || self.animation_export.is_some()
@@ -1949,6 +1960,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.clear()
             }
             "clear" => self.clear(),
+            "replace-color" => {
+                self.replace_color = Some(ReplaceColor {
+                    source: self.fg,
+                    replacement: self.bg,
+                    all_cels: false,
+                    selection_only: self.selection.is_some(),
+                });
+            }
             "selectall" => {
                 self.studio.mask = None;
                 self.studio.polygon.clear();
@@ -2339,6 +2358,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Cut   Ctrl+X", "cut"),
                         ("Paste   Ctrl+V", "paste"),
                         ("Clear   Delete", "clear"),
+                        ("Replace Color…", "replace-color"),
                         ("Select all   Ctrl+A", "selectall"),
                         ("Deselect   Esc", "deselect"),
                         ("Settings…", "settings"),
@@ -3771,7 +3791,97 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.colors().ink,
         );
     }
+    fn apply_replace_color(&mut self, request: ReplaceColor) {
+        if request.selection_only && self.selection.is_none() {
+            return;
+        }
+        let mask = request.selection_only.then(|| {
+            (0..self.doc.width * self.doc.height)
+                .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
+                .collect::<Vec<_>>()
+        });
+        let layers = if request.all_cels {
+            0..self.doc.layers.len()
+        } else {
+            self.layer..self.layer + 1
+        };
+        let frames = if request.all_cels {
+            0..self.doc.durations.len()
+        } else {
+            self.frame..self.frame + 1
+        };
+        let mut next = self.doc.clone();
+        let mut count = 0;
+        for layer in layers {
+            for frame in frames.clone() {
+                count += next.replace_color_in_cel(
+                    layer,
+                    frame,
+                    request.source,
+                    request.replacement,
+                    mask.as_deref(),
+                );
+            }
+        }
+        if count == 0 {
+            self.status = "No matching pixels changed".into();
+        } else {
+            self.remember();
+            self.doc = next;
+            self.status = format!("Replaced color in {count} pixels");
+        }
+    }
+
+    fn replace_color_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut request) = self.replace_color else {
+            return;
+        };
+        let mut apply = false;
+        let close = fluent::modal_dialog(ctx, "Replace Color", |ui| {
+            for (label, color) in [
+                ("Source color", &mut request.source),
+                ("Replacement color", &mut request.replacement),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.color_edit_button_srgba_unmultiplied(color)
+                        .on_hover_text(label);
+                    ui.label(label);
+                });
+            }
+            ui.label("Scope");
+            ui.radio_value(&mut request.all_cels, false, "Active layer and frame");
+            ui.radio_value(
+                &mut request.all_cels,
+                true,
+                "All unlocked image layers and frames",
+            );
+            ui.add_enabled_ui(self.selection.is_some(), |ui| {
+                ui.pc_checkbox(&mut request.selection_only, "Limit to selection");
+            });
+            let editable =
+                self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none();
+            if !request.all_cels && !editable {
+                ui.small("Choose an unlocked image layer or change the scope.");
+            }
+            ui.horizontal(|ui| {
+                apply = ui
+                    .add_enabled(
+                        request.source != request.replacement && (request.all_cels || editable),
+                        egui::Button::new("Replace"),
+                    )
+                    .clicked();
+                apply || ui.pc_button("Cancel").clicked()
+            })
+            .inner
+        });
+        self.replace_color = (!close).then_some(request);
+        if apply {
+            self.apply_replace_color(request);
+        }
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
+        self.replace_color_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let title = match kind {
@@ -5052,6 +5162,70 @@ mod tests {
         );
         std::fs::remove_dir_all(directory).unwrap();
     }
+    #[test]
+    fn replace_color_selection_across_cels_is_one_undo_and_respects_locked_layers() {
+        let mut a = app();
+        a.doc = Document::new(3, 1);
+        a.doc.add_frame(0, false);
+        a.doc.add_layer();
+        a.doc.add_layer();
+        let source = [12, 34, 56, 255];
+        let replacement = [89, 1, 23, 128];
+        for layer in 0..3 {
+            for frame in 0..2 {
+                for x in 0..3 {
+                    a.doc.set_pixel(layer, frame, x, source);
+                }
+            }
+        }
+        a.doc.layers[2].locked = true;
+        a.selection = Some((0, 0, 2, 0));
+        a.studio.mask = Some(vec![true, false, true]);
+        let before = a.doc.clone();
+        a.apply_replace_color(ReplaceColor {
+            source,
+            replacement,
+            all_cels: true,
+            selection_only: true,
+        });
+        for layer in 0..2 {
+            for frame in 0..2 {
+                assert_eq!(
+                    a.doc.layers[layer].cels[frame].to_vec(),
+                    vec![replacement, source, replacement]
+                );
+            }
+        }
+        assert_eq!(a.doc.layers[2], before.layers[2]);
+        assert_eq!(a.undo.len(), 1);
+        a.undo();
+        assert_eq!(a.doc, before);
+    }
+
+    #[test]
+    fn replace_color_active_cel_leaves_linked_other_frames_and_other_layers_intact() {
+        let mut a = app();
+        a.doc = Document::new(2, 1);
+        a.doc.add_frame(0, false);
+        a.doc.add_layer();
+        let source = [12, 34, 56, 255];
+        a.doc.set_pixel(0, 0, 0, source);
+        a.doc.set_pixel(1, 0, 0, source);
+        a.doc.link_cel(0, 1, 0).unwrap();
+        a.apply_replace_color(ReplaceColor {
+            source,
+            replacement: CLEAR,
+            all_cels: false,
+            selection_only: false,
+        });
+        assert_eq!(a.doc.layers[0].cels[0][0], CLEAR);
+        assert_eq!(a.doc.layers[0].cels[1][0], source);
+        assert_eq!(a.doc.layers[1].cels[0][0], source);
+        a.doc.validate().unwrap();
+        a.undo();
+        assert!(a.doc.layers[0].cel_meta[0].artwork_link.is_some());
+    }
+
     #[test]
     fn undo_redo_restores_pixels_and_structural_edits() {
         let mut a = app();

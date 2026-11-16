@@ -158,6 +158,22 @@ fn effects_respect_mask_and_keep_source_alpha() {
     assert_eq!(d.layers[0].cels[0][3], CLEAR);
 }
 #[test]
+fn outline_with_corners_fills_diagonals_inside_selection() {
+    let mut sides = Document::new(3, 3);
+    sides.set_pixel(0, 0, 4, [255, 0, 0, 128]);
+    let mut corners = sides.clone();
+    let outline = [0, 0, 0, 255];
+    let mut mask = vec![true; 9];
+    mask[8] = false;
+    spatial_effect(&mut sides, 0, 0, &mask, outline, None).unwrap();
+    spatial_outline(&mut corners, 0, 0, &mask, outline, true).unwrap();
+    assert_eq!(sides.layers[0].cels[0][0], CLEAR);
+    assert_eq!(corners.layers[0].cels[0][0], [0, 0, 0, 128]);
+    assert_eq!(corners.layers[0].cels[0][8], CLEAR);
+    assert_eq!(corners.layers[0].cels[0][4], [255, 0, 0, 128]);
+}
+
+#[test]
 fn godot_finite_repeats_and_unique_names() {
     let root =
         std::env::temp_dir().join(format!("pixelcraft-godot-expansion-{}", std::process::id()));

@@ -635,6 +635,49 @@ pub fn spatial_effect(
     color: Pixel,
     offset: Option<(i32, i32)>,
 ) -> Result<(), String> {
+    if let Some(shift) = offset {
+        spatial_neighbors(d, l, f, mask, color, &[shift])
+    } else {
+        spatial_outline(d, l, f, mask, color, false)
+    }
+}
+
+pub fn spatial_outline(
+    d: &mut Document,
+    l: usize,
+    f: usize,
+    mask: &[bool],
+    color: Pixel,
+    corners: bool,
+) -> Result<(), String> {
+    let shifts = [
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, -1),
+        (1, -1),
+        (-1, 1),
+        (1, 1),
+    ];
+    spatial_neighbors(
+        d,
+        l,
+        f,
+        mask,
+        color,
+        if corners { &shifts } else { &shifts[..4] },
+    )
+}
+
+fn spatial_neighbors(
+    d: &mut Document,
+    l: usize,
+    f: usize,
+    mask: &[bool],
+    color: Pixel,
+    shifts: &[(i32, i32)],
+) -> Result<(), String> {
     if l >= d.layers.len()
         || f >= d.durations.len()
         || !d.editable(l)
@@ -650,8 +693,7 @@ pub fn spatial_effect(
             continue;
         }
         let (x, y) = ((i % d.width) as i32, (i / d.width) as i32);
-        let shifts = offset.map_or_else(|| vec![(-1, 0), (1, 0), (0, -1), (0, 1)], |v| vec![v]);
-        for (dx, dy) in shifts {
+        for &(dx, dy) in shifts {
             if let Some(j) = d.index(x + dx, y + dy)
                 && mask[j]
             {

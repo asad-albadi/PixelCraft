@@ -28,6 +28,7 @@ pub(super) struct Studio {
     w: usize,
     h: usize,
     ramp_steps: usize,
+    outline_corners: bool,
     rotation_angle: f64,
     rotation_pivot: Option<[f64; 2]>,
     rotation_preview: bool,
@@ -62,6 +63,7 @@ impl Default for Studio {
             w: 16,
             h: 16,
             ramp_steps: 5,
+            outline_corners: false,
             rotation_angle: 0.,
             rotation_pivot: None,
             rotation_preview: false,
@@ -457,14 +459,26 @@ impl PixelCraft {
                 .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
                 .collect::<Vec<_>>();
             let mut next = self.doc.clone();
-            let offset = if kind == "Drop shadow" {
-                Some((self.studio.dx, self.studio.dy))
+            let result = if kind == "Drop shadow" {
+                workflows::spatial_effect(
+                    &mut next,
+                    self.layer,
+                    self.frame,
+                    &mask,
+                    self.fg,
+                    Some((self.studio.dx, self.studio.dy)),
+                )
             } else {
-                None
+                workflows::spatial_outline(
+                    &mut next,
+                    self.layer,
+                    self.frame,
+                    &mask,
+                    self.fg,
+                    self.studio.outline_corners,
+                )
             };
-            match workflows::spatial_effect(
-                &mut next, self.layer, self.frame, &mask, self.fg, offset,
-            ) {
+            match result {
                 Ok(()) => {
                     self.remember();
                     self.doc = next;
@@ -795,6 +809,7 @@ impl PixelCraft {
                             }
                         }
                     });
+                    ui.pc_checkbox(&mut self.studio.outline_corners, "Include diagonal neighbors in outline");
                     ui.small("Outline/shadow use the active color and selection. Shadow uses the movement X/Y offsets above.");
                     ui.separator();
                     ui.small(&self.studio.recovery_status);
