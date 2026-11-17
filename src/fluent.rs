@@ -1072,6 +1072,9 @@ impl PixelCraft {
         } else {
             self.brush_mode_ui(ui);
             self.drawing_ink_ui(ui);
+            if self.tool == Tool::Pencil {
+                self.brush_library_ui(ui);
+            }
         }
         ui.separator();
         toggle(ui, &mut self.studio.mirror_x, "Symmetry").on_hover_text(

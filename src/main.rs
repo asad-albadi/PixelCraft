@@ -7204,9 +7204,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             )
         {
             let (x, y) = self.snapped_canvas_point((x, y), repeats);
-            let size = pixel_size * self.brush as f32;
-            let p = board.min
-                + Vec2::new((x - self.brush / 2) as f32, (y - self.brush / 2) as f32) * pixel_size;
+            let (width, height) = self
+                .active_image_brush_size()
+                .unwrap_or((self.brush, self.brush));
+            let size = pixel_size * Vec2::new(width as f32, height as f32);
+            let p =
+                board.min + Vec2::new((x - width / 2) as f32, (y - height / 2) as f32) * pixel_size;
             painter.rect_stroke(
                 Rect::from_min_size(p, size),
                 0,

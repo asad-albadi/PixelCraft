@@ -115,7 +115,7 @@ pub fn matching_by_on_axes<T: Copy>(
     }
     out
 }
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub enum BrushMode {
     #[default]
     Normal,
@@ -235,6 +235,123 @@ pub struct BrushOptions {
     pub stamp: Option<(usize, usize, Vec<Pixel>)>,
     pub mask: Option<Vec<bool>>,
 }
+
+pub struct ImageBrushDab<'a> {
+    pub size: (usize, usize),
+    pub pixels: &'a [Pixel],
+    pub pattern_origin: Option<(i32, i32)>,
+}
+
+pub fn paint_image_brush_using(
+    doc: &mut Document,
+    (layer, frame, axes): (usize, usize, WrapAxes),
+    point: (i32, i32),
+    stamp: ImageBrushDab<'_>,
+    mask: Option<&[bool]>,
+    mut apply: impl FnMut(&mut Document, usize, Pixel),
+) {
+    let (width, height) = stamp.size;
+    if !doc.editable(layer)
+        || doc.layers[layer].tileset.is_some()
+        || frame >= doc.durations.len()
+        || width == 0
+        || height == 0
+        || width > MAX_DIMENSION
+        || height > MAX_DIMENSION
+        || width.checked_mul(height) != Some(stamp.pixels.len())
+    {
+        return;
+    }
+    let left = point.0.saturating_sub((width / 2) as i32);
+    let top = point.1.saturating_sub((height / 2) as i32);
+    let span = |origin: i32, brush: usize, canvas: usize, wraps: bool| {
+        if wraps {
+            0..brush
+        } else {
+            let start = (-i64::from(origin)).clamp(0, brush as i64) as usize;
+            let end = (canvas as i64 - i64::from(origin)).clamp(0, brush as i64) as usize;
+            start..end
+        }
+    };
+    let columns = span(left, width, doc.width, axes.horizontal);
+    let rows = span(top, height, doc.height, axes.vertical);
+    for y in rows {
+        for x in columns.clone() {
+            let Some(index) = doc.position_on_axes(
+                left.saturating_add(x as i32),
+                top.saturating_add(y as i32),
+                axes,
+            ) else {
+                continue;
+            };
+            if mask.is_some_and(|mask| mask.get(index) != Some(&true)) {
+                continue;
+            }
+            let (sx, sy) = stamp.pattern_origin.map_or((x, y), |(px, py)| {
+                let dx = (index % doc.width) as i64 - i64::from(px);
+                let dy = (index / doc.width) as i64 - i64::from(py);
+                (
+                    dx.rem_euclid(width as i64) as usize,
+                    dy.rem_euclid(height as i64) as usize,
+                )
+            });
+            apply(doc, index, stamp.pixels[sy * width + sx]);
+        }
+    }
+}
+
+/// Resolve the next shade and its exact palette slot when it has one.
+pub fn shading_color(
+    doc: &Document,
+    (layer, frame): (usize, usize),
+    index: usize,
+    reverse: bool,
+    ramp: Option<&[Pixel]>,
+) -> Option<(Pixel, Option<usize>)> {
+    let old = doc.layers[layer].cels[frame][index];
+    if old[3] == 0 {
+        return None;
+    }
+    let step = |i: usize, len: usize| {
+        if reverse {
+            i.saturating_sub(1)
+        } else {
+            (i + 1).min(len - 1)
+        }
+    };
+    let indexed = doc.color_mode == ColorMode::Indexed;
+    if let Some(ramp) = ramp {
+        let i = ramp.iter().position(|&pixel| pixel == old)?;
+        let color = ramp[step(i, ramp.len())];
+        return if indexed {
+            let slot = doc
+                .palette_for(frame)
+                .iter()
+                .enumerate()
+                .position(|(slot, &pixel)| {
+                    pixel == color
+                        && (doc.layers[layer].background || slot != doc.transparent_index)
+                })?;
+            Some((color, Some(slot)))
+        } else {
+            Some((color, None))
+        };
+    }
+    if indexed {
+        let palette = doc.editing_palette(layer, frame);
+        let slot = doc.layers[layer].cel_meta[frame]
+            .indices
+            .as_ref()
+            .map(|slots| usize::from(slots[index]))
+            .filter(|&slot| slot < palette.len())
+            .unwrap_or_else(|| nearest(old, &palette));
+        let next = step(slot, palette.len());
+        Some((palette[next], Some(next)))
+    } else {
+        let palette = doc.palette_for(frame);
+        Some((palette[step(nearest(old, palette), palette.len())], None))
+    }
+}
 pub fn paint_brush(
     d: &mut Document,
     l: usize,
@@ -301,26 +418,27 @@ pub fn paint_brush_using(
     if !d.editable(l) || d.layers[l].tileset.is_some() {
         return;
     }
-    let mut points = Vec::new();
     if o.mode == BrushMode::Selection {
         if let Some((w, h, pixels)) = &o.stamp {
-            for y in 0..*h {
-                for x in 0..*w {
-                    points.push((
-                        p.0 + x as i32 - (*w / 2) as i32,
-                        p.1 + y as i32 - (*h / 2) as i32,
-                        pixels[y * w + x],
-                    ));
-                }
-            }
+            paint_image_brush_using(
+                d,
+                (l, f, axes),
+                p,
+                ImageBrushDab {
+                    size: (*w, *h),
+                    pixels,
+                    pattern_origin: None,
+                },
+                o.mask.as_deref(),
+                apply,
+            );
         }
-    } else {
-        points.extend(
-            d.brush_shape
-                .offsets(size)
-                .map(|(x, y)| (p.0 + x, p.1 + y, color)),
-        );
+        return;
     }
+    let points = d
+        .brush_shape
+        .offsets(size)
+        .map(|(x, y)| (p.0 + x, p.1 + y, color));
     let mut shaded = std::collections::HashSet::new();
     for (x, y, mut c) in points {
         let Some(i) = d.position_on_axes(x, y, axes) else {
@@ -335,35 +453,13 @@ pub fn paint_brush_using(
                 if !shaded.insert(i) {
                     continue;
                 }
-                let old = d.layers[l].cels[f][i];
-                if old[3] == 0 {
+                let Some((color, slot)) = shading_color(d, (l, f), i, o.reverse, None) else {
                     continue;
-                }
-                let palette = if d.color_mode == ColorMode::Indexed {
-                    d.editing_palette(l, f)
-                } else {
-                    d.palette_for(f).to_vec()
                 };
-                let n = if d.color_mode == ColorMode::Indexed {
-                    d.layers[l].cel_meta[f]
-                        .indices
-                        .as_ref()
-                        .and_then(|indices| indices.get(i))
-                        .map(|&n| n as usize)
-                        .filter(|&n| n < palette.len())
-                        .unwrap_or_else(|| nearest(old, &palette))
-                } else {
-                    nearest(old, &palette)
-                };
-                let n = if o.reverse {
-                    n.saturating_sub(1)
-                } else {
-                    (n + 1).min(palette.len() - 1)
-                };
-                c = palette[n];
-                if d.color_mode == ColorMode::Indexed {
+                c = color;
+                if let Some(slot) = slot {
                     // Keep the destination index even when its color is duplicated.
-                    let drawing_index = d.drawing_index.replace(n);
+                    let drawing_index = d.drawing_index.replace(slot);
                     d.set_pixel(l, f, i, c);
                     d.drawing_index = drawing_index;
                     continue;
@@ -374,9 +470,7 @@ pub fn paint_brush_using(
             }
             _ => {}
         }
-        if o.mode != BrushMode::Selection {
-            c = d.snapped_color(f, c);
-        }
+        c = d.snapped_color(f, c);
         apply(d, i, c);
     }
 }

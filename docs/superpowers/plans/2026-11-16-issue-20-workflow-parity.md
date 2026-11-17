@@ -224,6 +224,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 6 ink checkpoint. Pencil, raster fill, and raster shape tools can independently remember Default, Copy Color, Alpha Compositing, or Lock Alpha. Pencil blends from the start of the stroke so overlapping dabs do not build opacity. Lock Alpha retains pixel coverage and only chooses indexed swatches with the original alpha. Lua exposes the same Lock Alpha math and indexed behavior for raster strokes. Formatting, strict Clippy, and 607 Windows all-target tests passed. Saved brush and shading presets, image-brush alignment, and stabilization and dynamics remain open.
 
+- Item 6 brush library checkpoint. Pencil can save and reload named brushes with size, shape, ink, mode, image pixels, alignment, and shading settings. Named ramps retain the saved color order across palette changes. Image brushes can stamp each dab or hold their pattern phase at the capture origin or at the first dab of the stroke. The painting path uses borrowed stamp pixels and tests selection membership at the touched pixels. Windows tests cover restarting from saved presets, exact ramp order, one shade step per stroke, and phase across overlapping dabs. Formatting, strict Clippy, and 609 Windows all-target tests passed. Stabilization and dynamics remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

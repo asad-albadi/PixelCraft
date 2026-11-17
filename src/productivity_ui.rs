@@ -6,6 +6,16 @@ use pixelcraft::{
     workflows::SheetOptions,
 };
 use serde::{Deserialize, Serialize};
+mod brush_library;
+use brush_library::BrushLibrary;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum ImageBrushAlignment {
+    #[default]
+    Stamp,
+    Source,
+    Stroke,
+}
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 enum EyedropperSource {
     #[default]
@@ -273,12 +283,15 @@ pub(super) struct PowerTools {
     pub mode: BrushMode,
     pub reverse: bool,
     pub stamp: Option<(usize, usize, Vec<Pixel>)>,
+    image_brush_alignment: ImageBrushAlignment,
+    image_brush_origin: (i32, i32),
     pub contiguous: bool,
     pub tolerance: u8,
     pub(super) fill_tolerance: u8,
     pub(super) fill_global: bool,
     pub selection_op: SelectionOp,
     preferences: Preferences,
+    brush_library: BrushLibrary,
     grid: GridImportOptions,
     grid_preview: Option<CachedGridPreview>,
     grid_source: Option<GridSource>,
@@ -319,12 +332,15 @@ impl Default for PowerTools {
             mode: BrushMode::Normal,
             reverse: false,
             stamp: None,
+            image_brush_alignment: ImageBrushAlignment::Stamp,
+            image_brush_origin: (0, 0),
             contiguous: true,
             tolerance: 0,
             fill_tolerance: 0,
             fill_global: false,
             selection_op: SelectionOp::Replace,
             preferences,
+            brush_library: BrushLibrary::read(&brush_library::path()).unwrap_or_default(),
             grid: GridImportOptions::default(),
             grid_preview: None,
             grid_source: None,
@@ -1297,11 +1313,23 @@ impl PixelCraft {
     }
     pub(super) fn power_paint(&mut self, p: (i32, i32), color: Pixel, size: i32) {
         let axes = self.drawing_axes();
-        let mask = self.selection.map(|_| {
-            (0..self.doc.width * self.doc.height)
-                .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
-                .collect::<Vec<_>>()
-        });
+        let [left, top, width, height] = self.selection_bounds();
+        let stride = self.doc.width;
+        let mask = self.studio.mask.as_deref();
+        let polygon = &self.studio.polygon;
+        let has_selection = self.selection.is_some();
+        let allows = |index| {
+            if !has_selection {
+                return true;
+            }
+            if let Some(mask) = mask {
+                return mask.get(index) == Some(&true);
+            }
+            let (x, y) = ((index % stride) as i32, (index / stride) as i32);
+            (left..left + width).contains(&x)
+                && (top..top + height).contains(&y)
+                && (polygon.is_empty() || pixelcraft::workflows::inside_polygon(polygon, x, y))
+        };
         let mode = if self.tool == Tool::Eraser {
             BrushMode::Normal
         } else {
@@ -1311,44 +1339,15 @@ impl PixelCraft {
             mode,
             alternate: self.alternate_stroke_color(),
             reverse: self.power.reverse,
-            stamp: self.power.stamp.clone(),
-            mask,
+            stamp: None,
+            mask: None,
         };
         if mode == BrushMode::Shade {
-            let n = self.doc.width * self.doc.height;
-            let mut allowed = o.mask.take().unwrap_or_else(|| vec![true; n]);
-            for &i in &self.power.shade_seen {
-                if let Some(hit) = allowed.get_mut(i) {
-                    *hit = false;
-                }
-            }
-            o.mask = Some(allowed);
-            let before = self.doc.layers[self.layer].cels[self.frame].clone();
-            paint_brush_on_axes(
-                &mut self.doc,
-                (self.layer, self.frame),
-                p,
-                color,
-                size,
-                &o,
-                axes,
-            );
-            for (i, (a, b)) in before
-                .iter()
-                .zip(self.doc.layers[self.layer].cels[self.frame].iter())
-                .enumerate()
-            {
-                if a != b {
-                    self.power.shade_seen.insert(i);
-                }
-            }
-        } else {
-            let ink = self.tool_ink();
+            o.mode = BrushMode::Normal;
             let target = (self.layer, self.frame);
-            let original = self
-                .stroke_base
-                .as_ref()
-                .map(|doc| &doc.layers[target.0].cels[target.1]);
+            let reverse = self.power.reverse;
+            let ramp = self.power.brush_library.active_ramp();
+            let seen = &mut self.power.shade_seen;
             paint_brush_using(
                 &mut self.doc,
                 (target.0, target.1, axes),
@@ -1356,13 +1355,80 @@ impl PixelCraft {
                 color,
                 size,
                 &o,
-                |doc, index, source| {
-                    let old = original.map_or(doc.layers[target.0].cels[target.1][index], |base| {
-                        base[index]
-                    });
-                    ink.draw(doc, target, index, old, source);
+                |doc, index, _| {
+                    if allows(index)
+                        && seen.insert(index)
+                        && let Some((value, slot)) =
+                            shading_color(doc, target, index, reverse, ramp)
+                    {
+                        let previous = doc.drawing_index;
+                        doc.drawing_index = slot;
+                        doc.set_pixel(target.0, target.1, index, value);
+                        doc.drawing_index = previous;
+                    }
                 },
             );
+        } else {
+            let ink = self.tool_ink();
+            let target = (self.layer, self.frame);
+            let original = self
+                .stroke_base
+                .as_ref()
+                .map(|doc| &doc.layers[target.0].cels[target.1]);
+            let apply = |doc: &mut Document, index, source| {
+                if !allows(index) {
+                    return;
+                }
+                let old = original.map_or(doc.layers[target.0].cels[target.1][index], |base| {
+                    base[index]
+                });
+                ink.draw(doc, target, index, old, source);
+            };
+            if mode == BrushMode::Selection {
+                if let Some((width, height, pixels)) = &self.power.stamp {
+                    let pattern_origin = match self.power.image_brush_alignment {
+                        ImageBrushAlignment::Stamp => None,
+                        ImageBrushAlignment::Source => Some(self.power.image_brush_origin),
+                        ImageBrushAlignment::Stroke => {
+                            let (x, y) = self.start.unwrap_or(p);
+                            Some((x - (*width / 2) as i32, y - (*height / 2) as i32))
+                        }
+                    };
+                    paint_image_brush_using(
+                        &mut self.doc,
+                        (target.0, target.1, axes),
+                        p,
+                        ImageBrushDab {
+                            size: (*width, *height),
+                            pixels,
+                            pattern_origin,
+                        },
+                        o.mask.as_deref(),
+                        apply,
+                    );
+                }
+            } else {
+                paint_brush_using(
+                    &mut self.doc,
+                    (target.0, target.1, axes),
+                    p,
+                    color,
+                    size,
+                    &o,
+                    apply,
+                );
+            }
+        }
+    }
+
+    pub(super) fn active_image_brush_size(&self) -> Option<(i32, i32)> {
+        if self.tool == Tool::Pencil && self.power.mode == BrushMode::Selection {
+            self.power
+                .stamp
+                .as_ref()
+                .map(|&(width, height, _)| (width as i32, height as i32))
+        } else {
+            None
         }
     }
 
@@ -1525,6 +1591,10 @@ impl PixelCraft {
         self.copy();
         if let Some(c) = &self.clipboard {
             self.power.stamp = Some((c.w, c.h, c.pixels.clone()));
+            self.power.image_brush_origin = c
+                .selection
+                .as_ref()
+                .map_or((0, 0), |mask| (mask.origin[0], mask.origin[1]));
             self.power.mode = BrushMode::Selection;
             self.selection = None;
             self.studio.mask = None;
@@ -2360,6 +2430,28 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     ui.pc_selectable_value(&mut self.power.mode, mode, format!("{mode:?}"));
                 }
             });
+        if self.active_image_brush_size().is_some() {
+            let label = |alignment| match alignment {
+                ImageBrushAlignment::Stamp => "Stamp",
+                ImageBrushAlignment::Source => "Source aligned",
+                ImageBrushAlignment::Stroke => "Stroke aligned",
+            };
+            egui::ComboBox::from_id_salt(ui.id().with("image-brush-alignment"))
+                .selected_text(label(self.power.image_brush_alignment))
+                .show_ui(ui, |ui| {
+                    for alignment in [
+                        ImageBrushAlignment::Stamp,
+                        ImageBrushAlignment::Source,
+                        ImageBrushAlignment::Stroke,
+                    ] {
+                        ui.pc_selectable_value(
+                            &mut self.power.image_brush_alignment,
+                            alignment,
+                            label(alignment),
+                        );
+                    }
+                });
+        }
     }
     pub(super) fn gradient_controls(&mut self, ui: &mut egui::Ui) {
         let options = &mut self.power.preferences.gradient;
@@ -4232,5 +4324,102 @@ mod smarter_fill_tests {
         assert_eq!(app.doc.layers[1].tile_cels[0], vec![flipped_tile; 4]);
         assert_eq!(app.doc.tilesets[0].tiles[0][0], [10, 20, 30, 255]);
         assert_eq!(app.doc.tilesets[0].tiles[1][0], [40, 50, 60, 255]);
+    }
+}
+
+#[cfg(test)]
+mod brush_library_tests {
+    use super::*;
+
+    #[test]
+    fn image_brush_phase_follows_stamp_source_or_stroke() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-image-brush.png")));
+        let [a, b, c] = [[232, 45, 18, 255], [30, 140, 81, 255], [44, 110, 237, 255]];
+        for (alignment, expected) in [
+            (ImageBrushAlignment::Stamp, [a, a, b, c]),
+            (ImageBrushAlignment::Source, [b, c, a, b]),
+            (ImageBrushAlignment::Stroke, [a, b, c, a]),
+        ] {
+            app.replace(Document::new(9, 3), None);
+            app.power.mode = BrushMode::Selection;
+            app.power.stamp = Some((3, 1, vec![a, b, c]));
+            app.power.image_brush_alignment = alignment;
+            app.power.image_brush_origin = (0, 1);
+            app.start = Some((5, 1));
+            app.power_paint((5, 1), CLEAR, 1);
+            app.power_paint((6, 1), CLEAR, 1);
+            assert_eq!(
+                app.doc.layers[0].cels[0]
+                    .iter()
+                    .skip(13)
+                    .take(4)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn brush_presets_and_named_ramps_round_trip_and_restore_painting() {
+        let ctx = egui::Context::default();
+        let new_app =
+            || PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-brush-presets.png")));
+        let (low, mid, high, unrelated) = (
+            [32, 40, 50, 255],
+            [65, 88, 95, 255],
+            [146, 175, 180, 255],
+            [250, 15, 40, 255],
+        );
+        let mut app = new_app();
+        app.replace(Document::new(8, 3), None);
+        app.brush = 7;
+        app.doc.brush_shape = BrushShape::Diamond;
+        app.power.mode = BrushMode::Selection;
+        app.power.stamp = Some((2, 1, vec![high, CLEAR]));
+        app.power.image_brush_alignment = ImageBrushAlignment::Source;
+        app.power.image_brush_origin = (0, 0);
+        app.set_tool_ink(PaintInk::CopyColor);
+        app.capture_brush_preset("Leaf").unwrap();
+        app.doc.palette = vec![unrelated, low, mid, high];
+        app.capture_shading_ramp("Water", 1, 3).unwrap();
+
+        let directory =
+            std::env::temp_dir().join(format!("pixelcraft-brush-library-{}", std::process::id()));
+        let path = directory.join("brush-library.json");
+        app.power.brush_library.write(&path).unwrap();
+        let mut next = new_app();
+        next.replace(Document::new(8, 3), None);
+        next.power.brush_library = BrushLibrary::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&directory).unwrap();
+
+        next.apply_brush_preset("Leaf").unwrap();
+        assert_eq!(next.brush, 7);
+        assert_eq!(next.doc.brush_shape, BrushShape::Diamond);
+        assert_eq!(
+            next.power.image_brush_alignment,
+            ImageBrushAlignment::Source
+        );
+        assert_eq!(next.tool_ink(), PaintInk::CopyColor);
+        next.doc.set_pixel(0, 0, 1, low);
+        next.power_paint((1, 0), unrelated, next.brush);
+        assert_eq!(next.doc.layers[0].cels[0][0], high);
+        assert_eq!(next.doc.layers[0].cels[0][1], CLEAR);
+
+        next.doc.palette = vec![high, unrelated, low, mid];
+        next.select_shading_ramp(Some("Water")).unwrap();
+        next.doc.set_pixel(0, 0, 2, low);
+        next.doc.set_pixel(0, 0, 3, unrelated);
+        next.power_paint((2, 0), unrelated, 1);
+        next.power_paint((2, 0), unrelated, 1);
+        next.power_paint((3, 0), unrelated, 1);
+        assert_eq!(next.doc.layers[0].cels[0][2], mid);
+        assert_eq!(next.doc.layers[0].cels[0][3], unrelated);
+        next.power.shade_seen.clear();
+        next.power.reverse = true;
+        next.power_paint((2, 0), unrelated, 1);
+        assert_eq!(next.doc.layers[0].cels[0][2], low);
     }
 }
