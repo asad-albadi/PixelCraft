@@ -635,7 +635,20 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                 dword(&mut c, z.len() as u32);
                 c.extend(z);
                 chunks.push(chunk(0x2023, c));
-                append_metadata(&mut chunks, d, f, &format!("tileset:{i}"));
+                let owner = format!("tileset:{i}");
+                let (user_data, other): (Vec<_>, Vec<_>) = d
+                    .metadata
+                    .iter()
+                    .filter(|m| m.frame == f && m.owner == owner)
+                    .partition(|m| m.kind == 0x2020);
+                if !user_data.is_empty() {
+                    // A tileset user-data chunk is followed by a chunk for every
+                    // tile including the empty tile, in tile ID order.
+                    let padding = (t.tiles.len() + 2).saturating_sub(user_data.len());
+                    chunks.extend(user_data.into_iter().map(|m| chunk(m.kind, m.data.clone())));
+                    chunks.extend((0..padding).map(|_| chunk(0x2020, vec![0; 4])));
+                }
+                chunks.extend(other.into_iter().map(|m| chunk(m.kind, m.data.clone())));
             }
             for &(li, level) in &order {
                 let l = &d.layers[li];

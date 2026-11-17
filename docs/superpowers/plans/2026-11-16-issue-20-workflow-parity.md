@@ -160,6 +160,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 animation tag properties checkpoint. Lua can enumerate tags and edit typed default and named properties. Duplicate names and renames preserve tag identity within a document state. Tag deletion in the editor, automation, and Lua removes the corresponding positional ASE user-data chunk. Frame deletion does the same for affected tags. Tests cover empty preceding tag data, native and ASE persistence, baked ASE export, and reading tag properties from the upstream fixture. Tileset and tile properties and broader object identity remain open.
 
+- Item 45 tileset and tile properties checkpoint. Typed Lua maps support document tilesets and the empty and nonempty tiles they contain. Properties follow Lua tile insertion and deletion and native tile movement, duplication, and deletion. Native and ASE round-trip coverage includes upstream typed tileset data and a complete positional ASE tile metadata sequence. Detached clipboard tileset properties and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

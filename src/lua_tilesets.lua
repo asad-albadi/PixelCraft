@@ -14,6 +14,10 @@ do
   error('Tileset is deleted or belongs to another document state')
  end
 
+ local function propertySlot(setIndex,ordinal)
+  return 'tileset:'..(setIndex-1),0,ordinal
+ end
+
  local function tilesetObject(handle)
   local set=assert(tilesetObjects[handle],'Invalid tileset')
   if detached[set] then return set end
@@ -114,6 +118,12 @@ do
   if not detached[set] then bindSpriteHandle(handle,sprite) end
   tileObjects[handle]={set=set,pixels=pixels}
   tileHandles[key]=handle
+  if not detached[set] then
+   bindUserProperties(handle,sprite,function()
+    local current,tileIndex=tileObject(handle)
+    return propertySlot(setIndex(current),tileIndex+2)
+   end)
+  end
   return handle
  end
 
@@ -161,6 +171,11 @@ do
   if not detached[set] then bindSpriteHandle(handle,sprite) end
   tilesetObjects[handle]=set
   tilesetHandles[set]=handle
+  if not detached[set] then
+   bindUserProperties(handle,sprite,function()
+    return propertySlot(setIndex(set),1)
+   end)
+  end
   return handle
  end
 
@@ -209,14 +224,14 @@ do
   local owner='tileset:'..(setIndex-1)
   local chunks={}
   for i,metadata in ipairs(doc.metadata)do
-   if metadata.owner==owner and metadata.kind==0x2020 then chunks[#chunks+1]=i end
+   if metadata.frame==0 and metadata.owner==owner and metadata.kind==0x2020 then
+    chunks[#chunks+1]=i
+   end
   end
   -- The tileset record and empty tile occupy the first two entries.
-  if #chunks<2 then return end
   local position=tileIndex+2
   if insert then
    local before=chunks[position]
-   if not before and position==#chunks+1 then before=chunks[#chunks]+1 end
    if before then
     table.insert(doc.metadata,before,{frame=0,kind=0x2020,owner=owner,data={0,0,0,0}})
    end

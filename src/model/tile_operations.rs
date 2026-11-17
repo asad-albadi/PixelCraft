@@ -1,4 +1,4 @@
-use super::{CLEAR, Document, MAX_PIXELS, Pixel, TILE_ID_MASK, Tileset};
+use super::{CLEAR, Document, MAX_PIXELS, MetadataChunk, Pixel, TILE_ID_MASK, Tileset};
 
 #[derive(Clone, Copy, Debug)]
 pub enum TileDefinitionEdit {
@@ -106,10 +106,12 @@ impl Document {
                     return Err("Duplicating this tile exceeds the tileset size limit".into());
                 }
                 set.tiles.push(set.tiles[from].clone());
+                self.edit_tile_user_data(tileset, id, count, edit);
                 Ok(count + 1)
             }
             TileDefinitionEdit::Delete => {
                 set.tiles.remove(from);
+                self.edit_tile_user_data(tileset, id, count, edit);
                 self.remap_tiles(tileset, |current| match current.cmp(&id) {
                     std::cmp::Ordering::Less => current,
                     std::cmp::Ordering::Equal => 0,
@@ -124,6 +126,7 @@ impl Document {
                 if to != id {
                     let tile = set.tiles.remove(from);
                     set.tiles.insert((to - 1) as usize, tile);
+                    self.edit_tile_user_data(tileset, id, count, edit);
                     self.remap_tiles(tileset, |current| {
                         if current == id {
                             to
@@ -137,6 +140,84 @@ impl Document {
                     });
                 }
                 Ok(to)
+            }
+        }
+    }
+
+    fn edit_tile_user_data(
+        &mut self,
+        tileset: usize,
+        id: u32,
+        tile_count: u32,
+        edit: TileDefinitionEdit,
+    ) {
+        let owner = format!("tileset:{tileset}");
+        // The first two records store the tileset and the empty tile.
+        let mut from = id as usize + 1;
+        let mut records: Vec<_> = self
+            .metadata
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| chunk.frame == 0 && chunk.kind == 0x2020 && chunk.owner == owner)
+            .take(tile_count as usize + 2)
+            .map(|(index, _)| index)
+            .collect();
+        if matches!(edit, TileDefinitionEdit::Delete) {
+            if let Some(&index) = records.get(from) {
+                self.metadata.remove(index);
+            }
+            return;
+        }
+        let to = match edit {
+            TileDefinitionEdit::Duplicate => tile_count as usize + 2,
+            TileDefinitionEdit::MoveTo(to) => to as usize + 1,
+            TileDefinitionEdit::Delete => unreachable!(),
+        };
+        let mut duplicate = None;
+        if matches!(edit, TileDefinitionEdit::Duplicate) {
+            let Some(&index) = records.get(from) else {
+                return;
+            };
+            if self.metadata[index].data == [0; 4] {
+                return;
+            }
+            duplicate = Some(self.metadata[index].data.clone());
+        } else if from.min(to) >= records.len() {
+            return;
+        }
+
+        // Moving an unrecorded tile toward earlier IDs only shifts the
+        // last existing record by one. The intervening records are empty.
+        if matches!(edit, TileDefinitionEdit::MoveTo(_)) && to < from {
+            from = from.min(records.len());
+        }
+        let needed = from.max(to) + 1;
+        if needed > records.len() {
+            // Keep positional chunks contiguous and leave any unrelated metadata in place.
+            let start = records
+                .last()
+                .map_or(self.metadata.len(), |index| index + 1);
+            let missing = needed - records.len();
+            self.metadata.splice(
+                start..start,
+                (0..missing).map(|_| MetadataChunk {
+                    frame: 0,
+                    kind: 0x2020,
+                    data: vec![0; 4],
+                    owner: owner.clone(),
+                }),
+            );
+            records.extend(start..start + missing);
+        }
+        if let Some(data) = duplicate {
+            self.metadata[records[to]].data = data;
+        } else if from < to {
+            for position in from..to {
+                self.metadata.swap(records[position], records[position + 1]);
+            }
+        } else {
+            for position in (to..from).rev() {
+                self.metadata.swap(records[position], records[position + 1]);
             }
         }
     }

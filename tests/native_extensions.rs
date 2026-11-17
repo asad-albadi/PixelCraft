@@ -1688,3 +1688,108 @@ fn lua_tag_properties_keep_ase_chunk_order_and_follow_tag_deletion() {
     )
     .unwrap();
 }
+
+#[test]
+fn lua_tileset_and_tile_properties_follow_definition_edits_and_ase_chunk_order() {
+    use pixelcraft::model::TileDefinitionEdit;
+
+    let fixture = pixelcraft::formats::load(std::path::Path::new(
+        "tests/fixtures/file-tests-props.aseprite",
+    ))
+    .unwrap();
+    run_source(
+        &fixture,
+        r#"
+ local set=app.activeSprite.tilesets[1]
+ assert(set.properties.a=="i'm a tilemap")
+ assert(set.properties('ext').a=='text from extension')
+ assert(set:tile(0).properties.a==nil)
+ assert(set:tile(1).properties.a==320 and set:tile(2).properties.b==650)
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+
+    let mut output = run_source(
+        &Document::new(2, 1),
+        r#"
+ local sprite=app.activeSprite
+ local discarded=sprite:newTileset(Rectangle(0,0,1,1))
+ local set=sprite:newTileset(Rectangle(0,0,1,1),4)
+ set.name='Terrain'
+ set.properties.biome='forest'
+ set:tile(0).properties.empty=true
+ local stone=set:tile(1)
+ stone.properties.material='stone'
+ local soil=set:tile(2)
+ soil.properties('pc/test').density=1.5
+ local inserted=sprite:newTile(set,1)
+ assert(stone.index==2 and soil.index==3)
+ assert(soil.properties('pc/test').density==1.5)
+ assert(inserted.properties.material==nil)
+ sprite:deleteTile(inserted)
+ sprite:deleteTileset(discarded)
+ assert(sprite.tilesets[1]==set and stone.index==1)
+ assert(stone.properties.material=='stone')
+ assert(set:tile(0).properties.empty)
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    output
+        .edit_tile_definition(0, 2, TileDefinitionEdit::MoveTo(1))
+        .unwrap();
+    output
+        .edit_tile_definition(0, 2, TileDefinitionEdit::Duplicate)
+        .unwrap();
+    output
+        .edit_tile_definition(0, 2, TileDefinitionEdit::Delete)
+        .unwrap();
+    let readback = r#"
+ local set=app.activeSprite.tilesets[1]
+ assert(set.name=='Terrain' and set.properties.biome=='forest')
+ assert(set:tile(0).properties.empty)
+ assert(set:tile(1).properties('pc/test').density==1.5)
+ assert(set:tile(2).properties.material==nil)
+ assert(set:tile(3).properties.material=='stone')
+ "#;
+    run_source(&output, readback, 0, 0, None).unwrap();
+    let native = pixelcraft::formats::encode_project(&output).unwrap();
+    let native = pixelcraft::formats::decode_project(&native).unwrap();
+    run_source(&native, readback, 0, 0, None).unwrap();
+    let file = pixelcraft::formats::encode_ase(&output).unwrap();
+    let mut pos = 144;
+    let mut kinds = Vec::new();
+    for _ in 0..u16::from_le_bytes(file[134..136].try_into().unwrap()) {
+        let size = u32::from_le_bytes(file[pos..pos + 4].try_into().unwrap()) as usize;
+        kinds.push(u16::from_le_bytes(
+            file[pos + 4..pos + 6].try_into().unwrap(),
+        ));
+        pos += size;
+    }
+    let index = kinds.iter().position(|&kind| kind == 0x2023).unwrap();
+    assert_eq!(&kinds[index + 1..index + 6], &[0x2020; 5]);
+    let reopened = pixelcraft::formats::decode_ase(&file).unwrap();
+    run_source(&reopened, readback, 0, 0, None).unwrap();
+
+    let tileset_only = run_source(
+        &Document::new(1, 1),
+        "local set=app.activeSprite:newTileset(Rectangle(0,0,1,1),4); set.properties.ready=true",
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let file = pixelcraft::formats::encode_ase(&tileset_only).unwrap();
+    let reopened = pixelcraft::formats::decode_ase(&file).unwrap();
+    let chunk_count = reopened
+        .metadata
+        .iter()
+        .filter(|chunk| chunk.kind == 0x2020 && chunk.owner == "tileset:0")
+        .count();
+    assert_eq!(chunk_count, 5);
+}

@@ -119,7 +119,7 @@ do
   app.transaction(function()
    if previous then previous.data=response.data
    else
-    -- ASE stores one user-data chunk per tag, even for empty preceding tags.
+    -- Positional ASE user data needs placeholders for earlier tags or tiles.
     for _=count+1,ordinal-1 do
      table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data={0,0,0,0}})
     end
