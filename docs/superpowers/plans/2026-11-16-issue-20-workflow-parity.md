@@ -142,6 +142,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 text clipboard checkpoint. Lua can read and write Unicode text, check image and text availability, and clear clipboard contents. The desktop routes native text and clear through the same worker and per-run choice as images. Tests cover multiline Unicode across the editor bridge, headless isolation, text and image replacement, clearing, and timed-out text responses. Native desktop round-trip and rich clipboard fields remain pending.
 
+- Item 45 selection and palette clipboard checkpoint. Image content can include a detached selection mask and palette. GUI and Lua copy preserve the selected pixels and active frame palette. Native and headless paste skip masked-out pixels. The editor bridge tests palette and mask retention when a matching bitmap returns and removal when a different bitmap arrives. Actual desktop clipboard exchange remains unverified. The system clipboard carries bitmap and text data. Clipboard tilesets, native tool invocation, typed properties, and broader identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

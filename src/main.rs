@@ -161,11 +161,61 @@ struct ClipboardTarget {
     mask: Option<Vec<bool>>,
 }
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct ClipboardMask {
+    origin: [i32; 2],
+    selected: Vec<bool>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct Clipboard {
     w: usize,
     h: usize,
     pixels: Vec<Pixel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selection: Option<ClipboardMask>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    palette: Option<Vec<Pixel>>,
 }
+
+impl Clipboard {
+    fn raster(w: usize, h: usize, pixels: Vec<Pixel>) -> Self {
+        Self {
+            w,
+            h,
+            pixels,
+            selection: None,
+            palette: None,
+        }
+    }
+
+    fn visible_pixel(&self, index: usize) -> Pixel {
+        if self
+            .selection
+            .as_ref()
+            .is_none_or(|mask| mask.selected[index])
+        {
+            self.pixels[index]
+        } else {
+            CLEAR
+        }
+    }
+
+    fn native_pixels(&self) -> Vec<Pixel> {
+        (0..self.pixels.len())
+            .map(|index| self.visible_pixel(index))
+            .collect()
+    }
+
+    fn matches_native(&self, w: usize, h: usize, pixels: &[Pixel]) -> bool {
+        (w, h) == (self.w, self.h)
+            && pixels.len() == self.pixels.len()
+            && pixels
+                .iter()
+                .enumerate()
+                .all(|(i, pixel)| *pixel == self.visible_pixel(i))
+    }
+}
+
 #[derive(Clone, Default)]
 struct TimelineHeaders {
     anchor: Option<usize>,
@@ -2501,32 +2551,44 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let (x0, y0, x1, y1) = (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
         let w = (x1 - x0 + 1) as usize;
         let h = (y1 - y0 + 1) as usize;
-        let mut pixels = vec![];
+        let mut pixels = Vec::with_capacity(w * h);
+        let mut mask =
+            (self.selection.is_some() || self.studio.mask.is_some()).then(|| ClipboardMask {
+                origin: [x0, y0],
+                selected: Vec::with_capacity(w * h),
+            });
         for y in y0..=y1 {
             for x in x0..=x1 {
-                pixels.push(if self.selected(x, y) {
+                let selected = self.selected(x, y);
+                pixels.push(if selected {
                     self.doc
                         .index(x, y)
                         .map_or(CLEAR, |i| self.doc.layers[self.layer].cels[self.frame][i])
                 } else {
                     CLEAR
                 });
+                if let Some(mask) = &mut mask {
+                    mask.selected.push(selected);
+                }
             }
         }
         self.script_clipboard_text = None;
-        self.clipboard = Some(Clipboard {
-            w,
-            h,
-            pixels: pixels.clone(),
-        });
         self.status = "Copied pixels from the active layer".into();
         if self.shot.is_none() && !cfg!(test) {
-            let result = self.system_clipboard.copy(w, h, pixels);
+            let result = self.system_clipboard.copy(w, h, pixels.clone());
             if let Err(e) = result {
                 self.status = format!("Copied internally; system clipboard: {e}");
             }
         }
+        self.clipboard = Some(Clipboard {
+            w,
+            h,
+            pixels,
+            selection: mask,
+            palette: Some(self.doc.palette_for(self.frame).to_vec()),
+        });
     }
+
     fn paste(&mut self) {
         if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
             return;
@@ -2567,7 +2629,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         serde_json::json!({})
                     }
                     system_clipboard::Completion::Paste(Ok((w, h, pixels))) => {
-                        self.clipboard = Some(Clipboard { w, h, pixels });
+                        self.remember_native_image(w, h, pixels);
                         self.read_script_clipboard(false)
                     }
                     system_clipboard::Completion::Paste(Err(error)) => {
@@ -2602,7 +2664,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     match result {
                         Ok((w, h, pixels)) => {
                             self.script_clipboard_text = None;
-                            self.clipboard = Some(Clipboard { w, h, pixels });
+                            self.remember_native_image(w, h, pixels);
                             self.paste_internal();
                         }
                         Err(e) => {
@@ -2618,6 +2680,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
+    fn remember_native_image(&mut self, w: usize, h: usize, pixels: Vec<Pixel>) {
+        if !self
+            .clipboard
+            .as_ref()
+            .is_some_and(|previous| previous.matches_native(w, h, &pixels))
+        {
+            self.clipboard = Some(Clipboard::raster(w, h, pixels));
+        }
+    }
+
     fn script_clipboard_fallback(&self, error: String, text: bool) -> serde_json::Value {
         if error.contains("timed out") || error.contains("exceeds limits") {
             serde_json::json!({"error":error})
@@ -2692,7 +2764,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 let started = native
                     && self
                         .system_clipboard
-                        .copy(image.w, image.h, image.pixels.clone())
+                        .copy(image.w, image.h, image.native_pixels())
                         .is_ok();
                 self.clipboard = Some(image);
                 self.script_clipboard_text = None;
@@ -2731,6 +2803,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         {
             return Err("Invalid clipboard image or Lua clipboard pixel budget exceeded".into());
         }
+        if image.selection.as_ref().is_some_and(|mask| {
+            mask.selected.len() != image.pixels.len()
+                || mask.origin[0].checked_add(image.w as i32 - 1).is_none()
+                || mask.origin[1].checked_add(image.h as i32 - 1).is_none()
+        }) || image
+            .palette
+            .as_ref()
+            .is_some_and(|palette| palette.is_empty() || palette.len() > 256)
+        {
+            return Err("Invalid clipboard selection or palette".into());
+        }
         Ok(image)
     }
 
@@ -2747,7 +2830,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     origin.0.saturating_add(cx as i32),
                     origin.1.saturating_add(cy as i32),
                 ) {
-                    let p = clip.pixels[cy * clip.w + cx];
+                    let p = clip.visible_pixel(cy * clip.w + cx);
+                    if p[3] == 0 {
+                        continue;
+                    }
                     let color = over(doc.layers[layer].cels[frame][i], p, 255);
                     doc.set_pixel(layer, frame, i, color);
                 }
@@ -7941,13 +8027,12 @@ mod tests {
         let ctx = egui::Context::default();
         let mut editor = PixelCraft::with_context(&ctx, None);
         editor.replace(Document::new(4, 1), None);
-        editor.clipboard = Some(Clipboard {
-            w: 1,
-            h: 1,
-            pixels: vec![[3, 60, 90, 128]],
-        });
+        editor.doc.layers[0].cels[0].set(0, [3, 60, 90, 128]);
         editor.doc.layers[0].cels[0].set(1, [210, 60, 100, 255]);
         editor.doc.layers[0].cels[0].set(2, [10, 20, 30, 255]);
+        editor.selection = Some((0, 0, 2, 0));
+        editor.studio.mask = Some(vec![true, false, true, false]);
+        editor.copy();
         let path = std::env::temp_dir().join(format!(
             "pixelcraft-lua-clipboard-{}.lua",
             std::process::id()
@@ -7956,7 +8041,10 @@ mod tests {
             &path,
             r#"
  local sprite=app.activeSprite
- assert(app.clipboard.hasImage and app.clipboard.image.width==1)
+ local fromEditor=app.clipboard.content
+ assert(app.clipboard.hasImage and fromEditor.image.width==3)
+ assert(fromEditor.selection:contains(0,0) and fromEditor.selection:contains(2,0))
+ assert(not fromEditor.selection:contains(1,0) and #fromEditor.palette>1)
  assert(app.clipboard.image:getPixel(0,0)==app.pixelColor.rgba(3,60,90,128))
  local text='café 🌿'..string.char(10)..'second line'
  app.clipboard.text=text
@@ -7970,7 +8058,9 @@ mod tests {
  assert(app.clipboard.image.width==1)
  local im=Image(2,1,ColorMode.RGB)
  im:drawPixel(0,0,Color{r=80,g=110,b=140,a=128})
- app.clipboard.image=im
+ im:drawPixel(1,0,Color('#ff0000'))
+ app.clipboard.content={image=im,selection=Selection(Rectangle(10,20,1,1)),palette=Palette(2)}
+ assert(app.clipboard.content.selection:contains(10,20))
  app.command.Paste{position=Point(2,0)}
  "#,
         )
@@ -7998,6 +8088,24 @@ mod tests {
             [80, 110, 140, 128]
         );
         assert_eq!(editor.undo.len(), 1);
+        let native = editor.clipboard.as_ref().unwrap().native_pixels();
+        assert_eq!(native, vec![[80, 110, 140, 128], CLEAR]);
+        editor.remember_native_image(2, 1, native);
+        assert!(editor.clipboard.as_ref().unwrap().selection.is_some());
+        assert_eq!(
+            editor
+                .clipboard
+                .as_ref()
+                .unwrap()
+                .palette
+                .as_ref()
+                .unwrap()
+                .len(),
+            2
+        );
+        editor.remember_native_image(2, 1, vec![CLEAR; 2]);
+        assert!(editor.clipboard.as_ref().unwrap().selection.is_none());
+        assert!(editor.clipboard.as_ref().unwrap().palette.is_none());
         std::fs::remove_file(path).unwrap();
     }
 

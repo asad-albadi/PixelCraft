@@ -244,15 +244,57 @@ app.command.Clear=command(function()
   if spriteSelection.isEmpty or spriteSelection:contains(x+pos.x,y+pos.y) then im:drawPixel(x,y,color) end
  end end
 end)
+local function paletteColors(value)
+ assert(type(value)=='table' and type(value.getColor)=='function','Expected a palette')
+ assert(#value>=1 and #value<=256,'Palette must contain 1–256 colors')
+ local colors={}
+ for i=0,#value-1 do colors[i+1]=unpackColor(value:getColor(i)) end
+ return colors
+end
+local function detachedPalette(colors)
+ local methods={}
+ function methods:getColor(index)
+  return Color(assert(colors[index+1],'Palette index out of range'))
+ end
+ function methods:setColor(index,value)
+  assert(colors[index+1],'Palette index out of range')
+  colors[index+1]=unpackColor(value)
+ end
+ function methods:resize(size)
+  assert(math.type(size)=='integer' and size>=1 and size<=256,'Palette must contain 1–256 colors')
+  while #colors>size do table.remove(colors) end
+  while #colors<size do colors[#colors+1]={0,0,0,255} end
+ end
+ return setmetatable({},{__index=methods,__len=function()return #colors end})
+end
+function Palette(value)
+ if type(value)=='table' then return detachedPalette(paletteColors(value)) end
+ local object=detachedPalette({})
+ object:resize(value or 256)
+ return object
+end
+
 do
  local localClipboard={}
  local function read(format)
   if editorTabs then return host{op='clipboardRead',format=format}[format] end
   return localClipboard[format]
  end
- local function readImage()
-  local data=read('image')
-  if data then return image(copy(data.pixels),data.w,data.h,ColorMode.RGB,0) end
+ local function clipboardImage(data)
+  return data and image(copy(data.pixels),data.w,data.h,ColorMode.RGB,0)
+ end
+ local function clipboardSelection(data)
+  local mask=data.selection
+  if not mask then return nil end
+  local points={}
+  for i,selected in ipairs(mask.selected)do
+   if selected then
+    local x=mask.origin[1]+(i-1)%data.w
+    local y=mask.origin[2]+math.floor((i-1)/data.w)
+    points[x..','..y]=Point(x,y)
+   end
+  end
+  return selection(points)
  end
  local function write(format,data)
   if editorTabs then
@@ -262,10 +304,20 @@ do
    if format~='clear' then localClipboard[format]=copy(data) end
   end
  end
- local function writeImage(im)
+ local function writeImage(im,mask,palette)
   assert(type(im)=='table' and im._pixels and im.width and im.height,'Expected a clipboard image')
   assert(im.width*im.height<=1000000,'Clipboard image exceeds the Lua pixel budget')
-  write('image',{w=im.width,h=im.height,pixels=im._pixels})
+  local region
+  if mask~=nil then
+   assert(type(mask)=='table' and mask._mask,'Expected a clipboard selection')
+   local bounds=mask.bounds
+   assert(bounds.width<=im.width and bounds.height<=im.height,'Clipboard selection exceeds the image')
+   region={origin={bounds.x,bounds.y},selected={}}
+   for y=0,im.height-1 do for x=0,im.width-1 do
+    region.selected[y*im.width+x+1]=mask:contains(x+bounds.x,y+bounds.y)
+   end end
+  end
+  write('image',{w=im.width,h=im.height,pixels=im._pixels,selection=region,palette=palette})
  end
  local function writeText(text)
   assert(type(text)=='string','Expected clipboard text')
@@ -276,14 +328,17 @@ do
  local function clear() write('clear') end
  rawset(app,'clipboard',setmetatable({},{
   __index=function(_,key)
-   if key=='image' then return readImage() end
+   if key=='image' then return clipboardImage(read('image')) end
    if key=='text' then return read('text') end
    if key=='hasImage' then return read('image')~=nil end
    if key=='hasText' then return read('text')~=nil end
    if key=='clear' then return clear end
    if key=='content' then
-    local im=readImage()
-    if im then return {image=im} end
+    local data=read('image')
+    if data then
+     return {image=clipboardImage(data),selection=clipboardSelection(data),
+      palette=data.palette and detachedPalette(copy(data.palette))}
+    end
     return {text=read('text')}
    end
    error('Unsupported clipboard field: '..key)
@@ -292,10 +347,14 @@ do
    if key=='image' then writeImage(value)
    elseif key=='text' then writeText(value)
    elseif key=='content' and type(value)=='table' then
-    assert(value.selection==nil and value.palette==nil and value.tileset==nil,
-     'Clipboard selection, palette and tileset data are unsupported')
+    assert(value.tileset==nil,'Clipboard tileset data is unsupported')
+    assert(value.image~=nil or (value.selection==nil and value.palette==nil),
+     'Clipboard selection and palette require an image')
     assert(value.image==nil or value.text==nil,'Choose image or text clipboard content')
-    if value.image~=nil then writeImage(value.image)
+    if value.image~=nil then
+     local colors
+     if value.palette~=nil then colors=paletteColors(value.palette) end
+     writeImage(value.image,value.selection,colors)
     elseif value.text~=nil then writeText(value.text)
     else clear() end
    else error('Unsupported clipboard assignment: '..key) end
@@ -315,7 +374,8 @@ do
     copied._pixels[y*bounds.width+x+1]=pixels[py*doc.width+px+1]
    end
   end end
-  writeImage(copied)
+  local palette=doc.frame_palettes[activeFrame] or doc.palette
+  writeImage(copied,not spriteSelection.isEmpty and spriteSelection or nil,palette)
  end
 
  local function requireEditableImage()
@@ -337,17 +397,23 @@ do
 
  app.command.Paste=command(function(options)
   requireEditableImage()
-  local im=readImage()
-  if not im then return end
+  local data=read('image')
+  if not data then return end
   local bounds=spriteSelection.bounds
   local position=options.position and Point(options.position) or Point(bounds.x,bounds.y)
   if editorTabs then
-   local result=host{op='clipboardApply',document=doc,image={w=im.width,h=im.height,pixels=im._pixels},
+   local result=host{op='clipboardApply',document=doc,image=data,
     site={activeLayer-1,activeFrame-1},origin={position.x,position.y}}
    local edited=expandDocumentPixels(result.document).layers[activeLayer]
    local layer=doc.layers[activeLayer]
    layer.cels,layer.cel_meta=edited.cels,edited.cel_meta
   else
+   local im=clipboardImage(data)
+   if data.selection then
+    for i,selected in ipairs(data.selection.selected)do
+     if not selected then im._pixels[i]={0,0,0,0} end
+    end
+   end
    local cel=app.activeCel
    local start=cel.position
    cel.image:drawImage(im,Point(position.x-start.x,position.y-start.y))

@@ -995,3 +995,45 @@ fn headless_lua_clipboard_text_and_clear_replace_previous_content() {
     )
     .unwrap();
 }
+
+#[test]
+fn lua_clipboard_preserves_detached_selections_and_palettes() {
+    let mut doc = Document::new(4, 1);
+    doc.layers[0].cels[0].set(2, [8, 16, 24, 255]);
+    let output = run_source(
+        &doc,
+        r#"
+ local im=Image(3,1,ColorMode.RGB)
+ im:clear(Color('#aabbcc'))
+ local p=Palette(2)
+ p:setColor(1,Color('#123456'))
+ local mask=Selection(Rectangle(10,4,3,1))
+ mask:subtract(Rectangle(11,4,1,1))
+ app.clipboard.content={image=im,selection=mask,palette=p}
+ im:clear()
+ mask:deselect()
+ p:setColor(1,Color('#ffffff'))
+ local saved=app.clipboard.content
+ assert(saved.selection:contains(10,4) and saved.selection:contains(12,4))
+ assert(not saved.selection:contains(11,4))
+ assert(saved.image:getPixel(1,0)==app.pixelColor.rgba(170,187,204,255))
+ assert(#saved.palette==2 and saved.palette:getColor(1)==Color('#123456'))
+ saved.palette:setColor(1,Color('#000000'))
+ assert(app.clipboard.content.palette:getColor(1)==Color('#123456'))
+ app.command.Paste{position=Point(1,0)}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        output.composite(0),
+        vec![
+            CLEAR,
+            [170, 187, 204, 255],
+            [8, 16, 24, 255],
+            [170, 187, 204, 255]
+        ]
+    );
+}
