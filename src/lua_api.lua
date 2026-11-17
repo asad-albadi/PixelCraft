@@ -557,6 +557,160 @@ function spriteMethods:newCel(l,f,im,pos) local li,fi=layerNumber(l),frameNumber
 function spriteMethods:deleteCel(c) c.image:clear() end
 function spriteMethods:newLayer() assert((#doc.layers+1)*#doc.durations*doc.width*doc.height<=64000000,'Layer budget exceeded');local l={name='Layer '..(#doc.layers+1),visible=true,locked=false,opacity=255,cels={},cel_meta={},group=false,blend='Normal',tile_cels={}};for f=1,#doc.durations do l.cels[f]=Image(doc.width,doc.height)._pixels;l.cel_meta[f]={opacity=255,z_index=0,outside={}};l.tile_cels[f]={} end table.insert(doc.layers,l);rebuildHandles();return layerHandles[#doc.layers] end
 function spriteMethods:newGroup() local l=self:newLayer();doc.layers[l._index].group=true;return l end
+local spriteSlices
+do
+ local handles=setmetatable({},{__mode='kv'})
+ local objects=setmetatable({},{__mode='k'})
+ local methods={}
+
+ local function sliceObject(handle)
+  local object=assert(objects[handle],'Slice is deleted or invalid')
+  assert(object.document==doc,'Slice no longer belongs to this document state')
+  return object.value
+ end
+
+ local function rectValues(rect)
+  assert(rect.width>=0 and rect.height>=0,'Invalid slice rectangle')
+  return {rect.x,rect.y,rect.width,rect.height}
+ end
+
+ local function optionalCenter(value)
+  if value==nil then return nil end
+  local rect=Rectangle(value)
+  local values=rectValues(rect)
+  if not rect.isEmpty then return values end
+ end
+
+ local function optionalPivot(value)
+  if value==nil then return nil end
+  local point=Point(value)
+  if point.x~=-2147483648 or point.y~=-2147483648 then return {point.x,point.y} end
+ end
+
+ local function sliceFrame(frame)
+  local index=frameNumber(frame)
+  assert(index and index%1==0 and doc.durations[index],'Invalid slice frame')
+  return index-1
+ end
+
+ local function setKey(slice,key)
+  for index,existing in ipairs(slice.keys)do
+   if existing.frame==key.frame then slice.keys[index]=key;return end
+   if existing.frame>key.frame then table.insert(slice.keys,index,key);return end
+  end
+  slice.keys[#slice.keys+1]=key
+ end
+
+ function methods:keyAt(frame)
+  local slice,index=sliceObject(self),sliceFrame(frame)
+  for i=#slice.keys,1,-1 do
+   local key=slice.keys[i]
+   if key.frame<=index then
+    return {frame=frameHandles[key.frame+1],bounds=Rectangle(key.bounds),
+     center=key.center and Rectangle(key.center),pivot=key.pivot and Point(key.pivot)}
+   end
+  end
+ end
+
+ function methods:setKey(frame,bounds,center,pivot)
+  local slice,index=sliceObject(self),sliceFrame(frame)
+  setKey(slice,{frame=index,bounds=rectValues(Rectangle(bounds)),
+   center=optionalCenter(center),pivot=optionalPivot(pivot)})
+ end
+
+ function methods:deleteKey(frame)
+  local slice,index=sliceObject(self),sliceFrame(frame)
+  for i,key in ipairs(slice.keys)do
+   if key.frame==index then table.remove(slice.keys,i);return true end
+  end
+  return false
+ end
+
+ local function sliceHandle(slice)
+  local handle=handles[slice]
+  if handle then return handle end
+  handle=bindSpriteHandle(setmetatable({},{
+   __index=function(self,key)
+    local value=sliceObject(self)
+    if key=='sprite' then return sprite end
+    if key=='name' then return value.name end
+    if methods[key] then return methods[key] end
+    local first=value.keys[1]
+    if not first then return nil end
+    if key=='bounds' then return Rectangle(first.bounds) end
+    if key=='center' and first.center then return Rectangle(first.center) end
+    if key=='pivot' and first.pivot then return Point(first.pivot) end
+   end,
+   __newindex=function(self,key,value)
+    local slice=sliceObject(self)
+    if key=='name' then
+     local name=tostring(value)
+     assert(#name<=65535,'Slice name is too long')
+     slice.name=name
+     return
+    end
+    local first=slice.keys[1]
+    local entry=first and first.frame==0 and copy(first) or {frame=0,bounds={0,0,0,0}}
+    if key=='bounds' then entry.bounds=rectValues(Rectangle(value))
+    elseif key=='center' then entry.center=optionalCenter(value)
+    elseif key=='pivot' then entry.pivot=optionalPivot(value)
+    else error('Unsupported slice assignment: '..key) end
+    setKey(slice,entry)
+   end,
+  }),sprite)
+  handles[slice]=handle
+  objects[handle]={document=doc,value=slice}
+  return handle
+ end
+
+ function spriteMethods:newSlice(x,y,w,h)
+  local bounds=Rectangle(x,y,w,h)
+  local values=rectValues(bounds)
+  local slice={name='Slice',keys={}}
+  if not bounds.isEmpty then setKey(slice,{frame=0,bounds=values}) end
+  doc.slices=doc.slices or {}
+  doc.slices[#doc.slices+1]=slice
+  return sliceHandle(slice)
+ end
+
+ function spriteMethods:deleteSlice(value)
+  local target=type(value)=='table' and sliceObject(value)
+  for index,slice in ipairs(doc.slices or {})do
+   if slice==target or slice.name==value then
+    local handle=handles[slice]
+    if handle then objects[handle]=nil end
+    handles[slice]=nil
+    table.remove(doc.slices,index)
+    for i=#doc.metadata,1,-1 do
+     local metadata=doc.metadata[i]
+     local owner=tonumber(metadata.owner:match('^slice:(%d+)$'))
+     if owner==index-1 then table.remove(doc.metadata,i)
+     elseif owner and owner>=index then metadata.owner='slice:'..(owner-1) end
+    end
+    return
+   end
+  end
+  error('Slice not found')
+ end
+
+ spriteSlices=function()
+  local result={}
+  for index,slice in ipairs(doc.slices or {})do result[index]=sliceHandle(slice) end
+  return result
+ end
+end
+
+local function insertFrameMetadata(index)
+ for _,slice in ipairs(doc.slices or {})do
+  for _,key in ipairs(slice.keys)do
+   if key.frame>=index then key.frame=key.frame+1 end
+  end
+ end
+ for _,metadata in ipairs(doc.metadata)do
+  if metadata.frame>=index and not metadata.owner:match('^slice:') then metadata.frame=metadata.frame+1 end
+ end
+end
+
 local function insertFrameExportId(index)
  local ids=doc.frame_export_ids
  if not ids then
@@ -593,7 +747,7 @@ function spriteMethods:newFrame(f)
  -- Keep PixelCraft's parallel document data aligned with the inserted frame.
  if #doc.frame_palettes>0 then table.insert(doc.frame_palettes,f+1,copy(doc.frame_palettes[f] or doc.palette)) end
  for _,t in ipairs(doc.tags) do if t.from>=f then t.from=t.from+1 end;if t.to>=f-1 then t.to=t.to+1 end end
- for _,m in ipairs(doc.metadata) do if m.frame>=f then m.frame=m.frame+1 end end
+ insertFrameMetadata(f)
  rebuildHandles()
  -- The native explicit-argument path pushes the source index, not source+1.
  return frameHandles[explicit and f or #doc.durations]
@@ -617,12 +771,12 @@ function spriteMethods:newEmptyFrame(f)
  if #doc.frame_palettes>0 then table.insert(doc.frame_palettes,f,copy(doc.frame_palettes[previous] or doc.palette)) end
  -- DocApi::adjustTags 0x19f2d0, insertion with TagsHandling=1.
  for _,t in ipairs(doc.tags) do if t.from>=f-1 then t.from=t.from+1 end;if t.to>=f-2 then t.to=t.to+1 end end
- for _,m in ipairs(doc.metadata) do if m.frame>=f-1 then m.frame=m.frame+1 end end
+ insertFrameMetadata(f-1)
  rebuildHandles()
  return frameHandles[f]
 end
 function spriteMethods:newTag(a,b) a=frameNumber(a);b=frameNumber(b);assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range');local t={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}};table.insert(doc.tags,t);return setmetatable({},{__index=function(_,k)if k=='name' then return t.name elseif k=='fromFrame' then return frameHandles[t.from+1] elseif k=='toFrame' then return frameHandles[t.to+1] elseif k=='aniDir' then return t.direction end end,__newindex=function(_,k,v)if k=='name' then t.name=tostring(v) elseif k=='aniDir' then t.direction=v elseif k=='fromFrame' then t.from=frameNumber(v)-1 elseif k=='toFrame' then t.to=frameNumber(v)-1 else error('Unsupported tag field: '..k) end end}) end
-setmetatable(sprite,{__index=function(_,k)if spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
+setmetatable(sprite,{__index=function(_,k)if k=='slices' then return spriteSlices() elseif spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
 rebuildHandles()
 -- Detached scratch sprites let a script compose an image without changing the
 -- editor document. They are not tabs and do not participate in document undo.

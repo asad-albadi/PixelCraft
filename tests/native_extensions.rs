@@ -697,3 +697,109 @@ fn lua_selected_colors_paint_independent_rgba_copies() {
     assert_eq!(edited.layers[0].cels[0][0], [12, 34, 56, 78]);
     assert_eq!(edited.layers[0].cels[0][1], [90, 87, 65, 43]);
 }
+
+#[test]
+fn lua_edits_animated_slices_and_round_trips_their_keys() {
+    let mut input = Document::new(8, 8);
+    input.add_frame(0, false);
+    input.slices.push(SpriteSlice {
+        name: "Retired".into(),
+        keys: Vec::new(),
+    });
+    input.metadata = vec![
+        MetadataChunk {
+            frame: 0,
+            owner: "slice:0".into(),
+            kind: 0x2020,
+            data: vec![0; 4],
+        },
+        MetadataChunk {
+            frame: 0,
+            owner: "slice:1".into(),
+            kind: 0x2020,
+            data: vec![2, 0, 0, 0, 35, 50, 65, 255],
+        },
+    ];
+    input.slices.push(SpriteSlice {
+        name: "Old hitbox".into(),
+        keys: vec![SliceKey {
+            frame: 1,
+            bounds: [2, 3, 4, 5],
+            center: None,
+            pivot: Some([2, 1]),
+        }],
+    });
+    let output = run_source(
+        &input,
+        r#"
+ local sprite=app.activeSprite
+ sprite:deleteSlice(sprite.slices[1])
+ local existing=sprite.slices[1]
+ assert(existing==sprite.slices[1] and existing.sprite==sprite)
+ assert(existing.bounds==Rectangle(2,3,4,5) and existing:keyAt(1)==nil)
+ assert(existing:keyAt(sprite.frames[2]).pivot==Point(2,1))
+ existing.name='Hitbox'
+ existing.bounds=Rectangle(1,1,3,4)
+ existing.center=Rectangle(1,1,1,2)
+ existing.pivot=Point(-1,2)
+ sprite:newEmptyFrame(2)
+ assert(existing:keyAt(2).bounds==Rectangle(1,1,3,4))
+ assert(existing:keyAt(3).bounds==Rectangle(2,3,4,5))
+ existing:setKey(2,Rectangle(-1,2,5,4),nil,Point(3,2))
+ assert(existing:keyAt(2).pivot==Point(3,2))
+ assert(existing:deleteKey(2) and not existing:deleteKey(2))
+ assert(not pcall(function() existing:setKey(4,Rectangle(0,0,1,1)) end))
+ assert(not pcall(function() existing.bounds=Rectangle(0,0,-1,3) end))
+ local temporary=sprite:newSlice(0,0,2,2)
+ temporary.name='Temporary'
+ sprite:deleteSlice('Temporary')
+ assert(not pcall(function() return temporary.bounds end))
+ local trim=sprite:newSlice(Rectangle(3,2,5,4))
+ trim.name='Trim'
+ trim.center=Rectangle(1,0,2,2)
+ trim.pivot=Point(0,0)
+ trim:setKey(2,Rectangle(3,3,5,4))
+ assert(trim:keyAt(2).pivot==nil)
+ assert(#sprite.slices==2)
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(output.slices[0].name, "Hitbox");
+    assert_eq!(
+        output.slices[0].keys,
+        vec![
+            SliceKey {
+                frame: 0,
+                bounds: [1, 1, 3, 4],
+                center: Some([1, 1, 1, 2]),
+                pivot: Some([-1, 2])
+            },
+            SliceKey {
+                frame: 2,
+                bounds: [2, 3, 4, 5],
+                center: None,
+                pivot: Some([2, 1])
+            },
+        ]
+    );
+    assert_eq!(output.slices[1].keys[0].center, Some([1, 0, 2, 2]));
+    assert_eq!(output.slices[1].keys[0].pivot, Some([0, 0]));
+    assert_eq!(output.slices[1].keys[1].pivot, None);
+    assert_eq!(output.metadata.len(), 1);
+    assert_eq!(output.metadata[0].owner, "slice:0");
+    assert_eq!(output.metadata[0].data, input.metadata[1].data);
+    let dir = std::env::temp_dir().join(format!("pixelcraft-lua-slices-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    for extension in ["pixel", "aseprite"] {
+        let path = dir.join("edited").with_extension(extension);
+        pixelcraft::formats::save(&path, &output).unwrap();
+        let reopened = pixelcraft::formats::load(&path).unwrap();
+        assert_eq!(reopened.slices, output.slices);
+        assert_eq!(reopened.durations, output.durations);
+        assert_eq!(reopened.metadata, output.metadata);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

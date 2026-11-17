@@ -417,6 +417,10 @@ fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &st
         chunks.push(chunk(m.kind, m.data.clone()));
     }
 }
+// The ASE slice flag is shared by all keys. The sentinel leaves a single key
+// without a pivot while retaining a real pivot at the origin in another key.
+const NO_SLICE_PIVOT: [i32; 2] = [i32::MIN; 2];
+
 fn encode_slice(slice: &SpriteSlice) -> Result<Vec<u8>, String> {
     let center = slice.keys.iter().any(|key| key.center.is_some());
     let pivot = slice.keys.iter().any(|key| key.pivot.is_some());
@@ -436,7 +440,7 @@ fn encode_slice(slice: &SpriteSlice) -> Result<Vec<u8>, String> {
             }
         }
         if pivot {
-            for value in key.pivot.unwrap_or([0; 2]) {
+            for value in key.pivot.unwrap_or(NO_SLICE_PIVOT) {
                 dword(&mut data, value as u32);
             }
         }
@@ -467,17 +471,19 @@ fn decode_slice(data: &[u8]) -> Result<SpriteSlice, String> {
             next()? as i32,
         ];
         let center = if flags & 1 != 0 {
-            Some([
+            let rect = [
                 next()? as i32,
                 next()? as i32,
                 next()? as i32,
                 next()? as i32,
-            ])
+            ];
+            (rect[2] != 0 && rect[3] != 0).then_some(rect)
         } else {
             None
         };
         let pivot = if flags & 2 != 0 {
-            Some([next()? as i32, next()? as i32])
+            let point = [next()? as i32, next()? as i32];
+            (point != NO_SLICE_PIVOT).then_some(point)
         } else {
             None
         };

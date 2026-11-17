@@ -134,6 +134,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 44 complete. The editor follows Lua activation while the worker runs. An opened sprite previews in its own tab, and closing that temporary sprite removes its preview immediately. A successful script commits separate documents and a failed one restores the prior tabs, document contents, and undo state. The Windows editor regression drives the real egui script request path, observes tab changes before reading the final result, and checks that a modeless user edit reaches the correct Lua sprite and becomes one undoable commit. Existing unsaved tabs still use normal save prompts at commit.
 
+- Item 45 slice checkpoint. Lua can create, enumerate, rename, reshape and delete slices, including animated keys. Inserting frames moves later keys with their frames. Deleting a slice removes its metadata and reindexes metadata on surviving slices. The round-trip regression covers mixed optional center and pivot fields, explicitly distinguishing a zero pivot from a missing pivot. Editable tilesets, native tool invocation, clipboard, typed metadata, and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
