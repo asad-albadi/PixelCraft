@@ -158,6 +158,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 layer, cel, and slice properties checkpoint. Typed Lua maps now resolve to the current layer, cel, or slice across frame insertion and unrelated layer and slice deletion. Linked cels share their source user data. Timeline reordering and frame removal preserve document-wide user data and transfer linked cel properties when the source changes. Windows tests cover namespaced layer properties, linked cel metadata, slice properties, and native and ASE round-trips. Tag, tileset, and tile properties and broader object identity remain open.
 
+- Item 45 animation tag properties checkpoint. Lua can enumerate tags and edit typed default and named properties. Duplicate names and renames preserve tag identity within a document state. Tag deletion in the editor, automation, and Lua removes the corresponding positional ASE user-data chunk. Frame deletion does the same for affected tags. Tests cover empty preceding tag data, native and ASE persistence, baked ASE export, and reading tag properties from the upstream fixture. Tileset and tile properties and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

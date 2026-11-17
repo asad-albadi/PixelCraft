@@ -531,7 +531,6 @@ app.command.ChangePixelFormat=command(function(options)
  doc.color_mode=mode
 end)
 function spriteMethods:deleteLayer(l) local old=activeLayer;activeLayer=layerNumber(l);app.command.RemoveLayer();activeLayer=math.min(old,#doc.layers)end
-function spriteMethods:deleteTag(tag) for i,t in ipairs(doc.tags)do if t.name==tag.name then table.remove(doc.tags,i);return end end end
 local appIndex,appAssign=getmetatable(app).__index,getmetatable(app).__newindex
 local preferences=copy((_pw_options or {}).preferences or {})
 preferences.general=preferences.general or {visible_timeline=true}

@@ -1827,7 +1827,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         });
         self.properties_open = open;
         if let Some(i) = remove_tag {
-            edited.tags.remove(i);
+            edited.remove_tag(i);
             self.active_tag = None;
         }
         if edited != self.doc {

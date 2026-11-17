@@ -75,15 +75,21 @@ do
   return value
  end
 
- local function objectMetadata(owner,frame)
+ local function objectMetadata(owner,frame,ordinal)
+  local count=0
   for _,chunk in ipairs(doc.metadata)do
-   if chunk.frame==frame and chunk.kind==0x2020 and chunk.owner==owner then return chunk end
+   if chunk.frame==frame and chunk.kind==0x2020 and chunk.owner==owner then
+    count=count+1
+    if count==ordinal then return chunk,count end
+   end
   end
+  return nil,count
  end
 
  local function call(resolve,action,key,value,namespace)
-  local owner,frame=resolve()
-  local previous=objectMetadata(owner,frame)
+  local owner,frame,ordinal=resolve()
+  ordinal=ordinal or 1
+  local previous,count=objectMetadata(owner,frame,ordinal)
   local data=previous and previous.data or {0,0,0,0}
   local request={op='aseProperties',action=action,data=data,key=key,namespace=namespace}
   local firstExternal
@@ -112,7 +118,13 @@ do
   if identical and not response.external then return end
   app.transaction(function()
    if previous then previous.data=response.data
-   else table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data=response.data}) end
+   else
+    -- ASE stores one user-data chunk per tag, even for empty preceding tags.
+    for _=count+1,ordinal-1 do
+     table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data={0,0,0,0}})
+    end
+    table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data=response.data})
+   end
    if response.external then
     if firstExternal then firstExternal.data=response.external
     else table.insert(doc.metadata,{frame=0,kind=0x2008,owner='',data=response.external}) end

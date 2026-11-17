@@ -472,10 +472,9 @@ pub fn apply_command_batch_until(
             }
             "remove-tag" => {
                 let i = number(c, "index")?;
-                if i >= out.tags.len() {
+                if !out.remove_tag(i) {
                     return Err("Invalid tag".into());
                 }
-                out.tags.remove(i);
             }
             op @ ("blit" | "stroke" | "clear-region" | "copy-region" | "move-region"
             | "recolor-region" | "polygon") => {

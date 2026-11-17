@@ -503,6 +503,15 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         baked.layers[0].name = "Baked artwork".into();
         baked.durations = d.durations.clone();
         baked.tags = d.tags.clone();
+        baked.metadata.extend(
+            d.metadata
+                .iter()
+                .filter(|chunk| {
+                    chunk.is_tag_user_data()
+                        || (chunk.frame == 0 && chunk.kind == 0x2008 && chunk.owner.is_empty())
+                })
+                .cloned(),
+        );
         baked.slices = d.slices.clone();
         baked.drawing_grid = d.stored_drawing_grid();
         baked.pixel_aspect = Some(d.pixel_aspect());

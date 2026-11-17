@@ -532,6 +532,9 @@ local function findObject(list,target,description)
  end
  error(description..' is deleted or no longer belongs to this document state')
 end
+local function isTagUserData(chunk)
+ return chunk.frame==0 and chunk.kind==0x2020 and chunk.owner=='tags'
+end
 local function cel(li,fi)
  local l=assert(doc.layers[li],'Missing layer');assert(doc.durations[fi],'Missing frame');local m=l.cel_meta[fi]
  local handle=bindSpriteHandle(setmetatable({},{__index=function(_,k)
@@ -811,8 +814,77 @@ function spriteMethods:newEmptyFrame(f)
  rebuildHandles()
  return frameHandles[f]
 end
-function spriteMethods:newTag(a,b) a=frameNumber(a);b=frameNumber(b);assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range');local t={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}};table.insert(doc.tags,t);return setmetatable({},{__index=function(_,k)if k=='name' then return t.name elseif k=='fromFrame' then return frameHandles[t.from+1] elseif k=='toFrame' then return frameHandles[t.to+1] elseif k=='aniDir' then return t.direction end end,__newindex=function(_,k,v)if k=='name' then t.name=tostring(v) elseif k=='aniDir' then t.direction=v elseif k=='fromFrame' then t.from=frameNumber(v)-1 elseif k=='toFrame' then t.to=frameNumber(v)-1 else error('Unsupported tag field: '..k) end end}) end
-setmetatable(sprite,{__index=function(_,k)if k=='slices' then return spriteSlices() elseif k=='tilesets' then return spriteTilesets() elseif spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
+local spriteTags
+do
+ local handles=setmetatable({},{__mode='kv'})
+ local objects=setmetatable({},{__mode='k'})
+
+ local function tagHandle(tag)
+  if handles[tag] then return handles[tag] end
+  local function index()
+   return findObject(doc.tags,tag,'Tag')
+  end
+  local handle=bindSpriteHandle(setmetatable({},{
+   __index=function(_,key)
+    index()
+    if key=='name' then return tag.name end
+    if key=='fromFrame' then return frameHandles[tag.from+1] end
+    if key=='toFrame' then return frameHandles[tag.to+1] end
+    if key=='aniDir' then return tag.direction end
+    if key=='sprite' then return sprite end
+   end,
+   __newindex=function(_,key,value)
+    index()
+    if key=='name' then tag.name=tostring(value)
+    elseif key=='aniDir' then tag.direction=value
+    elseif key=='fromFrame' then tag.from=frameNumber(value)-1
+    elseif key=='toFrame' then tag.to=frameNumber(value)-1
+    else error('Unsupported tag field: '..key) end
+   end,
+  }),sprite)
+  handles[tag]=handle
+  objects[handle]=tag
+  return bindUserProperties(handle,sprite,function()
+   return 'tags',0,index()
+  end)
+ end
+
+ function spriteMethods:newTag(a,b)
+  a=frameNumber(a);b=frameNumber(b)
+  assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range')
+  local tag={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}}
+  table.insert(doc.tags,tag)
+  return tagHandle(tag)
+ end
+
+ function spriteMethods:deleteTag(handle)
+  local tag=objects[handle]
+  local index
+  if tag then
+   index=findObject(doc.tags,tag,'Tag')
+  else
+   for i,value in ipairs(doc.tags)do
+    if value.name==handle.name then index=i;break end
+   end
+   if not index then return end
+  end
+  table.remove(doc.tags,index)
+  local ordinal=0
+  for i,chunk in ipairs(doc.metadata)do
+   if isTagUserData(chunk) then
+    ordinal=ordinal+1
+    if ordinal==index then table.remove(doc.metadata,i);break end
+   end
+  end
+ end
+
+ spriteTags=function()
+  local result={}
+  for i,tag in ipairs(doc.tags)do result[i]=tagHandle(tag) end
+  return result
+ end
+end
+setmetatable(sprite,{__index=function(_,k)if k=='tags' then return spriteTags() elseif k=='slices' then return spriteSlices() elseif k=='tilesets' then return spriteTilesets() elseif spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
 rebuildHandles()
 -- Detached scratch sprites let a script compose an image without changing the
 -- editor document. They are not tabs and do not participate in document undo.

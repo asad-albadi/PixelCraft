@@ -1583,3 +1583,108 @@ fn lua_layer_cel_slice_properties_follow_their_metadata_owners() {
     .unwrap();
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn lua_tag_properties_keep_ase_chunk_order_and_follow_tag_deletion() {
+    let fixture = pixelcraft::formats::load(std::path::Path::new(
+        "tests/fixtures/file-tests-props.aseprite",
+    ))
+    .unwrap();
+    run_source(
+        &fixture,
+        r#"
+ local tag=app.activeSprite.tags[1]
+ assert(tag.properties.a==Point(1,2))
+ assert(tag.properties.b.c==Rectangle(1,2,3,4))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+
+    let mut input = Document::new(2, 1);
+    input.add_frame(0, false);
+    input.add_frame(1, false);
+    let readback = r#"
+ local tags=app.activeSprite.tags
+ assert(#tags==3)
+ assert(tags[1].name=='Idle' and tags[1].properties.marker==nil)
+ assert(tags[2].name=='Walk east' and tags[2].properties.marker==Point(2,3))
+ assert(tags[2].properties('pc/test').speed==0.5)
+ assert(tags[3].name=='Jump' and tags[3].properties.marker=='jump')
+ "#;
+    let output = run_source(
+        &input,
+        &format!(
+            r#"
+ local sprite=app.activeSprite
+ local idle=sprite:newTag(1,1)
+ idle.name='Idle'
+ local throwaway=sprite:newTag(1,1)
+ throwaway.name='Walk'
+ local keep=sprite:newTag(2,2)
+ keep.name='Walk'
+ local jump=sprite:newTag(3,3)
+ jump.name='Jump'
+ keep.properties={{marker=Point(2,3)}}
+ keep.properties('pc/test').speed=0.5
+ throwaway.properties.marker='delete this'
+ jump.properties.marker='jump'
+ sprite:deleteTag(throwaway)
+ keep.name='Walk east'
+ assert(sprite.tags[2]==keep and keep.sprite==sprite)
+ assert(not pcall(function()return throwaway.properties.marker end))
+ {readback}
+ "#
+        ),
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let chunks: Vec<_> = output
+        .metadata
+        .iter()
+        .filter(|chunk| chunk.owner == "tags" && chunk.kind == 0x2020)
+        .collect();
+    assert_eq!(chunks.len(), 3);
+    assert_eq!(chunks[0].data, [0, 0, 0, 0]);
+
+    let encoded = pixelcraft::formats::encode_ase(&output).unwrap();
+    let mut decoded = pixelcraft::formats::decode_ase(&encoded).unwrap();
+    run_source(&decoded, readback, 0, 0, None).unwrap();
+    let mut baked = output;
+    baked.layers[0].adjustment = Some(pixelcraft::model::Adjustment::Levels {
+        black: 0,
+        white: 200,
+    });
+    let encoded = pixelcraft::formats::encode_ase(&baked).unwrap();
+    let baked_reopened = pixelcraft::formats::decode_ase(&encoded).unwrap();
+    run_source(&baked_reopened, readback, 0, 0, None).unwrap();
+    decoded.remove_frame(0);
+    run_source(
+        &decoded,
+        r#"
+ local tags=app.activeSprite.tags
+ assert(#tags==2)
+ assert(tags[1].name=='Walk east' and tags[1].properties.marker==Point(2,3))
+ assert(tags[2].name=='Jump' and tags[2].properties.marker=='jump')
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert!(decoded.remove_tag(0));
+    let encoded = pixelcraft::formats::encode_project(&decoded).unwrap();
+    let reopened = pixelcraft::formats::decode_project(&encoded).unwrap();
+    run_source(
+        &reopened,
+        "assert(app.activeSprite.tags[1].properties.marker=='jump')",
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+}

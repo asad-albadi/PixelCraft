@@ -814,6 +814,10 @@ pub struct MetadataChunk {
     pub owner: String,
 }
 impl MetadataChunk {
+    pub(crate) fn is_tag_user_data(&self) -> bool {
+        self.frame == 0 && self.kind == 0x2020 && self.owner == "tags"
+    }
+
     fn is_frame_independent(&self) -> bool {
         self.frame == 0
             && (self.owner.starts_with("layer:")
@@ -3254,7 +3258,7 @@ impl Document {
                     }
                 }
             }
-            self.tags.retain(|t| !(t.from == f && t.to == f));
+            self.retain_tags(|_, t| !(t.from == f && t.to == f));
             for t in &mut self.tags {
                 if t.from > f {
                     t.from -= 1
@@ -3265,6 +3269,36 @@ impl Document {
             }
         }
     }
+    /// Remove a tag and its positional ASE user-data chunk.
+    pub fn remove_tag(&mut self, index: usize) -> bool {
+        if index >= self.tags.len() {
+            return false;
+        }
+        self.retain_tags(|i, _| i != index);
+        true
+    }
+
+    fn retain_tags(&mut self, mut keep: impl FnMut(usize, &FrameTag) -> bool) {
+        let mut keep_tag = Vec::with_capacity(self.tags.len());
+        self.tags.retain(|tag| {
+            let retain = keep(keep_tag.len(), tag);
+            keep_tag.push(retain);
+            retain
+        });
+        if keep_tag.iter().all(|&keep| keep) {
+            return;
+        }
+        let mut index = 0;
+        self.metadata.retain(|chunk| {
+            if !chunk.is_tag_user_data() {
+                return true;
+            }
+            let retain = keep_tag.get(index).copied().unwrap_or(true);
+            index += 1;
+            retain
+        });
+    }
+
     pub fn add_layer(&mut self) {
         if self.can_add_layer() {
             self.layers.push(Layer::new(
