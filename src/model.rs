@@ -2455,7 +2455,7 @@ impl Document {
         self.layer_unlocked(l) && !self.layers[l].group
     }
 
-    fn layer_unlocked(&self, l: usize) -> bool {
+    pub(crate) fn layer_unlocked(&self, l: usize) -> bool {
         let mut p = Some(l);
         let mut n = 0;
         while let Some(i) = p {

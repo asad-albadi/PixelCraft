@@ -83,6 +83,92 @@ fn file_call(op: &str, args: Value) -> Value {
 }
 
 #[test]
+#[cfg(any(target_os = "linux", windows))]
+fn mcp_create_and_commands_apply_editor_effects_and_group_changes_atomically() {
+    use pixelcraft::model::BlendMode;
+    let w = Workspace::new();
+    let source = w.project().join("background.pixel");
+    let output = w.project().join("commands.pixel");
+    let rejected = w.project().join("rejected.pixel");
+    let reply = w.call(
+        "create",
+        json!({"width":7,"height":5,"background":[30,40,50,255],"output":source}),
+    );
+    assert_ne!(reply["isError"], true, "{reply}");
+    let doc = formats::load(&source).unwrap();
+    assert_eq!(doc.composite(0), vec![[30, 40, 50, 255]; 35]);
+    let revision = automation::document_revision(&doc);
+    let commands = json!([
+        {"op":"add-group","name":"Effects"},
+        {"op":"add-group","name":"Ink and shadow","parent":1},
+        {"op":"add-layer","name":"Ink","parent":2},
+        {"op":"set-layer","layer":3,"blend":"Multiply"},
+        {"op":"shape","layer":3,"frame":0,"kind":"line","x":0,"y":0,"x2":0,"y2":0,"color":[80,90,100,255]},
+        {"op":"shape","layer":3,"frame":0,"kind":"line","x":1,"y":0,"x2":1,"y2":0,"color":[84,90,100,255]},
+        {"op":"shape","layer":3,"frame":0,"kind":"line","x":6,"y":0,"x2":6,"y2":0,"color":[80,90,100,255]},
+        {"op":"fill","layer":3,"frame":0,"x":0,"y":0,"tolerance":4,"color":[200,30,40,255]},
+        {"op":"outline","layer":3,"frame":0,"color":[190,150,50,255],"corners":true},
+        {"op":"shadow","layer":3,"frame":0,"color":[70,50,20,255],"offset":[0,2]},
+        {"op":"set-layer","layer":3,"parent":null},
+        {"op":"set-layer","layer":3,"parent":2}
+    ]);
+    let reply = w.call(
+        "commands",
+        json!({"input":source,"output":output,"revision":revision,"commands":commands}),
+    );
+    assert_ne!(reply["isError"], true, "{reply}");
+    let edited = formats::load(&output).unwrap();
+    assert!(edited.layers[1].group && edited.layers[2].group);
+    assert_eq!(edited.layers[2].parent, Some(1));
+    assert_eq!(edited.layers[3].parent, Some(2));
+    assert_eq!(edited.layers[3].blend, BlendMode::Multiply);
+    let ink = &edited.layers[3].cels[0];
+    assert_eq!(
+        [ink[0], ink[1], ink[6]],
+        [[200, 30, 40, 255], [200, 30, 40, 255], [80, 90, 100, 255]]
+    );
+    assert_eq!(ink[9], [190, 150, 50, 255]);
+    assert_eq!(ink[14], [70, 50, 20, 255]);
+    let reply = w.call("commands", json!({
+        "input":output,"output":rejected,"revision":automation::document_revision(&edited),
+        "commands":[{"op":"set-layer","layer":3,"blend":"Screen"},{"op":"set-layer","layer":1,"parent":2}]
+    }));
+    assert_error(&reply, "hierarchy");
+    assert!(!rejected.exists());
+    assert_eq!(formats::load(&output).unwrap(), edited);
+    let without_group = automation::apply_command_batch(
+        &edited,
+        &json!({
+            "commands":[{"op":"remove-layer","layer":2}]
+        }),
+    )
+    .unwrap();
+    assert_eq!(without_group.layers[2].parent, Some(1));
+    assert_eq!(without_group.layers[2].cels[0], *ink);
+}
+
+#[test]
+fn mcp_canvas_effects_reject_oversized_work_and_invalid_offsets() {
+    let large = Document::new(2048, 2048);
+    let error = automation::apply_command_batch(
+        &large,
+        &json!({"commands":[
+            {"op":"outline","layer":0,"frame":0,"color":[1,2,3,255]}
+        ]}),
+    )
+    .unwrap_err();
+    assert!(error.contains("work limit"));
+    assert!(!large.layers[0].cels[0].occupied());
+    let small = Document::new(2, 2);
+    for command in [
+        json!({"op":"fill","layer":0,"frame":0,"x":0,"y":0,"tolerance":256,"color":[1,2,3,255]}),
+        json!({"op":"shadow","layer":0,"frame":0,"offset":[-2147483648,0],"color":[1,2,3,255]}),
+    ] {
+        assert!(automation::apply_command_batch(&small, &json!({"commands":[command]})).is_err());
+    }
+}
+
+#[test]
 fn export_batch_previews_exact_outputs_and_runs_the_ordered_operations() {
     let w = Workspace::new();
     let input = w.project().join("art.pixel");

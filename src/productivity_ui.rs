@@ -2796,19 +2796,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     automation::apply_command_batch_until(&doc, args, Some(request.deadline))?
                 }
                 "live-edit" => automation::apply_pixel_batch(&doc, args)?,
-                "live-create" => {
-                    let w = args["width"].as_u64().unwrap_or(0);
-                    let h = args["height"].as_u64().unwrap_or(0);
-                    if w == 0
-                        || h == 0
-                        || w > MAX_DIMENSION as u64
-                        || h > MAX_DIMENSION as u64
-                        || w * h > MAX_PIXELS as u64
-                    {
-                        return Err("Invalid canvas dimensions".into());
-                    }
-                    Document::new(w as usize, h as usize)
-                }
+                "live-create" => automation::new_canvas(args)?,
                 _ => return Err("Unknown live operation".into()),
             };
             let bounds = if request.operation == "live-create" {
@@ -3385,14 +3373,36 @@ mod bridge_tests {
         a.selection = Some((0, 0, 0, 0));
         a.studio.mask = Some(vec![true, false, false, false]);
         let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
-        let args = serde_json::json!({"revision":info["revision"],"commands":[{"op":"add-layer","name":"Ink"},{"op":"add-frame","frame":0}]});
+        let args = serde_json::json!({"revision":info["revision"],"commands":[
+            {"op":"add-group","name":"Effects"},
+            {"op":"add-layer","name":"Ink","parent":1},
+            {"op":"set-layer","layer":2,"blend":"Overlay"},
+            {"op":"fill","layer":2,"frame":0,"x":0,"y":0,"color":[90,80,70,255]},
+            {"op":"add-frame","frame":0}
+        ]});
         assert!(request(&mut a, "live-commands", args.clone(), true).is_err());
         assert_eq!(a.doc, before);
-        request(&mut a, "live-commands", args.clone(), false).unwrap();
+        let preview = request(&mut a, "live-preview-commands", args.clone(), false).unwrap();
+        assert!(preview["data"].is_string());
+        assert_eq!(a.doc, before);
+        let result = request(&mut a, "live-commands", args.clone(), false).unwrap();
         assert_eq!(a.undo.len(), 1);
-        assert_eq!(a.doc.layers.len(), 2);
+        assert_eq!(a.doc.layers.len(), 3);
         assert_eq!(a.doc.durations.len(), 2);
+        assert_eq!(result["layers"][2]["blend"], "Overlay");
+        assert_eq!(a.doc.layers[2].cels[0][3], [90, 80, 70, 255]);
+        request(
+            &mut a,
+            "live-commands",
+            serde_json::json!({
+                "revision":result["revision"],
+                "commands":[{"op":"set-layer","layer":2,"parent_id":result["layers"][1]["id"]}]
+            }),
+            false,
+        )
+        .unwrap();
         assert!(request(&mut a, "live-commands", args, false).is_err());
+        a.undo();
         a.undo();
         assert_eq!(a.doc, before);
         assert_eq!(a.studio.mask, Some(vec![true, false, false, false]));
@@ -3400,11 +3410,12 @@ mod bridge_tests {
         request(
             &mut a,
             "live-create",
-            serde_json::json!({"revision":info["revision"],"width":4,"height":3}),
+            serde_json::json!({"revision":info["revision"],"width":4,"height":3,"background":[11,22,33,128]}),
             false,
         )
         .unwrap();
         assert_eq!((a.doc.width, a.doc.height), (4, 3));
+        assert_eq!(a.doc.layers[0].cels[0][0], [11, 22, 33, 128]);
         assert_ne!(a.active_tab, original_tab);
         assert!(a.path.is_none());
         a.undo();

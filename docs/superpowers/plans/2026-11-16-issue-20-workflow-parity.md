@@ -196,6 +196,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 49 complete. Each overlay has placement locking, a sampling toggle, display width and height, and an aspect-ratio lock. Docked, floating, sampled, and rasterized placements use the same display geometry. Linked overlays use paths within the saved project folder and keep an embedded snapshot. A background availability check shows a placeholder and excludes missing sources from picking. Relink or refresh explicitly loads changed pixels. The tests cover locked drags, resized sampling, native save and reopen, deletion detection, placeholder rendering, and path rejection. Formatting, strict Clippy, and 572 Windows all-target tests passed.
 
+- Item 51 complete. File and live MCP share tolerance fill, one-pixel outlines, offset shadows, RGBA creation backgrounds, group creation and removal, reparenting by index or live ID, and native blend editing. Effects reuse editor raster logic and count toward the batch work limit. Tests exercise Windows MCP stdio, live preview without mutation, commit and undo, nested groups, stable parent targeting, removal with child promotion, canvas color, and cycle and work-limit rejection. Formatting, strict Clippy, and 574 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -263,7 +265,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **48. Capture shortcuts from keypresses.** Show conflicts, protect reserved bindings, allow cancellation, and reset individual shortcuts.
 - [x] **49. Expand per-reference controls.** Lock individual references, toggle sampling per image, set aspect-linked dimensions, and show a placeholder when a linked source is missing.
 - [x] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
-- [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
+- [x] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
 - [x] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
 - [x] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
 - [x] **54. Allow typed file paths in the GUI.** Provide path entry alongside native file browsing.

@@ -17,6 +17,7 @@ pub(crate) mod mcp_linux;
 mod mcp_windows;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     hash::{Hash, Hasher},
@@ -91,7 +92,8 @@ pub fn inspect(d: &Document) -> Value {
 pub fn inspect_revision(d: &Document, revision: &str) -> Value {
     let layers: Vec<_> = d.layers.iter().enumerate().map(|(i, layer)| {
         json!({"index":i,"id":layer.editor_id.to_string(),"name":layer.name,"locked":layer.locked,
-            "group":layer.group,"visible":layer.visible,"parent":layer.parent})
+            "group":layer.group,"visible":layer.visible,"parent":layer.parent,"background":layer.background,
+            "opacity":layer.opacity,"blend":layer.blend})
     }).collect();
     let mut info = json!({"revision":revision,"document_id":d.editor_id.to_string(),
         "capabilities":{"stable_targets":true,"command_preview":1},
@@ -154,6 +156,25 @@ fn resolve_layer(doc: &Document, args: &Value) -> Result<usize, String> {
             .then_some(layer)
             .ok_or_else(|| "Invalid layer".into())
     })
+}
+
+fn command_parent(doc: &Document, args: &Value) -> Result<Option<Option<usize>>, String> {
+    let (parent, id) = (args.get("parent"), args.get("parent_id"));
+    let parent = match (parent, id) {
+        (None, None) => return Ok(None),
+        (Some(Value::Null), None) => return Ok(Some(None)),
+        (Some(_), Some(_)) => return Err("Supply either parent or parent_id".into()),
+        (Some(_), None) => number(args, "parent")?,
+        (None, Some(id)) => doc
+            .layers
+            .iter()
+            .position(|layer| id.as_str() == Some(&layer.editor_id.to_string()))
+            .ok_or("Parent layer no longer exists")?,
+    };
+    if !doc.layers.get(parent).is_some_and(|layer| layer.group) {
+        return Err("Parent must be a group layer".into());
+    }
+    Ok(Some(Some(parent)))
 }
 
 fn resolve_cel(doc: &Document, args: &Value) -> Result<(usize, usize), String> {
@@ -270,29 +291,46 @@ pub fn apply_command_batch_until(
             Ok(frame)
         };
         match c["op"].as_str().ok_or("Missing command op")? {
-            "add-layer" => {
+            op @ ("add-layer" | "add-group") => {
+                let parent = command_parent(&out, c)?.flatten();
                 let n = out.layers.len();
-                out.add_layer();
-                if n == out.layers.len() {
-                    return Err("Layer limit reached".into());
+                if op == "add-group" {
+                    out.add_group(c["name"].as_str().unwrap_or("Group"))?;
+                } else {
+                    out.add_layer();
+                    if n == out.layers.len() {
+                        return Err("Layer limit reached".into());
+                    }
+                    if let Some(name) = c["name"].as_str() {
+                        out.layers[n].name = name.into();
+                    }
                 }
-                if let Some(name) = c["name"].as_str() {
-                    out.layers[n].name = name.into();
-                }
+                out.layers[n].parent = parent;
             }
             "remove-layer" => {
                 let l = layer()?;
                 if out.layers.len() == 1 {
                     return Err("Cannot remove last layer".into());
                 }
-                if !out.editable(l) {
+                if !out.layer_unlocked(l) {
                     return Err("Layer is locked".into());
                 }
                 out.remove_layer(l);
             }
             "set-layer" => {
                 let l = layer()?;
+                let parent = command_parent(&out, c)?;
                 let target = &mut out.layers[l];
+                if let Some(parent) = parent {
+                    if target.background && parent.is_some() {
+                        return Err("A background layer must stay at the root".into());
+                    }
+                    target.parent = parent;
+                }
+                if let Some(blend) = c.get("blend") {
+                    target.blend =
+                        serde_json::from_value(blend.clone()).map_err(|_| "Invalid blend mode")?;
+                }
                 if let Some(n) = c["name"].as_str() {
                     target.name = n.into();
                 }
@@ -481,6 +519,10 @@ pub fn apply_command_batch_until(
                 let (layer, frame) = (layer()?, frame()?);
                 crate::automation_paint::paint(&mut out, layer, frame, op, c, &mut paint_budget)?;
             }
+            op @ ("fill" | "outline" | "shadow") => {
+                let (layer, frame) = (layer()?, frame()?);
+                raster_effect(&mut out, layer, frame, op, c, &mut paint_budget)?;
+            }
             "shape" => {
                 let l = layer()?;
                 let f = frame()?;
@@ -538,6 +580,126 @@ pub fn apply_command_batch_until(
     }
     Ok(out)
 }
+
+fn raster_effect(
+    doc: &mut Document,
+    layer: usize,
+    frame: usize,
+    op: &str,
+    args: &Value,
+    budget: &mut usize,
+) -> Result<(), String> {
+    if !doc.editable(layer)
+        || doc.layers[layer].tileset.is_some()
+        || doc.layers[layer].adjustment.is_some()
+    {
+        return Err("Choose an unlocked image layer".into());
+    }
+    let color: Pixel =
+        serde_json::from_value(args["color"].clone()).map_err(|_| "Invalid RGBA color")?;
+    let area = doc.width * doc.height;
+    // Indexed writes consult the palette. Linked writes also visit related
+    // frame placements. Account for both before allocating full-canvas buffers.
+    let linked_frames = if doc.layers[layer].cel_meta[frame].artwork_link.is_some() {
+        doc.durations.len()
+    } else {
+        1
+    };
+    let palette_cost = if doc.color_mode == ColorMode::Indexed {
+        doc.palette_for(frame).len().div_ceil(32)
+    } else {
+        1
+    };
+    *budget = budget
+        .checked_sub(
+            area.saturating_mul(linked_frames)
+                .saturating_mul(palette_cost),
+        )
+        .ok_or("Paint batch exceeds its work limit")?;
+    match op {
+        "fill" => {
+            let (x, y) = (number(args, "x")?, number(args, "y")?);
+            if x >= doc.width || y >= doc.height {
+                return Err("Fill seed outside canvas".into());
+            }
+            let tolerance = args
+                .get("tolerance")
+                .map(u8::deserialize)
+                .transpose()
+                .map_err(|_| "Tolerance must be 0–255")?
+                .unwrap_or(0);
+            let contiguous = args
+                .get("contiguous")
+                .map(bool::deserialize)
+                .transpose()
+                .map_err(|_| "Contiguous must be true or false")?
+                .unwrap_or(true);
+            let hits = matching(
+                &doc.layer_pixels(layer, frame),
+                doc.width,
+                doc.height,
+                (x as i32, y as i32),
+                tolerance,
+                contiguous,
+                doc.wraparound,
+            );
+            let color = doc.snapped_color(frame, color);
+            for (index, hit) in hits.into_iter().enumerate() {
+                if hit {
+                    doc.set_pixel(layer, frame, index, color);
+                }
+            }
+            Ok(())
+        }
+        "outline" => {
+            let corners = args
+                .get("corners")
+                .map(bool::deserialize)
+                .transpose()
+                .map_err(|_| "Corners must be true or false")?
+                .unwrap_or(false);
+            workflows::spatial_outline(doc, layer, frame, &vec![true; area], color, corners)
+        }
+        "shadow" => {
+            let [x, y] = args
+                .get("offset")
+                .map(<[i32; 2]>::deserialize)
+                .transpose()
+                .map_err(|_| "Offset must contain two signed integers")?
+                .unwrap_or([1, 1]);
+            if x.unsigned_abs() > MAX_DIMENSION as u32 || y.unsigned_abs() > MAX_DIMENSION as u32 {
+                return Err("Shadow offset exceeds canvas limits".into());
+            }
+            workflows::spatial_effect(doc, layer, frame, &vec![true; area], color, Some((x, y)))
+        }
+        _ => unreachable!("Only supported raster effects are dispatched"),
+    }
+}
+
+pub fn new_canvas(args: &Value) -> Result<Document, String> {
+    let (w, h) = (number(args, "width")?, number(args, "height")?);
+    if w == 0
+        || h == 0
+        || w > MAX_DIMENSION
+        || h > MAX_DIMENSION
+        || w.saturating_mul(h) > MAX_PIXELS
+    {
+        return Err("Invalid canvas dimensions".into());
+    }
+    let mut doc = Document::new(w, h);
+    if let Some(background) = args.get("background") {
+        let color: Pixel = serde_json::from_value(background.clone())
+            .map_err(|_| "Background must contain four RGBA bytes")?;
+        let layer = &mut doc.layers[0];
+        layer.background = color[3] == 255;
+        layer.name = "Background".into();
+        if color != CLEAR {
+            layer.cels[0] = vec![color; w * h].into();
+        }
+    }
+    Ok(doc)
+}
+
 fn number(v: &Value, key: &str) -> Result<usize, String> {
     v[key]
         .as_u64()
@@ -634,16 +796,7 @@ fn file_operation_mode(
     match op {
         "batch" => batch::execute(v, files),
         "create" => {
-            let (w, h) = (number(v, "width")?, number(v, "height")?);
-            if w == 0
-                || h == 0
-                || w > MAX_DIMENSION
-                || h > MAX_DIMENSION
-                || w.saturating_mul(h) > MAX_PIXELS
-            {
-                return Err("Invalid canvas dimensions".into());
-            }
-            let d = Document::new(w, h);
+            let d = new_canvas(v)?;
             let output = argument_path("output")?;
             if files.is_none() && output.exists() {
                 return Err("Output already exists".into());
@@ -1136,7 +1289,7 @@ const OPERATIONS: &[&str] = &[
     "palette-export",
     "palette-convert",
 ];
-pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|pcx|qoi|tga|jpeg|webp|svg|css|gif|mp4|fli|flc|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height or columns,rows; offset_x,offset_y,spacing_x,spacing_y; order (row_major or column_major), include_partial, layers, skip_transparent, duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity/Unity + Godot),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist). Commands: revision,commands:[{op,...}]. Ops: add-layer(name), set-layer(layer,name,visible,locked,opacity), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
+pub const CLI_HELP: &str = "PixelCraft headless tools\n  pixelcraft --cli OPERATION '{JSON arguments}'\n  pixelcraft --cli OPERATION --input FILE --output FILE [--options '{JSON}']\n  pixelcraft --mcp [--live BRIDGE_CONFIG] [--project-root DIRECTORY]\nOperations: batch, create, commands, inspect, render, edit, save, save-as, export, import, import-sequence, import-grid, batch-tags, atlas, palette-import, palette-export, palette-convert, lua, lua-console\nPaths: input, output; atlas and import-sequence use inputs (JSON array), palette-import uses palette.\nExport: format=png|png-sequence|tileset-atlas|bmp|ico|pcx|qoi|tga|jpeg|webp|svg|css|gif|mp4|fli|flc|sheet|pixel|aseprite; scale is a positive integer; frame is zero-based. MP4 requires FFmpeg with libx264 on PATH.\nBatch takes steps: [{operation, arguments}], dry_run (optional), and overwrite (optional). Export steps are preflighted before any writes.\nCLI Lua takes script, optional input/output, params (JSON object), frame/layer, and overwrite. Without input it starts a 16x16 sprite (override with width and height).\nCLI lua-console takes the same canvas options and reads commands on stdin. Use :save to write output or :quit to discard.\nTileset atlas export takes a PNG output and optional layers (zero-based array) and columns; it defaults to visible tilemap layers.\nSave takes input and revision; save-as also takes output.\nGrid options: width,height or columns,rows; offset_x,offset_y,spacing_x,spacing_y; order (row_major or column_major), include_partial, layers, skip_transparent, duration (ms, default 100).\nSheet options: scale,layout (rows/columns/horizontal/vertical/packed),width,height,columns,rows,padding,trim,tag,preset (Generic/Godot/Unity/Unity + Godot),layers (zero-based indices),frame_range (inclusive zero-based pair, intersected with tag).\nExport format=sheet also accepts extrude (0–256 pixels before scaling) and slice (exact authored name), split_slices (true uses output as a directory), split_layers, split_grid, filename_template, tag_template, border_padding, shape_padding, inner_padding, and trim_by_grid.\nAtlas options: layout (Rows/MaxRects),width,padding,trim,deduplicate,power_of_two,metadata (array/hash/none).\nEdits: revision from inspect, edits:[{layer,frame,x,y,color:[r,g,b,a]}].\nCreate: width,height,output (must not exist), optional background RGBA. Commands: revision,commands:[{op,...}]. Ops: add-group(name,parent), add-layer(name,parent), set-layer(layer,name,visible,locked,opacity,parent,blend), fill(layer,frame,x,y,color,tolerance,contiguous), outline(layer,frame,color,corners), shadow(layer,frame,color,offset), move-layer(layer,to), remove-layer(layer), add-frame(frame,duplicate), set-frame(frame,name and/or duration ms), remove-frame(frame), add-tag(tag), set-tag(index,tag), remove-tag(index), shape(layer,frame,kind=line|rectangle|ellipse,x,y,x2,y2,color RGBA,filled). Tags: name,from,to,direction (0 forward/1 reverse/2 pingpong/3 reverse pingpong),repeat (0 infinite),color RGB. All indices start at 0. File commands use input/output; live commands require the live-inspect revision and are one Undo step. Live-create takes width,height, optional background RGBA and a live revision; Undo restores the previous artwork.\nMCP exposes these operations and live-inspect, live-render, live-edit, live-commands, live-create, live-undo, live-redo, live-save, live-save-as and live-export. Live access must first be enabled in the editor's Workflow tools.\n";
 pub fn run_cli(args: &[String]) -> Result<Value, String> {
     let op = args.first().ok_or(CLI_HELP)?;
     let v = cli_arguments(&args[1..])?;
@@ -1291,7 +1444,8 @@ fn rpc_with_root(
             }
             Ok(json!({"tools":names.iter().map(|name| {
                     let details = match *name {
-                        "live-commands" | "commands" => "Atomic edits with the current revision. Set frame name and/or timing with set-frame (frame,name,duration ms). Raster ops: blit (layer,frame,x,y,width,height,data,encoding,mode); stroke (layer,frame,points [[x,y],...],color RGBA,size,end_size,spacing,placements,scatter,seed,ramp,stamp,alternate,shade,opacity,mode,pressure,mask); polygon (layer,frame,points,color,alternate,dither_level,edge_noise,seed); clear-region, copy-region, move-region, recolor-region. Raster data is straight RGBA8, row-major, encoding base64 or base64-zlib. See the PixelCraft live painting documentation for full arguments.",
+                        "live-commands" | "commands" => "Atomic edits with the current revision. Layer ops: add-group(name,parent), add-layer(name,parent), set-layer(layer,parent,blend); parent can be a group index or null for root, or use parent_id. Raster ops: fill(layer,frame,x,y,color,tolerance,contiguous), outline(layer,frame,color,corners), shadow(layer,frame,color,offset), blit, stroke, polygon, clear-region, copy-region, move-region, recolor-region. Set frame name or timing with set-frame(frame,name,duration). See the PixelCraft live painting documentation for full arguments.",
+                        "create" | "live-create" => "Create a sprite with width and height. Optional background is four RGBA bytes. File create takes output, live-create takes the current revision.",
                         "live-preview-commands" => "Preview an atomic command batch at the supplied revision without changing the document or undo history.",
                         "batch" => "Run ordered file export steps, or set dry_run to list output paths without writing files.",
                         "live-render" => "Return a PNG of the active sprite or a crop/layer subset. Optional revision, frame, layers, region, and integer scale.",
@@ -1305,6 +1459,18 @@ fn rpc_with_root(
                     };
                     let mut tool = json!({"name":name,"description":format!("PixelCraft {name}. {details}"),
                     "inputSchema":{"type":"object","properties":{"input":{"type":"string"},"output":{"type":"string"},"revision":{"type":"string"},"document_id":{"type":"string"},"edits":{"type":"array","items":{"type":"object"}},"options":{"type":"object"},"inputs":{"type":"array","items":{"type":"string"}},"format":{"type":"string"},"frame":{"type":"integer"},"palette":{"type":"string"},"width":{"type":"integer"},"height":{"type":"integer"},"commands":{"type":"array","items":{"type":"object"}},"scale":{"type":"integer","minimum":1}},"additionalProperties":false}});
+                if matches!(*name, "create" | "live-create") {
+                    tool["inputSchema"]["properties"]["background"] = json!({
+                        "type":"array","minItems":4,"maxItems":4,
+                        "items":{"type":"integer","minimum":0,"maximum":255},
+                        "description":"Optional starting background color in RGBA order."
+                    });
+                    tool["inputSchema"]["required"] = if *name == "create" {
+                        json!(["width", "height", "output"])
+                    } else {
+                        json!(["width", "height", "revision"])
+                    };
+                }
                 if (OPERATIONS.contains(name) && *name != "inspect")
                     || matches!(*name, "live-save-as" | "live-export")
                 {
