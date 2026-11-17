@@ -1793,3 +1793,65 @@ fn lua_tileset_and_tile_properties_follow_definition_edits_and_ase_chunk_order()
         .count();
     assert_eq!(chunk_count, 5);
 }
+
+#[test]
+fn lua_layer_frame_and_cel_handles_survive_edits_undo_and_redo() {
+    let mut input = Document::new(3, 2);
+    input.add_layer();
+    input.add_frame(0, false);
+    let output = run_source(
+        &input,
+        r#"
+ local sprite=app.activeSprite
+ local removed=sprite.layers[1]
+ local layer=sprite.layers[2]
+ local frame=sprite.frames[2]
+ local cel=layer:cel(frame)
+ local image=cel.image
+ layer.name='Keep'
+ assert(layer==sprite.layers[2] and cel==layer:cel(frame))
+ app.transaction(function()
+  sprite:newEmptyFrame(1)
+  sprite:deleteLayer(removed)
+ end)
+ assert(sprite.layers[1]==layer and sprite.frames[3]==frame)
+ assert(layer:cel(frame)==cel and cel.layer==layer and cel.frame==frame)
+ assert(cel.frameNumber==3 and frame.frameNumber==3)
+ assert(not pcall(function()return removed.name end))
+ app.activeLayer=layer
+ app.activeFrame=frame
+ assert(app.activeCel==cel)
+ image:drawPixel(1,1,Color{r=77,g=13,b=29,a=255})
+ assert(cel.image:getPixel(1,1)==app.pixelColor.rgba(77,13,29,255))
+ assert(layer:cel(2).image:getPixel(1,1)==0)
+ app.command.Undo()
+ assert(sprite.layers[1]==removed and sprite.layers[2]==layer)
+ assert(sprite.frames[2]==frame and layer:cel(frame)==cel and cel.frameNumber==2)
+ assert(cel.image:getPixel(1,1)==0)
+ app.command.Redo()
+ assert(sprite.layers[1]==layer and sprite.frames[3]==frame)
+ assert(layer:cel(frame)==cel and cel.image:getPixel(1,1)==app.pixelColor.rgba(77,13,29,255))
+ local orphan
+ local ok=pcall(function()
+  app.transaction(function()
+   orphan=sprite:newEmptyFrame(1)
+   error('Rollback')
+  end)
+ end)
+ assert(not ok and frame.frameNumber==3)
+ local replacement=sprite:newEmptyFrame(1)
+ assert(orphan~=replacement and not pcall(function()return orphan.frameNumber end))
+ frame.duration=0.125
+ cel.opacity=150
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(output.layers.len(), 1);
+    assert_eq!(output.layers[0].name, "Keep");
+    assert_eq!(output.durations[3], 125);
+    assert_eq!(output.layers[0].cel_meta[3].opacity, 150);
+    assert_eq!(output.layers[0].cels[3][4], [77, 13, 29, 255]);
+}

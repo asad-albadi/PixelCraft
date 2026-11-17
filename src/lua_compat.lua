@@ -223,8 +223,8 @@ if (_pw_options or {}).editorWorkspace then
   return result
  end
 end
-local function snapshot() return {document=copy(doc),mask=copy(spriteSelection._mask),frame=activeFrame,layer=activeLayer} end
-local function restore(s) doc=copy(s.document);spriteSelection=bindSpriteHandle(selection(copy(s.mask)),sprite);activeFrame=s.frame;activeLayer=s.layer;rebuildHandles() end
+local function snapshot() return {document=cloneDocumentState(doc),mask=copy(spriteSelection._mask),frame=activeFrame,layer=activeLayer} end
+local function restore(s) doc=cloneDocumentState(s.document);spriteSelection=bindSpriteHandle(selection(copy(s.mask)),sprite);activeFrame=s.frame;activeLayer=s.layer;rebuildHandles() end
 local transactionDepth=0
 rawset(app,'transaction',function(a,b)
  local owner,before=sprite,snapshot()

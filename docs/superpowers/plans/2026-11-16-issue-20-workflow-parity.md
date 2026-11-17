@@ -162,6 +162,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 tileset and tile properties checkpoint. Typed Lua maps support document tilesets and the empty and nonempty tiles they contain. Properties follow Lua tile insertion and deletion and native tile movement, duplication, and deletion. Native and ASE round-trip coverage includes upstream typed tileset data and a complete positional ASE tile metadata sequence. Detached clipboard tileset properties and broader object identity remain open.
 
+- Item 45 layer, frame, and cel identity checkpoint. A retained Lua handle resolves to the current slot across structural Lua edits, undo, redo, and rollback. Layer, frame, and cel identity tokens stay outside serialized project and clipboard data. The Windows regression covers handle equality, stale handle errors, active cel targeting, and drawing to a retained cel image after a frame shift. Modeless editor-snapshot identity, the other object types, and native clipboard verification remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
