@@ -928,3 +928,32 @@ fn lua_edits_tilesets_and_remaps_placements_in_every_frame() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn headless_lua_clipboard_is_local_and_cut_preserves_selection_holes() {
+    let mut input = Document::new(4, 1);
+    input.layers[0].cels[0].set(0, [100, 80, 60, 255]);
+    input.layers[0].cels[0].set(1, [7, 8, 9, 255]);
+    input.layers[0].cels[0].set(2, [60, 80, 100, 255]);
+    let output = run_source(
+        &input,
+        r#"
+ assert(not app.clipboard.hasImage)
+ app.activeSprite.selection=Selection(Rectangle(0,0,3,1))
+ app.activeSprite.selection:subtract(Rectangle(1,0,1,1))
+ app.command.Cut()
+ assert(app.clipboard.hasImage and app.clipboard.content.image.width==3)
+ assert(app.clipboard.image:getPixel(1,0)==0)
+ app.command.Paste{position=Point(1,0)}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        output.composite(0),
+        vec![CLEAR, [100, 80, 60, 255], CLEAR, [60, 80, 100, 255]]
+    );
+    run_source(&input, "assert(not app.clipboard.hasImage)", 0, 0, None).unwrap();
+}

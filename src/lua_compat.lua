@@ -244,6 +244,84 @@ app.command.Clear=command(function()
   if spriteSelection.isEmpty or spriteSelection:contains(x+pos.x,y+pos.y) then im:drawPixel(x,y,color) end
  end end
 end)
+do
+ local localClipboard
+ local function readImage()
+  local data=editorTabs and host{op='clipboardRead'}.image or (not editorTabs and localClipboard)
+  if data then return image(copy(data.pixels),data.w,data.h,ColorMode.RGB,0) end
+ end
+ local function writeImage(im)
+  assert(type(im)=='table' and im._pixels and im.width and im.height,'Expected a clipboard image')
+  assert(im.width*im.height<=1000000,'Clipboard image exceeds the Lua pixel budget')
+  local data={w=im.width,h=im.height,pixels=im._pixels}
+  if editorTabs then host{op='clipboardWrite',image=data} else localClipboard=copy(data) end
+ end
+ rawset(app,'clipboard',setmetatable({},{
+  __index=function(_,key)
+   if key=='image' then return readImage() end
+   if key=='hasImage' then return readImage()~=nil end
+   if key=='content' then return {image=readImage()} end
+   error('Unsupported clipboard field: '..key)
+  end,
+  __newindex=function(_,key,value)
+   if key=='image' then writeImage(value)
+   elseif key=='content' and type(value)=='table' then writeImage(value.image)
+   else error('Unsupported clipboard assignment: '..key) end
+  end,
+ }))
+
+ app.command.Copy=function()
+  assert(app.activeLayer and app.activeLayer.isImage,'Choose an image layer')
+  local bounds=spriteSelection.isEmpty and Rectangle(0,0,doc.width,doc.height) or spriteSelection.bounds
+  assert(bounds.width*bounds.height<=1000000,'Clipboard image exceeds the Lua pixel budget')
+  local copied=Image(bounds.width,bounds.height,ColorMode.RGB)
+  local pixels=doc.layers[activeLayer].cels[activeFrame]
+  for y=0,bounds.height-1 do for x=0,bounds.width-1 do
+   local px,py=x+bounds.x,y+bounds.y
+   if px>=0 and px<doc.width and py>=0 and py<doc.height
+      and (spriteSelection.isEmpty or spriteSelection:contains(px,py)) then
+    copied._pixels[y*bounds.width+x+1]=pixels[py*doc.width+px+1]
+   end
+  end end
+  writeImage(copied)
+ end
+
+ local function requireEditableImage()
+  assert(app.activeLayer and app.activeLayer.isImage,'Choose an image layer')
+  local layer=doc.layers[activeLayer]
+  local seen={}
+  while layer do
+   assert(not layer.locked and not seen[layer],'Choose an editable image layer')
+   seen[layer]=true
+   layer=layer.parent and doc.layers[layer.parent+1]
+  end
+ end
+
+ app.command.Cut=function()
+  requireEditableImage()
+  app.command.Copy()
+  app.command.Clear()
+ end
+
+ app.command.Paste=command(function(options)
+  requireEditableImage()
+  local im=readImage()
+  if not im then return end
+  local bounds=spriteSelection.bounds
+  local position=options.position and Point(options.position) or Point(bounds.x,bounds.y)
+  if editorTabs then
+   local result=host{op='clipboardApply',document=doc,image={w=im.width,h=im.height,pixels=im._pixels},
+    site={activeLayer-1,activeFrame-1},origin={position.x,position.y}}
+   local edited=expandDocumentPixels(result.document).layers[activeLayer]
+   local layer=doc.layers[activeLayer]
+   layer.cels,layer.cel_meta=edited.cels,edited.cel_meta
+  else
+   local cel=app.activeCel
+   local start=cel.position
+   cel.image:drawImage(im,Point(position.x-start.x,position.y-start.y))
+  end
+ end)
+end
 -- Additional common image commands, with selection-aware transactional writes.
 local function selectedImagePixels(fn)
  assert(app.activeLayer.isImage and app.activeLayer.isEditable, 'Select an editable image layer')

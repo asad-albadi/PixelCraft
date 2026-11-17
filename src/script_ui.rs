@@ -17,13 +17,16 @@ pub struct ScriptUi {
     received: Option<Instant>,
     started: Option<Instant>,
     pub preview: Option<Value>,
+    pub clipboard_request: Option<Request>,
+    pub use_system_clipboard: Option<bool>,
     pub modeless: bool,
     pub editor_update: Option<Value>,
 }
 impl ScriptUi {
-    pub fn connect(&mut self, rx: mpsc::Receiver<Request>) {
+    pub fn connect(&mut self, rx: mpsc::Receiver<Request>, native_clipboard: bool) {
         *self = Self {
             receiver: Some(rx),
+            use_system_clipboard: (!native_clipboard).then_some(false),
             started: Some(Instant::now()),
             ..Self::default()
         };
@@ -44,6 +47,10 @@ impl ScriptUi {
             }
             if matches!(op, "activate" | "closePreview" | "refresh" | "preferences") {
                 let _ = request.reply.send(json!({}));
+            } else if matches!(op, "clipboardRead" | "clipboardWrite")
+                && self.use_system_clipboard.is_some()
+            {
+                self.clipboard_request = Some(request);
             } else {
                 self.pending = Some(request);
                 self.received = Some(Instant::now());
@@ -54,7 +61,24 @@ impl ScriptUi {
         };
         let op = request.value["op"].as_str().unwrap_or("").to_string();
         let mut response = None;
-        if op == "alert" {
+        if matches!(op.as_str(), "clipboardRead" | "clipboardWrite") {
+            if crate::fluent::modal_dialog(ctx, "Extension clipboard access", |ui| {
+                ui.label("Allow this extension to read and write images on the system clipboard?");
+                ui.horizontal(|ui| {
+                    if ui.pc_button("Allow for this run").clicked() {
+                        self.use_system_clipboard = Some(true);
+                    }
+                    if ui.pc_button("Use PixelCraft clipboard").clicked() {
+                        self.use_system_clipboard = Some(false);
+                    }
+                });
+                self.use_system_clipboard.is_some()
+            }) {
+                self.use_system_clipboard.get_or_insert(false);
+                self.clipboard_request = self.pending.take();
+                return;
+            }
+        } else if op == "alert" {
             let value = &request.value["value"];
             let title = value["title"].as_str().unwrap_or("Extension message");
             egui::Window::new(title).collapsible(false).show(ctx, |ui| {
@@ -108,7 +132,13 @@ impl ScriptUi {
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 if ui.pc_button("Stop extension").clicked() {
-                    response = Some(json!({"cancelled":true,"closed":true}));
+                    response = Some(
+                        if matches!(op.as_str(), "clipboardRead" | "clipboardWrite") {
+                            json!({"error":"Extension stopped"})
+                        } else {
+                            json!({"cancelled":true,"closed":true})
+                        },
+                    );
                 }
             });
         if let Some(mut value) = response {
@@ -168,6 +198,54 @@ fn draw_dialog(ctx: &egui::Context, dialog: &mut Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn extension_clipboard_requires_a_native_choice_and_remembers_internal_mode() {
+        let context = egui::Context::default();
+        let (requests, receiver) = mpsc::channel();
+        let (reply, _response) = mpsc::channel();
+        let mut ui = ScriptUi::default();
+        ui.connect(receiver, true);
+        let request = |op| Request {
+            value: json!({"op":op}),
+            reply: reply.clone(),
+        };
+        requests.send(request("clipboardRead")).unwrap();
+        context
+            .run_ui(egui::RawInput::default(), |root| ui.show(root.ctx()))
+            .textures_delta
+            .clear();
+        assert!(ui.clipboard_request.is_none());
+        assert!(ui.use_system_clipboard.is_none());
+        let pressed_escape = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        context
+            .run_ui(pressed_escape, |root| ui.show(root.ctx()))
+            .textures_delta
+            .clear();
+        assert_eq!(ui.use_system_clipboard, Some(false));
+        assert_eq!(
+            ui.clipboard_request.take().unwrap().value["op"],
+            "clipboardRead"
+        );
+        requests.send(request("clipboardWrite")).unwrap();
+        context
+            .run_ui(egui::RawInput::default(), |root| ui.show(root.ctx()))
+            .textures_delta
+            .clear();
+        assert_eq!(
+            ui.clipboard_request.take().unwrap().value["op"],
+            "clipboardWrite"
+        );
+    }
+
     #[test]
     fn real_dialog_ui_renders_entries_and_buttons() {
         let ctx = egui::Context::default();

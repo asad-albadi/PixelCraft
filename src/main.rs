@@ -160,7 +160,7 @@ struct ClipboardTarget {
     selection: Option<(i32, i32, i32, i32)>,
     mask: Option<Vec<bool>>,
 }
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct Clipboard {
     w: usize,
     h: usize,
@@ -441,6 +441,7 @@ struct PixelCraft {
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
     clipboard_target: Option<ClipboardTarget>,
+    script_clipboard_reply: Option<std::sync::mpsc::Sender<serde_json::Value>>,
     native_paste_handled: bool,
     start: Option<(i32, i32)>,
     last: Option<(i32, i32)>,
@@ -619,6 +620,7 @@ impl PixelCraft {
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
             clipboard_target: None,
+            script_clipboard_reply: None,
             native_paste_handled: false,
             start: None,
             last: None,
@@ -2553,35 +2555,160 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn poll_clipboard(&mut self, ctx: &egui::Context) {
         if let Some(result) = self.system_clipboard.poll() {
-            match result {
-                system_clipboard::Completion::Copy(Err(e)) => {
-                    self.status = format!("Copied internally; {e}")
-                }
-                system_clipboard::Completion::Copy(Ok(())) => {}
-                system_clipboard::Completion::Paste(result) => {
-                    if self.clipboard_target.take() == Some(self.clipboard_destination()) {
-                        match result {
-                            Ok((w, h, pixels)) => {
-                                self.clipboard = Some(Clipboard { w, h, pixels });
-                                self.paste_internal();
-                            }
-                            Err(e) => {
-                                if !e.contains("timed out") && !e.contains("exceeds limits") {
-                                    self.paste_internal();
-                                }
-                                self.status = format!("{e}; internal clipboard retained");
-                            }
+            if let Some(reply) = self.script_clipboard_reply.take() {
+                let response = match result {
+                    system_clipboard::Completion::Copy(result) => {
+                        if result.is_err() {
+                            self.script_ui.use_system_clipboard = Some(false);
                         }
-                    } else {
-                        self.status = "Paste cancelled because the document changed".into();
+                        serde_json::json!({})
                     }
-                }
+                    system_clipboard::Completion::Paste(Ok((w, h, pixels))) => {
+                        self.clipboard = Some(Clipboard { w, h, pixels });
+                        self.script_clipboard_read()
+                    }
+                    system_clipboard::Completion::Paste(Err(error)) => {
+                        if error.contains("timed out") || error.contains("exceeds limits") {
+                            serde_json::json!({"error":error})
+                        } else {
+                            self.script_clipboard_read()
+                        }
+                    }
+                };
+                let _ = reply.send(response);
+            } else {
+                self.apply_native_clipboard(result);
             }
         }
         if self.system_clipboard.busy() {
             ctx.request_repaint_after(Duration::from_millis(25));
         }
     }
+
+    fn apply_native_clipboard(&mut self, result: system_clipboard::Completion) {
+        match result {
+            system_clipboard::Completion::Copy(Err(e)) => {
+                self.status = format!("Copied internally; {e}")
+            }
+            system_clipboard::Completion::Copy(Ok(())) => {}
+            system_clipboard::Completion::Paste(result) => {
+                if self.clipboard_target.take() == Some(self.clipboard_destination()) {
+                    match result {
+                        Ok((w, h, pixels)) => {
+                            self.clipboard = Some(Clipboard { w, h, pixels });
+                            self.paste_internal();
+                        }
+                        Err(e) => {
+                            if !e.contains("timed out") && !e.contains("exceeds limits") {
+                                self.paste_internal();
+                            }
+                            self.status = format!("{e}; internal clipboard retained");
+                        }
+                    }
+                } else {
+                    self.status = "Paste cancelled because the document changed".into();
+                }
+            }
+        }
+    }
+    fn script_clipboard_read(&self) -> serde_json::Value {
+        match self.clipboard.as_ref() {
+            Some(image) if image.w.saturating_mul(image.h) > 1_000_000 => {
+                serde_json::json!({"error":"Clipboard image exceeds the Lua pixel budget"})
+            }
+            image => serde_json::json!({"image":image}),
+        }
+    }
+
+    fn handle_script_clipboard(&mut self, request: script_ui::Request) {
+        let result = if request.value["op"] == "clipboardWrite" {
+            match Self::decode_script_clipboard(&request.value["image"]) {
+                Ok(clip) => {
+                    let native = self.script_ui.use_system_clipboard == Some(true);
+                    let started = native
+                        && self
+                            .system_clipboard
+                            .copy(clip.w, clip.h, clip.pixels.clone())
+                            .is_ok();
+                    self.clipboard = Some(clip);
+                    if started {
+                        self.clipboard_target = None;
+                        self.script_clipboard_reply = Some(request.reply);
+                        return;
+                    }
+                    if native {
+                        self.script_ui.use_system_clipboard = Some(false);
+                    }
+                    serde_json::json!({})
+                }
+                Err(error) => serde_json::json!({"error":error}),
+            }
+        } else if self.script_ui.use_system_clipboard == Some(true)
+            && self.system_clipboard.paste().is_ok()
+        {
+            self.clipboard_target = None;
+            self.script_clipboard_reply = Some(request.reply);
+            return;
+        } else {
+            self.script_clipboard_read()
+        };
+        let _ = request.reply.send(result);
+    }
+
+    fn decode_script_clipboard(value: &serde_json::Value) -> Result<Clipboard, String> {
+        let image: Clipboard = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+        if image.w == 0
+            || image.h == 0
+            || image.w > MAX_DIMENSION
+            || image.h > MAX_DIMENSION
+            || image.w.saturating_mul(image.h) != image.pixels.len()
+            || image.pixels.len() > 1_000_000
+        {
+            return Err("Invalid clipboard image or Lua clipboard pixel budget exceeded".into());
+        }
+        Ok(image)
+    }
+
+    fn paste_raster(
+        doc: &mut Document,
+        layer: usize,
+        frame: usize,
+        origin: (i32, i32),
+        clip: &Clipboard,
+    ) {
+        for cy in 0..clip.h {
+            for cx in 0..clip.w {
+                if let Some(i) = doc.index(
+                    origin.0.saturating_add(cx as i32),
+                    origin.1.saturating_add(cy as i32),
+                ) {
+                    let p = clip.pixels[cy * clip.w + cx];
+                    let color = over(doc.layers[layer].cels[frame][i], p, 255);
+                    doc.set_pixel(layer, frame, i, color);
+                }
+            }
+        }
+    }
+
+    fn apply_script_paste(request: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let mut doc: Document =
+            serde_json::from_value(request["document"].clone()).map_err(|e| e.to_string())?;
+        doc.validate()?;
+        let clip = Self::decode_script_clipboard(&request["image"])?;
+        let (layer, frame): (usize, usize) =
+            serde_json::from_value(request["site"].clone()).map_err(|e| e.to_string())?;
+        let origin =
+            serde_json::from_value(request["origin"].clone()).map_err(|e| e.to_string())?;
+        if frame >= doc.durations.len()
+            || !doc.editable(layer)
+            || doc.layers[layer].tileset.is_some()
+        {
+            return Err("Choose an editable image layer and frame".into());
+        }
+        Self::paste_raster(&mut doc, layer, frame, origin, &clip);
+        Ok(serde_json::json!({"document":extensions::script_document_value(&doc)?}))
+    }
+
     fn paste_internal(&mut self) {
         if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
             return;
@@ -2589,15 +2716,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if let Some(c) = self.clipboard.clone() {
             self.remember_action("Paste");
             let (x, y, _, _) = self.selection.unwrap_or((0, 0, 0, 0));
-            for cy in 0..c.h {
-                for cx in 0..c.w {
-                    if let Some(i) = self.doc.index(x + cx as i32, y + cy as i32) {
-                        let p = c.pixels[cy * c.w + cx];
-                        let color = over(self.doc.layers[self.layer].cels[self.frame][i], p, 255);
-                        self.doc.set_pixel(self.layer, self.frame, i, color);
-                    }
-                }
-            }
+            Self::paste_raster(&mut self.doc, self.layer, self.frame, (x, y), &c);
             self.status = "Pasted pixels".into();
         }
     }
@@ -2919,7 +3038,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let (frame, layer) = (self.frame, self.layer);
         let colors = [self.fg, self.bg];
         let (ui_tx, ui_rx) = std::sync::mpsc::channel::<script_ui::Request>();
-        self.script_ui.connect(ui_rx);
+        self.script_ui
+            .connect(ui_rx, self.shot.is_none() && !cfg!(test));
         self.script_preview = Some(ScriptPreview {
             initial_tab: self.active_tab,
             tab_count: self.tabs.len(),
@@ -2964,6 +3084,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     | "readScript"
                             ) {
                                 return extensions::script_file_request(&base, &request);
+                            }
+                            if op == "clipboardApply" {
+                                return Self::apply_script_paste(&request);
                             }
                             if op == "editorDocument" {
                                 let index = request["sprite"]
@@ -3130,6 +3253,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .as_ref()
             .and_then(|update| update["sprite"].as_u64());
         self.script_ui.show(ctx);
+        if let Some(request) = self.script_ui.clipboard_request.take() {
+            self.handle_script_clipboard(request);
+        }
         let Some(request) = self.script_ui.preview.take() else {
             return;
         };
@@ -7743,6 +7869,65 @@ mod tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc.drawing_grid(), DrawingGrid::default());
+    }
+
+    #[test]
+    fn lua_clipboard_shares_editor_images_and_pastes_through_native_raster_editing() {
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.replace(Document::new(4, 1), None);
+        editor.clipboard = Some(Clipboard {
+            w: 1,
+            h: 1,
+            pixels: vec![[3, 60, 90, 128]],
+        });
+        editor.doc.layers[0].cels[0].set(1, [210, 60, 100, 255]);
+        editor.doc.layers[0].cels[0].set(2, [10, 20, 30, 255]);
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-lua-clipboard-{}.lua",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"
+ local sprite=app.activeSprite
+ assert(app.clipboard.hasImage and app.clipboard.image.width==1)
+ assert(app.clipboard.image:getPixel(0,0)==app.pixelColor.rgba(3,60,90,128))
+ sprite.selection=Selection(Rectangle(1,0,2,1))
+ sprite.selection:subtract(Rectangle(2,0,1,1))
+ app.command.Copy()
+ assert(app.clipboard.image.width==1)
+ local im=Image(2,1,ColorMode.RGB)
+ im:drawPixel(0,0,Color{r=80,g=110,b=140,a=128})
+ app.clipboard.image=im
+ app.command.Paste{position=Point(2,0)}
+ "#,
+        )
+        .unwrap();
+        editor.start_script(path.clone(), None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while editor.script_job.is_some() && Instant::now() < deadline {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| {
+                editor.show_script_ui(&ctx);
+                editor.poll_clipboard(&ctx);
+            });
+            output.textures_delta.clear();
+            editor.poll_script();
+            std::thread::yield_now();
+        }
+        assert!(editor.script_job.is_none());
+        assert_eq!(editor.status, "Applied extension changes");
+        assert_eq!(
+            editor.doc.layers[0].cels[0][2],
+            over([10, 20, 30, 255], [80, 110, 140, 128], 255)
+        );
+        assert_eq!(editor.doc.layers[0].cels[0][3], CLEAR);
+        assert_eq!(
+            editor.clipboard.as_ref().unwrap().pixels[0],
+            [80, 110, 140, 128]
+        );
+        assert_eq!(editor.undo.len(), 1);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

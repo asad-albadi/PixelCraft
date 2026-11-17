@@ -138,6 +138,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 tileset checkpoint. Lua can create, clone, rename, and delete tilesets, inspect and edit tile images, insert and delete tiles, and create or reassign tilemap layers. Structural changes preserve tile flags, per-tile metadata, and surviving placements across frames and layers. Windows tests cover deleted handles, independent clone edits, and native and ASE save and reopen. Native tool invocation, clipboard integration, typed properties, and broader object identity remain open.
 
+- Item 45 clipboard checkpoint. Lua can read and write image data and run Copy, Cut, and Paste. Desktop paste uses the same raster path and alpha blending as the editor. The system image clipboard uses the existing asynchronous worker and requires a choice for each script run. Tests cover the internal and headless paths, selection holes, partial alpha, an undoable paste, and declining access. Native desktop round-trip was not exercised in this checkpoint. Text, clear, and rich clipboard content, native tool invocation, typed properties, and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
