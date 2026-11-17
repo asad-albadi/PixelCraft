@@ -124,6 +124,8 @@ impl Files<'_> {
     }
 
     fn check_path(&self, path: &Path, allow_missing: bool) -> Result<(), String> {
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let _ = allow_missing;
         let Some(root) = self.root else {
             return Ok(());
         };

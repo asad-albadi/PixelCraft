@@ -1,5 +1,7 @@
 use super::*;
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use raw_window_handle::HasWindowHandle;
+#[cfg(any(windows, target_os = "linux"))]
+use raw_window_handle::RawWindowHandle;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 
@@ -28,9 +30,9 @@ impl Surface {
             #[cfg(windows)]
             Ok(RawWindowHandle::Win32(handle)) => Self::Windows(handle.hwnd.get()),
             #[cfg(target_os = "linux")]
-            Ok(RawWindowHandle::Xlib(handle)) => (handle.window as u64)
-                .try_into()
-                .map_or(Self::Unsupported, Self::X11),
+            Ok(RawWindowHandle::Xlib(handle)) => {
+                u32::try_from(u128::from(handle.window)).map_or(Self::Unsupported, Self::X11)
+            }
             #[cfg(target_os = "linux")]
             Ok(RawWindowHandle::Xcb(handle)) => Self::X11(handle.window.get()),
             _ => Self::Unsupported,

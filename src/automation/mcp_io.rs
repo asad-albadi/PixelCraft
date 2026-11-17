@@ -23,6 +23,7 @@ pub(super) fn track_staging(path: &Path) -> std::sync::Arc<StagedFiles> {
     files
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 fn track_created(
     path: &Path,
     identity: impl FnOnce() -> io::Result<FileIdentity>,
@@ -54,6 +55,7 @@ fn track_created(
     Ok(())
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 fn expected_source(source: &Path) -> io::Result<Option<FileIdentity>> {
     if !super::mcp_access::is_restricted() {
         return Ok(None);
@@ -191,6 +193,8 @@ pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn directory_identity(path: &Path) -> io::Result<(u64, u64)> {
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let _ = path;
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.directory_identity(path)) {
         return result;
@@ -212,6 +216,9 @@ pub(crate) fn remove_staging(
     tracked: Option<&StagedFiles>,
 ) -> io::Result<()> {
     if let Some((expected, tracked)) = expected.zip(tracked) {
+        #[cfg(not(any(windows, target_os = "linux")))]
+        let _ = (expected, tracked, known_child);
+        #[cfg(any(windows, target_os = "linux"))]
         let files: Vec<_> = tracked
             .lock()
             .unwrap()
@@ -258,6 +265,7 @@ pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn rename(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(any(windows, target_os = "linux"))]
     let expected = expected_source(source)?;
     #[cfg(windows)]
     if let Some(result) =
@@ -275,6 +283,7 @@ pub(crate) fn rename(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(any(windows, target_os = "linux"))]
     let expected = expected_source(source)?;
     #[cfg(windows)]
     if let Some(result) =
@@ -292,6 +301,7 @@ pub(crate) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 pub(crate) fn hard_link(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(any(windows, target_os = "linux"))]
     let expected = expected_source(source)?;
     #[cfg(windows)]
     if let Some(result) =
