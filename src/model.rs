@@ -595,6 +595,27 @@ pub enum BrushShape {
     Horizontal,
     Vertical,
 }
+
+impl BrushShape {
+    pub(crate) fn offsets(self, size: i32) -> impl Iterator<Item = (i32, i32)> {
+        let size = size.clamp(1, MAX_BRUSH_SIZE);
+        let lo = -(size / 2);
+        let even = i32::from(size % 2 == 0);
+        (lo..lo + size).flat_map(move |y| {
+            (lo..lo + size).filter_map(move |x| {
+                let (a, b) = (2 * x + even, 2 * y + even);
+                let inside = match self {
+                    Self::Round => a * a + b * b <= size * size,
+                    Self::Square => true,
+                    Self::Diamond => a.abs() + b.abs() <= size,
+                    Self::Horizontal => y == 0,
+                    Self::Vertical => x == 0,
+                };
+                inside.then_some((x, y))
+            })
+        })
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[repr(u16)]
 pub enum BlendMode {
@@ -2471,24 +2492,9 @@ impl Document {
             return;
         }
         let (c, ci) = self.drawing_color(l, f, self.snapped_color(f, c));
-        let size = size.clamp(1, MAX_BRUSH_SIZE);
-        let lo = -(size / 2);
-        for dy in lo..lo + size {
-            for dx in lo..lo + size {
-                let (a, b) = (
-                    2 * dx + if size % 2 == 0 { 1 } else { 0 },
-                    2 * dy + if size % 2 == 0 { 1 } else { 0 },
-                );
-                let accept = match self.brush_shape {
-                    BrushShape::Round => a * a + b * b <= size * size,
-                    BrushShape::Square => true,
-                    BrushShape::Diamond => a.abs() + b.abs() <= size,
-                    BrushShape::Horizontal => dy == 0,
-                    BrushShape::Vertical => dx == 0,
-                };
-                if accept && let Some(i) = self.position_on_axes(x + dx, y + dy, axes) {
-                    self.draw_pixel(l, f, i, c, ci);
-                }
+        for (dx, dy) in self.brush_shape.offsets(size) {
+            if let Some(i) = self.position_on_axes(x + dx, y + dy, axes) {
+                self.draw_pixel(l, f, i, c, ci);
             }
         }
     }

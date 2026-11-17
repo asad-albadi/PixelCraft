@@ -17,6 +17,7 @@ mod ui_icons;
 use ui_icons::UiIcons;
 mod palette_conversion;
 mod productivity_ui;
+mod retouch_tool;
 
 mod script_ui;
 mod selection_tools;
@@ -115,6 +116,8 @@ fn read_theme_preference(bytes: &[u8]) -> egui::ThemePreference {
 enum Tool {
     Pencil,
     Spray,
+    BlurBrush,
+    JumbleBrush,
     Eraser,
     Fill,
     Picker,
@@ -142,6 +145,8 @@ impl Tool {
             Self::SelectEllipse => "elliptical-marquee",
             Self::Pencil => "pencil",
             Self::Spray => "spray",
+            Self::BlurBrush => "blur-brush",
+            Self::JumbleBrush => "jumble-brush",
             Self::Eraser => "eraser",
             Self::Fill => "fill",
             Self::Line => "line",
@@ -171,6 +176,8 @@ impl Tool {
             Self::Wand => "magic_wand",
             Self::Line => "line",
             Self::Curve => "curve",
+            Self::BlurBrush => "blur",
+            Self::JumbleBrush => "jumble",
             Self::Rect if filled => "filled_rectangle",
             Self::Rect => "rectangle",
             Self::Ellipse if filled => "filled_ellipse",
@@ -185,6 +192,8 @@ impl Tool {
         match self {
             Self::Pencil => "Pencil",
             Self::Spray => "Spray",
+            Self::BlurBrush => "Blur brush",
+            Self::JumbleBrush => "Jumble brush",
             Self::Eraser => "Eraser",
             Self::Fill => "Paint bucket",
             Self::Picker => "Eyedropper",
@@ -724,6 +733,8 @@ struct PixelCraft {
     spray_radius: i32,
     spray_rate: u16,
     spray_stroke: Option<spray_tool::SprayStroke>,
+    retouch_strength: u8,
+    retouch_gesture: Option<retouch_tool::RetouchGesture>,
     zoom: f32,
     wheel_zoom_steps: f32,
     pan: Vec2,
@@ -924,6 +935,8 @@ impl PixelCraft {
             spray_radius: 8,
             spray_rate: 60,
             spray_stroke: None,
+            retouch_strength: 100,
+            retouch_gesture: None,
             zoom: 10.,
             wheel_zoom_steps: 0.,
             pan: Vec2::ZERO,
@@ -2262,6 +2275,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.selection_tools.cancel_polygon();
         self.curve_draft = None;
         self.spray_stroke = None;
+        self.retouch_gesture = None;
         self.studio.marquee_operation = None;
         self.gesture_canvas = None;
         self.gesture_button = None;
@@ -3592,6 +3606,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "properties" => self.properties_open = true,
             "pencil" => self.tool = Tool::Pencil,
             "spray" => self.tool = Tool::Spray,
+            "blur-brush" => self.tool = Tool::BlurBrush,
+            "jumble-brush" => self.tool = Tool::JumbleBrush,
             "eraser" => self.tool = Tool::Eraser,
             "fill" => self.tool = Tool::Fill,
             "picker" => self.tool = Tool::Picker,
@@ -4838,6 +4854,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         for t in [
             Tool::Pencil,
             Tool::Spray,
+            Tool::BlurBrush,
+            Tool::JumbleBrush,
             Tool::Eraser,
             Tool::Fill,
             Tool::Picker,
@@ -6752,7 +6770,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         let draws = matches!(
             self.tool,
-            Tool::Pencil | Tool::Spray | Tool::Eraser | Tool::Line | Tool::Rect | Tool::Ellipse
+            Tool::Pencil
+                | Tool::Spray
+                | Tool::Eraser
+                | Tool::BlurBrush
+                | Tool::JumbleBrush
+                | Tool::Line
+                | Tool::Rect
+                | Tool::Ellipse
         );
         let accepts_copies = draws
             || matches!(self.tool, Tool::Fill | Tool::Wand | Tool::Picker)
@@ -6792,6 +6817,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             } else if self.tool == Tool::Spray {
                 self.begin_spray(p, pane, button, &ctx);
+            } else if matches!(self.tool, Tool::BlurBrush | Tool::JumbleBrush) {
+                self.begin_retouch(pane, button, p);
             } else if self.tool == Tool::Curve {
                 if secondary {
                     self.cancel_curve();
@@ -6926,6 +6953,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     b = self.snapped_canvas_point(b, repeats);
                 }
                 match self.tool {
+                    Tool::BlurBrush | Tool::JumbleBrush => self.extend_retouch(b),
                     Tool::Contour => self.contour_point(b),
                     Tool::Lasso => {
                         if self.studio.polygon.last() != Some(&b) {
@@ -6996,6 +7024,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         } else if owns_gesture {
+            if matches!(self.tool, Tool::BlurBrush | Tool::JumbleBrush)
+                && can_edit
+                && self
+                    .gesture_button
+                    .is_some_and(|button| ctx.input(|i| i.pointer.button_released(button)))
+                && let Some(raw) = on_canvas
+            {
+                self.extend_retouch(self.snapped_canvas_point(raw, repeats));
+            }
             if self.tool == Tool::Contour
                 && can_edit
                 && self
@@ -7126,7 +7163,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         if !transforming
             && let Some((x, y)) = on_canvas
-            && matches!(self.tool, Tool::Pencil | Tool::Eraser)
+            && matches!(
+                self.tool,
+                Tool::Pencil | Tool::Eraser | Tool::BlurBrush | Tool::JumbleBrush
+            )
         {
             let (x, y) = self.snapped_canvas_point((x, y), repeats);
             let size = pixel_size * self.brush as f32;

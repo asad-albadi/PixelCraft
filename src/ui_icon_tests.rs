@@ -3457,3 +3457,59 @@ fn spray_tool_keeps_emitting_at_rest_with_configured_rate_and_radius() {
         x >= 0 && x * x + y * y <= 12 * 12
     }));
 }
+
+#[test]
+fn blur_and_jumble_brushes_clip_to_selection_and_commit_one_stroke() {
+    for action in ["blur-brush", "jumble-brush"] {
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1180., 840.);
+        let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-retouch.png")));
+        let mut doc = Document::new(10, 10);
+        for y in 0..10 {
+            for x in 0..10 {
+                let color = if (x + y) % 2 == 0 {
+                    [250, 20, 40, 255]
+                } else {
+                    [20, 40, 250, 255]
+                };
+                doc.set_pixel(0, 0, y * 10 + x, color);
+            }
+        }
+        app.replace(doc.clone(), None);
+        app.action(action);
+        app.brush = 3;
+        app.selection = Some((2, 3, 7, 5));
+        for _ in 0..3 {
+            discard_frame(&mut app, &ctx, size, 1., vec![]);
+        }
+        app.zoom = 20.;
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        let board = Rect::from_center_size(
+            layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+            app.sprite_display_size() * app.zoom,
+        );
+        let center = |x, y| board.min + Vec2::new(x, y) * 20.;
+        drag_layout(&mut app, &ctx, size, center(1.5, 4.5), center(8.5, 4.5));
+        let original = &doc.layers[0].cels[0];
+        let edited = &app.doc.layers[0].cels[0];
+        let changes: Vec<_> = edited
+            .iter()
+            .enumerate()
+            .filter_map(|(i, color)| (*color != original[i]).then_some(i))
+            .collect();
+        assert!(!changes.is_empty(), "{action} had no effect");
+        assert!(
+            changes
+                .iter()
+                .all(|i| (2..=7).contains(&(i % 10)) && (3..=5).contains(&(i / 10)))
+        );
+        if action == "blur-brush" {
+            assert_eq!(edited[44], [147, 28, 133, 255]);
+        } else {
+            assert!(changes.iter().all(|&i| edited[i] == original[i - 1]));
+        }
+        assert_eq!(app.undo.len(), 1);
+        app.undo();
+        assert_eq!(app.doc, doc);
+    }
+}

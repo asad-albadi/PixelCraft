@@ -9,6 +9,7 @@ mod canvas_resize;
 pub mod curve;
 pub use artwork_palette::{generate_artwork_palette, generate_artwork_palette_until};
 pub mod filters;
+pub mod retouch;
 mod rotsprite;
 pub mod selection;
 mod sheet_layout;

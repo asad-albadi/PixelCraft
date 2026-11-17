@@ -5,6 +5,7 @@ mod tiles;
 use crate::lua::MAX_SCRIPT_PIXELS;
 use crate::model::{BrushShape, CLEAR, Document, MAX_BRUSH_SIZE, MAX_DIMENSION, Pixel, over};
 use crate::productivity::matching_on_axes;
+use crate::workflows::retouch::{Retouch, RetouchBrush, RetouchStroke};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -20,6 +21,7 @@ enum Tool {
     Ellipse(bool),
     Polygon(bool),
     Curve,
+    Retouch(Retouch),
     Fill,
     Picker,
     Selection(selection::Kind),
@@ -38,6 +40,8 @@ impl Tool {
             "polygon" => Ok(Self::Polygon(false)),
             "filled_polygon" | "filled_contour" => Ok(Self::Polygon(true)),
             "curve" => Ok(Self::Curve),
+            "blur" => Ok(Self::Retouch(Retouch::Blur)),
+            "jumble" => Ok(Self::Retouch(Retouch::Jumble)),
             "paint_bucket" | "fill" => Ok(Self::Fill),
             "eyedropper" => Ok(Self::Picker),
             "rectangular_marquee" => Ok(Self::Selection(selection::Kind::Rectangle)),
@@ -109,7 +113,7 @@ fn check_work(
         Tool::Pencil | Tool::Eraser if algorithm == freehand::Algorithm::Dots => {
             points.len() as u64
         }
-        Tool::Pencil | Tool::Eraser => points
+        Tool::Pencil | Tool::Eraser | Tool::Retouch(_) => points
             .windows(2)
             .map(|segment| distance(segment[0], segment[1]))
             .sum::<u64>()
@@ -195,7 +199,12 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Result<Vec<bool>, String>
             }
         }
         Tool::Ellipse(filled) => mask.ellipse(0, 0, a, b, white, filled, size),
-        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) | Tool::Curve => {
+        Tool::Fill
+        | Tool::Picker
+        | Tool::Selection(_)
+        | Tool::Polygon(_)
+        | Tool::Curve
+        | Tool::Retouch(_) => {
             unreachable!("Handled outside brush coverage")
         }
     }
@@ -243,6 +252,9 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
         return Err("Invalid tilemap mode".into());
     }
     if let Some(tileset) = layer.tileset {
+        if matches!(tool, Tool::Retouch(_)) {
+            return Err("Retouch brushes require an image layer".into());
+        }
         return tiles::use_tilemap_tool(&mut stroke, tool, size, tileset);
     }
     if stroke.tilemap_mode == Some(1) || stroke.tileset_mode.is_some() {
@@ -270,6 +282,30 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
         }
         mask
     });
+    if let Tool::Retouch(mode) = tool {
+        let brush = RetouchBrush {
+            mode,
+            size,
+            shape: stroke.brush_shape.unwrap_or(doc.brush_shape),
+            strength: stroke.opacity,
+            wrap: doc.wraparound.into(),
+            mirrors: [None; 2],
+            seed: 0,
+        };
+        let retouch = RetouchStroke::new(doc, (stroke.layer, stroke.frame), brush, selected)?;
+        let original = doc.layers[stroke.layer].clone();
+        let doc = &mut stroke.document;
+        let first = stroke.points[0];
+        retouch.paint(doc, first, first);
+        for pair in stroke.points.windows(2) {
+            retouch.paint(doc, pair[0], pair[1]);
+        }
+        return Ok(if original != doc.layers[stroke.layer] {
+            json!({"layer":doc.layers[stroke.layer]})
+        } else {
+            json!({})
+        });
+    }
     let hits = coverage(&stroke, tool, size)?;
     let doc = &mut stroke.document;
     doc.drawing_index = None;

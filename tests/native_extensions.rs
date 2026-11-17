@@ -1979,3 +1979,25 @@ fn lua_cubic_curve_renders_connected_pixels_between_native_endpoints() {
     assert_eq!(cel[3 * 13 + 6], red);
     assert_eq!(cel[7 * 13 + 6], CLEAR);
 }
+
+#[test]
+fn lua_retouch_reads_from_the_stroke_start_and_clips_to_mask() {
+    let mut doc = Document::new(6, 5);
+    doc.set_pixel(0, 0, 14, [231, 101, 24, 255]);
+    let output = run_source(
+        &doc,
+        r#"
+ local sel=app.activeSprite.selection
+ sel:select(Rectangle(2,2,2,1))
+ app.useTool{tool='blur',points={Point(2,2),Point(3,2),Point(2,2)}}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let cel = &output.layers[0].cels[0];
+    assert_eq!(cel[14], [231, 101, 24, 28]);
+    assert_eq!(cel[15], [231, 101, 24, 28]);
+    assert_eq!(cel[13], CLEAR);
+}

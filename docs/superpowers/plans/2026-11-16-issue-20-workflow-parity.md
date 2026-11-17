@@ -218,6 +218,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 5 curve and spray checkpoint. The cubic Bézier tool places two endpoints and then two controls and shows the flattened path as the cursor moves. The editor and Lua draw the curve using the native brush footprint. The editor spray tool has radius and dots-per-second controls and emits on a held pointer with or without motion. Tests verify curve preview geometry, clipped commits, idle emission, rate and radius, and undo. Formatting, strict Clippy, and 600 Windows all-target tests passed. Text, blur, and jumble remain open.
 
+- Item 5 retouch checkpoint. Blur averages a 3×3 neighborhood and jumble samples neighboring artwork with a shift based on stroke direction. Both editor brushes expose size, shape, and strength, sample the original cel for the duration of a stroke, and respect selection masks and seamless axes. Lua can invoke both brushes. Tests cover clipped pointer strokes, undo, and stable sampling of translucent pixels in Lua. Formatting, strict Clippy, and 602 Windows all-target tests passed. Text remains open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

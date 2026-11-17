@@ -1056,7 +1056,16 @@ impl PixelCraft {
             self.remember_action("Change brush shape");
             self.doc.brush_shape = shape;
         }
-        self.brush_mode_ui(ui);
+        if matches!(self.tool, Tool::BlurBrush | Tool::JumbleBrush) {
+            ui.label("Strength");
+            ui.add(
+                egui::DragValue::new(&mut self.retouch_strength)
+                    .range(0..=100)
+                    .suffix("%"),
+            );
+        } else {
+            self.brush_mode_ui(ui);
+        }
         ui.separator();
         toggle(ui, &mut self.studio.mirror_x, "Symmetry").on_hover_text(
             "Mirror brush strokes left to right. Drag the canvas handle to move the axis. Mirror Y is in Drawing & selection studio.",
