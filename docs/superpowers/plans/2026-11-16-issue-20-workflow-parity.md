@@ -180,6 +180,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 53 complete. The primary and secondary buttons use their own paint colors and end their gestures on release of the initiating button. Right-click sets the secondary palette color, retaining the exact slot for indexed swatches with duplicate colors. Shift+right-click opens swatch actions. The Windows pointer regression covers pencil, line, fill, duplicate slots, palette reorder, overlapping button presses, and undo. Formatting, strict Clippy, and 559 Windows all-target tests passed.
 
+- Item 54 complete. A shared path dialog offers text entry and native Browse for Open, Import as Layer, Save As, an unnamed Save, and file and sequence exports. It accepts quoted paths, resolves relative paths against the displayed folder, fills appropriate missing extensions, and confirms replacement for typed output files. The Windows UI test opens, imports, saves, exports PNG and a PNG sequence, rejects a cancelled overwrite, and completes a pending close after a typed save. It also verifies the animation dialog advances to destination selection. Formatting, strict Clippy, and 560 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -250,7 +252,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
 - [x] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
 - [x] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
-- [ ] **54. Allow typed file paths in the GUI.** Provide path entry alongside native file browsing.
+- [x] **54. Allow typed file paths in the GUI.** Provide path entry alongside native file browsing.
 - [x] **55. Hide Preview independently.** Persist Preview visibility independently of the Inspector.
 
 ## Verification

@@ -4,7 +4,9 @@
 )]
 
 mod export_actions;
+mod file_path_dialog;
 mod fluent;
+use file_path_dialog::{FilePathDialog, FilePathPurpose};
 mod ui_icons;
 use ui_icons::UiIcons;
 mod productivity_ui;
@@ -712,6 +714,7 @@ struct PixelCraft {
     export_job: Option<ExportJob>,
     last_export: Option<ExportRecipe>,
     animation_export: Option<&'static str>,
+    file_path: Option<FilePathDialog>,
     sequence_name: String,
     save_job: Option<SaveJob>,
     frame_texture_order: std::collections::VecDeque<usize>,
@@ -894,6 +897,7 @@ impl PixelCraft {
             export_job: None,
             last_export: None,
             animation_export: None,
+            file_path: None,
             sequence_name: String::new(),
             save_job: None,
             frame_texture_order: Default::default(),
@@ -2110,6 +2114,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.properties_open
             || self.grid_settings.is_some()
             || self.animation_export.is_some()
+            || self.file_path.is_some()
             || self.studio.open
             || self.studio.sheet_open
             || self.studio.tiles_open
@@ -2443,24 +2448,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.open_document(Document::demo(), None);
                 self.layer = 1;
             }
-            Pending::Open => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter(
-                        "Project, sprite or image",
-                        &[
-                            "pixel", "aseprite", "ase", "png", "gif", "webp", "apng", "ora",
-                            "json", "tmj", "tsj", "bmp", "jpg", "jpeg", "ico", "pcx", "qoi", "tga",
-                            "fli", "flc", "psd", "psb",
-                        ],
-                    )
-                    .set_directory(
-                        extensions::projects_directory().unwrap_or_else(|_| PathBuf::from(".")),
-                    )
-                    .pick_file()
-                {
-                    self.open_recent(path);
-                }
-            }
+            Pending::Open => self.begin_file_path(FilePathPurpose::Open, String::new()),
             Pending::CloseTab => {
                 if self.tabs.len() == 1 {
                     self.replace(Document::new(32, 32), None);
@@ -2494,20 +2482,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.autosave(false, ctx);
         }
     }
-    fn export_baked_ase(&mut self) {
-        if self.export_job.is_some() {
-            self.status = "An export is already running".into();
-            return;
-        }
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("ASE sprite", &["aseprite"])
-            .set_file_name("Baked artwork.aseprite")
-            .save_file()
-        {
-            self.start_export("baked-ase", path);
-        }
-    }
-
     fn save(&mut self, as_new: bool) -> bool {
         if self.script_job.is_some() {
             self.status = "Wait for the current script before saving the canvas".into();
@@ -2517,23 +2491,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.status = "A save is already running".into();
             return false;
         }
-        let path = if !as_new { self.path.clone() } else { None }.or_else(|| {
-            rfd::FileDialog::new()
-                .add_filter("PixelCraft project", &["pixel"])
-                .add_filter("ASE sprite", &["aseprite"])
-                .set_directory(
-                    extensions::projects_directory().unwrap_or_else(|_| PathBuf::from(".")),
-                )
-                .set_file_name(
-                    self.path
-                        .as_ref()
-                        .and_then(|p| p.file_name())
-                        .and_then(|p| p.to_str())
-                        .unwrap_or("Untitled.pixel"),
-                )
-                .save_file()
-        });
-        let Some(mut path) = path else { return false };
+        if !as_new && let Some(path) = self.path.clone() {
+            return self.save_to_path(path);
+        }
+        let suggested = self.path.as_deref().and_then(Path::file_name).map_or_else(
+            || "Untitled.pixel".into(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        self.begin_file_path(FilePathPurpose::Save, suggested);
+        false
+    }
+
+    fn save_to_path(&mut self, mut path: PathBuf) -> bool {
         if !matches!(
             path.extension().and_then(|e| e.to_str()),
             Some("pixel" | "ase" | "aseprite")
@@ -2671,6 +2640,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         let ext = match kind {
+            "baked-ase" => "aseprite",
             "gif" => "gif",
             "mp4" => "mp4",
             "fli" => "fli",
@@ -2686,30 +2656,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "css" => "css",
             _ => "png",
         };
-        let sequence = kind == "png-sequence";
-        let dialog = rfd::FileDialog::new();
-        let chosen = if sequence {
-            dialog
-                .pick_folder()
-                .map(|folder| folder.join(self.sequence_name.trim()))
-        } else {
-            dialog
-                .add_filter("Export", &[ext])
-                .set_file_name(format!("sprite.{ext}"))
-                .save_file()
+        let suggested = match kind {
+            "png-sequence" => String::new(),
+            "baked-ase" => "Baked artwork.aseprite".into(),
+            _ => format!("sprite.{ext}"),
         };
-        if let Some(path) = chosen {
-            if matches!(kind, "gif" | "mp4" | "fli" | "flc")
-                && !path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case(ext))
-            {
-                self.status = format!("Export failed: choose a .{ext} filename");
-                return;
-            }
-            self.start_export(kind, path);
-        }
+        self.begin_file_path(
+            FilePathPurpose::Export {
+                kind: kind.into(),
+                extension: ext,
+            },
+            suggested,
+        );
     }
     fn start_export(&mut self, kind: &str, path: PathBuf) {
         let scale = self.studio.sheet.scale;
@@ -3123,21 +3081,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "new" => self.request(Pending::New),
             "closetab" => self.request(Pending::CloseTab),
             "open" => self.request(Pending::Open),
-            "import-layer" => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter(
-                        "Raster image",
-                        pixelcraft::productivity::RASTER_LAYER_EXTENSIONS,
-                    )
-                    .pick_file()
-                {
-                    self.open_as_raster_layer(path);
-                }
-            }
+            "import-layer" => self.begin_file_path(FilePathPurpose::ImportLayer, String::new()),
             "save" => {
                 self.save(false);
             }
-            "export-baked-ase" => self.export_baked_ase(),
+            "export-baked-ase" => self.export("baked-ase"),
             "repeat-export" => self.repeat_export(),
             "saveas" => {
                 self.save(true);
@@ -6759,6 +6707,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.replace_color_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;
+            let mut cancel = false;
             let title = match kind {
                 "png-sequence" => "Export PNG sequence",
                 "gif" => "Export animated GIF",
@@ -6766,7 +6715,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 "flc" => "Export FLC animation",
                 _ => "Export MP4 video",
             };
-            if fluent::modal_dialog(ctx, title, |ui| {
+            let dismiss = fluent::modal_dialog(ctx, title, |ui| {
                 self.export_scale_ui(ui);
                 let scale = self.studio.sheet.scale;
                 let width = self.doc.width.saturating_mul(scale);
@@ -6787,9 +6736,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     accept = true;
                     true
                 } else {
-                    ui.pc_button("Cancel").clicked()
+                    cancel = ui.pc_button("Cancel").clicked();
+                    cancel
                 }
-            }) {
+            });
+            if dismiss || accept || cancel {
                 self.animation_export = None;
                 if accept {
                     self.export(kind);
@@ -6808,6 +6759,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }) {
                 self.status = "Ready".into();
             }
+            return;
+        }
+        if self.file_path.is_some() {
+            self.file_path_dialog(ctx);
             return;
         }
         self.continue_script_tab_closes();

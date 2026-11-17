@@ -2428,3 +2428,142 @@ fn secondary_palette_swatch_and_mouse_button_keep_their_own_indexed_stroke() {
     assert_eq!(indices.as_slice(), &[1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
     assert_eq!((app.fg, app.bg), (red, blue));
 }
+
+#[test]
+fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let directory =
+        std::env::temp_dir().join(format!("pixelcraft-typed-paths-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("Original sprite.pixel");
+    let saved = directory.join("Saved sprite.pixel");
+    let exported = directory.join("Exported sprite.png");
+    let color = [41, 78, 127, 255];
+    let mut doc = Document::new(3, 2);
+    doc.set_pixel(0, 0, 0, color);
+    formats::save(&source, &doc).unwrap();
+    std::fs::write(&exported, b"preserve until confirmed").unwrap();
+
+    let type_path = |app: &mut PixelCraft, path: &Path, action: &str| {
+        let status = app.status.clone();
+        app.file_path
+            .as_mut()
+            .unwrap_or_else(|| panic!("Missing {action} dialog for {path:?}: {status}"))
+            .input
+            .clear();
+        for _ in 0..3 {
+            discard_frame(app, &ctx, size, 1., vec![]);
+        }
+        let mut output = frame(
+            app,
+            &ctx,
+            size,
+            1.,
+            vec![egui::Event::Text(format!("\"{}\"", path.display()))],
+        );
+        let _ = text_position(&mut output, "Browse…");
+        let accept = output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == action => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Path dialog submit button is visible");
+        discard_frame(app, &ctx, size, 1., click(accept));
+    };
+    let poll = |app: &mut PixelCraft| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while (app.open_job.is_some() || app.save_job.is_some() || app.export_job.is_some())
+            && Instant::now() < deadline
+        {
+            discard_frame(app, &ctx, size, 1., vec![]);
+            std::thread::yield_now();
+        }
+        assert!(app.open_job.is_none() && app.save_job.is_none() && app.export_job.is_none());
+    };
+
+    app.action("open");
+    type_path(&mut app, &source, "Open");
+    poll(&mut app);
+    assert_eq!(app.path.as_ref(), Some(&source));
+    assert_eq!(app.doc.composite(0)[0], color);
+
+    app.action("saveas");
+    type_path(&mut app, &saved.with_extension(""), "Save");
+    poll(&mut app);
+    assert_eq!(app.path.as_ref(), Some(&saved));
+    assert_eq!(formats::load(&saved).unwrap().composite(0)[0], color);
+
+    app.action("png");
+    type_path(&mut app, &exported, "Export");
+    assert!(app.export_job.is_none());
+    assert_eq!(
+        std::fs::read(&exported).unwrap(),
+        b"preserve until confirmed"
+    );
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let cancel = text_position(&mut output, "Cancel");
+    discard_frame(&mut app, &ctx, size, 1., click(cancel));
+    assert!(app.file_path.is_none());
+    assert_eq!(
+        std::fs::read(&exported).unwrap(),
+        b"preserve until confirmed"
+    );
+    app.action("png");
+    type_path(&mut app, &exported, "Export");
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let replace = text_position(&mut output, "Replace file");
+    discard_frame(&mut app, &ctx, size, 1., click(replace));
+    poll(&mut app);
+    assert_eq!(
+        image::open(&exported).unwrap().to_rgba8().get_pixel(0, 0).0,
+        color
+    );
+    app.action("import-layer");
+    let layer_count = app.doc.layers.len();
+    type_path(&mut app, &exported, "Import");
+    poll(&mut app);
+    assert_eq!(app.doc.layers.len(), layer_count + 1);
+    assert_eq!(app.doc.layers[app.layer].cels[0][0], color);
+
+    app.action("png-sequence");
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let choose = text_position(&mut output, "Choose export location…");
+    discard_frame(&mut app, &ctx, size, 1., click(choose));
+    let sequence_path = directory.join(&app.sequence_name);
+    type_path(&mut app, &directory, "Export");
+    poll(&mut app);
+    assert!(std::fs::read_dir(sequence_path).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|ext| ext == "png")
+    }));
+
+    app.open_document(Document::new(1, 1), None);
+    app.doc.set_pixel(0, 0, 0, color);
+    let tabs = app.tabs.len();
+    app.request(Pending::CloseTab);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let save = text_position(&mut output, "Save");
+    discard_frame(&mut app, &ctx, size, 1., click(save));
+    let closed = directory.join("Saved while closing.pixel");
+    type_path(&mut app, &closed, "Save");
+    assert_eq!(formats::load(&closed).unwrap().composite(0)[0], color);
+    assert_eq!(app.tabs.len(), tabs - 1);
+    assert!(app.pending.is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}
