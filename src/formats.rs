@@ -493,7 +493,11 @@ fn decode_slice(data: &[u8]) -> Result<SpriteSlice, String> {
         });
     }
     keys.sort_by_key(|key| key.frame);
-    Ok(SpriteSlice { name, keys })
+    Ok(SpriteSlice {
+        editor_id: Default::default(),
+        name,
+        keys,
+    })
 }
 
 pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
@@ -1394,7 +1398,7 @@ pub fn decode_ase_with_resolver(
                             tw * th * n * (depth / 8),
                         )?;
                         let pixels = read_pixels(&bytes, depth, &d.palette, transparent, false)?;
-                        let mut tiles: Vec<Pixels> =
+                        let mut tiles: Vec<TileRaster> =
                             pixels.chunks(tw * th).map(|p| p.to_vec().into()).collect();
                         if fl & 4 != 0 {
                             tiles.remove(0);
@@ -1410,7 +1414,11 @@ pub fn decode_ase_with_resolver(
                         if resolved.width != tw || resolved.height != th {
                             return Err("External tileset dimensions differ".into());
                         }
-                        resolved.tiles
+                        resolved
+                            .tiles
+                            .into_iter()
+                            .map(|tile| tile.pixels.into())
+                            .collect()
                     };
                     let index = d.tilesets.len();
                     legacy_tilesets.push(fl & 4 == 0);
@@ -1424,6 +1432,7 @@ pub fn decode_ase_with_resolver(
                         });
                     }
                     d.tilesets.push(Tileset {
+                        editor_id: Default::default(),
                         name,
                         width: tw,
                         height: th,
@@ -2230,6 +2239,7 @@ mod project_budget_tests {
 
         let mut tilemap = Document::new(2, 2);
         tilemap.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Empty".into(),
             width: 1,
             height: 1,

@@ -63,8 +63,10 @@ jobs:
           target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
 
       - name: Native clipboard and automatic graphics fallback on Linux
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
-          xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
+          xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
           WGPU_BACKEND=metal xvfb-run -a bash checks/graphical-startup.sh target/release/pixelcraft "$RUNNER_TEMP/fallback-linux"
           grep -F 'restarting with OpenGL' "$RUNNER_TEMP/fallback-linux/startup.log"
 
@@ -242,12 +244,14 @@ jobs:
           path: target
           key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
       - name: Strict lint and native clipboard on Windows
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
           cargo fmt --check
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
           cargo clippy --locked --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Strict lint failed' }
-          cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
+          cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Native clipboard failed' }
           ./checks/graphics-fallback.ps1
 

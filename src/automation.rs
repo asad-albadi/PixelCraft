@@ -372,13 +372,14 @@ pub fn apply_command_batch_until(
                 )?;
             }
             "set-slice" => {
-                let slice: SpriteSlice =
+                let mut slice: SpriteSlice =
                     serde_json::from_value(c["slice"].clone()).map_err(|_| "Invalid slice")?;
                 if let Some(existing) = out
                     .slices
                     .iter_mut()
                     .find(|existing| existing.name == slice.name)
                 {
+                    slice.editor_id = existing.editor_id;
                     *existing = slice;
                 } else {
                     out.slices.push(slice);

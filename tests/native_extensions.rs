@@ -703,6 +703,7 @@ fn lua_edits_animated_slices_and_round_trips_their_keys() {
     let mut input = Document::new(8, 8);
     input.add_frame(0, false);
     input.slices.push(SpriteSlice {
+        editor_id: Default::default(),
         name: "Retired".into(),
         keys: Vec::new(),
     });
@@ -721,6 +722,7 @@ fn lua_edits_animated_slices_and_round_trips_their_keys() {
         },
     ];
     input.slices.push(SpriteSlice {
+        editor_id: Default::default(),
         name: "Old hitbox".into(),
         keys: vec![SliceKey {
             frame: 1,
@@ -809,12 +811,14 @@ fn lua_edits_tilesets_and_remaps_placements_in_every_frame() {
     let mut input = Document::new(4, 2);
     input.add_frame(0, false);
     input.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "unused".into(),
         width: 1,
         height: 1,
         tiles: vec![],
     });
     input.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "terrain".into(),
         width: 2,
         height: 2,
@@ -1042,6 +1046,7 @@ fn lua_clipboard_preserves_detached_selections_and_palettes() {
 fn lua_clipboard_tilesets_survive_source_deletion_and_import_independently() {
     let mut doc = Document::new(4, 2);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "shore".into(),
         width: 2,
         height: 2,
@@ -1170,6 +1175,7 @@ fn lua_native_brush_applies_opacity_once_and_fill_uses_native_color_matching() {
 fn lua_tilemap_strokes_use_native_placements_and_tileset_modes() {
     let mut doc = Document::new(6, 2);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Terrain".into(),
         width: 2,
         height: 2,
@@ -1226,6 +1232,7 @@ fn lua_tilemap_strokes_use_native_placements_and_tileset_modes() {
 fn lua_tilemap_auto_keeps_placement_edits_when_an_existing_tile_matches() {
     let mut doc = Document::new(2, 1);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Variants".into(),
         width: 2,
         height: 1,
@@ -1325,6 +1332,7 @@ fn lua_freehand_modes_keep_distinct_paths_and_preserve_existing_corners() {
 fn lua_freehand_tile_strokes_use_cell_corners_and_supplied_dots() {
     let mut doc = Document::new(6, 6);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tiles".into(),
         width: 2,
         height: 2,

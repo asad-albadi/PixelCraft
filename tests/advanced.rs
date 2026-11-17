@@ -43,6 +43,7 @@ fn groups_blend_and_cel_opacity_render_together() {
 fn tiles_and_ranges_survive_native_project_roundtrip() {
     let mut d = Document::new(4, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tiles".into(),
         width: 2,
         height: 2,

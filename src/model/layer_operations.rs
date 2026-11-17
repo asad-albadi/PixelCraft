@@ -691,6 +691,7 @@ mod tests {
             color: ink,
         });
         doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Detail".into(),
             width: 1,
             height: 1,

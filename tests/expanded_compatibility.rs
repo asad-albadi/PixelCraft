@@ -2,6 +2,7 @@ use pixelcraft::{extensions, formats::*, model::*};
 fn tile_doc() -> Document {
     let mut d = Document::new(3, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "set".into(),
         width: 2,
         height: 2,

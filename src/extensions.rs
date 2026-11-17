@@ -548,8 +548,8 @@ pub struct ScriptSprite {
     pub layer_keys: Vec<String>,
     #[serde(default, rename = "celKeys")]
     pub cel_keys: Vec<ScriptCelTarget>,
-    #[serde(default, rename = "tagKeys")]
-    pub tag_keys: Vec<String>,
+    #[serde(default, rename = "metadataKeys")]
+    pub metadata_keys: ScriptMetadataKeys,
     pub baseline: Option<Document>,
     pub saved: Option<Document>,
     pub filename: PathBuf,
@@ -563,6 +563,15 @@ pub struct ScriptCelTarget {
     pub key: u64,
     pub layer: usize,
     pub frame: usize,
+}
+
+#[derive(Default, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ScriptMetadataKeys {
+    pub tags: Vec<String>,
+    pub slices: Vec<String>,
+    pub tilesets: Vec<String>,
+    pub tiles: Vec<String>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]

@@ -29,7 +29,7 @@ pub fn resample_sprite(doc: &Document, size: [usize; 2]) -> Result<Document, Str
             return Err("Resampled tileset exceeds the image limit".into());
         }
         for tile in &mut tileset.tiles {
-            *tile = rasters.pixels(
+            tile.pixels = rasters.pixels(
                 tile,
                 Scale {
                     old: old_tile,
@@ -289,6 +289,7 @@ mod tests {
         let green = [12, 201, 15, 255];
         doc.add_frame(0, false);
         doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Test".into(),
             width: 2,
             height: 1,

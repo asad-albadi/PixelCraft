@@ -131,7 +131,7 @@ pub fn orient_sprite(doc: &Document, orientation: Orientation) -> Result<Documen
     for tileset in &mut output.tilesets {
         let tile_size = [tileset.width, tileset.height];
         for tile in &mut tileset.tiles {
-            *tile = rasters.pixels(tile_size, tile)?;
+            tile.pixels = rasters.pixels(tile_size, tile)?;
         }
         [tileset.width, tileset.height] = orientation.size(tile_size);
     }
@@ -348,6 +348,7 @@ mod tests {
         doc.layers[1].cel_meta[1].indices = Some(vec![0, 0, 0, 1, 0, 0].into());
         doc.layers[1].cels[1].set(3, ink);
         doc.slices.push(SpriteSlice {
+            editor_id: Default::default(),
             name: "Region".into(),
             keys: vec![SliceKey {
                 frame: 0,
@@ -384,6 +385,7 @@ mod tests {
     fn whole_sprite_flip_and_rotation_preserve_tilemap_appearance() {
         let mut doc = Document::new(6, 3);
         doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Tile".into(),
             width: 2,
             height: 3,

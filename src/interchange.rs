@@ -464,6 +464,7 @@ mod slice_sheet_limits {
         let mut doc = Document::new(1, 1);
         doc.slices = (0..count)
             .map(|index| SpriteSlice {
+                editor_id: Default::default(),
                 name: format!("Slice {index}"),
                 keys: vec![SliceKey {
                     frame: 0,
@@ -637,6 +638,7 @@ impl SliceSheet<'_> {
         }
         cropped.layers[0].cels = cels;
         cropped.slices.push(SpriteSlice {
+            editor_id: Default::default(),
             name: self.slice.name.clone(),
             keys: local_keys,
         });
@@ -1534,10 +1536,12 @@ pub(crate) fn load_tiled_with_path_check(
             tiles.push(
                 (0..w * h)
                     .map(|p| im.get_pixel((x + p % w) as u32, (y + p / w) as u32).0)
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
             );
         }
         Ok(Tileset {
+            editor_id: Default::default(),
             name: v["name"].as_str().unwrap_or("Tileset").into(),
             width: w,
             height: h,

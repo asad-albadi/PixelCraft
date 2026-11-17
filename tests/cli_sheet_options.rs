@@ -61,10 +61,12 @@ fn cli_exports_one_sheet_per_slice_using_each_frames_active_bounds() {
     };
     sprite.slices = vec![
         SpriteSlice {
+            editor_id: Default::default(),
             name: "Walk/right".into(),
             keys: vec![key(1, 1), key(2, 2)],
         },
         SpriteSlice {
+            editor_id: Default::default(),
             name: "Walk?right".into(),
             keys: vec![key(0, 0)],
         },

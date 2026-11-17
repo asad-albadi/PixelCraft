@@ -140,6 +140,7 @@ impl Document {
         }
         let source = &mut self.layers[layer];
         let mut tileset = Tileset {
+            editor_id: Default::default(),
             name: format!("{} tiles", source.name),
             width,
             height,
@@ -198,8 +199,9 @@ impl Document {
                     color.hash(&mut hash);
                 });
                 let matches = hashing.entry(hash.finish()).or_default();
-                let index = if let Some(&index) =
-                    matches.iter().find(|&&index| tileset.tiles[index] == tile)
+                let index = if let Some(&index) = matches
+                    .iter()
+                    .find(|&&index| tileset.tiles[index].pixels == tile)
                 {
                     index
                 } else {
@@ -208,7 +210,7 @@ impl Document {
                     }
                     reserve(&mut budget, tile.allocation_pixels().saturating_add(24))?;
                     let index = tileset.tiles.len();
-                    tileset.tiles.push(tile);
+                    tileset.tiles.push(tile.into());
                     matches.push(index);
                     index
                 };

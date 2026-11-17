@@ -174,6 +174,7 @@ fn indexed_sheet_preserves_indices_in_slice_grid_cells_and_extrusion() {
         size: [2, 1],
     });
     doc.slices.push(SpriteSlice {
+        editor_id: Default::default(),
         name: "Samples".into(),
         keys: vec![SliceKey {
             frame: 0,

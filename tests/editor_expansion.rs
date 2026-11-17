@@ -92,6 +92,7 @@ fn tagged_sheet_clips_overlapping_tags_and_carries_forward_slice_keys() {
         });
     }
     doc.slices.push(SpriteSlice {
+        editor_id: Default::default(),
         name: "held".into(),
         keys: [0, 1, 4, 5]
             .into_iter()

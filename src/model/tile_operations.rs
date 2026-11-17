@@ -105,7 +105,7 @@ impl Document {
                 {
                     return Err("Duplicating this tile exceeds the tileset size limit".into());
                 }
-                set.tiles.push(set.tiles[from].clone());
+                set.tiles.push(set.tiles[from].pixels.clone().into());
                 self.edit_tile_user_data(tileset, id, count, edit);
                 Ok(count + 1)
             }
@@ -254,10 +254,11 @@ mod tests {
             .map(|color| Pixels::from(vec![color]));
         for name in ["Shared", "Other"] {
             doc.tilesets.push(Tileset {
+                editor_id: Default::default(),
                 name: name.into(),
                 width: 1,
                 height: 1,
-                tiles: tiles.to_vec(),
+                tiles: tiles.iter().cloned().map(Into::into).collect(),
             });
         }
         doc.add_frame(0, false);
@@ -277,6 +278,7 @@ mod tests {
         let a = [10, 20, 30, 255];
         let b = [40, 50, 60, 255];
         doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Variants".into(),
             width: 2,
             height: 1,
@@ -328,6 +330,7 @@ mod tests {
             [4, 0, 0, 255],
         ];
         doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Asymmetric".into(),
             width: 2,
             height: 2,
@@ -347,6 +350,7 @@ mod tests {
             assert_eq!(doc.composite(0), expected);
         }
         let rect = Tileset {
+            editor_id: Default::default(),
             name: "Rectangular".into(),
             width: 2,
             height: 1,

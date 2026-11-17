@@ -4348,6 +4348,7 @@ mod smarter_fill_tests {
         let mut app = PixelCraft::with_context(&ctx, None);
         app.replace(Document::new(8, 2), None);
         app.doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Tiles".into(),
             width: 2,
             height: 2,

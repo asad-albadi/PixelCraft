@@ -14,6 +14,7 @@ fn tileset_atlas_file_and_live_exports_write_the_same_pixels_and_layout() {
     let a = [15, 62, 119, 255];
     let b = [213, 28, 80, 255];
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Authored".into(),
         width: 1,
         height: 1,
@@ -58,18 +59,21 @@ fn tileset_atlas_exports_each_authored_set_once_and_honors_layer_scope() {
     let green = [50, 190, 60, 255];
     doc.tilesets = vec![
         Tileset {
+            editor_id: Default::default(),
             name: "Ground".into(),
             width: 2,
             height: 1,
             tiles: vec![vec![red, blue].into(), vec![blue, red].into()],
         },
         Tileset {
+            editor_id: Default::default(),
             name: "Plants".into(),
             width: 1,
             height: 2,
             tiles: vec![vec![green, red].into()],
         },
         Tileset {
+            editor_id: Default::default(),
             name: "Unreferenced".into(),
             width: 1,
             height: 1,
@@ -309,6 +313,7 @@ fn ase_rejects_legacy_tile_ids_that_alias_transform_bits() {
     use std::io::Write;
     let mut doc = Document::new(1, 1);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tile".into(),
         width: 1,
         height: 1,

@@ -148,6 +148,7 @@ mod tests {
         doc.link_cel(0, 3, 1).unwrap();
         doc.frame_palettes = vec![doc.palette.clone(), vec![[23, 45, 67, 255]]];
         doc.slices.push(SpriteSlice {
+            editor_id: Default::default(),
             name: "Hit area".into(),
             keys: vec![
                 SliceKey {

@@ -2327,6 +2327,7 @@ mod tests {
         let mut editor = app();
         editor.doc = Document::new(3, 1);
         editor.doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Numbers".into(),
             width: 1,
             height: 1,
@@ -2860,6 +2861,7 @@ mod tests {
         let hidden = [10, 106, 205, 255];
         for (index, color) in [visible, hidden].into_iter().enumerate() {
             editor.doc.tilesets.push(Tileset {
+                editor_id: Default::default(),
                 name: index.to_string(),
                 width: 1,
                 height: 1,
@@ -2945,6 +2947,7 @@ mod tests {
         let ink = [40, 90, 220, 255];
         editor.doc.set_pixel(0, 0, 1, ink);
         editor.doc.slices.push(SpriteSlice {
+            editor_id: Default::default(),
             name: "Right".into(),
             keys: vec![SliceKey {
                 frame: 0,

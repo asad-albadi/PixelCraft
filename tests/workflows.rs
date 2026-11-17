@@ -69,6 +69,7 @@ fn tiled_export_import_preserves_flips_and_empty_tiles() {
     std::fs::create_dir_all(&root).unwrap();
     let mut d = Document::new(4, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Ground".into(),
         width: 2,
         height: 2,

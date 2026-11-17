@@ -831,6 +831,7 @@ pub(crate) fn pack_sheet_with_extrusion(
                 })
                 .collect();
             (!keys.is_empty()).then(|| SpriteSlice {
+                editor_id: Default::default(),
                 name: slice.name.clone(),
                 keys,
             })

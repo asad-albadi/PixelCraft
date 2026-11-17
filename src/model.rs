@@ -812,6 +812,8 @@ pub struct SliceKey {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpriteSlice {
+    #[serde(skip)]
+    pub editor_id: EditorId,
     pub name: String,
     pub keys: Vec<SliceKey>,
 }
@@ -835,10 +837,50 @@ pub struct FrameTag {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tileset {
+    #[serde(skip)]
+    pub editor_id: EditorId,
     pub name: String,
     pub width: usize,
     pub height: usize,
-    pub tiles: Vec<Pixels>,
+    pub tiles: Vec<TileRaster>,
+}
+
+/// Tile artwork with an identity that survives native edits and undo.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct TileRaster {
+    #[serde(skip)]
+    pub editor_id: EditorId,
+    pub pixels: Pixels,
+}
+
+impl From<Pixels> for TileRaster {
+    fn from(pixels: Pixels) -> Self {
+        Self {
+            editor_id: EditorId::default(),
+            pixels,
+        }
+    }
+}
+
+impl From<Vec<Pixel>> for TileRaster {
+    fn from(pixels: Vec<Pixel>) -> Self {
+        Pixels::from(pixels).into()
+    }
+}
+
+impl std::ops::Deref for TileRaster {
+    type Target = Pixels;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pixels
+    }
+}
+
+impl std::ops::DerefMut for TileRaster {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pixels
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MetadataChunk {
@@ -1721,7 +1763,11 @@ impl Document {
             .layers
             .iter()
             .flat_map(|layer| layer.cels.iter().chain(layer.mask.iter()))
-            .chain(self.tilesets.iter().flat_map(|tileset| &tileset.tiles))
+            .chain(
+                self.tilesets
+                    .iter()
+                    .flat_map(|tileset| tileset.tiles.iter().map(|tile| &tile.pixels)),
+            )
             .chain(self.references.iter().map(|reference| &reference.pixels))
             .filter(|pixels| pixels.backing_id().is_some_and(|id| seen.insert(id)))
             .fold(0usize, |total, pixels| {
@@ -1753,16 +1799,34 @@ impl Document {
             .eq(other.layers.iter().map(|layer| layer.editor_id.0))
     }
 
-    pub fn same_editor_tag_targets(&self, other: &Self) -> bool {
+    pub fn same_editor_metadata_targets(&self, other: &Self) -> bool {
         self.tags
             .iter()
-            .map(|tag| tag.editor_id.runtime_key())
-            .eq(other.tags.iter().map(|tag| tag.editor_id.runtime_key()))
+            .map(|tag| tag.editor_id.0)
+            .eq(other.tags.iter().map(|tag| tag.editor_id.0))
+            && self
+                .slices
+                .iter()
+                .map(|slice| slice.editor_id.0)
+                .eq(other.slices.iter().map(|slice| slice.editor_id.0))
+            && self
+                .tilesets
+                .iter()
+                .zip(&other.tilesets)
+                .all(|(left, right)| {
+                    left.editor_id.0 == right.editor_id.0
+                        && left
+                            .tiles
+                            .iter()
+                            .map(|tile| tile.editor_id.0)
+                            .eq(right.tiles.iter().map(|tile| tile.editor_id.0))
+                })
+            && self.tilesets.len() == other.tilesets.len()
     }
 
     pub fn same_editor_targets(&self, other: &Self) -> bool {
         self.editor_id.0 == other.editor_id.0
-            && self.same_editor_tag_targets(other)
+            && self.same_editor_metadata_targets(other)
             && self.layers.len() == other.layers.len()
             && self.layers.iter().zip(&other.layers).all(|(a, b)| {
                 a.editor_id.0 == b.editor_id.0
@@ -3530,7 +3594,7 @@ impl Document {
         let mut artwork = if id == 0 {
             Pixels::empty(set.width * set.height)
         } else {
-            set.tiles[id - 1].clone()
+            set.tiles[id - 1].pixels.clone()
         };
         if mode == TilePixelEdit::CreateVariant && artwork[offset] == color {
             return Ok(());
@@ -3539,7 +3603,7 @@ impl Document {
         let existing = if mode == TilePixelEdit::CreateVariant {
             None
         } else {
-            set.tiles.iter().position(|tile| *tile == artwork)
+            set.tiles.iter().position(|tile| tile.pixels == artwork)
         };
         let new_id = if let Some(existing) = existing {
             existing + 1
@@ -3552,7 +3616,7 @@ impl Document {
             {
                 return Err("Tile variant exceeds the tileset or project pixel budget".into());
             }
-            self.tilesets[tileset].tiles.push(artwork);
+            self.tilesets[tileset].tiles.push(artwork.into());
             self.tilesets[tileset].tiles.len()
         };
         self.layers[layer].tile_cels[frame][slot] = (placed & !TILE_ID_MASK) | new_id as u32;

@@ -458,6 +458,9 @@ struct ScriptPreview {
 struct ScriptTargets {
     layer_targets: std::collections::HashMap<String, EditorId>,
     tag_targets: std::collections::HashMap<String, EditorId>,
+    slice_targets: std::collections::HashMap<String, EditorId>,
+    tileset_targets: std::collections::HashMap<String, EditorId>,
+    tile_targets: std::collections::HashMap<String, EditorId>,
     cel_targets: std::collections::HashMap<u64, EditorId>,
 }
 
@@ -473,11 +476,28 @@ impl ScriptTargets {
         )
     }
 
-    fn expose_tags(&mut self, document: &Document) -> Vec<String> {
-        Self::expose(
-            &mut self.tag_targets,
-            document.tags.iter().map(|tag| tag.editor_id),
-        )
+    fn expose_metadata(&mut self, document: &Document) -> extensions::ScriptMetadataKeys {
+        extensions::ScriptMetadataKeys {
+            tags: Self::expose(
+                &mut self.tag_targets,
+                document.tags.iter().map(|tag| tag.editor_id),
+            ),
+            slices: Self::expose(
+                &mut self.slice_targets,
+                document.slices.iter().map(|slice| slice.editor_id),
+            ),
+            tilesets: Self::expose(
+                &mut self.tileset_targets,
+                document.tilesets.iter().map(|set| set.editor_id),
+            ),
+            tiles: Self::expose(
+                &mut self.tile_targets,
+                document
+                    .tilesets
+                    .iter()
+                    .flat_map(|set| set.tiles.iter().map(|tile| tile.editor_id)),
+            ),
+        }
     }
 
     fn expose(
@@ -503,25 +523,50 @@ impl ScriptTargets {
     fn apply_layers(&mut self, document: &mut Document, keys: &[String]) {
         Self::apply(
             &mut self.layer_targets,
+            document.layers.len(),
             document.layers.iter_mut().map(|layer| &mut layer.editor_id),
             keys,
         );
     }
 
-    fn apply_tags(&mut self, document: &mut Document, keys: &[String]) {
+    fn apply_metadata(&mut self, document: &mut Document, keys: &extensions::ScriptMetadataKeys) {
         Self::apply(
             &mut self.tag_targets,
+            document.tags.len(),
             document.tags.iter_mut().map(|tag| &mut tag.editor_id),
-            keys,
+            &keys.tags,
+        );
+        Self::apply(
+            &mut self.slice_targets,
+            document.slices.len(),
+            document.slices.iter_mut().map(|slice| &mut slice.editor_id),
+            &keys.slices,
+        );
+        Self::apply(
+            &mut self.tileset_targets,
+            document.tilesets.len(),
+            document.tilesets.iter_mut().map(|set| &mut set.editor_id),
+            &keys.tilesets,
+        );
+        let tile_count = document.tilesets.iter().map(|set| set.tiles.len()).sum();
+        Self::apply(
+            &mut self.tile_targets,
+            tile_count,
+            document
+                .tilesets
+                .iter_mut()
+                .flat_map(|set| set.tiles.iter_mut().map(|tile| &mut tile.editor_id)),
+            &keys.tiles,
         );
     }
 
     fn apply<'a>(
         targets: &mut std::collections::HashMap<String, EditorId>,
-        ids: impl ExactSizeIterator<Item = &'a mut EditorId>,
+        count: usize,
+        ids: impl Iterator<Item = &'a mut EditorId>,
         keys: &[String],
     ) {
-        if keys.len() != ids.len() {
+        if keys.len() != count {
             return;
         }
         let mut seen = std::collections::HashSet::new();
@@ -2013,6 +2058,7 @@ impl PixelCraft {
         }
         self.remember_action("Import tileset");
         self.doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: path
                 .file_stem()
                 .unwrap_or_default()
@@ -2032,6 +2078,7 @@ impl PixelCraft {
             if ui.pc_button("Add slice from selection").clicked() {
                 let bounds = self.selection_bounds();
                 doc.slices.push(SpriteSlice {
+                    editor_id: Default::default(),
                     name: format!("Slice {}", doc.slices.len() + 1),
                     keys: vec![SliceKey {
                         frame: self.frame,
@@ -2229,6 +2276,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             self.remember_action("Capture selection as tile");
             self.doc.tilesets.push(Tileset {
+                editor_id: Default::default(),
                 name: "Captured tile".into(),
                 width: w,
                 height: h,
@@ -3858,7 +3906,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         "selection": Self::script_selection(&tab.doc, tab.selection, tab.mask.as_deref(), &tab.polygon), "zoom": tab.zoom,
                         "timelineRange": range,
                         "layerKeys": ScriptTargets::default().expose_layers(&tab.doc),
-                        "tagKeys": ScriptTargets::default().expose_tags(&tab.doc),
                     });
                     (tab.doc.clone(), options)
                 })
@@ -3896,7 +3943,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixelcraft::productivity::SelectionOp::Subtract => 2,
             pixelcraft::productivity::SelectionOp::Intersect => 3,
         };
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tagKeys":ScriptTargets::default().expose_tags(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"sprayRadius":self.spray_radius,"sprayRate":self.spray_rate,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"sprayRadius":self.spray_radius,"sprayRate":self.spray_rate,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -3906,6 +3953,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         .unwrap_or(std::path::Path::new("."))
                         .to_path_buf();
                     let mut preferences = saved_preferences;
+                    let mut options = options;
+                    options["metadataKeys"] =
+                        serde_json::to_value(ScriptTargets::default().expose_metadata(&doc))
+                            .map_err(|e| e.to_string())?;
                     extensions::run_workspace_with_host(
                         &doc,
                         &source,
@@ -3943,6 +3994,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     .ok_or("Unknown editor tab")?;
                                 let mut response = options.clone();
                                 response["document"] = extensions::script_document_value(doc)?;
+                                response["metadataKeys"] = serde_json::to_value(
+                                    ScriptTargets::default().expose_metadata(doc),
+                                )
+                                .map_err(|e| e.to_string())?;
                                 return Ok(response);
                             }
                             if op == "preferences" {
@@ -4093,7 +4148,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && let Some(tab) = self.script_preview.as_ref().map(|p| &p.visible)
             && (tab.drawn != self.doc
                 || !tab.drawn.same_editor_layer_targets(&self.doc)
-                || !tab.drawn.same_editor_tag_targets(&self.doc)
                 || (tab.generation != self.power.bridge_generation
                     && !tab.drawn.same_editor_targets(&self.doc))
                 || tab.site != (self.frame, self.layer)
@@ -4111,10 +4165,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .or_default();
             let layer_keys = targets.expose_layers(&self.doc);
             let cel_keys = targets.expose_cels(&self.doc);
-            let tag_keys = targets.expose_tags(&self.doc);
+            let metadata_keys = targets.expose_metadata(&self.doc);
             self.script_ui.editor_update = Some(serde_json::json!({
                 "sprite":id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1,
-                "selection":self.current_script_selection(),"layerKeys":layer_keys,"celKeys":cel_keys,"tagKeys":tag_keys,
+                "selection":self.current_script_selection(),"layerKeys":layer_keys,"celKeys":cel_keys,"metadataKeys":metadata_keys,
             }));
             let selection = self.script_selection_state();
             let tab = &mut self.script_preview.as_mut().unwrap().visible;
@@ -4195,12 +4249,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let targets = preview.layer_keys.entry(id).or_insert_with(|| {
                 let mut targets = ScriptTargets::default();
                 targets.expose_layers(&self.doc);
-                targets.expose_tags(&self.doc);
+                targets.expose_metadata(&self.doc);
                 targets
             });
             targets.apply_layers(&mut document, &keys);
-            if let Ok(tags) = serde_json::from_value::<Vec<String>>(request["tagKeys"].clone()) {
-                targets.apply_tags(&mut document, &tags);
+            if let Ok(keys) = serde_json::from_value::<extensions::ScriptMetadataKeys>(
+                request["metadataKeys"].clone(),
+            ) {
+                targets.apply_metadata(&mut document, &keys);
             }
             if let Ok(cels) = serde_json::from_value::<Vec<extensions::ScriptCelTarget>>(
                 request["celKeys"].clone(),
@@ -4270,18 +4326,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let targets = layer_keys.entry(sprite.id).or_insert_with(|| {
                 let mut targets = ScriptTargets::default();
                 targets.expose_layers(&self.doc);
-                targets.expose_tags(&self.doc);
+                targets.expose_metadata(&self.doc);
                 targets
             });
             targets.apply_layers(&mut document, &sprite.layer_keys);
-            targets.apply_tags(&mut document, &sprite.tag_keys);
+            targets.apply_metadata(&mut document, &sprite.metadata_keys);
             let cel_targets_changed =
                 targets.apply_cels(&self.doc, &mut document, &sprite.cel_keys);
             let changed = self.doc != document
                 || (existing.is_some()
                     && (cel_targets_changed
                         || !self.doc.same_editor_layer_targets(&document)
-                        || !self.doc.same_editor_tag_targets(&document)));
+                        || !self.doc.same_editor_metadata_targets(&document)));
             let selection = Self::decode_script_selection(&document, sprite.selection);
             let selection_changed = selection.bounds != self.selection
                 || selection.mask != self.studio.mask
@@ -9501,6 +9557,56 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
 
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    #[ignore = "Overwrites the native clipboard. Run on the disposable release desktop."]
+    fn lua_native_clipboard_roundtrip() {
+        let mut external = arboard::Clipboard::new().unwrap();
+        external.set_text("External clipboard\nCafé").unwrap();
+
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.replace(Document::new(2, 1), None);
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-native-lua-clipboard-{}.lua",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"
+ assert(app.clipboard.text=='External clipboard'..string.char(10)..'Café')
+ local image=Image(2,1,ColorMode.RGB)
+ image:drawPixel(0,0,Color('#114477'))
+ image:drawPixel(1,0,Color('#aa6622'))
+ app.clipboard.image=image
+ app.activeCel.image:drawPixel(0,0,Color('#224466'))
+ "#,
+        )
+        .unwrap();
+        editor.start_script(path.clone(), None).unwrap();
+        editor.script_ui.use_system_clipboard = Some(true);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while editor.script_job.is_some() && Instant::now() < deadline {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| {
+                editor.show_script_ui(&ctx);
+                editor.poll_clipboard(&ctx);
+            });
+            output.textures_delta.clear();
+            editor.poll_script();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            editor.script_job.is_none(),
+            "Native clipboard script timed out"
+        );
+        assert_eq!(editor.status, "Applied extension changes");
+        assert_eq!(editor.doc.layers[0].cels[0][0], [34, 68, 102, 255]);
+        let image = external.get_image().unwrap();
+        assert_eq!((image.width, image.height), (2, 1));
+        assert_eq!(image.bytes.as_ref(), &[17, 68, 119, 255, 170, 102, 34, 255]);
+    }
+
     #[test]
     fn lua_workspace_presents_tabs_before_completion_and_restores_failed_previews() {
         let ctx = egui::Context::default();
@@ -9640,6 +9746,21 @@ mod tests {
             });
         }
         let original_tag = doc.tags[1].editor_id.runtime_key();
+        for _ in 0..2 {
+            doc.slices.push(
+                serde_json::from_value(serde_json::json!({
+                    "name":"Same slice", "keys":[{"frame":0,"bounds":[0,0,2,1]}]
+                }))
+                .unwrap(),
+            );
+            doc.tilesets.push(
+                serde_json::from_value(serde_json::json!({
+                    "name":"Same tileset", "width":1, "height":1,
+                    "tiles":[[[71,81,91,255]],[[71,81,91,255]]]
+                }))
+                .unwrap(),
+            );
+        }
         let original_cel = doc.layers[1].cel_meta[1].editor_id.to_string();
         let original_layer = doc.layers[1].editor_id.to_string();
         app.replace(doc, None);
@@ -9659,12 +9780,18 @@ mod tests {
  local image=cel.image
  local removed,tag=sprite.tags[1],sprite.tags[2]
  local newTag=sprite:newTag(1,1)
+ local removedSlice,slice=sprite.slices[1],sprite.slices[2]
+ local removedSet,set=sprite.tilesets[1],sprite.tilesets[2]
+ local firstTile,secondTile=set:tile(1),set:tile(2)
+ local heldTileImage=secondTile.image
+ local newSlice=sprite:newSlice(1,0,1,1)
+ local newSet=sprite:newTileset(Rectangle(0,0,1,1),1)
  local created=sprite:newLayer()
  created.name='Script layer'
  local replaced=created:cel(1)
  local dialog=Dialog{title='Timeline identity'}
  dialog:show{wait=false}
- local listener,vacated,inserted
+ local listener,vacated,inserted,duplicatedTile
  local phase=0
  listener=sprite.events:on('change',function()
   phase=phase+1
@@ -9672,6 +9799,14 @@ mod tests {
    assert(tag==sprite.tags[1] and tag.name=='Renamed natively')
    assert(newTag==sprite.tags[2])
    assert(not pcall(function()return removed.name end))
+   assert(slice==sprite.slices[1] and slice.name=='Renamed slice')
+   assert(set==sprite.tilesets[1] and set.name=='Renamed tileset')
+   assert(secondTile==set:tile(1) and firstTile==set:tile(2))
+   duplicatedTile=set:tile(3)
+   assert(duplicatedTile~=secondTile and duplicatedTile.index==3)
+   assert(newSlice==sprite.slices[2] and newSet==sprite.tilesets[2])
+   assert(not pcall(function()return removedSlice.name end))
+   assert(not pcall(function()return removedSet.name end))
    assert(original==sprite.layers[1] and original.name=='Keep')
    assert(created==sprite.layers[2] and created.name=='Script layer')
    assert(frame==sprite.frames[3] and frame.frameNumber==3)
@@ -9684,6 +9819,10 @@ mod tests {
   elseif phase==2 then
    assert(removed==sprite.tags[1] and tag==sprite.tags[2])
    assert(tag.name=='Same' and newTag==sprite.tags[3])
+   assert(removedSlice==sprite.slices[1] and slice==sprite.slices[2])
+   assert(removedSet==sprite.tilesets[1] and set==sprite.tilesets[2])
+   assert(firstTile==set:tile(1) and secondTile==set:tile(2))
+   assert(not pcall(function()return duplicatedTile.index end))
    assert(original==sprite.layers[2] and created==sprite.layers[3])
    assert(frame==sprite.frames[2] and cel==original:cel(frame))
    assert(replaced==created:cel(1) and replaced.opacity==255)
@@ -9694,6 +9833,10 @@ mod tests {
    assert(tag==sprite.tags[1] and newTag==sprite.tags[2])
    assert(not pcall(function()return removed.name end))
    newTag.name='Edited through retained handle'
+   slice.name='Edited slice after redo'
+   set.name='Edited tileset after redo'
+   assert(secondTile==set:tile(1) and duplicatedTile==set:tile(3))
+   heldTileImage:drawPixel(0,0,Color('#113355'))
    assert(phase==3 and frame==sprite.frames[3] and inserted==sprite.frames[2])
    assert(cel==created:cel(1) and vacated==original:cel(frame))
    assert(not pcall(function()return replaced.opacity end))
@@ -9717,6 +9860,17 @@ mod tests {
                 app.doc.swap_layers(1, 2);
                 assert!(app.doc.remove_tag(0));
                 app.doc.tags[0].name = "Renamed natively".into();
+                app.doc.slices.remove(0);
+                app.doc.slices[0].name = "Renamed slice".into();
+                app.doc.tilesets.remove(0);
+                app.doc.tilesets[0].name = "Renamed tileset".into();
+                use pixelcraft::model::TileDefinitionEdit;
+                app.doc
+                    .edit_tile_definition(0, 2, TileDefinitionEdit::MoveTo(1))
+                    .unwrap();
+                app.doc
+                    .edit_tile_definition(0, 1, TileDefinitionEdit::Duplicate)
+                    .unwrap();
                 app.doc.add_frame(0, false);
                 app.doc
                     .move_cel_range(CelRange::between((0, 2), (0, 2)), 1, 0, false)
@@ -9742,6 +9896,10 @@ mod tests {
         assert_eq!(app.doc.tags[0].name, "Renamed natively");
         assert_eq!(app.doc.tags[0].editor_id.runtime_key(), original_tag);
         assert_eq!(app.doc.tags[1].name, "Edited through retained handle");
+        assert_eq!(app.doc.slices[0].name, "Edited slice after redo");
+        assert_eq!(app.doc.tilesets[0].name, "Edited tileset after redo");
+        assert_eq!(app.doc.tilesets[0].tiles[0][0], [17, 51, 85, 255]);
+        assert_eq!(app.doc.tilesets[0].tiles[2][0], [71, 81, 91, 255]);
         assert_eq!(app.doc.layers[0].name, "Keep");
         assert_eq!(app.doc.layers[0].editor_id.to_string(), original_layer);
         assert_eq!(app.doc.layers[1].name, "Script layer");
@@ -11086,6 +11244,7 @@ mod tests {
         let old = [10, 20, 30, 255];
         let paint = [40, 50, 60, 255];
         a.doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Variants".into(),
             width: 2,
             height: 1,
@@ -11140,6 +11299,7 @@ mod tests {
         let mut editor = app();
         editor.doc = Document::new(2, 1);
         editor.doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Stone".into(),
             width: 1,
             height: 1,
@@ -11175,6 +11335,7 @@ mod tests {
     fn tile_painting_changes_ids_and_eraser_clears_whole_tile() {
         let mut a = app();
         a.doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Test".into(),
             width: 2,
             height: 2,

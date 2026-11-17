@@ -380,6 +380,7 @@ mod tests {
         mask.set(0, [255; 4]);
         layer.mask = Some(mask);
         doc.slices.push(SpriteSlice {
+            editor_id: Default::default(),
             name: "Pivot".into(),
             keys: vec![SliceKey {
                 frame: 0,
@@ -408,6 +409,7 @@ mod tests {
         let red = [255, 0, 0, 255];
         let green = [0, 255, 0, 255];
         doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Test".into(),
             width: 2,
             height: 1,

@@ -549,29 +549,54 @@ local function copyObjectKeys(source,target)
   historyObjectKeys[target[index]]=historyObjectKeys[object]
  end
 end
-local setTagIdentity,tagIdentityWire
+local setMetadataIdentity,metadataIdentityWire
 do
  local keysByWire=setmetatable({},{__mode='v'})
+ local kinds={'tags','slices','tilesets'}
  local nextKey=0
- setTagIdentity=function(document,keys)
-  for index,wire in ipairs(keys or {})do
-   local key=keysByWire[wire] or {wire=wire}
-   keysByWire[wire]=key
-   historyObjectKeys[document.tags[index]]=key
+ local function bind(object,wire)
+  if not wire then return end
+  local key=keysByWire[wire] or {wire=wire}
+  keysByWire[wire]=key
+  historyObjectKeys[object]=key
+ end
+ local function wireOf(object)
+  local key=historyObjectKey(object)
+  if not key.wire then
+   nextKey=nextKey+1
+   key.wire='script:'..nextKey
+   keysByWire[key.wire]=key
+  end
+  return key.wire
+ end
+ setMetadataIdentity=function(document,keys)
+  if not keys then return end
+  for _,kind in ipairs(kinds)do
+   local objects=document[kind] or {}
+   for index,object in ipairs(objects)do bind(object,(keys[kind] or {})[index]) end
+  end
+  local slot=0
+  local tiles=keys.tiles or {}
+  for _,set in ipairs(document.tilesets or {})do
+   for _,tile in ipairs(set.tiles)do
+    slot=slot+1
+    bind(tile,tiles[slot])
+   end
   end
  end
- tagIdentityWire=function(document)
-  local keys={}
-  for index,tag in ipairs((document or doc).tags)do
-   local key=historyObjectKey(tag)
-   if not key.wire then
-    nextKey=nextKey+1
-    key.wire='script:'..nextKey
-    keysByWire[key.wire]=key
-   end
-   keys[index]=key.wire
+ metadataIdentityWire=function(document)
+  document=document or doc
+  local groups={}
+  for _,kind in ipairs(kinds)do
+   local keys={}
+   for index,object in ipairs(document[kind] or {})do keys[index]=wireOf(object) end
+   groups[kind]=keys
   end
-  return keys
+  groups.tiles={}
+  for _,set in ipairs(document.tilesets or {})do
+   for _,tile in ipairs(set.tiles)do groups.tiles[#groups.tiles+1]=wireOf(tile) end
+  end
+  return groups
  end
 end
 local function isTagUserData(chunk)

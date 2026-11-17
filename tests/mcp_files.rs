@@ -676,6 +676,7 @@ fn restricted_mcp_tileset_atlas_respects_root_and_overwrite() {
     let w = Workspace::new();
     let mut doc = Document::new(1, 1);
     doc.tilesets.push(pixelcraft::model::Tileset {
+        editor_id: Default::default(),
         name: "Author palette".into(),
         width: 1,
         height: 1,
@@ -853,6 +854,7 @@ fn restricted_split_slice_exports_update_all_unity_sidecars() {
         .into_iter()
         .enumerate()
         .map(|(x, name)| SpriteSlice {
+            editor_id: Default::default(),
             name: name.into(),
             keys: vec![SliceKey {
                 frame: 0,
@@ -940,6 +942,7 @@ fn sheet_filters_groups_and_frame_ranges_in_cli_and_mcp() {
         color: [10, 20, 30],
     });
     sprite.slices.push(SpriteSlice {
+        editor_id: Default::default(),
         name: "Actor".into(),
         keys: vec![SliceKey {
             frame: 0,
@@ -1038,10 +1041,12 @@ fn named_slice_sheet_uses_keyed_bounds_and_rejects_unresolvable_names() {
     };
     sprite.slices = vec![
         SpriteSlice {
+            editor_id: Default::default(),
             name: "Other".into(),
             keys: vec![key(0, 1)],
         },
         SpriteSlice {
+            editor_id: Default::default(),
             name: "Portrait".into(),
             keys: vec![key(0, -1), key(1, 3)],
         },
@@ -1137,6 +1142,7 @@ fn sheet_splits_layers_and_grid_cells_into_independent_animation_samples() {
         sprite.set_pixel(2, f, 3, color);
     }
     sprite.slices.push(SpriteSlice {
+        editor_id: Default::default(),
         name: "Stage".into(),
         keys: vec![SliceKey {
             frame: 0,
