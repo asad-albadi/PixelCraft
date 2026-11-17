@@ -785,6 +785,7 @@ local function dialogSpec(d)
   for k,v in pairs(widget)do if k~='tabs' and type(v)~='function' then item[k]=v end end
   item.id=widget.id or widget._hostId
   item.hostId,item.tabGroup,item.tabId=widget._hostId,widget._tabGroup,widget._tabId
+  if widget.kind=='canvas' then configureDialogCanvas(widget,item) end
   if widget.kind=='tabs' then
    item.tabs={}
    for _,tab in ipairs(widget.tabs)do
@@ -819,6 +820,17 @@ local function dispatch(d,response)
     break
    end
   end
+ elseif response.canvasEvents then
+  for _,widget in ipairs(d._widgets)do
+   if widget.kind=='canvas' and (widget.id or widget._hostId)==response.widget then
+    for _,event in ipairs(response.canvasEvents)do
+     local callback=widget[event.name]
+     if callback then callback(event) end
+     if not d._visible then break end
+    end
+    break
+   end
+  end
  else
   for _,w in ipairs(d._widgets)do if (w.id or w._hostId)==response.widget then local callback=w.onclick or w.onchange;if callback then callback(response.event or {})elseif w.kind=='button'then d:close() end;break end end
  end
@@ -841,11 +853,18 @@ function Dialog(t)
    else rawset(self,key,value) end
   end,
  })
- for _,kind in ipairs{'label','entry','number','slider','check','radio','combobox','color','shades','button','separator','file'}do
-  d[kind]=function(self,w)w=w or {};w.kind=kind;w._hostId="widget:"..(#self._widgets+1);self._widgets[#self._widgets+1]=w
+ for _,kind in ipairs{'label','entry','number','slider','check','radio','combobox','color','shades','button','separator','file','canvas'}do
+  d[kind]=function(self,w)
+   w=w or {}
+   if kind=='canvas' then
+    w.width,w.height=w.width or 128,w.height or 64
+    validateDialogCanvasSize(w.width,w.height)
+    w._canvasDirty=true
+   end
+   w.kind=kind;w._hostId="widget:"..(#self._widgets+1);self._widgets[#self._widgets+1]=w
    local group=self._activeTabs
    if group then w._tabGroup=group._hostId;w._tabId=group.tabs[#group.tabs].key end
-   if w.id then self.data[w.id]=kind=='check' or kind=='radio' or kind=='button' and (w.selected or false) or kind=='color' and Color(w.color or {}) or kind=='shades' and (w.colors or {}) or kind=='slider' and (w.value or w.min or 0) or kind=='number' and tonumber(w.text or '0') or kind=='combobox' and (w.option or (w.options or {})[1] or '') or kind=='file' and (w.filename or '') or w.text or ''
+   if w.id and kind~='canvas' then self.data[w.id]=kind=='check' or kind=='radio' or kind=='button' and (w.selected or false) or kind=='color' and Color(w.color or {}) or kind=='shades' and (w.colors or {}) or kind=='slider' and (w.value or w.min or 0) or kind=='number' and tonumber(w.text or '0') or kind=='combobox' and (w.option or (w.options or {})[1] or '') or kind=='file' and (w.filename or '') or w.text or ''
     if kind=='check' or kind=='radio' or kind=='button' then self.data[w.id]=w.selected or false end
    end;return self end
  end
@@ -875,14 +894,34 @@ function Dialog(t)
   self._activeTabs=nil
   return self
  end
- function d:modify(w)for _,item in ipairs(self._widgets)do if item.id==w.id then for k,v in pairs(w)do item[k]=v end;if w.text and (item.kind=='entry' or item.kind=='number' or item.kind=='label')then self.data[w.id]=item.kind=='number' and tonumber(w.text) or w.text end;if w.value~=nil then self.data[w.id]=w.value end;if w.selected~=nil then self.data[w.id]=w.selected end end end;return self end
+ function d:modify(w)
+  for _,item in ipairs(self._widgets)do
+   if item.id==w.id then
+    if item.kind=='canvas' then
+     validateDialogCanvasSize(w.width or item.width,w.height or item.height)
+     item._canvasDirty=true
+    end
+    for k,v in pairs(w)do item[k]=v end
+    if w.text and (item.kind=='entry' or item.kind=='number' or item.kind=='label')then self.data[w.id]=item.kind=='number' and tonumber(w.text) or w.text end
+    if w.value~=nil then self.data[w.id]=w.value end
+    if w.selected~=nil then self.data[w.id]=w.selected end
+   end
+  end
+  return self
+ end
  function d:close()if self._visible then self._visible=false;if self._onclose then self._onclose()end end;return self end
- function d:repaint()return self end
+ function d:repaint()
+  for _,widget in ipairs(self._widgets)do
+   if widget.kind=='canvas' then widget._canvasDirty=true end
+  end
+  return self
+ end
  function d:show(options)
   options=options or {}
   self:endtabs()
   if options.bounds then self.bounds=options.bounds end
   self._visible=true
+  self:repaint()
   if options.wait~=false then while self._visible do dispatch(self,host{op='dialog',dialog=dialogSpec(self)})end end
   return self
  end

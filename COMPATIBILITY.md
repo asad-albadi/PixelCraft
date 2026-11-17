@@ -38,6 +38,8 @@ Real egui controls support Dialog label, entry, number, slider, check/radio, com
 
 Use `Dialog:tab` and `Dialog:endtabs` to group controls into pages. Each group exposes its selected tab ID through `Dialog.data`. Tab clicks and group selection changes have separate callbacks. Controls keep their values when their page is hidden. Assign a rectangle to `dialog.bounds` or pass it to `Dialog:show` to position and size the window in editor coordinates. The live bounds follow native dragging and resizing, and the editor constrains the window to the available viewport.
 
+`Dialog:canvas` paints through the `context` of its `onpaint` event. The context supports filled and stroked rectangles, stroked line paths, text, and cropped or scaled images. It exposes dimensions, color, stroke width, opacity, and `save` and `restore`. Use `Dialog:repaint` to update the drawing. The editor clips the drawing to its widget and samples images with nearest-neighbor filtering. Input callbacks receive local pointer coordinates, button and modifier state, wheel deltas, and focused key presses and releases. Canvas dimensions may be up to 1024 pixels on each axis. Each paint can issue up to 2048 commands and supply up to 131072 image pixels.
+
 Custom canvas/graphics-context widgets, exact original dialog layouts/tab groups, radio exclusivity, dialog bounds positioning, full editor mouse/paint events, hot-reloading and extension command menu placement are not implemented. Concurrent editor/script edits use document snapshots rather than independent per-operation history. Prefer finishing/stopping an extension before unrelated structural editing.
 
 ## Contributions

@@ -98,6 +98,85 @@ timer:start()
 }
 
 #[test]
+fn dialog_canvas_paints_and_handles_input_without_resending_unchanged_artwork() {
+    let mut pumps = 0;
+    let output = run_source_with_host(
+        &Document::new(2, 1),
+        r#"
+local dlg=Dialog('Canvas')
+local sceneColor=Color('#bb3322')
+local paints=0
+local thumbnail=Image(2,1,ColorMode.RGB)
+thumbnail:drawPixel(1,0,Color('#234567'))
+dlg:canvas{id='preview',width=48,height=24,onpaint=function(ev)
+ local gc=ev.context
+ assert(gc.width==48 and gc.height==24)
+ paints=paints+1
+ gc.color=sceneColor
+ gc:fillRect(Rectangle(1,2,8,9))
+ gc:save()
+ gc.opacity=128
+ gc:drawImage(thumbnail,Rectangle(1,0,1,1),Rectangle(12,6,8,8))
+ gc:restore()
+ assert(gc.opacity==255)
+end,onmousedown=function(ev)
+ assert(ev.x==5 and ev.y==7 and ev.button==MouseButton.LEFT)
+ sceneColor=Color('#31aa53')
+ dlg:repaint()
+end,onmouseup=function(ev)
+ assert(ev.x==8 and ev.y==9 and paints==2)
+ app.activeImage:drawPixel(1,0,sceneColor)
+ dlg:close()
+end}
+dlg:show{wait=false}
+"#,
+        0,
+        0,
+        None,
+        None,
+        json!({}),
+        Box::new(move |request| {
+            if request["op"] == "preferences" {
+                assert_eq!(pumps, 3);
+                return Ok(json!({}));
+            }
+            assert_eq!(request["op"], "pump");
+            pumps += 1;
+            let canvas = &request["dialogs"][0]["widgets"][0];
+            assert_eq!(canvas["kind"], "canvas");
+            assert_eq!(canvas["canvasEvents"]["onmousedown"], true);
+            if pumps == 2 {
+                assert!(canvas["paint"].is_null());
+                return Ok(json!({"dialog":1,"widget":"preview","canvasEvents":[
+                    {"name":"onmousedown","x":5,"y":7,"button":1}
+                ]}));
+            }
+            assert_eq!(canvas["paint"][0]["kind"], "fillRect");
+            assert_eq!(
+                canvas["paint"][0]["color"],
+                if pumps == 1 {
+                    json!([187, 51, 34, 255])
+                } else {
+                    json!([49, 170, 83, 255])
+                }
+            );
+            assert_eq!(canvas["paint"][1]["kind"], "image");
+            assert_eq!(canvas["paint"][1]["pixels"][1], json!([35, 69, 103, 255]));
+            assert_eq!(canvas["paint"][1]["opacity"], 128);
+            Ok(if pumps == 1 {
+                json!({})
+            } else {
+                json!({"dialog":1,"widget":"preview","canvasEvents":[
+                    {"name":"onmouseup","x":8,"y":9,"button":1}
+                ]})
+            })
+        }),
+    )
+    .unwrap();
+    assert_eq!(output.composite(0)[1], [49, 170, 83, 255]);
+}
+
+#[test]
 fn actual_file_bridge_saves_and_reopens_a_project() {
     use pixelcraft::{extensions::script_file_request, formats};
     let dir = std::env::temp_dir().join(format!("pixelcraft-script-files-{}", std::process::id()));

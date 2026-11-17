@@ -491,9 +491,10 @@ impl ScriptRuntime {
             ))
         ))?;
         runtime.eval(&format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             include_str!("lua_api.lua"),
             include_str!("lua_tilesets.lua"),
+            include_str!("lua_dialog_canvas.lua"),
             include_str!("lua_compat.lua"),
             include_str!("lua_properties.lua")
         ))?;

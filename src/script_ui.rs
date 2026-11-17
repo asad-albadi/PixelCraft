@@ -1,4 +1,6 @@
 //! The Lua worker blocks on replies; egui remains responsive and owns the widgets.
+mod canvas;
+
 use crate::ui_icons::UiIcons;
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
@@ -23,6 +25,7 @@ pub struct ScriptUi {
     pub modeless: bool,
     pub editor_update: Option<Value>,
     applied_dialog_bounds: HashMap<u64, u64>,
+    canvases: canvas::Canvases,
 }
 impl ScriptUi {
     pub fn connect(&mut self, rx: mpsc::Receiver<Request>, native_clipboard: bool) {
@@ -37,6 +40,7 @@ impl ScriptUi {
         self.receiver = None;
         self.pending = None;
         self.modeless = false;
+        self.canvases = canvas::Canvases::default();
     }
     pub fn show(&mut self, ctx: &egui::Context) {
         if self.pending.is_none()
@@ -111,12 +115,16 @@ impl ScriptUi {
                     .cloned()
                     .unwrap_or_default()
             };
+            if op == "pump" {
+                self.canvases.retain_visible(&dialogs);
+            }
             for dialog in &mut dialogs {
                 if let Some(value) = draw_dialog(
                     ctx,
                     dialog,
                     &mut dialog_bounds,
                     &mut self.applied_dialog_bounds,
+                    &mut self.canvases,
                 ) {
                     response = Some(value);
                 }
@@ -171,10 +179,19 @@ fn draw_dialog(
     dialog: &mut Value,
     bounds: &mut Vec<Value>,
     applied_bounds: &mut HashMap<u64, u64>,
+    canvases: &mut canvas::Canvases,
 ) -> Option<Value> {
     let title = dialog["title"].as_str().unwrap_or("Extension").to_string();
     let dialog_id = dialog["id"].as_u64().unwrap_or(0);
-    let widgets = dialog["widgets"].as_array().cloned().unwrap_or_default();
+    let mut widgets = dialog["widgets"].take();
+    if let Some(widgets) = widgets.as_array_mut() {
+        for widget in widgets
+            .iter_mut()
+            .filter(|widget| widget["kind"] == "canvas")
+        {
+            canvases.receive(ctx, dialog_id, widget);
+        }
+    }
     let revision = dialog["boundsRevision"].as_u64().unwrap_or(0);
     let window_id = egui::Id::new(("lua-dialog", dialog_id));
     let mut open = true;
@@ -202,7 +219,7 @@ fn draw_dialog(
     let mut response = None;
     let mut active_tabs = HashMap::new();
     let mut draw_widgets = |ui: &mut egui::Ui| {
-        for (n, w) in widgets.iter().enumerate() {
+        for (n, w) in widgets.as_array().into_iter().flatten().enumerate() {
             if w["visible"] == false {
                 continue;
             }
@@ -213,6 +230,16 @@ fn draw_dialog(
             if let Some(group) = w["tabGroup"].as_str()
                 && active_tabs.get(group).copied() != w["tabId"].as_str()
             {
+                continue;
+            }
+            if w["kind"] == "canvas" {
+                ui.push_id(n, |ui| {
+                    ui.add_enabled_ui(w["enabled"] != false, |ui| {
+                        if let Some(event) = canvases.draw(ui, dialog_id, w) {
+                            response = Some(event);
+                        }
+                    });
+                });
                 continue;
             }
             ui.push_id(n, |ui| {
@@ -366,6 +393,7 @@ fn draw_dialog(
     if !open {
         response = Some(json!({"dialog":dialog_id,"closed":true,"data":data}));
     }
+    dialog["widgets"] = widgets;
     response
 }
 
@@ -435,6 +463,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut bounds = Vec::new();
         let mut applied_bounds = HashMap::new();
+        let mut canvases = canvas::Canvases::default();
         let mut dialog = json!({
             "id":7,"title":"Tabbed dialog","bounds":[40,55,320,200],"boundsRevision":1,
             "data":{"page":"second"},
@@ -474,7 +503,13 @@ mod tests {
                 ..Default::default()
             };
             let mut output = ctx.run_ui(input, |_| {
-                reply = draw_dialog(&ctx, &mut dialog, &mut bounds, &mut applied_bounds);
+                reply = draw_dialog(
+                    &ctx,
+                    &mut dialog,
+                    &mut bounds,
+                    &mut applied_bounds,
+                    &mut canvases,
+                );
             });
             output.textures_delta.clear();
             (output, reply, bounds[0]["bounds"].clone())
@@ -564,7 +599,14 @@ mod tests {
         // Exercise the same widget renderer used by the running editor.
         let mut result = ctx.run_ui(egui::RawInput::default(), |ui| {
             assert!(
-                draw_dialog(ui.ctx(), &mut dialog, &mut Vec::new(), &mut HashMap::new()).is_none()
+                draw_dialog(
+                    ui.ctx(),
+                    &mut dialog,
+                    &mut Vec::new(),
+                    &mut HashMap::new(),
+                    &mut canvas::Canvases::default()
+                )
+                .is_none()
             );
         });
         assert!(!result.shapes.is_empty());
