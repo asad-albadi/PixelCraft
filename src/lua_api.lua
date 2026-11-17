@@ -538,6 +538,7 @@ local function isTagUserData(chunk)
 end
 local tilesetHandle,spriteTilesets,assignLayerTileset,snapshotTileset,detachedTileset
 local cloneDocumentState,insertFrameIdentity,cel,rebuildHandles
+local setLayerIdentity,layerIdentityWire,reconcileDocumentState
 do
  -- Keep Lua handles and their identity tokens out of the serialized document.
  local states=setmetatable({},{__mode='k'})
@@ -545,8 +546,46 @@ do
  local layers=setmetatable({},{__mode='kv'})
  local frames=setmetatable({},{__mode='kv'})
  local cels=setmetatable({},{__mode='k'})
+ local keysByWire=setmetatable({},{__mode='v'})
+ local nextLayerKey=0
+ local state
 
- local function state(document)
+ local function layerKey(wire)
+  local key=keysByWire[wire]
+  if key then return key end
+  key={wire=wire}
+  keysByWire[wire]=key
+  return key
+ end
+
+ setLayerIdentity=function(document,keys)
+  if not keys then return end
+  for i,layer in ipairs(document.layers)do
+   if keys[i] then layerKeys[layer]=layerKey(keys[i]) end
+  end
+ end
+
+ layerIdentityWire=function(document)
+  local keys={}
+  for i,layer in ipairs((document or doc).layers)do keys[i]=layerKeys[layer].wire end
+  return keys
+ end
+
+ reconcileDocumentState=function(document,keys)
+  local current=state(doc)
+  local oldIds=doc.frame_export_ids and doc.frame_export_ids.frames
+  local newIds=document.frame_export_ids and document.frame_export_ids.frames
+  local previous={}
+  for i,key in ipairs(current.frameKeys)do previous[oldIds and oldIds[i] or i-1]=key end
+  local next=state(document)
+  for i=1,#document.durations do
+   next.frameKeys[i]=previous[newIds and newIds[i] or i-1] or next.frameKeys[i]
+  end
+  setLayerIdentity(document,keys)
+ end
+
+
+ state=function(document)
   local value=states[document]
   if value then return value end
   local keys={}
@@ -698,8 +737,12 @@ do
   value.layerSlots,value.frameSlots={},{}
   layerHandles,frameHandles={},{}
   for i,layer in ipairs(doc.layers)do
-   local key=layerKeys[layer] or {}
-   layerKeys[layer]=key
+   local key=layerKeys[layer]
+   if not key then
+    nextLayerKey=nextLayerKey+1
+    key=layerKey('script:'..nextLayerKey)
+    layerKeys[layer]=key
+   end
    value.layerSlots[key]=i
    layerHandles[i]=layerHandle(key)
   end

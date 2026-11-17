@@ -164,6 +164,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 layer, frame, and cel identity checkpoint. A retained Lua handle resolves to the current slot across structural Lua edits, undo, redo, and rollback. Layer, frame, and cel identity tokens stay outside serialized project and clipboard data. The Windows regression covers handle equality, stale handle errors, active cel targeting, and drawing to a retained cel image after a frame shift. Modeless editor-snapshot identity, the other object types, and native clipboard verification remain open.
 
+- Item 45 modeless timeline identity checkpoint. Existing editor layer IDs survive a modeless Lua preview and final commit. Layer keys and frame export IDs let Lua rebind retained layer, frame, and cel handles to surviving objects after a native timeline update. A Windows editor request-loop test reorders a native layer and a Lua-created layer, inserts a native frame, and writes through a retained cel image. Individual cel moves across otherwise surviving slots, other object types, and native clipboard verification remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

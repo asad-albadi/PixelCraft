@@ -1705,6 +1705,13 @@ impl Document {
         })
     }
 
+    pub fn same_editor_layer_targets(&self, other: &Self) -> bool {
+        self.layers
+            .iter()
+            .map(|layer| layer.editor_id.0)
+            .eq(other.layers.iter().map(|layer| layer.editor_id.0))
+    }
+
     pub fn same_editor_targets(&self, other: &Self) -> bool {
         self.editor_id.0 == other.editor_id.0
             && self.layers.len() == other.layers.len()

@@ -542,6 +542,8 @@ pub struct ScriptWorkspace {
 pub struct ScriptSprite {
     pub id: u32,
     pub document: Document,
+    #[serde(default, rename = "layerKeys")]
+    pub layer_keys: Vec<String>,
     pub baseline: Option<Document>,
     pub saved: Option<Document>,
     pub filename: PathBuf,
