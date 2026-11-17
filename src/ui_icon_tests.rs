@@ -3513,3 +3513,59 @@ fn blur_and_jumble_brushes_clip_to_selection_and_commit_one_stroke() {
         assert_eq!(app.doc, doc);
     }
 }
+
+#[test]
+fn sprite_text_previews_and_places_multiline_pixels_as_one_undoable_edit() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-sprite-text.png")));
+    let doc = Document::new(48, 56);
+    app.replace(doc.clone(), None);
+    app.action("text");
+    app.fg = [235, 186, 94, 255];
+    app.selection = Some((9, 5, 40, 50));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 5.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        click(board.min + Vec2::new(4.5, 5.5) * 5.),
+    );
+    assert!(app.dialog_open());
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::Text("Oak\nLake".into())],
+    );
+    assert!(app.text_preview_texture().is_some());
+    assert!(app.undo.is_empty());
+    assert!(!app.doc.layers[0].cels[0].occupied());
+
+    let apply = layout_rect(&ctx, "sprite-text-apply").center();
+    discard_frame(&mut app, &ctx, size, 1., click(apply));
+    let pixels = &app.doc.layers[0].cels[0];
+    let touched: Vec<_> = pixels
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| (p[3] != 0).then_some(i))
+        .collect();
+    assert!(!touched.is_empty());
+    assert!(touched.iter().all(|i| (9..=40).contains(&(i % 48))));
+    assert!(touched.iter().any(|i| i / 48 < 22));
+    assert!(touched.iter().any(|i| i / 48 > 25));
+    assert!(touched.iter().all(|&i| pixels[i] == app.fg));
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert_eq!(app.doc, doc);
+}

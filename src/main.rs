@@ -23,6 +23,7 @@ mod script_ui;
 mod selection_tools;
 mod shortcut_editor;
 mod spray_tool;
+mod sprite_text;
 use shortcut_editor::{ShortcutChord, ShortcutEdit};
 mod studio;
 mod subtag_playback;
@@ -123,6 +124,7 @@ enum Tool {
     Picker,
     Line,
     Curve,
+    Text,
     Rect,
     Ellipse,
     Polygon,
@@ -151,6 +153,7 @@ impl Tool {
             Self::Fill => "fill",
             Self::Line => "line",
             Self::Curve => "curve",
+            Self::Text => "text",
             Self::Ellipse => "ellipse",
             Self::Polygon => "polygon",
             Self::Contour => "contour",
@@ -199,6 +202,7 @@ impl Tool {
             Self::Picker => "Eyedropper",
             Self::Line => "Line",
             Self::Curve => "Bézier curve",
+            Self::Text => "Text",
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
             Self::Polygon => "Polygon",
@@ -757,6 +761,7 @@ struct PixelCraft {
     editor_filter: Option<editor_filters::FilterDialog>,
     canvas_transform: Option<canvas_transform::CanvasTransform>,
     curve_draft: Option<curve_tool::CurveDraft>,
+    text_draft: Option<sprite_text::TextDraft>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
     profile_dialog: Option<color_profiles::ProfileDialog>,
     selection_tools: selection_tools::SelectionTools,
@@ -959,6 +964,7 @@ impl PixelCraft {
             editor_filter: None,
             canvas_transform: None,
             curve_draft: None,
+            text_draft: None,
             palette_conversion: None,
             profile_dialog: None,
             selection_tools: selection_tools::SelectionTools::default(),
@@ -2252,6 +2258,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.rename.is_some()
             || self.replace_color.is_some()
             || self.editor_filter.is_some()
+            || self.text_draft.is_some()
             || self.palette_conversion.is_some()
             || self.profile_dialog.is_some()
             || self.selection_tools.open()
@@ -2274,6 +2281,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn cancel_gesture(&mut self) {
         self.selection_tools.cancel_polygon();
         self.curve_draft = None;
+        self.text_draft = None;
         self.spray_stroke = None;
         self.retouch_gesture = None;
         self.studio.marquee_operation = None;
@@ -3619,6 +3627,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "polygonal-lasso" => self.tool = Tool::PolygonLasso,
             "polygon" => self.tool = Tool::Polygon,
             "curve" => self.tool = Tool::Curve,
+            "text" => self.tool = Tool::Text,
             "contour" => self.tool = Tool::Contour,
             "wand" => self.tool = Tool::Wand,
             "workflow" => self.power.open = true,
@@ -4861,6 +4870,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Tool::Picker,
             Tool::Line,
             Tool::Curve,
+            Tool::Text,
             Tool::Rect,
             Tool::Ellipse,
             Tool::Polygon,
@@ -6715,6 +6725,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 );
             }
         }
+        self.draw_sprite_text(&painter, board);
         if pane == CanvasPane::Primary {
             self.draw_references(ui, board);
         } else {
@@ -6824,6 +6835,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.cancel_curve();
                 } else {
                     self.curve_click(pane, self.snapped_canvas_point(raw, repeats));
+                }
+            } else if self.tool == Tool::Text {
+                if !secondary {
+                    self.begin_sprite_text(p);
                 }
             } else if matches!(self.tool, Tool::PolygonLasso | Tool::Polygon) {
                 if secondary {
@@ -7324,6 +7339,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         self.replace_color_dialog(ctx);
         self.filters_dialog(ctx);
+        self.sprite_text_dialog(ctx);
         self.palette_conversion_dialog(ctx);
         self.document_profile_dialog(ctx);
         self.selection_tools_dialog(ctx);

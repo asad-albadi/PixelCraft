@@ -220,6 +220,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 5 retouch checkpoint. Blur averages a 3×3 neighborhood and jumble samples neighboring artwork with a shift based on stroke direction. Both editor brushes expose size, shape, and strength, sample the original cel for the duration of a stroke, and respect selection masks and seamless axes. Lua can invoke both brushes. Tests cover clipped pointer strokes, undo, and stable sampling of translucent pixels in Lua. Formatting, strict Clippy, and 602 Windows all-target tests passed. Text remains open.
 
+- Item 5 complete. Text supports multiline placement, built-in regular, bold, and monospaced typefaces, pixel sizing and coordinates, and optional antialiasing for non-indexed sprites. It previews the glyph raster on the canvas without editing the cel. Placement respects selection clipping and commits in one undo step. Windows tests cover clipping, native pixel coverage, antialiasing, and undo. Formatting, strict Clippy, and 604 Windows all-target tests passed. Local font import and broader text workflows remain candidates for the parity audit.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -229,7 +231,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 ## Drawing, selections, and color
 
-- [ ] **5. Add drawing tools.** Implement spray with size and rate controls, curves, filled freehand contours, polygons, text, blur, and jumble.
+- [x] **5. Add drawing tools.** Implement spray with size and rate controls, curves, filled freehand contours, polygons, text, blur, and jumble.
 - [ ] **6. Expand brush and ink controls.** Add per-tool inks such as lock alpha and copy color, saved brushes and shading ramps, image-brush alignment, and stroke stabilization and dynamics.
 - [x] **7. Add dithered gradients.** Expose gradient patterns and dithering in the gradient tool.
 - [x] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.

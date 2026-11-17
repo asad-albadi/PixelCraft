@@ -1014,6 +1014,11 @@ impl PixelCraft {
             toggle(ui, &mut self.grid, "Pixel grid");
             return;
         }
+        if self.tool == Tool::Text {
+            ui.label("Click the canvas to place text");
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
         if self.tool == Tool::Spray {
             ui.label("Radius");
             ui.add(
