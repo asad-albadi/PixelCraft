@@ -3142,3 +3142,128 @@ fn gradient_controls_apply_patterns_to_preview_release_and_radial_strokes() {
         [2, 0, 2, 1]
     );
 }
+
+#[test]
+fn canvas_transform_handles_edit_selected_cels_with_one_undo() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-transform.png")));
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let mut doc = Document::new(12, 10);
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.set_pixel(0, 0, 26, red);
+    doc.set_pixel(0, 1, 39, green);
+    doc.set_pixel(0, 2, 39, blue);
+    app.replace(doc, None);
+    app.selection = Some((2, 2, 3, 3));
+    app.selected_cels = Some(CelSelection::Rectangle(CelRange {
+        first_layer: 0,
+        last_layer: 0,
+        first_frame: 0,
+        last_frame: 1,
+    }));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    app.action("canvas-transform");
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let handle = layout_rect(&ctx, "canvas-transform-scale").center();
+    drag_layout(&mut app, &ctx, size, handle, handle + Vec2::splat(40.));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.canvas_transform.is_some() && Instant::now() < deadline {
+        std::thread::yield_now();
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    assert!(app.canvas_transform.is_none(), "{}", app.status);
+    assert_eq!(app.doc.layers[0].cels[0][39], red);
+    assert_eq!(app.doc.layers[0].cels[1][65], green);
+    assert_eq!(app.doc.layers[0].cels[2][39], blue);
+    assert_eq!(app.selection, Some((2, 2, 5, 5)));
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert_eq!(app.doc.layers[0].cels[0][39], CLEAR);
+    assert_eq!(app.doc.layers[0].cels[1][39], green);
+    assert_eq!(app.selection, Some((2, 2, 3, 3)));
+}
+
+#[test]
+fn canvas_skew_preview_leaves_linked_cels_untouched_until_release() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-skew.png")));
+    let mut doc = Document::new(12, 10);
+    let red = [255, 0, 0, 255];
+    doc.add_frame(0, false);
+    doc.add_frame(1, false);
+    doc.set_pixel(0, 0, 26, red);
+    doc.set_pixel(0, 0, 50, red);
+    doc.link_cel(0, 1, 0).unwrap();
+    doc.link_cel(0, 2, 0).unwrap();
+    app.replace(doc, None);
+    app.selected_cels = Some(CelSelection::Rectangle(CelRange {
+        first_layer: 0,
+        last_layer: 0,
+        first_frame: 0,
+        last_frame: 1,
+    }));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    app.action("canvas-transform");
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let anchor = layout_rect(&ctx, "canvas-transform-skew-x").center();
+    let end = anchor + Vec2::new(60., 0.);
+    let pointer_button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(anchor)],
+    );
+    discard_frame(&mut app, &ctx, size, 1., vec![pointer_button(anchor, true)]);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(end)],
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.canvas_transform_texture().is_none() && Instant::now() < deadline {
+        std::thread::yield_now();
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    assert!(app.canvas_transform_texture().is_some(), "{}", app.status);
+    assert_eq!(app.doc.layers[0].cels[0][50], red);
+    assert_eq!(app.doc.layers[0].cels[0][52], CLEAR);
+    assert!(app.undo.is_empty());
+    discard_frame(&mut app, &ctx, size, 1., vec![pointer_button(end, false)]);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.canvas_transform.is_some() && Instant::now() < deadline {
+        std::thread::yield_now();
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    assert!(app.canvas_transform.is_none(), "{}", app.status);
+    assert_eq!(app.doc.layers[0].cels[0][52], red);
+    assert_eq!(app.doc.layers[0].cels[1][52], red);
+    assert_eq!(app.doc.layers[0].cels[2][50], red);
+    assert_eq!(app.doc.layers[0].cels[2][52], CLEAR);
+    app.undo();
+    let layer = &app.doc.layers[0];
+    assert!(layer.cel_meta[0].artwork_link.is_some());
+    assert_eq!(
+        layer.cel_meta[0].artwork_link,
+        layer.cel_meta[2].artwork_link
+    );
+}

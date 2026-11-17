@@ -738,7 +738,9 @@ impl PixelCraft {
                     let (x, y) = (p.0 - ox, p.1 - oy);
                     *p = match t {
                         Transform::Move(dx, dy) => (p.0 + dx, p.1 + dy),
-                        Transform::RotateAround { .. } => *p,
+                        Transform::RotateAround { .. }
+                        | Transform::SkewX(_)
+                        | Transform::SkewY(_) => *p,
                         Transform::Rotate => (ox + oh - y, oy + x),
                         Transform::FlipX => (ox + ow - x, p.1),
                         Transform::FlipY => (p.0, oy + oh - y),
@@ -748,7 +750,12 @@ impl PixelCraft {
                         ),
                     };
                 }
-                if self.studio.mask.is_some() || matches!(t, Transform::RotateAround { .. }) {
+                if self.studio.mask.is_some()
+                    || matches!(
+                        t,
+                        Transform::RotateAround { .. } | Transform::SkewX(_) | Transform::SkewY(_)
+                    )
+                {
                     let mask = rotated_selection.unwrap_or_else(|| {
                         workflows::transform_mask(&self.doc, original_bounds, &mask, t)
                     });

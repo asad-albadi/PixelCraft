@@ -23,14 +23,39 @@ pub use canvas_resize::resize_canvas;
 pub use sprite_resize::{resample_sprite, trim_sprite};
 pub use sprite_transform::{Orientation, duplicate_sprite, orient_sprite};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Transform {
     Move(i32, i32),
     Resize(usize, usize),
+    SkewX(i32),
+    SkewY(i32),
     Rotate,
     RotateAround { degrees: f64, pivot: [f64; 2] },
     FlipX,
     FlipY,
+}
+
+fn skew_bounds([x, y, w, h]: [i32; 4], t: Transform) -> [i32; 4] {
+    match t {
+        Transform::SkewX(delta) => [x + delta.min(0), y, w + delta.abs(), h],
+        Transform::SkewY(delta) => [x, y + delta.min(0), w, h + delta.abs()],
+        _ => unreachable!(),
+    }
+}
+
+fn skew_source([x, y, w, h]: [i32; 4], position: [i32; 2], t: Transform) -> (i32, i32) {
+    let [dx, dy] = position;
+    // Offset of the inverse shear at the center of this destination pixel.
+    let shift = |offset: i32, extent: i32, delta: i32| {
+        let extent = i64::from(extent);
+        let shift = i64::from(2 * offset + 1) * i64::from(delta);
+        ((extent - shift).div_euclid(2 * extent)) as i32
+    };
+    match t {
+        Transform::SkewX(delta) => (dx + shift(dy - y, h, delta), dy),
+        Transform::SkewY(delta) => (dx, dy + shift(dx - x, w, delta)),
+        _ => unreachable!(),
+    }
 }
 pub fn inside_polygon(points: &[(i32, i32)], x: i32, y: i32) -> bool {
     if points.len() < 3 {
@@ -179,6 +204,13 @@ fn transform_selection(
         }
         Transform::Move(dx, dy) => (w as usize, h as usize, dx, dy),
         Transform::Resize(w, h) => (w, h, 0, 0),
+        Transform::SkewX(delta) | Transform::SkewY(delta) => {
+            if delta.unsigned_abs() > MAX_DIMENSION as u32 {
+                return Err("Selection exceeds limits".into());
+            }
+            let [nx, ny, nw, nh] = skew_bounds(b, t);
+            (nw as usize, nh as usize, nx - x, ny - y)
+        }
         Transform::Rotate => (h as usize, w as usize, 0, 0),
         _ => (w as usize, h as usize, 0, 0),
     };
@@ -192,15 +224,15 @@ fn transform_selection(
     }
     let source = d.layers[l].cels[f].clone();
     let source_indices = d.layers[l].cel_meta[f].indices.clone();
-    let selected = |sx: i32, sy: i32| {
-        d.index(sx, sy)
-            .is_some_and(|i| mask.is_none_or(|m| m.get(i) == Some(&true)))
+    let (width, height) = (d.width as i32, d.height as i32);
+    let index = |sx: i32, sy: i32| {
+        (sx >= 0 && sy >= 0 && sx < width && sy < height)
+            .then(|| sy as usize * width as usize + sx as usize)
     };
+    let selected_index =
+        |sx, sy| index(sx, sy).filter(|&i| mask.is_none_or(|m| m.get(i) == Some(&true)));
     let sample_source = |sx, sy| {
-        if !selected(sx, sy) {
-            return None;
-        }
-        let src = d.index(sx, sy).unwrap();
+        let src = selected_index(sx, sy)?;
         Some((source[src], source_indices.as_ref().map(|v| v[src])))
     };
     let enlarged = if use_rotsprite && rotation.is_some_and(|(_, basis)| needs_enlargement(basis)) {
@@ -212,19 +244,38 @@ fn transform_selection(
     } else {
         None
     };
-    let mut writes = Vec::new();
-    for oy in 0..nh {
-        for ox in 0..nw {
-            let position = [x + dx + ox as i32, y + dy + oy as i32];
-            let Some(dst) = d.index(position[0], position[1]) else {
-                continue;
-            };
+    for sy in y.max(0)..(y + h).min(height) {
+        for sx in x.max(0)..(x + w).min(width) {
+            if let Some(i) = selected_index(sx, sy) {
+                d.set_pixel(l, f, i, CLEAR);
+            }
+        }
+    }
+    let mut rotated_selection = if use_rotsprite {
+        vec![false; d.width * d.height]
+    } else {
+        Vec::new()
+    };
+    let mut write = |dst, pixel, slot: Option<u8>| {
+        if use_rotsprite {
+            rotated_selection[dst] = true;
+        }
+        d.drawing_index = slot.map(usize::from);
+        d.set_pixel(l, f, dst, pixel);
+    };
+    let left = x.saturating_add(dx);
+    let top = y.saturating_add(dy);
+    for dy in top.max(0)..top.saturating_add(nh as i32).min(height) {
+        for dx in left.max(0)..left.saturating_add(nw as i32).min(width) {
+            let (ox, oy) = (dx - left, dy - top);
+            let position = [dx, dy];
+            let dst = dy as usize * width as usize + dx as usize;
             if let Some(enlarged) = &enlarged {
                 let (pivot, basis) = rotation.unwrap();
                 let [sx, sy] = inverse_rotation(position, pivot, basis);
                 if let Some((pixel, index)) = enlarged.sample(sx - f64::from(x), sy - f64::from(y))
                 {
-                    writes.push((dst, pixel, index));
+                    write(dst, pixel, index);
                 }
                 continue;
             }
@@ -237,39 +288,25 @@ fn transform_selection(
                     }
                     (sx - x, sy - y)
                 }
-                Transform::Rotate => (oy as i32, h - 1 - ox as i32),
-                Transform::FlipX => (w - 1 - ox as i32, oy as i32),
-                Transform::FlipY => (ox as i32, h - 1 - oy as i32),
-                _ => (ox as i32 * w / nw as i32, oy as i32 * h / nh as i32),
+                Transform::SkewX(_) | Transform::SkewY(_) => {
+                    let (sx, sy) = skew_source(b, position, t);
+                    if !(x..x + w).contains(&sx) || !(y..y + h).contains(&sy) {
+                        continue;
+                    }
+                    (sx - x, sy - y)
+                }
+                Transform::Rotate => (oy, h - 1 - ox),
+                Transform::FlipX => (w - 1 - ox, oy),
+                Transform::FlipY => (ox, h - 1 - oy),
+                _ => (ox * w / nw as i32, oy * h / nh as i32),
             };
             if let Some((pixel, index)) = sample_source(x + sx, y + sy) {
-                writes.push((dst, pixel, index));
+                write(dst, pixel, index);
             }
         }
-    }
-    for sy in y..y + h {
-        for sx in x..x + w {
-            if let Some(i) = d.index(sx, sy)
-                && mask.is_none_or(|m| m.get(i) == Some(&true))
-            {
-                d.set_pixel(l, f, i, CLEAR);
-            }
-        }
-    }
-    let mut rotated_selection = if use_rotsprite {
-        vec![false; d.width * d.height]
-    } else {
-        Vec::new()
-    };
-    for (i, p, index) in writes {
-        if use_rotsprite {
-            rotated_selection[i] = true;
-        }
-        d.drawing_index = index.map(|n| n as usize);
-        d.set_pixel(l, f, i, p);
     }
     d.drawing_index = None;
-    Ok(([x + dx, y + dy, nw as i32, nh as i32], rotated_selection))
+    Ok(([left, top, nw as i32, nh as i32], rotated_selection))
 }
 pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
     let [x, y, w, h] = b;
@@ -1003,6 +1040,25 @@ fn unpack_sheet_samples(
 /// Transform a selection mask with the same nearest-neighbor mapping as its pixels.
 pub fn transform_mask(d: &Document, b: [i32; 4], mask: &[bool], t: Transform) -> Vec<bool> {
     let [x, y, w, h] = b;
+    if let Transform::SkewX(delta) | Transform::SkewY(delta) = t {
+        let mut out = vec![false; d.width * d.height];
+        if w <= 0 || h <= 0 || delta.unsigned_abs() > MAX_DIMENSION as u32 {
+            return out;
+        }
+        let [nx, ny, nw, nh] = skew_bounds(b, t);
+        for dy in ny.max(0)..(ny + nh).min(d.height as i32) {
+            for dx in nx.max(0)..(nx + nw).min(d.width as i32) {
+                let (sx, sy) = skew_source(b, [dx, dy], t);
+                if (x..x + w).contains(&sx)
+                    && (y..y + h).contains(&sy)
+                    && let Some(source) = d.index(sx, sy)
+                {
+                    out[dy as usize * d.width + dx as usize] = mask.get(source) == Some(&true);
+                }
+            }
+        }
+        return out;
+    }
     if let Transform::RotateAround { degrees, pivot } = t {
         let mut out = vec![false; d.width * d.height];
         if let Some(([nx, ny, nw, nh], basis)) = rotation_bounds(b, degrees, pivot) {

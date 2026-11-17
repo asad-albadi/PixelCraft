@@ -990,3 +990,42 @@ fn reference_controls_keep_native_aspect_and_skip_unsampleable_overlays() {
     assert_eq!(d.references[0].display_dimensions(), [6., 3.]);
     d.validate().unwrap();
 }
+
+#[test]
+fn canvas_skew_samples_pixel_centers_and_preserves_mask_holes() {
+    use pixelcraft::workflows::{Transform, transform, transform_mask};
+
+    let mut doc = Document::new(8, 6);
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    doc.set_pixel(0, 0, 9, red);
+    doc.set_pixel(0, 0, 25, blue);
+    doc.set_pixel(0, 0, 11, blue);
+    let mut mask = vec![false; 48];
+    mask[9] = true;
+    mask[25] = true;
+    let bounds = [1, 1, 2, 3];
+    let skew = Transform::SkewX(3);
+    let result = transform_mask(&doc, bounds, &mask, skew);
+    assert_eq!(
+        transform(&mut doc, 0, 0, bounds, Some(&mask), skew),
+        Ok([1, 1, 5, 3])
+    );
+    assert_eq!(doc.layers[0].cels[0][9], red);
+    assert_eq!(doc.layers[0].cels[0][11], blue);
+    assert_eq!(doc.layers[0].cels[0][25], CLEAR);
+    assert_eq!(doc.layers[0].cels[0][27], blue);
+    assert_eq!(
+        result
+            .iter()
+            .enumerate()
+            .filter(|(_, hit)| **hit)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>(),
+        [9, 27]
+    );
+
+    let edge = Transform::SkewX(-6);
+    assert!(transform(&mut doc, 0, 0, bounds, None, edge).is_ok());
+    assert!(transform(&mut doc, 0, 0, bounds, None, Transform::SkewX(i32::MIN)).is_err());
+}

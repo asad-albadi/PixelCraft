@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod canvas_transform;
 mod color_profiles;
 mod color_wheel;
 mod display_profiles;
@@ -702,6 +703,7 @@ struct PixelCraft {
     selection: Option<(i32, i32, i32, i32)>,
     replace_color: Option<ReplaceColor>,
     editor_filter: Option<editor_filters::FilterDialog>,
+    canvas_transform: Option<canvas_transform::CanvasTransform>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
     profile_dialog: Option<color_profiles::ProfileDialog>,
     selection_tools: selection_tools::SelectionTools,
@@ -897,6 +899,7 @@ impl PixelCraft {
             selection: None,
             replace_color: None,
             editor_filter: None,
+            canvas_transform: None,
             palette_conversion: None,
             profile_dialog: None,
             selection_tools: selection_tools::SelectionTools::default(),
@@ -3336,11 +3339,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn action(&mut self, s: &str) {
+        self.canvas_transform = None;
         self.cancel_gesture();
         if self.studio_action(s) {
             return;
         }
         match s {
+            "canvas-transform" => self.start_canvas_transform(),
             "shortcuts" => self.shortcut_settings_open = true,
             "new" => self.request(Pending::New),
             "closetab" => self.request(Pending::CloseTab),
@@ -4239,6 +4244,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.canvas_transform.is_some() && ctx.input(|i| i.key_pressed(Key::Escape)) {
+            self.canvas_transform = None;
+            self.status = "Canvas transform cancelled".into();
+            return;
+        }
         if ctx.egui_wants_keyboard_input() || self.polygon_shortcuts(ctx) {
             return;
         }
@@ -4340,6 +4350,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Brushes, references & workflow tools…", "workflow"),
                         ("Lasso selection", "lasso"),
                         ("Move selection", "move"),
+                        ("Scale or skew cels on canvas…", "canvas-transform"),
                         ("Rotate selection 90°", "rotate"),
                         ("Flip selection horizontally", "selectionflipx"),
                         ("Flip selection vertically", "selectionflipy"),
@@ -6494,6 +6505,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn canvas_pane(&mut self, ui: &mut egui::Ui, pane: CanvasPane) {
+        if pane == CanvasPane::Primary {
+            self.poll_canvas_transform(ui.ctx());
+        }
         let (r, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         #[cfg(test)]
         ui.ctx().data_mut(|d| {
@@ -6625,6 +6639,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if let Some(t) = self
             .filter_texture()
             .or(rotation_preview.as_ref())
+            .or(self.canvas_transform_texture())
             .or(self.texture.as_ref())
         {
             for &copy in copies {
@@ -6670,7 +6685,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 );
             }
         }
-        let over_symmetry_handle = self.draw_symmetry_guides(ui, &painter, board, pane, can_edit);
+        let transforming = self.canvas_transform.is_some();
+        let over_symmetry_handle =
+            self.draw_symmetry_guides(ui, &painter, board, pane, can_edit && !transforming);
         let pos = pointer.filter(|p| r.contains(*p)).map(|p| {
             (
                 ((p.x - board.min.x) / pixel_size.x).floor() as i32,
@@ -6700,6 +6717,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .find(|&button| i.pointer.button_pressed(button))
         });
         if can_edit
+            && !transforming
             && let Some(button) = pressed
             && self.gesture_canvas.is_none()
             && response.hovered()
@@ -6940,7 +6958,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             self.cancel_gesture();
         }
-        if self.studio.polygon.len() > 1 {
+        if !transforming && self.studio.polygon.len() > 1 {
             let points: Vec<_> = self
                 .studio
                 .polygon
@@ -6950,8 +6968,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .collect();
             painter.add(egui::Shape::line(points, Stroke::new(1., Color32::WHITE)));
         }
-        self.draw_selection_mask(&painter, board, r);
-        if self.tool == Tool::PolygonLasso {
+        if !transforming {
+            self.draw_selection_mask(&painter, board, r);
+        }
+        if self.tool == Tool::PolygonLasso && !transforming {
             if can_edit && response.double_clicked() {
                 self.finish_polygon_lasso();
             }
@@ -6967,7 +6987,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         } else {
             None
         };
-        let rectangular_selection = self.selection.filter(|_| self.studio.mask.is_none());
+        let rectangular_selection = self
+            .selection
+            .filter(|_| !transforming && self.studio.mask.is_none());
         for (index, bounds) in [rectangular_selection, candidate].into_iter().enumerate() {
             let Some((x0, y0, x1, y1)) = bounds else {
                 continue;
@@ -7002,7 +7024,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 egui::StrokeKind::Outside,
             );
         }
-        if let Some((x, y)) = on_canvas
+        if can_edit {
+            self.draw_canvas_transform(ui, &painter, board, pane);
+        }
+        if !transforming
+            && let Some((x, y)) = on_canvas
             && matches!(self.tool, Tool::Pencil | Tool::Eraser)
         {
             let (x, y) = self.snapped_canvas_point((x, y), repeats);
