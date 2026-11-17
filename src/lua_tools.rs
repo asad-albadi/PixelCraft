@@ -6,6 +6,7 @@ use crate::lua::MAX_SCRIPT_PIXELS;
 use crate::model::{BrushShape, CLEAR, Document, MAX_BRUSH_SIZE, MAX_DIMENSION, Pixel, over};
 use crate::productivity::{PaintInk, matching_on_axes};
 use crate::workflows::retouch::{Retouch, RetouchBrush, RetouchStroke};
+use crate::workflows::spray::{self, SprayPattern};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -15,6 +16,7 @@ const MAX_STAMP_WORK: u64 = 16_000_000;
 #[derive(Clone, Copy)]
 enum Tool {
     Pencil,
+    Spray,
     Eraser,
     Line,
     Rectangle(bool),
@@ -31,6 +33,7 @@ impl Tool {
     fn parse(name: &str) -> Result<Self, String> {
         match name {
             "pencil" => Ok(Self::Pencil),
+            "spray" => Ok(Self::Spray),
             "eraser" => Ok(Self::Eraser),
             "line" => Ok(Self::Line),
             "rectangle" => Ok(Self::Rectangle(false)),
@@ -83,6 +86,10 @@ struct Stroke {
     tilemap_mode: Option<u8>,
     tileset_mode: Option<u8>,
     tile: Option<u32>,
+    spray_radius: Option<i32>,
+    spray_rate: Option<u16>,
+    spray_interval_ms: Option<u16>,
+    seed: Option<u64>,
 }
 
 fn distance(a: Point, b: Point) -> u64 {
@@ -119,7 +126,12 @@ fn check_work(
             .map(|segment| distance(segment[0], segment[1]))
             .sum::<u64>()
             .max(1),
-        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) | Tool::Curve => 1,
+        Tool::Fill
+        | Tool::Picker
+        | Tool::Selection(_)
+        | Tool::Polygon(_)
+        | Tool::Curve
+        | Tool::Spray => 1,
     };
     let brush = match tool {
         Tool::Rectangle(true) | Tool::Ellipse(true) => 1,
@@ -135,6 +147,38 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Result<Vec<bool>, String>
     let doc = &stroke.document;
     let a = stroke.points[0];
     let b = stroke.points[stroke.points.len() - 1];
+    if matches!(tool, Tool::Spray) {
+        let radius = stroke.spray_radius.unwrap_or(spray::DEFAULT_RADIUS);
+        let rate = stroke.spray_rate.unwrap_or(spray::DEFAULT_RATE);
+        let interval = stroke.spray_interval_ms.unwrap_or(16);
+        if !(1..=spray::MAX_RADIUS).contains(&radius)
+            || !(1..=spray::MAX_RATE).contains(&rate)
+            || interval > spray::MAX_INTERVAL_MS
+        {
+            return Err(
+                "Spray requires a radius of 1–64, rate of 1–240, and interval of 0–125 ms".into(),
+            );
+        }
+        let mut hits = vec![false; doc.width * doc.height];
+        let mut pattern = SprayPattern::new(stroke.seed.unwrap_or_default(), rate);
+        let mut plot = |(x, y)| {
+            if let Some(index) = doc.drawing_position(x, y) {
+                hits[index] = true;
+            }
+        };
+        pattern.emit(a, a, 0., radius, rate, &mut plot);
+        for segment in stroke.points.windows(2) {
+            pattern.emit(
+                segment[0],
+                segment[1],
+                f64::from(interval) / 1000.,
+                radius,
+                rate,
+                &mut plot,
+            );
+        }
+        return Ok(hits);
+    }
     if matches!(tool, Tool::Fill) {
         return Ok(matching_on_axes(
             &doc.layer_pixels(stroke.layer, stroke.frame),
@@ -205,6 +249,7 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Result<Vec<bool>, String>
         | Tool::Selection(_)
         | Tool::Polygon(_)
         | Tool::Curve
+        | Tool::Spray
         | Tool::Retouch(_) => {
             unreachable!("Handled outside brush coverage")
         }
@@ -254,6 +299,9 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
         return Err("Invalid tilemap mode".into());
     }
     if let Some(tileset) = layer.tileset {
+        if matches!(tool, Tool::Spray) {
+            return Err("Spray requires an image layer".into());
+        }
         if matches!(tool, Tool::Retouch(_)) {
             return Err("Retouch brushes require an image layer".into());
         }

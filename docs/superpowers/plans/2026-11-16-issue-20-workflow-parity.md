@@ -293,6 +293,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - [x] **44. Edit multiple independent documents from Lua.** Open, manage, and close sprites and switch the active editor document.
 - [ ] **45. Expand Lua editor APIs.** Expose native tool invocation, clipboard access, editable slices and tilesets, typed properties, and consistent object identity.
+  - Lua and the desktop share timed spray sampling. Lua accepts a deterministic seed, radius, rate, and point interval. The regression test exercises stationary spray, selection clipping, non-accumulating opacity, two matching frames, and invalid intervals. The Windows all-target suite passed 612 tests. Modeless metadata identity still needs verification and implementation.
 - [ ] **46. Expand extension panels and lifecycle.** Support custom drawing canvases, tabbed dialogs and bounds, more editor events, command menu registration and removal, and reload.
 - [ ] **47. Define permissioned system APIs for scripts.** Specify what file, process, and network access can be granted, and test that denied operations stay blocked.
 

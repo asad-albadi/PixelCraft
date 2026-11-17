@@ -171,6 +171,7 @@ impl Tool {
     fn script_name(self, filled: bool) -> Option<&'static str> {
         Some(match self {
             Self::Pencil => "pencil",
+            Self::Spray => "spray",
             Self::Eraser => "eraser",
             Self::Fill => "paint_bucket",
             Self::Picker => "eyedropper",
@@ -940,8 +941,8 @@ impl PixelCraft {
             used_colors_job: None,
             used_colors: vec![],
             brush: 1,
-            spray_radius: 8,
-            spray_rate: 60,
+            spray_radius: pixelcraft::workflows::spray::DEFAULT_RADIUS,
+            spray_rate: pixelcraft::workflows::spray::DEFAULT_RATE,
             spray_stroke: None,
             retouch_strength: 100,
             retouch_gesture: None,
@@ -3860,7 +3861,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixelcraft::productivity::SelectionOp::Subtract => 2,
             pixelcraft::productivity::SelectionOp::Intersect => 3,
         };
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"sprayRadius":self.spray_radius,"sprayRate":self.spray_rate,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())

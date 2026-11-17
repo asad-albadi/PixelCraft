@@ -2024,3 +2024,45 @@ fn lua_lock_alpha_ink_preserves_rgb_coverage_and_unpainted_pixels() {
     assert!(cel[1][0] > 0 && cel[1][2] > 0);
     assert_eq!(cel[2], CLEAR);
 }
+
+#[test]
+fn lua_spray_repeats_seeded_native_dabs_within_the_selection() {
+    let mut doc = Document::new(16, 16);
+    doc.add_frame(0, false);
+    let result = run_source(
+        &doc,
+        r#"
+ local sprite=app.activeSprite
+ sprite.selection:select(Rectangle(8,2,8,12))
+ local points={}
+ for i=1,16 do points[i]=Point(8,8) end
+ for frame=1,2 do
+  app.useTool{tool='spray',frame=frame,points=points,color=Color('#cc4422'),
+   sprayRadius=4,sprayRate=180,sprayIntervalMs=60,seed=165,opacity=128}
+ end
+ assert(not pcall(function()
+  app.useTool{tool='spray',points=points,sprayIntervalMs=10000}
+ end))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let [ref first, ref second] = result.layers[0].cels[..] else {
+        panic!("Expected two frames")
+    };
+    assert_eq!(first, second);
+    let mut painted = 0;
+    for (i, color) in first.iter().enumerate() {
+        if *color == CLEAR {
+            continue;
+        }
+        assert_eq!(*color, [204, 68, 34, 128]);
+        let x = (i % 16) as i32 - 8;
+        let y = (i / 16) as i32 - 8;
+        assert!(x >= 0 && x * x + y * y <= 16);
+        painted += 1;
+    }
+    assert!(painted > 15);
+}

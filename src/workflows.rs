@@ -14,6 +14,7 @@ mod rotsprite;
 pub mod selection;
 mod sheet_layout;
 mod sheet_split;
+pub mod spray;
 pub(crate) use sheet_layout::{
     uniform_sheet_area, uniform_sheet_dimensions, validate_sheet_dimensions,
 };

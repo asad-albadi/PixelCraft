@@ -1024,13 +1024,13 @@ impl PixelCraft {
             ui.label("Radius");
             ui.add(
                 egui::DragValue::new(&mut self.spray_radius)
-                    .range(1..=64)
+                    .range(1..=pixelcraft::workflows::spray::MAX_RADIUS)
                     .suffix(" px"),
             );
             ui.label("Rate");
             ui.add(
                 egui::DragValue::new(&mut self.spray_rate)
-                    .range(1..=240)
+                    .range(1..=pixelcraft::workflows::spray::MAX_RATE)
                     .suffix(" dots/s"),
             );
             toggle(ui, &mut self.studio.mirror_x, "Symmetry");

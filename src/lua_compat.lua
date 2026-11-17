@@ -620,6 +620,8 @@ rawset(app,'useTool',function(options)
   local result=host({op='useTool',document=doc,tool=name,layer=layer-1,frame=frame-1,
    tilemap_mode=tilemapMode,tileset_mode=options.tilesetMode or (isTilemap and toolOptions.tilesetMode or nil),tile=tile,
    points=points,freehand_algorithm=algorithm,selection=selectionPoints,selection_mode=options.selection or toolOptions.selectionMode,brush_shape=brush and brush.type,size=size,
+   spray_radius=options.sprayRadius or (brush and brush.size) or toolOptions.sprayRadius,
+   spray_rate=options.sprayRate or toolOptions.sprayRate,spray_interval_ms=options.sprayIntervalMs,seed=options.seed,
    ink=options.ink or Ink.SIMPLE,color=color,opacity=options.opacity==nil and 255 or byte(options.opacity),
    tolerance=byte(options.tolerance or defaultTolerance),
    contiguous=options.contiguous==true or (options.contiguous==nil and defaultContiguous~=false)},true)
