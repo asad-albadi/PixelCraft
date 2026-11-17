@@ -75,6 +75,60 @@ pub fn inside_polygon(points: &[(i32, i32)], x: i32, y: i32) -> bool {
     }
     hit
 }
+
+/// Rasterize the closed outline and optional even-odd interior.
+pub fn polygon_coverage(
+    dimensions: (usize, usize),
+    vertices: &[(i32, i32)],
+    filled: bool,
+    brush: (i32, BrushShape),
+    axes: WrapAxes,
+) -> Result<Vec<bool>, String> {
+    let (width, height) = dimensions;
+    if !(3..=4096).contains(&vertices.len())
+        || vertices
+            .iter()
+            .any(|&(x, y)| x.unsigned_abs().max(y.unsigned_abs()) as usize > 2 * MAX_DIMENSION)
+    {
+        return Err("Polygon needs 3 to 4096 points within the drawing limits".into());
+    }
+    if width == 0
+        || height == 0
+        || width > MAX_DIMENSION
+        || height > MAX_DIMENSION
+        || width.saturating_mul(height) > MAX_PIXELS
+    {
+        return Err("Invalid polygon canvas dimensions".into());
+    }
+    let edges = vertices
+        .iter()
+        .copied()
+        .zip(vertices.iter().copied().cycle().skip(1));
+    let size = if filled {
+        1
+    } else {
+        brush.0.clamp(1, MAX_BRUSH_SIZE)
+    };
+    let stamps: u64 = edges
+        .clone()
+        .map(|(a, b)| u64::from(a.0.abs_diff(b.0).max(a.1.abs_diff(b.1))) + 1)
+        .sum();
+    if stamps * u64::from(size as u32).pow(2) > MAX_PIXELS as u64 {
+        return Err("Polygon outline exceeds the drawing work limit".into());
+    }
+    let mut outline = Document::new(width, height);
+    outline.brush_shape = brush.1;
+    for (from, to) in edges {
+        outline.line_on_axes((0, 0), from, to, [255; 4], size, axes);
+    }
+    let mut coverage = if filled {
+        selection::polygon_mask(width, height, vertices)?
+    } else {
+        vec![false; width * height]
+    };
+    outline.layers[0].cels[0].visit_nonclear(|index, _| coverage[index] = true);
+    Ok(coverage)
+}
 fn snap_near_integer(value: f64) -> f64 {
     if (value - value.round()).abs() < 1e-9 {
         value.round()

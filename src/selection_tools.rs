@@ -42,7 +42,18 @@ pub(super) struct SelectionTools {
 struct PolygonDraft {
     points: Vec<(i32, i32)>,
     pane: CanvasPane,
-    operation: SelectionOp,
+    action: PolygonAction,
+}
+
+#[derive(Clone, Copy)]
+enum PolygonAction {
+    Select(SelectionOp),
+    Paint {
+        layer: usize,
+        frame: usize,
+        generation: u64,
+        color: Pixel,
+    },
 }
 
 impl Default for SelectionTools {
@@ -77,11 +88,13 @@ impl PixelCraft {
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
             self.selection_tools.cancel_polygon();
-            self.status = "Polygon lasso cancelled".into();
+            self.status = "Polygon cancelled".into();
             return true;
         }
         if ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter)) {
-            self.finish_polygon_lasso();
+            if self.tool != Tool::Contour {
+                self.finish_polygon();
+            }
             return true;
         }
         false
@@ -99,11 +112,15 @@ impl PixelCraft {
             .as_ref()
             .is_none_or(|draft| draft.pane != pane)
         {
-            self.selection_tools.polygon = Some(PolygonDraft {
-                points: vec![point],
-                pane,
-                operation,
-            });
+            if self.tool == Tool::PolygonLasso {
+                self.selection_tools.polygon = Some(PolygonDraft {
+                    points: vec![point],
+                    pane,
+                    action: PolygonAction::Select(operation),
+                });
+            } else if !self.begin_painted_polygon(point, pane) {
+                return;
+            }
             self.status =
                 "Click to add vertices. Enter or click the first point to finish. Esc cancels."
                     .into();
@@ -111,13 +128,55 @@ impl PixelCraft {
         }
         let draft = self.selection_tools.polygon.as_mut().unwrap();
         if draft.points.len() >= 3 && draft.points.first() == Some(&point) {
-            self.finish_polygon_lasso();
+            self.finish_polygon();
         } else if draft.points.last() != Some(&point) && draft.points.len() < 4096 {
             draft.points.push(point);
         }
     }
 
-    pub(super) fn finish_polygon_lasso(&mut self) {
+    pub(super) fn begin_painted_polygon(&mut self, point: (i32, i32), pane: CanvasPane) -> bool {
+        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+            self.status = "Choose an unlocked image layer to draw this shape".into();
+            return false;
+        }
+        self.selection_tools.polygon = Some(PolygonDraft {
+            points: vec![point],
+            pane,
+            action: PolygonAction::Paint {
+                layer: self.layer,
+                frame: self.frame,
+                generation: self.power.bridge_generation,
+                color: self.stroke_color,
+            },
+        });
+        true
+    }
+
+    pub(super) fn contour_point(&mut self, point: (i32, i32)) {
+        let Some(draft) = &mut self.selection_tools.polygon else {
+            return;
+        };
+        let last = *draft.points.last().unwrap();
+        if point == last {
+            return;
+        }
+        if let Some(previous) = draft.points.iter().rev().nth(1).copied() {
+            let a = (last.0 - previous.0, last.1 - previous.1);
+            let b = (point.0 - last.0, point.1 - last.1);
+            if a.0 * b.1 == a.1 * b.0 && a.0 * b.0 + a.1 * b.1 > 0 {
+                *draft.points.last_mut().unwrap() = point;
+                return;
+            }
+        }
+        if draft.points.len() < 4096 {
+            draft.points.push(point);
+        } else {
+            self.selection_tools.cancel_polygon();
+            self.status = "Contour exceeds 4096 distinct path points".into();
+        }
+    }
+
+    pub(super) fn finish_polygon(&mut self) {
         if self
             .selection_tools
             .polygon
@@ -127,14 +186,68 @@ impl PixelCraft {
             return;
         }
         let draft = self.selection_tools.polygon.take().unwrap();
-        match polygon_mask(self.doc.width, self.doc.height, &draft.points) {
-            Ok(hits) => {
-                let mut mask = self.canvas_selection_mask();
-                combine_selection(&mut mask, &hits, draft.operation);
-                self.commit_selection_mask(mask, "Polygonal lasso");
-                self.status = "Polygon selection".into();
+        match draft.action {
+            PolygonAction::Select(operation) => {
+                match polygon_mask(self.doc.width, self.doc.height, &draft.points) {
+                    Ok(hits) => {
+                        let mut mask = self.canvas_selection_mask();
+                        combine_selection(&mut mask, &hits, operation);
+                        self.commit_selection_mask(mask, "Polygonal lasso");
+                        self.status = "Polygon selection".into();
+                    }
+                    Err(error) => self.status = error,
+                }
             }
-            Err(error) => self.status = error,
+            PolygonAction::Paint {
+                layer,
+                frame,
+                generation,
+                color,
+            } => {
+                if (layer, frame, generation)
+                    != (self.layer, self.frame, self.power.bridge_generation)
+                    || !self.doc.editable(layer)
+                    || self.doc.layers[layer].tileset.is_some()
+                {
+                    self.status = "Shape cancelled after the target cel changed".into();
+                    return;
+                }
+                let contour = self.tool == Tool::Contour;
+                let hits = match pixelcraft::workflows::polygon_coverage(
+                    (self.doc.width, self.doc.height),
+                    &draft.points,
+                    contour || self.filled,
+                    (self.brush, self.doc.brush_shape),
+                    self.drawing_axes(),
+                ) {
+                    Ok(hits) => hits,
+                    Err(error) => {
+                        self.status = error;
+                        return;
+                    }
+                };
+                let mut result = self.doc.clone();
+                result.drawing_index = self.drawing_palette_index(color);
+                for (index, hit) in hits.into_iter().enumerate() {
+                    if hit
+                        && self
+                            .selected((index % result.width) as i32, (index / result.width) as i32)
+                    {
+                        result.set_pixel(layer, frame, index, color);
+                    }
+                }
+                result.drawing_index = None;
+                if result != self.doc {
+                    self.remember_action(if contour { "Filled contour" } else { "Polygon" });
+                    self.doc = result;
+                }
+                self.status = if contour {
+                    "Drew filled contour"
+                } else {
+                    "Drew polygon"
+                }
+                .into();
+            }
         }
     }
 

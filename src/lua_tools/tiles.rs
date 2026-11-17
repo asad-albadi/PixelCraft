@@ -152,7 +152,7 @@ fn paint_pixels(
         .selection
         .as_ref()
         .map(|points| points.iter().copied().collect());
-    let hits = coverage(stroke, tool, size);
+    let hits = coverage(stroke, tool, size)?;
     let width = doc.width;
     let cells = &doc.layers[layer].tile_cels[frame];
     if cells.len() > MAX_SCRIPT_PIXELS {

@@ -18,6 +18,7 @@ enum Tool {
     Line,
     Rectangle(bool),
     Ellipse(bool),
+    Polygon(bool),
     Fill,
     Picker,
     Selection(selection::Kind),
@@ -33,6 +34,8 @@ impl Tool {
             "filled_rectangle" => Ok(Self::Rectangle(true)),
             "ellipse" => Ok(Self::Ellipse(false)),
             "filled_ellipse" => Ok(Self::Ellipse(true)),
+            "polygon" => Ok(Self::Polygon(false)),
+            "filled_polygon" | "filled_contour" => Ok(Self::Polygon(true)),
             "paint_bucket" | "fill" => Ok(Self::Fill),
             "eyedropper" => Ok(Self::Picker),
             "rectangular_marquee" => Ok(Self::Selection(selection::Kind::Rectangle)),
@@ -109,7 +112,7 @@ fn check_work(
             .map(|segment| distance(segment[0], segment[1]))
             .sum::<u64>()
             .max(1),
-        Tool::Fill | Tool::Picker | Tool::Selection(_) => 1,
+        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) => 1,
     };
     let brush = match tool {
         Tool::Rectangle(true) | Tool::Ellipse(true) => 1,
@@ -121,18 +124,27 @@ fn check_work(
     Ok(())
 }
 
-fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Vec<bool> {
+fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Result<Vec<bool>, String> {
     let doc = &stroke.document;
     let a = stroke.points[0];
     let b = stroke.points[stroke.points.len() - 1];
     if matches!(tool, Tool::Fill) {
-        return matching_on_axes(
+        return Ok(matching_on_axes(
             &doc.layer_pixels(stroke.layer, stroke.frame),
             doc.width,
             doc.height,
             a,
             stroke.tolerance,
             stroke.contiguous,
+            doc.wraparound.into(),
+        ));
+    }
+    if let Tool::Polygon(filled) = tool {
+        return crate::workflows::polygon_coverage(
+            (doc.width, doc.height),
+            &stroke.points,
+            filled,
+            (size, stroke.brush_shape.unwrap_or(doc.brush_shape)),
             doc.wraparound.into(),
         );
     }
@@ -165,14 +177,14 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Vec<bool> {
             }
         }
         Tool::Ellipse(filled) => mask.ellipse(0, 0, a, b, white, filled, size),
-        Tool::Fill | Tool::Picker | Tool::Selection(_) => {
+        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) => {
             unreachable!("Handled outside brush coverage")
         }
     }
-    mask.layers[0].cels[0]
+    Ok(mask.layers[0].cels[0]
         .iter()
         .map(|pixel| *pixel != CLEAR)
-        .collect()
+        .collect())
 }
 
 fn stroke_color(tool: Tool, ink: &Ink, opacity: u8, previous: Pixel, source: Pixel) -> Pixel {
@@ -240,7 +252,7 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
         }
         mask
     });
-    let hits = coverage(&stroke, tool, size);
+    let hits = coverage(&stroke, tool, size)?;
     let doc = &mut stroke.document;
     doc.drawing_index = None;
     let source = doc.snapped_color(stroke.frame, stroke.color);

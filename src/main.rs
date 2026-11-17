@@ -118,6 +118,8 @@ enum Tool {
     Line,
     Rect,
     Ellipse,
+    Polygon,
+    Contour,
     Select,
     SelectEllipse,
     Hand,
@@ -128,6 +130,28 @@ enum Tool {
     Wand,
 }
 impl Tool {
+    fn action(self) -> &'static str {
+        match self {
+            Self::Picker => "picker",
+            Self::Rect => "rectangle",
+            Self::Select => "selection",
+            Self::SelectEllipse => "elliptical-marquee",
+            Self::Pencil => "pencil",
+            Self::Eraser => "eraser",
+            Self::Fill => "fill",
+            Self::Line => "line",
+            Self::Ellipse => "ellipse",
+            Self::Polygon => "polygon",
+            Self::Contour => "contour",
+            Self::Hand => "hand",
+            Self::Lasso => "lasso",
+            Self::PolygonLasso => "polygonal-lasso",
+            Self::Move => "move",
+            Self::Gradient => "gradient",
+            Self::Wand => "wand",
+        }
+    }
+
     fn script_name(self, filled: bool) -> Option<&'static str> {
         Some(match self {
             Self::Pencil => "pencil",
@@ -144,6 +168,9 @@ impl Tool {
             Self::Rect => "rectangle",
             Self::Ellipse if filled => "filled_ellipse",
             Self::Ellipse => "ellipse",
+            Self::Polygon if filled => "filled_polygon",
+            Self::Polygon => "polygon",
+            Self::Contour => "filled_contour",
             _ => return None,
         })
     }
@@ -156,6 +183,8 @@ impl Tool {
             Self::Line => "Line",
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
+            Self::Polygon => "Polygon",
+            Self::Contour => "Filled contour",
             Self::Select => "Selection",
             Self::SelectEllipse => "Elliptical marquee",
             Self::Hand => "Hand",
@@ -3552,6 +3581,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "selection" | "select" => self.tool = Tool::Select,
             "elliptical-marquee" => self.tool = Tool::SelectEllipse,
             "polygonal-lasso" => self.tool = Tool::PolygonLasso,
+            "polygon" => self.tool = Tool::Polygon,
+            "contour" => self.tool = Tool::Contour,
             "wand" => self.tool = Tool::Wand,
             "workflow" => self.power.open = true,
             "swap" => {
@@ -4785,6 +4816,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Tool::Line,
             Tool::Rect,
             Tool::Ellipse,
+            Tool::Polygon,
+            Tool::Contour,
             Tool::Select,
             Tool::SelectEllipse,
             Tool::Wand,
@@ -4794,23 +4827,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Tool::Gradient,
             Tool::Hand,
         ] {
-            let action = match t {
-                Tool::Picker => "picker",
-                Tool::Rect => "rectangle",
-                Tool::Select => "selection",
-                Tool::SelectEllipse => "elliptical-marquee",
-                Tool::Pencil => "pencil",
-                Tool::Eraser => "eraser",
-                Tool::Fill => "fill",
-                Tool::Line => "line",
-                Tool::Ellipse => "ellipse",
-                Tool::Hand => "hand",
-                Tool::Lasso => "lasso",
-                Tool::PolygonLasso => "polygonal-lasso",
-                Tool::Move => "move",
-                Tool::Gradient => "gradient",
-                Tool::Wand => "wand",
-            };
+            let action = t.action();
             let response = ui
                 .scope(|ui| {
                     ui.spacing_mut().interact_size =
@@ -6744,12 +6761,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 {
                     self.pick_color(p, secondary);
                 }
-            } else if self.tool == Tool::PolygonLasso {
+            } else if matches!(self.tool, Tool::PolygonLasso | Tool::Polygon) {
                 if secondary {
-                    self.finish_polygon_lasso();
+                    self.finish_polygon();
                 } else {
                     let operation = selection_tools::marquee_operation(ctx.input(|i| i.modifiers));
                     self.polygon_vertex(p, pane, operation);
+                }
+            } else if self.tool == Tool::Contour {
+                if self.begin_painted_polygon(p, pane) {
+                    self.gesture_canvas = Some(pane);
+                    self.gesture_button = Some(button);
+                    self.start = Some(p);
                 }
             } else if self.tool == Tool::Wand {
                 let op = ctx.input(|i| {
@@ -6862,6 +6885,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     b = self.snapped_canvas_point(b, repeats);
                 }
                 match self.tool {
+                    Tool::Contour => self.contour_point(b),
                     Tool::Lasso => {
                         if self.studio.polygon.last() != Some(&b) {
                             self.studio.polygon.push(b);
@@ -6931,6 +6955,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         } else if owns_gesture {
+            if self.tool == Tool::Contour
+                && can_edit
+                && self
+                    .gesture_button
+                    .is_some_and(|button| ctx.input(|i| i.pointer.button_released(button)))
+            {
+                if let Some((x, y)) = pos {
+                    self.contour_point((x.clamp(0, w - 1), y.clamp(0, h - 1)));
+                }
+                self.finish_polygon();
+            }
             if matches!(self.tool, Tool::Select | Tool::SelectEllipse)
                 && can_edit
                 && let Some(operation) = self.studio.marquee_operation
@@ -6971,9 +7006,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if !transforming {
             self.draw_selection_mask(&painter, board, r);
         }
-        if self.tool == Tool::PolygonLasso && !transforming {
-            if can_edit && response.double_clicked() {
-                self.finish_polygon_lasso();
+        if matches!(
+            self.tool,
+            Tool::PolygonLasso | Tool::Polygon | Tool::Contour
+        ) && !transforming
+        {
+            if self.tool != Tool::Contour && can_edit && response.double_clicked() {
+                self.finish_polygon();
             }
             self.draw_polygon_draft(
                 &painter,

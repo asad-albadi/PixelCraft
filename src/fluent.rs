@@ -978,23 +978,7 @@ impl PixelCraft {
     }
     fn fluent_brush_controls(&mut self, ui: &mut egui::Ui) {
         let short = !self.power.comfortable();
-        let tool_icon = match self.tool {
-            Tool::Pencil => "pencil",
-            Tool::Eraser => "eraser",
-            Tool::Fill => "fill",
-            Tool::Picker => "eyedropper",
-            Tool::Line => "line",
-            Tool::Rect => "rectangle",
-            Tool::Ellipse => "ellipse",
-            Tool::Select => "select",
-            Tool::SelectEllipse => "ellipse",
-            Tool::Hand => "hand",
-            Tool::Lasso => "lasso",
-            Tool::PolygonLasso => "lasso",
-            Tool::Move => "move",
-            Tool::Gradient => "gradient",
-            Tool::Wand => "wand",
-        };
+        let tool_icon = ui_icons::icon_name(self.tool.action());
         egui::containers::menu::MenuButton::from_button(
             egui::Button::new((
                 egui::Image::new((
@@ -1062,7 +1046,7 @@ impl PixelCraft {
         );
         ui.separator();
         toggle(ui, &mut self.grid, "Pixel grid");
-        if matches!(self.tool, Tool::Rect | Tool::Ellipse) {
+        if matches!(self.tool, Tool::Rect | Tool::Ellipse | Tool::Polygon) {
             ui.pc_checkbox(&mut self.filled, "Filled");
         }
     }

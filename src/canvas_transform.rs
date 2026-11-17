@@ -102,9 +102,14 @@ pub(super) struct CanvasTransform {
 }
 
 impl PixelCraft {
+    fn canvas_transform_timeline(&self) -> Option<CelSelection> {
+        (self.selected_cels.is_some() || self.timeline_anchor.is_some())
+            .then(|| self.timeline_cel_selection())
+    }
+
     pub(super) fn start_canvas_transform(&mut self) {
         self.stop_playback(false);
-        let timeline = self.selected_cels.clone();
+        let timeline = self.canvas_transform_timeline();
         let targets: Arc<[_]> = match &timeline {
             Some(selection) => selection.cells().collect(),
             None => Arc::new([(self.layer, self.frame)]),
@@ -173,7 +178,7 @@ impl PixelCraft {
             || state.generation != self.power.bridge_generation
             || state.frame != self.frame
             || state.layer != self.layer
-            || state.timeline != self.selected_cels
+            || state.timeline != self.canvas_transform_timeline()
         {
             self.status = "Canvas transform cancelled".into();
             return;

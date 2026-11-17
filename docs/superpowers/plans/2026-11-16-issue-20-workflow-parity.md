@@ -212,6 +212,10 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 9 complete. Edit offers on-canvas scaling and horizontal and vertical skew. Dragging previews the active frame while background processing keeps the editor responsive during raster transforms. Releasing applies one undoable edit to the selected timeline cels, using any active pixel mask. Fully selected links with a shared origin stay linked. An independently transformed cel detaches when its link spans the selection or uses different origins. Windows tests cover pixel-center sampling, mask holes, clipping, live preview, selection fitting, linked scope, and undo. Formatting, strict Clippy, and 595 Windows all-target tests passed.
 
+- Item 5 polygon and contour checkpoint. The editor supports vertex-based polygons with an outline or fill and fills a freehand contour when the pointer is released. Both respect the active selection and commit in one undo step. Lua uses the same coverage for polygon, filled polygon, and filled contour strokes. Windows regressions check canvas gestures, selection clipping, and translucent Lua fills. Formatting, strict Clippy, and 597 Windows all-target tests passed. Spray, curves, text, blur, and jumble remain open.
+
+- Item 9 follow-up. The pointer regression now selects a timeline range with Shift. Scale and skew use that range as well as individually selected cels.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

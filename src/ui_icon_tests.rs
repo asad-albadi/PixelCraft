@@ -3159,12 +3159,8 @@ fn canvas_transform_handles_edit_selected_cels_with_one_undo() {
     doc.set_pixel(0, 2, 39, blue);
     app.replace(doc, None);
     app.selection = Some((2, 2, 3, 3));
-    app.selected_cels = Some(CelSelection::Rectangle(CelRange {
-        first_layer: 0,
-        last_layer: 0,
-        first_frame: 0,
-        last_frame: 1,
-    }));
+    app.timeline_select(0, 0, false);
+    app.timeline_select(0, 1, true);
     for _ in 0..3 {
         discard_frame(&mut app, &ctx, size, 1., vec![]);
     }
@@ -3266,4 +3262,75 @@ fn canvas_skew_preview_leaves_linked_cels_untouched_until_release() {
         layer.cel_meta[0].artwork_link,
         layer.cel_meta[2].artwork_link
     );
+}
+
+#[test]
+fn polygon_and_contour_draw_covered_pixels_in_one_undoable_edit() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-polygon.png")));
+    let doc = Document::new(8, 8);
+    app.replace(doc.clone(), None);
+    app.action("polygon");
+    app.filled = false;
+    app.fg = [200, 40, 30, 255];
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let center = |x, y| board.min + Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * 20.;
+    for (x, y) in [(1, 1), (6, 1), (6, 6), (1, 6)] {
+        discard_frame(&mut app, &ctx, size, 1., click(center(x, y)));
+        assert_eq!(app.doc, doc);
+    }
+    discard_frame(&mut app, &ctx, size, 1., click(center(1, 1)));
+    assert_eq!(app.doc.layers[0].cels[0][11], app.fg);
+    assert_eq!(app.doc.layers[0].cels[0][51], app.fg);
+    assert_eq!(app.doc.layers[0].cels[0][27], CLEAR);
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert_eq!(app.doc, doc);
+
+    app.action("contour");
+    app.selection = Some((2, 2, 4, 4));
+    let press = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let start = center(1, 1);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(start)],
+    );
+    discard_frame(&mut app, &ctx, size, 1., vec![press(start, true)]);
+    for (x, y) in [(6, 1), (6, 6), (1, 6)] {
+        discard_frame(
+            &mut app,
+            &ctx,
+            size,
+            1.,
+            vec![egui::Event::PointerMoved(center(x, y))],
+        );
+        assert_eq!(app.doc, doc);
+    }
+    discard_frame(&mut app, &ctx, size, 1., vec![press(center(1, 6), false)]);
+    let painted: Vec<_> = app.doc.layers[0].cels[0]
+        .iter()
+        .enumerate()
+        .filter_map(|(index, color)| (*color == app.fg).then_some(index))
+        .collect();
+    assert_eq!(painted, [18, 19, 20, 26, 27, 28, 34, 35, 36]);
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert_eq!(app.doc, doc);
 }

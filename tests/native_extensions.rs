@@ -1933,3 +1933,24 @@ fn lua_metadata_object_handles_survive_history_and_reject_absent_objects() {
     assert!(output.slices.is_empty());
     assert_eq!(output.tilesets[0].tiles[0][0], [18, 52, 86, 255]);
 }
+
+#[test]
+fn lua_polygon_and_contour_use_native_boundary_and_fill_coverage() {
+    let doc = Document::new(8, 8);
+    let output = run_source(
+        &doc,
+        r#"
+ local points={Point(1,1),Point(6,1),Point(6,6),Point(1,6)}
+ app.useTool{tool='polygon',points=points,color=Color('#ff4422')}
+ app.useTool{tool='filled_contour',points=points,color=Color('#44ff22'),opacity=128}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let cel = &output.layers[0].cels[0];
+    assert_eq!(cel[27], [68, 255, 34, 128]);
+    assert_eq!(cel[54][3], 255);
+    assert_eq!(cel[0], CLEAR);
+}
