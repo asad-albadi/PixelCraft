@@ -230,6 +230,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 4 Windows portable checkpoint. Windows statically links libwebp while preserving the existing animation decoder and exact fixture pixels. The Windows release job stages a portable executable, checksum, and notices. The isolated smoke check copies only the executable, limits PATH to Windows system directories, and exercises WebP, native projects, exports, and Lua. The previous binary failed this check with a missing WebP runtime. The debug and optimized static-CRT executables both passed, along with formatting, strict Clippy, and 611 Windows all-target tests. Linux tarball and Debian packages remain open.
 
+- Item 4 Linux packaging checkpoint. The release workflow builds a relocatable tarball from the AppDir and an amd64 Debian package using linked-library dependencies and explicit runtime libraries. Both include checksums. The Linux gate launches the relocated tarball and installs the Debian package, checks WebP timing and rendered pixels, runs the standalone check, captures graphical startup, verifies the desktop files, and removes the Debian package. Windows checks verified the tarball layout and launcher with a shell fixture, failure on missing runtime or an invalid version, the WebP render command, Bash syntax, and workflow wiring. Native Linux package execution and tagged publication remain pending.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

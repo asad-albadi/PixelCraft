@@ -38,7 +38,7 @@ jobs:
             build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
             libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev libwebp-dev \
-            desktop-file-utils patchelf xvfb xauth weston \
+            desktop-file-utils dpkg-dev binutils patchelf xvfb xauth weston \
             libgl1-mesa-dri libegl-mesa0 python3-pil
 
       - name: Install stable Rust
@@ -89,6 +89,7 @@ jobs:
           install -m 644 LICENSE AppDir/usr/share/doc/pixelcraft/LICENSE
           install -m 644 assets/fonts/LICENSE AppDir/usr/share/doc/pixelcraft/FONT-LICENSE.txt
           install -m 644 runtime/LUA-LICENSE.txt AppDir/usr/share/doc/pixelcraft/LUA-LICENSE.txt
+          install -m 644 /usr/share/doc/libwebpdemux2/copyright AppDir/usr/share/doc/pixelcraft/WEBP-COPYRIGHT.txt
           desktop-file-validate packaging/pixelcraft.desktop
           curl --fail --location --retry 3 \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
@@ -125,6 +126,19 @@ jobs:
           "dist/$OUTPUT" --standalone-check "$RUNNER_TEMP/pixelcraft-appimage-check"
           cd dist
           sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+
+      - name: Build the Linux tarball and Debian package
+        run: |
+          app_version=$(cargo metadata --locked --no-deps --format-version 1 |
+            python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "pixelcraft"))')
+          bash packaging/build-linux-tarball.sh AppDir dist "$VERSION"
+          bash packaging/build-linux-deb.sh target/release/pixelcraft dist "$VERSION" "$app_version"
+      - name: Verify tarball and Debian package startup and WebP
+        run: |
+          bash checks/linux-packages.sh \
+            "dist/PixelCraft-$VERSION-linux-x86_64.tar.gz" \
+            "dist/PixelCraft-$VERSION-linux-amd64.deb" \
+            "$RUNNER_TEMP/startup-linux-packages"
 
       - name: Graphical startup on X11
         shell: bash
@@ -172,6 +186,8 @@ jobs:
           path: |
             ${{ runner.temp }}/startup-x11/startup.*
             ${{ runner.temp }}/startup-wayland/startup.*
+            ${{ runner.temp }}/startup-linux-packages/*/startup/startup.*
+            ${{ runner.temp }}/startup-linux-packages/*/webp.*
             ${{ runner.temp }}/weston.log
           if-no-files-found: ignore
 
