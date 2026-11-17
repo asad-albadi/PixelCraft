@@ -208,6 +208,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 16 display checkpoint complete. Settings → Color management selects sRGB, a custom RGB ICC file, or the editor monitor's profile. Monitor probes follow the window through Windows GDI or X11 RandR, with an sRGB fallback for unavailable profiles and unsupported display backends. The selected profile applies to artwork textures, previews, and reference overlays while preserving document data and exports. Windows formatting, strict Clippy, and 588 all-target tests passed, and the separate Windows desktop ICC lookup passed. The X11 probe compiled for Linux in isolation. A full Linux cross-build requires the GNU C cross-compiler, and X11 desktop playback and Wayland automatic discovery were not verified.
 
+- Item 8 complete. The Select menu and tool picker expose elliptical marquee and vertex-based polygonal lasso. The new shapes, rectangular marquee, and wand share modifier-based intersection. Select also exposes invert, per-tab reselect, Color Range with composite or active-layer sampling, grow, shrink, inner and outer borders, and reusable PNG masks. PNG masks use the canvas dimensions and can use luminance or alpha. Model and Windows UI tests cover hole preservation, mask round-tripping, tab isolation, undo, and pointer selection. Formatting, strict Clippy, and 592 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -220,7 +222,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **5. Add drawing tools.** Implement spray with size and rate controls, curves, filled freehand contours, polygons, text, blur, and jumble.
 - [ ] **6. Expand brush and ink controls.** Add per-tool inks such as lock alpha and copy color, saved brushes and shading ramps, image-brush alignment, and stroke stabilization and dynamics.
 - [x] **7. Add dithered gradients.** Expose gradient patterns and dithering in the gradient tool.
-- [ ] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.
+- [x] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.
 - [ ] **9. Add on-canvas scale and skew handles.** Support interactive transforms on a selection and across the selected timeline cels.
 - [x] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.
 - [x] **11. Resize the canvas with anchors and offsets.** Apply resizing across layers and frames, including tilemaps.

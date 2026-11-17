@@ -9,6 +9,7 @@ mod canvas_resize;
 pub use artwork_palette::{generate_artwork_palette, generate_artwork_palette_until};
 pub mod filters;
 mod rotsprite;
+pub mod selection;
 mod sheet_layout;
 mod sheet_split;
 pub(crate) use sheet_layout::{

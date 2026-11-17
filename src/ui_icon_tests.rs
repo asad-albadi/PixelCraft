@@ -2868,6 +2868,75 @@ fn display_profile_changes_canvas_preview_and_prefetch_without_editing_artwork()
 }
 
 #[test]
+fn polygonal_lasso_closes_click_vertices_without_changing_artwork() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-polygon-mask.png")));
+    let doc = Document::new(7, 7);
+    app.replace(doc.clone(), None);
+    app.action("polygonal-lasso");
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    for (x, y) in [(1., 1.), (5., 1.), (1., 5.)] {
+        let p = board.min + Vec2::new(x + 0.5, y + 0.5) * 20.;
+        discard_frame(&mut app, &ctx, size, 1., click(p));
+        assert!(app.selection.is_none());
+    }
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        click(board.min + Vec2::splat(30.)),
+    );
+    let mask = app.canvas_selection_mask();
+    assert!(mask[8] && mask[16]);
+    assert!(!mask[32] && !mask[0]);
+    assert_eq!(app.doc, doc);
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert!(app.selection.is_none());
+}
+
+#[test]
+fn ellipse_marquee_uses_the_canvas_drag_and_preserves_corner_holes() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-ellipse-mask.png")));
+    app.replace(Document::new(7, 7), None);
+    app.action("elliptical-marquee");
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    drag_layout(
+        &mut app,
+        &ctx,
+        size,
+        board.min + Vec2::splat(30.),
+        board.min + Vec2::splat(110.),
+    );
+    let mask = app.canvas_selection_mask();
+    assert!(mask[3 * 7 + 3]);
+    assert!(!mask[8] && !mask[40]);
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert!(app.selection.is_none());
+}
+
+#[test]
 fn document_profile_dialog_converts_and_undoes_in_one_step() {
     let ctx = egui::Context::default();
     let size = Vec2::new(1180., 840.);

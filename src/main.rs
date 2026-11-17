@@ -17,6 +17,7 @@ mod palette_conversion;
 mod productivity_ui;
 
 mod script_ui;
+mod selection_tools;
 mod shortcut_editor;
 use shortcut_editor::{ShortcutChord, ShortcutEdit};
 mod studio;
@@ -117,8 +118,10 @@ enum Tool {
     Rect,
     Ellipse,
     Select,
+    SelectEllipse,
     Hand,
     Lasso,
+    PolygonLasso,
     Move,
     Gradient,
     Wand,
@@ -131,7 +134,9 @@ impl Tool {
             Self::Fill => "paint_bucket",
             Self::Picker => "eyedropper",
             Self::Select => "rectangular_marquee",
+            Self::SelectEllipse => "elliptical_marquee",
             Self::Lasso => "lasso",
+            Self::PolygonLasso => "polygonal_lasso",
             Self::Wand => "magic_wand",
             Self::Line => "line",
             Self::Rect if filled => "filled_rectangle",
@@ -151,8 +156,10 @@ impl Tool {
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
             Self::Select => "Selection",
+            Self::SelectEllipse => "Elliptical marquee",
             Self::Hand => "Hand",
             Self::Lasso => "Lasso",
+            Self::PolygonLasso => "Polygonal lasso",
             Self::Move => "Move selection",
             Self::Gradient => "Gradient",
             Self::Wand => "Magic Wand",
@@ -382,6 +389,7 @@ struct SpriteTab {
     polygon: Vec<(i32, i32)>,
     mask: Option<Vec<bool>>,
     symmetry_axes: [Option<i32>; 2],
+    previous_selection: Option<selection_tools::RememberedMask>,
 }
 struct ScriptPreview {
     initial_tab: usize,
@@ -696,6 +704,7 @@ struct PixelCraft {
     editor_filter: Option<editor_filters::FilterDialog>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
     profile_dialog: Option<color_profiles::ProfileDialog>,
+    selection_tools: selection_tools::SelectionTools,
     display_profile: display_profiles::DisplayProfile,
     color_wheel: color_wheel::ColorWheel,
     clipboard: Option<Clipboard>,
@@ -890,6 +899,7 @@ impl PixelCraft {
             editor_filter: None,
             palette_conversion: None,
             profile_dialog: None,
+            selection_tools: selection_tools::SelectionTools::default(),
             display_profile: display_profiles::DisplayProfile::default(),
             color_wheel: color_wheel::ColorWheel::default(),
             clipboard: None,
@@ -2182,6 +2192,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.editor_filter.is_some()
             || self.palette_conversion.is_some()
             || self.profile_dialog.is_some()
+            || self.selection_tools.open()
             || self.rename_frame.is_some()
             || self.help
             || self.properties_open
@@ -2199,6 +2210,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.status.starts_with("Export failed")
     }
     fn cancel_gesture(&mut self) {
+        self.selection_tools.cancel_polygon();
         self.studio.marquee_operation = None;
         self.gesture_canvas = None;
         self.gesture_button = None;
@@ -2392,6 +2404,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.selection = None;
         self.studio.mask = None;
         self.studio.symmetry_axes = [None; 2];
+        self.selection_tools.previous = None;
         self.power.reference_edit = None;
         self.studio.polygon.clear();
         self.pan = Vec2::ZERO;
@@ -2436,6 +2449,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             polygon: self.studio.polygon.clone(),
             mask: self.studio.mask.clone(),
             symmetry_axes: self.studio.symmetry_axes,
+            previous_selection: self.selection_tools.previous.take(),
         };
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = self.tabs.len();
@@ -2477,6 +2491,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.studio.polygon, &mut tab.polygon);
         std::mem::swap(&mut self.studio.mask, &mut tab.mask);
         std::mem::swap(&mut self.studio.symmetry_axes, &mut tab.symmetry_axes);
+        std::mem::swap(
+            &mut self.selection_tools.previous,
+            &mut tab.previous_selection,
+        );
         self.power.reference_edit = None;
         std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
         std::mem::swap(
@@ -3387,10 +3405,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.selection = Some((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1))
             }
             "deselect" => {
-                self.studio.mask = None;
-                self.selection = None;
-                self.studio.polygon.clear();
+                self.deselect_and_remember();
             }
+            "reselect" => self.reselect_previous(),
+            "invert-selection" => self.invert_canvas_selection(),
+            "modify-selection" => self.open_selection_tools(false),
+            "color-range" => self.open_selection_tools(true),
+            "import-selection-mask" => self.import_selection_mask(),
+            "export-selection-mask" => self.export_selection_mask(),
             "layer" => {
                 if self.doc.can_add_layer() {
                     self.remember_action("New layer");
@@ -3523,6 +3545,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "rectangle" | "rect" => self.tool = Tool::Rect,
             "ellipse" => self.tool = Tool::Ellipse,
             "selection" | "select" => self.tool = Tool::Select,
+            "elliptical-marquee" => self.tool = Tool::SelectEllipse,
+            "polygonal-lasso" => self.tool = Tool::PolygonLasso,
             "wand" => self.tool = Tool::Wand,
             "workflow" => self.power.open = true,
             "swap" => {
@@ -4215,7 +4239,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() || self.polygon_shortcuts(ctx) {
             return;
         }
         let clipboard_action = ctx.input(|i| {
@@ -4393,6 +4417,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Seamless canvas · both axes", "seamless"),
                         ("Seamless canvas · horizontal", "seamless-horizontal"),
                         ("Seamless canvas · vertical", "seamless-vertical"),
+                    ],
+                ),
+                (
+                    "Select",
+                    vec![
+                        ("Select all", "selectall"),
+                        ("Elliptical marquee", "elliptical-marquee"),
+                        ("Polygonal lasso", "polygonal-lasso"),
+                        ("Deselect", "deselect"),
+                        ("Reselect", "reselect"),
+                        ("Invert selection", "invert-selection"),
+                        ("Color Range…", "color-range"),
+                        ("Grow, Shrink & Border…", "modify-selection"),
+                        ("Import mask PNG…", "import-selection-mask"),
+                        ("Export mask PNG…", "export-selection-mask"),
                     ],
                 ),
                 ("Extensions", vec![("Extensions & scripts…", "extensions")]),
@@ -4736,8 +4775,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Tool::Rect,
             Tool::Ellipse,
             Tool::Select,
+            Tool::SelectEllipse,
             Tool::Wand,
             Tool::Lasso,
+            Tool::PolygonLasso,
             Tool::Move,
             Tool::Gradient,
             Tool::Hand,
@@ -4746,6 +4787,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 Tool::Picker => "picker",
                 Tool::Rect => "rectangle",
                 Tool::Select => "selection",
+                Tool::SelectEllipse => "elliptical-marquee",
                 Tool::Pencil => "pencil",
                 Tool::Eraser => "eraser",
                 Tool::Fill => "fill",
@@ -4753,6 +4795,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 Tool::Ellipse => "ellipse",
                 Tool::Hand => "hand",
                 Tool::Lasso => "lasso",
+                Tool::PolygonLasso => "polygonal-lasso",
                 Tool::Move => "move",
                 Tool::Gradient => "gradient",
                 Tool::Wand => "wand",
@@ -6683,26 +6726,24 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 {
                     self.pick_color(p, secondary);
                 }
+            } else if self.tool == Tool::PolygonLasso {
+                if secondary {
+                    self.finish_polygon_lasso();
+                } else {
+                    let operation = selection_tools::marquee_operation(ctx.input(|i| i.modifiers));
+                    self.polygon_vertex(p, pane, operation);
+                }
             } else if self.tool == Tool::Wand {
                 let op = ctx.input(|i| {
-                    if i.modifiers.command {
-                        pixelcraft::productivity::SelectionOp::Subtract
-                    } else if i.modifiers.shift {
-                        pixelcraft::productivity::SelectionOp::Add
+                    if i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl {
+                        selection_tools::marquee_operation(i.modifiers)
                     } else {
                         self.power.selection_op
                     }
                 });
                 self.wand_at(p, op);
-            } else if self.tool == Tool::Select {
-                use pixelcraft::productivity::SelectionOp;
-                let modifiers = ctx.input(|i| i.modifiers);
-                let operation = match (modifiers.shift, modifiers.command || modifiers.ctrl) {
-                    (true, true) => SelectionOp::Intersect,
-                    (true, false) => SelectionOp::Add,
-                    (false, true) => SelectionOp::Subtract,
-                    (false, false) => SelectionOp::Replace,
-                };
+            } else if matches!(self.tool, Tool::Select | Tool::SelectEllipse) {
+                let operation = selection_tools::marquee_operation(ctx.input(|i| i.modifiers));
                 self.studio.marquee_operation = Some(operation);
                 self.gesture_canvas = Some(pane);
                 self.gesture_button = Some(button);
@@ -6846,7 +6887,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             let _ = r;
                         }
                     }
-                    Tool::Select => self.last = Some(b),
+                    Tool::Select | Tool::SelectEllipse => self.last = Some(b),
                     Tool::Pencil | Tool::Eraser => {
                         let color = if self.tool == Tool::Eraser {
                             CLEAR
@@ -6872,7 +6913,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         } else if owns_gesture {
-            if self.tool == Tool::Select
+            if matches!(self.tool, Tool::Select | Tool::SelectEllipse)
                 && can_edit
                 && let Some(operation) = self.studio.marquee_operation
                 && self
@@ -6883,7 +6924,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .or(self.last)
                 && let Some(bounds) = self.marquee_bounds(end)
             {
-                self.apply_marquee(bounds, operation);
+                if self.tool == Tool::SelectEllipse {
+                    self.apply_ellipse_marquee(bounds, operation);
+                } else {
+                    self.apply_marquee(bounds, operation);
+                }
             }
             if self.tool == Tool::Move
                 && let (Some(a), Some(b)) = (self.start, self.last)
@@ -6906,17 +6951,44 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             painter.add(egui::Shape::line(points, Stroke::new(1., Color32::WHITE)));
         }
         self.draw_selection_mask(&painter, board, r);
+        if self.tool == Tool::PolygonLasso {
+            if can_edit && response.double_clicked() {
+                self.finish_polygon_lasso();
+            }
+            self.draw_polygon_draft(
+                &painter,
+                board,
+                pane,
+                pointer.filter(|position| r.contains(*position)),
+            );
+        }
         let candidate = if owns_gesture && self.studio.marquee_operation.is_some() {
             self.last.and_then(|end| self.marquee_bounds(end))
         } else {
             None
         };
         let rectangular_selection = self.selection.filter(|_| self.studio.mask.is_none());
-        for (x0, y0, x1, y1) in [rectangular_selection, candidate].into_iter().flatten() {
+        for (index, bounds) in [rectangular_selection, candidate].into_iter().enumerate() {
+            let Some((x0, y0, x1, y1)) = bounds else {
+                continue;
+            };
             let sr = Rect::from_min_max(
                 board.min + Vec2::new(x0 as f32, y0 as f32) * pixel_size,
                 board.min + Vec2::new((x1 + 1) as f32, (y1 + 1) as f32) * pixel_size,
             );
+            if index == 1 && self.tool == Tool::SelectEllipse {
+                painter.add(egui::Shape::ellipse_stroke(
+                    sr.center(),
+                    sr.size() / 2.,
+                    Stroke::new(3., self.colors().ink),
+                ));
+                painter.add(egui::Shape::ellipse_stroke(
+                    sr.center(),
+                    sr.size() / 2.,
+                    Stroke::new(1., Color32::WHITE),
+                ));
+                continue;
+            }
             painter.rect_stroke(
                 sr,
                 0,
@@ -7091,6 +7163,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.filters_dialog(ctx);
         self.palette_conversion_dialog(ctx);
         self.document_profile_dialog(ctx);
+        self.selection_tools_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let mut cancel = false;

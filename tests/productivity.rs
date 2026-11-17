@@ -929,6 +929,35 @@ fn live_export_can_report_progress_and_cancel_on_a_second_connection() {
     assert!(response.contains("Export cancelled"));
 }
 #[test]
+fn selection_morphology_clips_edges_and_mask_png_roundtrips_holes() {
+    use pixelcraft::workflows::selection::{
+        MaskEffect, change_mask, read_mask_png, write_mask_png,
+    };
+    let mut source = vec![false; 25];
+    source[12] = true;
+    let expanded = change_mask(&source, 5, 5, 1, MaskEffect::Grow).unwrap();
+    assert_eq!(expanded.iter().filter(|&&bit| bit).count(), 9);
+    assert!(expanded[6] && expanded[18] && !expanded[0]);
+    assert_eq!(
+        change_mask(&expanded, 5, 5, 1, MaskEffect::Shrink).unwrap(),
+        source
+    );
+    let border = change_mask(&expanded, 5, 5, 1, MaskEffect::InsideBorder).unwrap();
+    assert_eq!(border.iter().filter(|&&bit| bit).count(), 8);
+    assert!(!border[12]);
+    let full = [true; 9];
+    assert_eq!(
+        change_mask(&full, 3, 3, 1, MaskEffect::Shrink).unwrap(),
+        [false, false, false, false, true, false, false, false, false]
+    );
+    let path = std::env::temp_dir().join(format!("pixelcraft-mask-{}.png", std::process::id()));
+    write_mask_png(&path, &border, 5, 5).unwrap();
+    assert_eq!(read_mask_png(&path, 5, 5).unwrap(), border);
+    assert!(read_mask_png(&path, 4, 5).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn reference_controls_keep_native_aspect_and_skip_unsampleable_overlays() {
     use pixelcraft::productivity::{ReferenceImage, ReferenceOptions, sample_reference_image};
     let mut d = Document::new(8, 8);

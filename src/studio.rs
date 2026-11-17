@@ -647,6 +647,7 @@ impl PixelCraft {
                 polygon: t.polygon.clone(),
                 mask: t.mask.clone(),
                 symmetry_axes: t.symmetry_axes,
+                previous_selection: None,
                 palette_index: 0,
                 secondary_palette_index: None,
                 active_tag: None,
