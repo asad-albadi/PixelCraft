@@ -3191,6 +3191,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         scale: 1.,
                         opacity: 255,
                         visible: true,
+                        options: Default::default(),
                     });
                 match next.validate() {
                     Ok(()) => {
@@ -7318,6 +7319,7 @@ impl PixelCraft {
         }
         self.autosave(false, &ctx);
         self.poll_open_document();
+        self.poll_reference_sources(&ctx);
         self.poll_export();
         self.poll_save();
         if self.open_job.is_some()
@@ -10978,6 +10980,7 @@ mod merge_regressions {
                 scale: 1.,
                 opacity: 255,
                 visible: true,
+                options: Default::default(),
             });
         let original = a.doc.clone();
         let baseline = a.saved.clone();

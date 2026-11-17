@@ -1471,6 +1471,13 @@ impl Document {
                 || !r.scale.is_finite()
                 || r.scale <= 0.
                 || r.scale > 1000.
+                || r.options
+                    .scale_y
+                    .is_some_and(|scale| !scale.is_finite() || scale <= 0. || scale > 1000.)
+                || r.options
+                    .source
+                    .as_ref()
+                    .is_some_and(|path| !crate::productivity::valid_reference_source(path))
             {
                 return Err("Invalid reference image".into());
             }

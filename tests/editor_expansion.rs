@@ -451,6 +451,7 @@ fn reference_copy_uses_placement_and_opacity_in_new_layer() {
         visible: true,
         behind: true,
         floating: false,
+        options: Default::default(),
     };
     reference_to_layer(&mut d, &r, 0).unwrap();
     assert_eq!(d.layers.len(), 2);

@@ -2692,6 +2692,7 @@ fn eyedropper_source_and_channels_target_each_drawing_color() {
             visible: true,
             behind: false,
             floating: false,
+            options: Default::default(),
         });
     let merged = doc.composite(0)[0];
     app.replace(doc, None);

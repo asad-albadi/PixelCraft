@@ -292,8 +292,92 @@ pub struct ReferenceImage {
     pub scale: f32,
     pub opacity: u8,
     pub visible: bool,
+    #[serde(default)]
+    pub options: ReferenceOptions,
 }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReferenceOptions {
+    pub locked: bool,
+    pub sampleable: bool,
+    pub scale_y: Option<f32>,
+    pub source: Option<PathBuf>,
+}
+
+impl Default for ReferenceOptions {
+    fn default() -> Self {
+        Self {
+            locked: false,
+            sampleable: true,
+            scale_y: None,
+            source: None,
+        }
+    }
+}
+
+/// Linked files must be ordinary project-relative paths.
+pub fn valid_reference_source(path: &Path) -> bool {
+    if path.as_os_str().len() > 4096 {
+        return false;
+    }
+    let mut parts = path.components();
+    parts.next().is_some_and(|first| {
+        std::iter::once(first).chain(parts).all(|part| {
+            matches!(part, std::path::Component::Normal(name) if
+            name.to_str().is_some_and(|name| {
+                let stem = name.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+                let port = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT"));
+                !name.contains([':', '\\', '/', '\0'])
+                    && !name.ends_with([' ', '.'])
+                    && !matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+                    && !matches!(port, Some("1"|"2"|"3"|"4"|"5"|"6"|"7"|"8"|"9"|"¹"|"²"|"³"))
+            }))
+        })
+    })
+}
+
 impl ReferenceImage {
+    pub fn display_dimensions(&self) -> [f32; 2] {
+        [
+            self.width as f32 * self.scale,
+            self.height as f32 * self.options.scale_y.unwrap_or(self.scale),
+        ]
+    }
+
+    pub fn set_aspect_locked(&mut self, locked: bool) {
+        self.options.scale_y = if locked {
+            None
+        } else {
+            Some(self.options.scale_y.unwrap_or(self.scale))
+        };
+    }
+
+    pub fn set_display_width(&mut self, width: f32) {
+        if width.is_finite() {
+            self.scale = (width / self.width as f32).clamp(0.01, 1000.);
+        }
+    }
+
+    pub fn set_display_height(&mut self, height: f32) {
+        if !height.is_finite() {
+            return;
+        }
+        let scale = (height / self.height as f32).clamp(0.01, 1000.);
+        if let Some(y) = &mut self.options.scale_y {
+            *y = scale;
+        } else {
+            self.scale = scale;
+        }
+    }
+
+    pub fn coordinates(&self, x: i32, y: i32) -> Option<(usize, usize)> {
+        let rx = ((x as f32 - self.x) / self.scale).floor();
+        let ry = ((y as f32 - self.y) / self.options.scale_y.unwrap_or(self.scale)).floor();
+        (rx >= 0. && ry >= 0. && rx < self.width as f32 && ry < self.height as f32)
+            .then_some((rx as usize, ry as usize))
+    }
+
     pub fn sample_pixel(&self, x: usize, y: usize) -> Pixel {
         let mut pixel = self.pixels[y * self.width + x];
         pixel[3] = ((u16::from(pixel[3]) * u16::from(self.opacity) + 127) / 255) as u8;
@@ -429,6 +513,7 @@ pub fn import_reference(path: &Path) -> Result<ReferenceImage, String> {
         scale: 1.,
         opacity: 128,
         visible: true,
+        options: ReferenceOptions::default(),
     })
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1160,7 +1245,10 @@ pub fn reference_to_layer(
     r: &ReferenceImage,
     frame: usize,
 ) -> Result<(), String> {
-    if frame >= d.durations.len() || !d.can_grow(d.width * d.height * d.durations.len()) {
+    if frame >= d.durations.len()
+        || !d.can_add_layer()
+        || !d.can_grow(d.width * d.height * d.durations.len())
+    {
         return Err("Layer exceeds document limits".into());
     }
     let n = d.layers.len();
@@ -1168,11 +1256,8 @@ pub fn reference_to_layer(
     d.layers[n].name = r.name.clone();
     for y in 0..d.height {
         for x in 0..d.width {
-            let sx = ((x as f32 - r.x) / r.scale).floor();
-            let sy = ((y as f32 - r.y) / r.scale).floor();
-            if sx >= 0. && sy >= 0. && sx < r.width as f32 && sy < r.height as f32 {
-                let mut p = r.pixels[sy as usize * r.width + sx as usize];
-                p[3] = ((p[3] as u16 * r.opacity as u16 + 127) / 255) as u8;
+            if let Some((sx, sy)) = r.coordinates(x as i32, y as i32) {
+                let p = r.sample_pixel(sx, sy);
                 d.set_pixel(n, frame, y * d.width + x, p);
             }
         }
@@ -1233,30 +1318,49 @@ pub(crate) fn expand_atlas_inputs_with_path_check(
     Ok(out)
 }
 
-fn reference_coordinates(reference: &ReferenceImage, x: i32, y: i32) -> Option<(usize, usize)> {
-    let rx = ((x as f32 - reference.x) / reference.scale).floor();
-    let ry = ((y as f32 - reference.y) / reference.scale).floor();
-    (rx >= 0. && ry >= 0. && rx < reference.width as f32 && ry < reference.height as f32)
-        .then_some((rx as usize, ry as usize))
-}
-
 /// Sample the uppermost visible docked reference covering this canvas position.
 pub fn sample_reference_image(d: &Document, x: i32, y: i32) -> Option<Pixel> {
+    sample_reference_image_if(d, x, y, |_| true)
+}
+
+pub fn sample_reference_image_if(
+    d: &Document,
+    x: i32,
+    y: i32,
+    available: impl Fn(&ReferenceImage) -> bool,
+) -> Option<Pixel> {
     [false, true].into_iter().find_map(|behind| {
         d.references
             .iter()
             .rev()
             .filter(|reference| {
-                reference.visible && !reference.floating && reference.behind == behind
+                reference.visible
+                    && reference.options.sampleable
+                    && !reference.floating
+                    && reference.behind == behind
+                    && available(reference)
             })
             .find_map(|reference| {
-                reference_coordinates(reference, x, y).map(|(x, y)| reference.sample_pixel(x, y))
+                reference
+                    .coordinates(x, y)
+                    .map(|(x, y)| reference.sample_pixel(x, y))
             })
     })
 }
 
 /// Sample the rendered reference stack, excluding checkerboard and onion skin.
 pub fn sample_canvas(d: &Document, frame: usize, x: i32, y: i32, references: bool) -> Pixel {
+    sample_canvas_if(d, frame, x, y, references, |_| true)
+}
+
+pub fn sample_canvas_if(
+    d: &Document,
+    frame: usize,
+    x: i32,
+    y: i32,
+    references: bool,
+    available: impl Fn(&ReferenceImage) -> bool,
+) -> Pixel {
     let artwork = d.index(x, y).map_or(CLEAR, |i| {
         if references {
             d.composite_view(frame)[i]
@@ -1273,10 +1377,15 @@ pub fn sample_canvas(d: &Document, frame: usize, x: i32, y: i32, references: boo
             color = over(color, artwork, 255);
         }
         for r in &d.references {
-            if !r.visible || r.floating || r.behind != behind {
+            if !r.visible
+                || !r.options.sampleable
+                || r.floating
+                || r.behind != behind
+                || !available(r)
+            {
                 continue;
             }
-            if let Some((x, y)) = reference_coordinates(r, x, y) {
+            if let Some((x, y)) = r.coordinates(x, y) {
                 color = over(color, r.pixels[y * r.width + x], r.opacity);
             }
         }

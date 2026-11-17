@@ -152,6 +152,40 @@ struct GradientOptions {
     pattern: GradientPattern,
 }
 
+#[derive(Default)]
+struct ReferenceAvailability {
+    root: PathBuf,
+    files: std::collections::HashSet<PathBuf>,
+}
+
+fn linked_reference_exists(root: &Path, source: &Path) -> bool {
+    if !valid_reference_source(source) {
+        return false;
+    }
+    let mut path = root.to_path_buf();
+    let mut components = source.components().peekable();
+    while let Some(part) = components.next() {
+        path.push(part);
+        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
+            return false;
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if metadata.file_attributes() & 0x400 != 0 {
+                return false;
+            }
+        }
+        if components.peek().is_none() {
+            return metadata.is_file();
+        }
+        if !metadata.is_dir() {
+            return false;
+        }
+    }
+    false
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Preferences {
@@ -273,6 +307,9 @@ pub(super) struct PowerTools {
     pub reference_edit: Option<usize>,
     reference_textures: Vec<(Pixels, egui::TextureHandle)>,
     reference_drag: Option<(f32, f32, f32, Pos2)>,
+    reference_availability: ReferenceAvailability,
+    reference_check: Option<std::sync::mpsc::Receiver<ReferenceAvailability>>,
+    reference_check_due: Instant,
     pub bridge: Option<LiveBridge>,
     bridge_snapshot: Option<Document>,
     pub bridge_generation: u64,
@@ -313,6 +350,9 @@ impl Default for PowerTools {
             reference_edit: None,
             reference_textures: vec![],
             reference_drag: None,
+            reference_availability: ReferenceAvailability::default(),
+            reference_check: None,
+            reference_check_due: Instant::now(),
             bridge: None,
             bridge_snapshot: None,
             bridge_generation: 0,
@@ -1266,6 +1306,309 @@ impl PixelCraft {
             self.status = "Selection captured as a brush, including transparent pixels".into();
         }
     }
+
+    fn reference_root(&self) -> Option<&Path> {
+        self.path.as_deref().and_then(Path::parent)
+    }
+
+    fn reference_available(&self, reference: &ReferenceImage) -> bool {
+        reference.options.source.as_ref().is_none_or(|path| {
+            self.reference_root() == Some(self.power.reference_availability.root.as_path())
+                && self.power.reference_availability.files.contains(path)
+        })
+    }
+
+    pub(super) fn poll_reference_sources(&mut self, ctx: &egui::Context) {
+        if self.power.reference_edit.is_some_and(|index| {
+            self.doc.references.get(index).is_none_or(|reference| {
+                reference.options.locked || !reference.visible || reference.floating
+            })
+        }) {
+            self.power.reference_edit = None;
+            self.power.reference_drag = None;
+        }
+        if let Some(probe) = &self.power.reference_check {
+            match probe.try_recv() {
+                Ok(available) => {
+                    self.power.reference_availability = available;
+                    self.power.reference_check = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.power.reference_check = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                    return;
+                }
+            }
+        }
+        if !self
+            .doc
+            .references
+            .iter()
+            .any(|reference| reference.options.source.is_some())
+        {
+            return;
+        }
+        let now = Instant::now();
+        let Some(root) = self.reference_root().map(Path::to_path_buf) else {
+            return;
+        };
+        if now < self.power.reference_check_due && self.power.reference_availability.root == root {
+            ctx.request_repaint_after(self.power.reference_check_due - now);
+            return;
+        }
+        let sources: std::collections::HashSet<_> = self
+            .doc
+            .references
+            .iter()
+            .filter_map(|reference| reference.options.source.clone())
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.power.reference_check = Some(rx);
+        self.power.reference_check_due = now + Duration::from_secs(2);
+        std::thread::spawn(move || {
+            let files = sources
+                .into_iter()
+                .filter(|path| linked_reference_exists(&root, path))
+                .collect();
+            let _ = tx.send(ReferenceAvailability { root, files });
+        });
+        ctx.request_repaint_after(Duration::from_millis(50));
+    }
+
+    fn pick_reference_file(&mut self, linked: bool, replace: Option<usize>) {
+        let root = self.reference_root().map(Path::to_path_buf);
+        let mut dialog =
+            rfd::FileDialog::new().add_filter("Reference image", &["png", "jpg", "jpeg"]);
+        if let Some(root) = &root {
+            dialog = dialog.set_directory(root);
+        }
+        let Some(path) = dialog.pick_file() else {
+            return;
+        };
+        let source = if linked {
+            let Some(relative) = root
+                .as_ref()
+                .and_then(|root| path.strip_prefix(root).ok())
+                .filter(|relative| valid_reference_source(relative))
+            else {
+                self.status = "Choose a reference image within the project folder".into();
+                return;
+            };
+            if !root
+                .as_ref()
+                .is_some_and(|root| linked_reference_exists(root, relative))
+            {
+                self.status = "Choose a regular image file inside the project folder".into();
+                return;
+            }
+            let portable = relative
+                .components()
+                .filter_map(|part| part.as_os_str().to_str())
+                .collect::<Vec<_>>()
+                .join("/");
+            Some(PathBuf::from(portable))
+        } else {
+            None
+        };
+        let result = import_reference(&path).and_then(|mut reference| {
+            let mut next = self.doc.clone();
+            if let Some(index) = replace {
+                let old = &next.references[index];
+                reference.x = old.x;
+                reference.y = old.y;
+                reference.visible = old.visible;
+                reference.opacity = old.opacity;
+                reference.behind = old.behind;
+                reference.floating = old.floating;
+                reference.options = old.options.clone();
+                let [width, height] = old.display_dimensions();
+                reference.set_display_width(width);
+                if reference.options.scale_y.is_some() {
+                    reference.set_display_height(height);
+                }
+                reference.options.source = source;
+                next.references[index] = reference;
+            } else {
+                reference.options.source = source;
+                next.references.push(reference);
+            }
+            next.validate()?;
+            self.remember_action(if replace.is_some() {
+                "Relink reference image"
+            } else {
+                "Import reference image"
+            });
+            self.doc = next;
+            self.power.reference_check_due = Instant::now();
+            Ok(())
+        });
+        if let Err(error) = result {
+            self.status = error;
+        }
+    }
+
+    fn reference_controls(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .pc_checkbox(
+                &mut self.power.preferences.sample_references,
+                "Sample reference colors",
+            )
+            .changed()
+        {
+            self.save_workflow_preferences();
+        }
+        ui.horizontal(|ui| {
+            if ui.pc_button("Import embedded image…").clicked() {
+                self.pick_reference_file(false, None);
+            }
+            if ui
+                .add_enabled_ui(self.reference_root().is_some(), |ui| {
+                    ui.pc_button("Link image…")
+                        .on_disabled_hover_text("Save the project before linking an image.")
+                        .clicked()
+                })
+                .inner
+            {
+                self.pick_reference_file(true, None);
+            }
+        });
+        let mut remove = None;
+        for index in 0..self.doc.references.len() {
+            let mut reference = self.doc.references[index].clone();
+            let available = self.reference_available(&reference);
+            ui.push_id(("reference-options", index), |ui| {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui_icons::checkbox(ui, &mut reference.visible, "eye", &reference.name);
+                    if ui.pc_small_button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                });
+                if let Some(path) = &reference.options.source {
+                    ui.small(if available {
+                        format!("Linked · {}", path.display())
+                    } else {
+                        format!("Missing linked image · {}", path.display())
+                    });
+                    if ui.pc_button("Relink or refresh…").clicked() {
+                        self.pick_reference_file(true, Some(index));
+                        reference = self.doc.references[index].clone();
+                    }
+                }
+                ui.horizontal(|ui| {
+                    ui.pc_checkbox(&mut reference.options.locked, "Lock placement");
+                    ui.pc_checkbox(&mut reference.options.sampleable, "Allow sampling");
+                });
+                ui.add_enabled_ui(!reference.options.locked, |ui| {
+                    if ui_icons::button_as(
+                        ui,
+                        "move",
+                        "reference-move",
+                        "Move / scale",
+                        self.power.reference_edit == Some(index),
+                        false,
+                    )
+                    .clicked()
+                    {
+                        self.power.reference_edit =
+                            (self.power.reference_edit != Some(index)).then_some(index);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut reference.x)
+                                .prefix("X ")
+                                .range(-16384. ..=16384.),
+                        );
+                        ui.add(
+                            egui::DragValue::new(&mut reference.y)
+                                .prefix("Y ")
+                                .range(-16384. ..=16384.),
+                        );
+                    });
+                    let mut preserve = reference.options.scale_y.is_none();
+                    if ui
+                        .pc_checkbox(&mut preserve, "Preserve aspect ratio")
+                        .changed()
+                    {
+                        reference.set_aspect_locked(preserve);
+                    }
+                    ui.horizontal(|ui| {
+                        let [mut width, mut height] = reference.display_dimensions();
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut width)
+                                    .prefix("Width ")
+                                    .suffix(" px")
+                                    .range(0.01..=16_384_000.),
+                            )
+                            .changed()
+                        {
+                            reference.set_display_width(width);
+                            height = reference.display_dimensions()[1];
+                        }
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut height)
+                                    .prefix("Height ")
+                                    .suffix(" px")
+                                    .range(0.01..=16_384_000.),
+                            )
+                            .changed()
+                        {
+                            reference.set_display_height(height);
+                        }
+                    });
+                    if ui.pc_button("Fit to canvas").clicked() {
+                        let [width, height] = reference.display_dimensions();
+                        let ratio =
+                            (self.doc.width as f32 / width).min(self.doc.height as f32 / height);
+                        reference.set_display_width(width * ratio);
+                        if !preserve {
+                            reference.set_display_height(height * ratio);
+                        }
+                        let [width, height] = reference.display_dimensions();
+                        reference.x = (self.doc.width as f32 - width) / 2.;
+                        reference.y = (self.doc.height as f32 - height) / 2.;
+                    }
+                });
+                ui.add(egui::Slider::new(&mut reference.opacity, 0..=255).text("Opacity"));
+                ui.horizontal(|ui| {
+                    ui.pc_checkbox(&mut reference.behind, "Behind artwork");
+                    ui.pc_checkbox(&mut reference.floating, "Floating window");
+                });
+                if ui
+                    .add_enabled_ui(available, |ui| ui.pc_button("Copy to layer").clicked())
+                    .inner
+                {
+                    let mut next = self.doc.clone();
+                    match reference_to_layer(&mut next, &reference, self.frame) {
+                        Ok(()) => {
+                            self.remember_action("Copy reference to layer");
+                            self.doc = next;
+                            self.layer = self.doc.layers.len() - 1;
+                        }
+                        Err(error) => self.status = error,
+                    }
+                }
+            });
+            if reference != self.doc.references[index] {
+                self.remember_action("Edit reference image");
+                self.doc.references[index] = reference;
+            }
+        }
+        if let Some(index) = remove {
+            self.remember_action("Remove reference image");
+            self.doc.references.remove(index);
+            self.power.reference_edit = None;
+            self.power.reference_drag = None;
+        }
+        if ui.pc_button("Finish moving references").clicked() {
+            self.power.reference_edit = None;
+            self.power.reference_drag = None;
+        }
+    }
     pub(super) fn power_dialogs(&mut self, ctx: &egui::Context) {
         if !self.power.open {
             return;
@@ -1276,14 +1619,7 @@ impl PixelCraft {
  ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
  ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember_action("Change drawing options");self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("The seamless canvas uses the axes selected under View.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
 if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
- ui.collapsing("Reference images",|ui|{if ui.pc_checkbox(&mut self.power.preferences.sample_references,"Sample reference colors").changed(){self.save_workflow_preferences();}
-if ui.pc_button("Import PNG / JPEG overlay…").clicked()&& let Some(path)=rfd::FileDialog::new().add_filter("Reference image",&["png","jpg","jpeg"]).pick_file(){match import_reference(&path){Ok(r)=>{let mut next=self.doc.clone();next.references.push(r);match next.validate(){Ok(())=>{self.remember_action("Import reference image");self.doc=next;},Err(e)=>self.status=e}},Err(e)=>self.status=e}}ui.small("Saved inside .pixel projects; excluded from artwork exports. Enable Move to drag; Shift-drag scales.");let mut remove=None;for i in 0..self.doc.references.len(){let mut r=self.doc.references[i].clone();ui.separator();ui.horizontal(|ui|{ui_icons::checkbox(ui,&mut r.visible,"eye",&r.name);if ui_icons::button_as(ui,"move","reference-move","Move / scale",self.power.reference_edit==Some(i),false).clicked(){self.power.reference_edit=if self.power.reference_edit==Some(i){None}else{Some(i)};}
-if ui.pc_small_button("Remove").clicked(){remove=Some(i);}});ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut r.x).prefix("X ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.y).prefix("Y ").range(-16384. ..=16384.));ui.add(egui::DragValue::new(&mut r.scale).prefix("Scale ").speed(0.01).range(0.01..=1000.));});ui.add(egui::Slider::new(&mut r.opacity,0..=255).text("Opacity"));
-ui.horizontal(|ui|{ui.pc_checkbox(&mut r.behind,"Behind artwork");ui.pc_checkbox(&mut r.floating,"Floating window");});
-ui.horizontal(|ui|{if ui.pc_button("Fit to canvas").clicked(){r.scale=(self.doc.width as f32/r.width as f32).min(self.doc.height as f32/r.height as f32).clamp(0.01,1000.);r.x=(self.doc.width as f32-r.width as f32*r.scale)/2.;r.y=(self.doc.height as f32-r.height as f32*r.scale)/2.;}
-if ui.pc_button("Copy to layer").clicked(){let mut d=self.doc.clone();match reference_to_layer(&mut d,&r,self.frame){Ok(())=>{self.remember_action("Copy reference to layer");self.doc=d;self.layer=self.doc.layers.len()-1;},Err(e)=>self.status=e}}});if r!=self.doc.references[i]{self.remember_action("Edit reference image");self.doc.references[i]=r;}}
-if let Some(i)=remove{self.remember_action("Remove reference image");self.doc.references.remove(i);self.power.reference_edit=None;}
-if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=None;}});
+ ui.collapsing("Reference images", |ui| self.reference_controls(ui));
  ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
  ui.collapsing("Grid sprite-sheet import", |ui| self.grid_import_ui(ui));
         ui.collapsing("Batch export animation tags", |ui| {
@@ -1959,12 +2295,13 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     pub(super) fn pick_color(&mut self, (x, y): (i32, i32), secondary: bool) {
         let (sample, index) = match self.power.preferences.eyedropper.source {
             EyedropperSource::Visible => (
-                Some(sample_canvas(
+                Some(sample_canvas_if(
                     &self.doc,
                     self.frame,
                     x,
                     y,
                     self.power.preferences.sample_references,
+                    |reference| self.reference_available(reference),
                 )),
                 None,
             ),
@@ -1984,7 +2321,12 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 };
                 (self.doc.sample_layer(self.layer, self.frame, x, y), index)
             }
-            EyedropperSource::References => (sample_reference_image(&self.doc, x, y), None),
+            EyedropperSource::References => (
+                sample_reference_image_if(&self.doc, x, y, |reference| {
+                    self.reference_available(reference)
+                }),
+                None,
+            ),
         };
         if let Some(sample) = sample {
             self.apply_eyedropper_sample(sample, index, secondary);
@@ -2067,24 +2409,26 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
             {
                 continue;
             }
-            let tex = if let Some((_, t)) = self
-                .power
-                .reference_textures
-                .iter()
-                .find(|(p, _)| p.shares_storage(&r.pixels))
-            {
-                t.clone()
-            } else {
-                let t = ui.ctx().load_texture(
-                    format!("reference-{i}"),
-                    color_image(&r.pixels.to_vec(), r.width, r.height),
-                    egui::TextureOptions::LINEAR,
-                );
-                self.power
+            let tex = self.reference_available(&r).then(|| {
+                if let Some((_, t)) = self
+                    .power
                     .reference_textures
-                    .push((r.pixels.clone(), t.clone()));
-                t
-            };
+                    .iter()
+                    .find(|(p, _)| p.shares_storage(&r.pixels))
+                {
+                    t.clone()
+                } else {
+                    let t = ui.ctx().load_texture(
+                        format!("reference-{i}"),
+                        color_image(&r.pixels.to_vec(), r.width, r.height),
+                        egui::TextureOptions::LINEAR,
+                    );
+                    self.power
+                        .reference_textures
+                        .push((r.pixels.clone(), t.clone()));
+                    t
+                }
+            });
             if r.floating {
                 if !behind {
                     let mut open = true;
@@ -2097,10 +2441,15 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                                 &mut self.power.preferences.sample_references,
                                 "Sample reference colors",
                             );
-                            let size = Vec2::new(r.width as f32, r.height as f32);
+                            let Some(tex) = &tex else {
+                                ui.label("Missing linked image");
+                                return;
+                            };
+                            let [width, height] = r.display_dimensions();
+                            let size = Vec2::new(width, height);
                             let scale = (ui.available_width() / size.x).min(450. / size.y);
                             let response = ui.add(
-                                egui::Image::new(&tex)
+                                egui::Image::new(tex)
                                     .fit_to_exact_size(size * scale)
                                     .sense(Sense::click()),
                             );
@@ -2110,12 +2459,13 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                                     == EyedropperSource::References;
                             let secondary = picker && response.secondary_clicked();
                             if (response.clicked() || secondary)
+                                && r.options.sampleable
                                 && (self.power.preferences.sample_references || explicit_reference)
                                 && let Some(pos) = response.interact_pointer_pos()
                             {
-                                let xy = (pos - response.rect.min) / scale;
-                                let x = (xy.x as usize).min(r.width - 1);
-                                let y = (xy.y as usize).min(r.height - 1);
+                                let xy = (pos - response.rect.min) / response.rect.size();
+                                let x = ((xy.x * r.width as f32) as usize).min(r.width - 1);
+                                let y = ((xy.y * r.height as f32) as usize).min(r.height - 1);
                                 if picker {
                                     self.apply_eyedropper_sample(
                                         r.sample_pixel(x, y),
@@ -2139,17 +2489,40 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 continue;
             }
             let pixel_size = self.canvas_pixel_size();
+            let [width, height] = r.display_dimensions();
             let rect = Rect::from_min_size(
                 board.min + Vec2::new(r.x, r.y) * pixel_size,
-                Vec2::new(r.width as f32, r.height as f32) * r.scale * pixel_size,
+                Vec2::new(width, height) * pixel_size,
             );
-            ui.painter().image(
-                tex.id(),
-                rect,
-                Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
-                Color32::from_white_alpha(r.opacity),
-            );
-            if self.power.reference_edit == Some(i) {
+            if let Some(tex) = tex {
+                ui.painter().image(
+                    tex.id(),
+                    rect,
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1., 1.)),
+                    Color32::from_white_alpha(r.opacity),
+                );
+            } else {
+                let painter = ui.painter();
+                let visible = rect.intersect(painter.clip_rect());
+                if visible.is_positive() {
+                    let faded = Color32::from_rgba_unmultiplied(45, 40, 48, 180);
+                    painter.rect_filled(rect, 0, faded);
+                    let stroke = Stroke::new(1., Color32::LIGHT_GRAY);
+                    painter.rect_stroke(rect, 0, stroke, egui::StrokeKind::Inside);
+                    painter.line_segment([rect.left_top(), rect.right_bottom()], stroke);
+                    painter.line_segment([rect.right_top(), rect.left_bottom()], stroke);
+                    if visible.width() > 120. && visible.height() > 20. {
+                        painter.text(
+                            visible.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Missing linked image",
+                            egui::FontId::proportional(12.),
+                            Color32::WHITE,
+                        );
+                    }
+                }
+            }
+            if !r.options.locked && self.power.reference_edit == Some(i) {
                 let response = ui.interact(
                     rect.intersect(ui.clip_rect()),
                     ui.id().with(("reference-drag", i)),
@@ -2176,7 +2549,11 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     let delta = (pointer - origin) / pixel_size;
                     let reference = &mut self.doc.references[i];
                     if ui.input(|i| i.modifiers.shift) {
-                        reference.scale = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);
+                        let new = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);
+                        if let Some(old_y) = &mut reference.options.scale_y {
+                            *old_y = (*old_y * new / reference.scale).clamp(0.01, 1000.);
+                        }
+                        reference.scale = new;
                     } else {
                         reference.x = (x + delta.x).clamp(-16384., 16384.);
                         reference.y = (y + delta.y).clamp(-16384., 16384.);
@@ -3305,7 +3682,7 @@ mod reference_drag_regressions {
     use super::*;
     #[test]
     fn regression_reference_drag_uses_total_movement_for_move_and_scale() {
-        for shift in [false, true] {
+        for (shift, locked) in [(false, false), (true, false), (false, true)] {
             let ctx = egui::Context::default();
             let mut a = PixelCraft::with_context(&ctx, None);
             a.doc.references.push(ReferenceImage {
@@ -3320,6 +3697,10 @@ mod reference_drag_regressions {
                 scale: 1.,
                 opacity: 255,
                 visible: true,
+                options: ReferenceOptions {
+                    locked,
+                    ..Default::default()
+                },
             });
             a.zoom = 2.;
             a.power.reference_edit = Some(0);
@@ -3353,12 +3734,81 @@ mod reference_drag_regressions {
             frame(vec![egui::Event::PointerMoved(Pos2::new(40., 35.))]);
             frame(vec![egui::Event::PointerMoved(Pos2::new(55., 45.))]);
             let r = &a.doc.references[0];
-            if shift {
+            if locked {
+                assert_eq!((r.x, r.y, r.scale), (0., 0., 1.));
+                assert!(a.undo.is_empty());
+            } else if shift {
                 assert!((r.scale - 1.125).abs() < 0.0001, "scale was {}", r.scale);
             } else {
                 assert_eq!((r.x, r.y), (12.5, 7.5));
             }
         }
+    }
+
+    #[test]
+    fn linked_reference_missing_placeholder_excludes_snapshot_from_picker() {
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-reference-link-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("guide.png");
+        image::RgbaImage::from_pixel(12, 12, image::Rgba([80, 90, 110, 255]))
+            .save(&path)
+            .unwrap();
+        let mut reference = import_reference(&path).unwrap();
+        reference.opacity = 255;
+        reference.options.source = Some(PathBuf::from("guide.png"));
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let mut doc = Document::new(12, 12);
+        doc.references.push(reference);
+        let project = root.join("drawing.pixel");
+        formats::save(&project, &doc).unwrap();
+        let reopened = formats::load(&project).unwrap();
+        app.replace(reopened, Some(project.clone()));
+        app.power.preferences.eyedropper.source = EyedropperSource::References;
+        let probe = |app: &mut PixelCraft| {
+            app.power.reference_check_due = Instant::now();
+            app.poll_reference_sources(&ctx);
+            app.power.reference_availability = app
+                .power
+                .reference_check
+                .take()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap();
+        };
+        probe(&mut app);
+        app.pick_color((0, 0), false);
+        assert_eq!(app.fg, [80, 90, 110, 255]);
+
+        std::fs::remove_file(&path).unwrap();
+        probe(&mut app);
+        app.fg = [1, 2, 3, 255];
+        app.pick_color((0, 0), false);
+        assert_eq!(app.fg, [1, 2, 3, 255]);
+        assert!(!app.dirty());
+        app.zoom = 16.;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(500.))),
+                ..Default::default()
+            },
+            |ui| {
+                app.draw_references(ui, Rect::from_min_size(Pos2::ZERO, Vec2::splat(300.)));
+            },
+        );
+        output.textures_delta.clear();
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::Shape::Text(text) if text.galley.job.text == "Missing linked image")));
+        assert!(!linked_reference_exists(&root, Path::new("../guide.png")));
+        assert!(!linked_reference_exists(
+            &root,
+            Path::new("drawing.pixel:stream")
+        ));
+        std::fs::remove_file(project).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }
 

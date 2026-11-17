@@ -135,6 +135,7 @@ fn references_survive_native_save_but_never_composite() {
         scale: 2.,
         opacity: 128,
         visible: true,
+        options: Default::default(),
     });
     let path =
         std::env::temp_dir().join(format!("pixelcraft-reference-{}.pixel", std::process::id()));
@@ -584,6 +585,7 @@ fn regression_ase_save_rejects_reference_loss() {
         scale: 1.,
         opacity: 255,
         visible: true,
+        options: Default::default(),
     });
     for ext in ["ase", "aseprite"] {
         let path =
@@ -858,6 +860,7 @@ fn reference_sampling_composites_transparency_and_stack_order() {
         scale: 1.,
         opacity: 255,
         visible: true,
+        options: Default::default(),
     };
     d.references.push(reference);
     assert_eq!(sample_canvas(&d, 0, 0, 0, true), art);
@@ -924,4 +927,37 @@ fn live_export_can_report_progress_and_cancel_on_a_second_connection() {
     let mut response = String::new();
     export.read_line(&mut response).unwrap();
     assert!(response.contains("Export cancelled"));
+}
+#[test]
+fn reference_controls_keep_native_aspect_and_skip_unsampleable_overlays() {
+    use pixelcraft::productivity::{ReferenceImage, ReferenceOptions, sample_reference_image};
+    let mut d = Document::new(8, 8);
+    let mut r = ReferenceImage {
+        name: "Guide".into(),
+        width: 2,
+        height: 1,
+        pixels: vec![[180, 70, 20, 255]; 2].into(),
+        x: 0.,
+        y: 0.,
+        scale: 1.,
+        opacity: 255,
+        visible: true,
+        behind: false,
+        floating: false,
+        options: ReferenceOptions::default(),
+    };
+    r.set_display_width(6.);
+    assert_eq!(r.display_dimensions(), [6., 3.]);
+    r.set_aspect_locked(false);
+    r.set_display_height(7.);
+    assert_eq!(r.display_dimensions(), [6., 7.]);
+    assert_eq!(r.coordinates(5, 6), Some((1, 0)));
+    r.options.sampleable = false;
+    d.references.push(r);
+    assert_eq!(sample_reference_image(&d, 5, 6), None);
+    d.references[0].options.sampleable = true;
+    assert_eq!(sample_reference_image(&d, 5, 6), Some([180, 70, 20, 255]));
+    d.references[0].set_aspect_locked(true);
+    assert_eq!(d.references[0].display_dimensions(), [6., 3.]);
+    d.validate().unwrap();
 }

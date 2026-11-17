@@ -194,6 +194,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 50 complete. Workflow tools can replace an inclusive palette span with a ramp of a different length. Indexed cels remap old slots by position, keeping entries outside the span and preserving transparency, linked backing, and frame-specific endpoints. An interior transparent slot is reserved when the requested length has room for it and both endpoints. Legacy color-only storage favors a surviving swatch when an exact slot is ambiguous. The model and Windows UI tests verify duplicate slots, linked frames, palette names, refusal without mutation, and single-step undo. Formatting, strict Clippy, and 570 Windows all-target tests passed.
 
+- Item 49 complete. Each overlay has placement locking, a sampling toggle, display width and height, and an aspect-ratio lock. Docked, floating, sampled, and rasterized placements use the same display geometry. Linked overlays use paths within the saved project folder and keep an embedded snapshot. A background availability check shows a placeholder and excludes missing sources from picking. Relink or refresh explicitly loads changed pixels. The tests cover locked drags, resized sampling, native save and reopen, deletion detection, placeholder rendering, and path rejection. Formatting, strict Clippy, and 572 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -259,7 +261,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 ## Editor and MCP workflow controls
 
 - [x] **48. Capture shortcuts from keypresses.** Show conflicts, protect reserved bindings, allow cancellation, and reset individual shortcuts.
-- [ ] **49. Expand per-reference controls.** Lock individual references, toggle sampling per image, set aspect-linked dimensions, and show a placeholder when a linked source is missing.
+- [x] **49. Expand per-reference controls.** Lock individual references, toggle sampling per image, set aspect-linked dimensions, and show a placeholder when a linked source is missing.
 - [x] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
 - [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
 - [x] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
