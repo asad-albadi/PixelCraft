@@ -226,6 +226,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 6 brush library checkpoint. Pencil can save and reload named brushes with size, shape, ink, mode, image pixels, alignment, and shading settings. Named ramps retain the saved color order across palette changes. Image brushes can stamp each dab or hold their pattern phase at the capture origin or at the first dab of the stroke. The painting path uses borrowed stamp pixels and tests selection membership at the touched pixels. Windows tests cover restarting from saved presets, exact ramp order, one shade step per stroke, and phase across overlapping dabs. Formatting, strict Clippy, and 609 Windows all-target tests passed. Stabilization and dynamics remain open.
 
+- Item 6 complete. Pencil and eraser can stabilize strokes by a configurable number of sprite pixels and finish at the release coordinate. Input pressure can control brush size and opacity independently. Opacity uses the strongest coverage applied to a pixel during a stroke. Dynamics are persisted in preferences and saved brushes. Windows GUI tests cover delayed motion, release followed by pointer loss, synthetic pressure and opacity, a mouse fallback, pressure erasing, and preset round-tripping. Formatting, strict Clippy, and 611 Windows all-target tests passed. Physical tablet input remains unverified.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -236,7 +238,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 ## Drawing, selections, and color
 
 - [x] **5. Add drawing tools.** Implement spray with size and rate controls, curves, filled freehand contours, polygons, text, blur, and jumble.
-- [ ] **6. Expand brush and ink controls.** Add per-tool inks such as lock alpha and copy color, saved brushes and shading ramps, image-brush alignment, and stroke stabilization and dynamics.
+- [x] **6. Expand brush and ink controls.** Add per-tool inks such as lock alpha and copy color, saved brushes and shading ramps, image-brush alignment, and stroke stabilization and dynamics.
 - [x] **7. Add dithered gradients.** Expose gradient patterns and dithering in the gradient tool.
 - [x] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.
 - [x] **9. Add on-canvas scale and skew handles.** Support interactive transforms on a selection and across the selected timeline cels.

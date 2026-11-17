@@ -137,7 +137,16 @@ pub enum PaintInk {
 impl PaintInk {
     pub fn composite(self, original: Pixel, color: Pixel, opacity: u8) -> Pixel {
         match self {
-            Self::Default | Self::CopyColor => color,
+            Self::Default => color,
+            Self::CopyColor => {
+                let [r, g, b, alpha] = color;
+                [
+                    r,
+                    g,
+                    b,
+                    ((u16::from(alpha) * u16::from(opacity) + 127) / 255) as u8,
+                ]
+            }
             Self::AlphaCompositing if color[3] == 0 || opacity == 0 => original,
             Self::AlphaCompositing => over(original, color, opacity),
             Self::LockAlpha if original[3] == 0 => original,
@@ -164,7 +173,7 @@ impl PaintInk {
         self.draw_with_opacity(doc, (layer, frame), index, original, color, 255);
     }
 
-    pub(crate) fn draw_with_opacity(
+    pub fn draw_with_opacity(
         self,
         doc: &mut Document,
         (layer, frame): (usize, usize),

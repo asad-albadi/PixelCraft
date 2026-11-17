@@ -133,7 +133,7 @@ impl From<bool> for WrapAxes {
     }
 }
 
-pub(crate) fn line_pixels<E>(
+pub fn line_pixels<E>(
     a: (i32, i32),
     b: (i32, i32),
     mut visit: impl FnMut((i32, i32)) -> Result<(), E>,

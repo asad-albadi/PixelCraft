@@ -193,6 +193,7 @@ struct Preferences {
     eyedropper: EyedropperOptions,
     gradient: GradientOptions,
     tool_inks: std::collections::BTreeMap<String, PaintInk>,
+    brush_dynamics: BrushDynamics,
     import_profile: pixelcraft::color::ImportProfile,
     pub(super) display_profile: crate::display_profiles::DisplayChoice,
     whole_pixel_wheel_zoom: bool,
@@ -217,6 +218,7 @@ impl Default for Preferences {
             eyedropper: EyedropperOptions::default(),
             gradient: GradientOptions::default(),
             tool_inks: Default::default(),
+            brush_dynamics: Default::default(),
             import_profile: pixelcraft::color::ImportProfile::default(),
             display_profile: crate::display_profiles::DisplayChoice::default(),
             whole_pixel_wheel_zoom: false,
@@ -314,6 +316,7 @@ pub(super) struct PowerTools {
     bridge_work: Option<std::sync::mpsc::Receiver<PreparedLive>>,
     pub bridge_export: Option<automation::LiveExportProgress>,
     pub shade_seen: std::collections::HashSet<usize>,
+    pub stroke_opacity: std::collections::HashMap<usize, u8>,
     ramp_from: usize,
     ramp_to: usize,
     ramp_steps: usize,
@@ -363,6 +366,7 @@ impl Default for PowerTools {
             bridge_work: None,
             bridge_export: None,
             shade_seen: Default::default(),
+            stroke_opacity: Default::default(),
             ramp_from: 0,
             ramp_to: 1,
             ramp_steps: 5,
@@ -1312,6 +1316,16 @@ impl PixelCraft {
         self.studio.mask = Some(mask);
     }
     pub(super) fn power_paint(&mut self, p: (i32, i32), color: Pixel, size: i32) {
+        self.power_paint_opacity(p, color, size, None);
+    }
+
+    pub(super) fn power_paint_opacity(
+        &mut self,
+        p: (i32, i32),
+        color: Pixel,
+        size: i32,
+        opacity: Option<u8>,
+    ) {
         let axes = self.drawing_axes();
         let [left, top, width, height] = self.selection_bounds();
         let stride = self.doc.width;
@@ -1375,6 +1389,8 @@ impl PixelCraft {
                 .stroke_base
                 .as_ref()
                 .map(|doc| &doc.layers[target.0].cels[target.1]);
+            let eraser = self.tool == Tool::Eraser;
+            let strongest = &mut self.power.stroke_opacity;
             let apply = |doc: &mut Document, index, source| {
                 if !allows(index) {
                     return;
@@ -1382,7 +1398,29 @@ impl PixelCraft {
                 let old = original.map_or(doc.layers[target.0].cels[target.1][index], |base| {
                     base[index]
                 });
-                ink.draw(doc, target, index, old, source);
+                if let Some(opacity) = opacity {
+                    let used = strongest.entry(index).or_default();
+                    if opacity <= *used {
+                        return;
+                    }
+                    *used = opacity;
+                    if eraser {
+                        let [r, g, b, alpha] = old;
+                        let alpha =
+                            ((u16::from(alpha) * u16::from(255 - opacity) + 127) / 255) as u8;
+                        let color = if alpha == 0 { CLEAR } else { [r, g, b, alpha] };
+                        doc.set_pixel(target.0, target.1, index, color);
+                    } else {
+                        let ink = if ink == PaintInk::Default {
+                            PaintInk::AlphaCompositing
+                        } else {
+                            ink
+                        };
+                        ink.draw_with_opacity(doc, target, index, old, source, opacity);
+                    }
+                } else {
+                    ink.draw(doc, target, index, old, source);
+                }
             };
             if mode == BrushMode::Selection {
                 if let Some((width, height, pixels)) = &self.power.stamp {
@@ -1419,6 +1457,35 @@ impl PixelCraft {
                 );
             }
         }
+    }
+
+    pub(super) fn brush_dynamics(&self) -> BrushDynamics {
+        self.power.preferences.brush_dynamics
+    }
+
+    pub(super) fn set_brush_dynamics(&mut self, dynamics: BrushDynamics) {
+        if self.power.preferences.brush_dynamics == dynamics {
+            return;
+        }
+        self.power.preferences.brush_dynamics = dynamics;
+        if self.shot.is_none() {
+            self.save_workflow_preferences();
+        }
+    }
+
+    pub(super) fn brush_dynamics_controls(&mut self, ui: &mut egui::Ui) {
+        let mut dynamics = self.brush_dynamics();
+        ui.horizontal(|ui| {
+            ui.label("Stabilizer distance");
+            ui.add(
+                egui::DragValue::new(&mut dynamics.stabilizer)
+                    .range(0..=64)
+                    .suffix(" px"),
+            );
+        });
+        ui.pc_checkbox(&mut dynamics.pressure_size, "Pressure controls size");
+        ui.pc_checkbox(&mut dynamics.pressure_opacity, "Pressure controls opacity");
+        self.set_brush_dynamics(dynamics);
     }
 
     pub(super) fn active_image_brush_size(&self) -> Option<(i32, i32)> {
@@ -4380,6 +4447,12 @@ mod brush_library_tests {
         app.power.stamp = Some((2, 1, vec![high, CLEAR]));
         app.power.image_brush_alignment = ImageBrushAlignment::Source;
         app.power.image_brush_origin = (0, 0);
+        let dynamics = BrushDynamics {
+            stabilizer: 7,
+            pressure_size: true,
+            pressure_opacity: true,
+        };
+        app.set_brush_dynamics(dynamics);
         app.set_tool_ink(PaintInk::CopyColor);
         app.capture_brush_preset("Leaf").unwrap();
         app.doc.palette = vec![unrelated, low, mid, high];
@@ -4397,6 +4470,7 @@ mod brush_library_tests {
 
         next.apply_brush_preset("Leaf").unwrap();
         assert_eq!(next.brush, 7);
+        assert_eq!(next.brush_dynamics(), dynamics);
         assert_eq!(next.doc.brush_shape, BrushShape::Diamond);
         assert_eq!(
             next.power.image_brush_alignment,

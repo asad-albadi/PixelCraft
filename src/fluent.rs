@@ -1075,6 +1075,11 @@ impl PixelCraft {
             if self.tool == Tool::Pencil {
                 self.brush_library_ui(ui);
             }
+            if matches!(self.tool, Tool::Pencil | Tool::Eraser)
+                && self.doc.layers[self.layer].tileset.is_none()
+            {
+                ui.menu_button("Dynamics", |ui| self.brush_dynamics_controls(ui));
+            }
         }
         ui.separator();
         toggle(ui, &mut self.studio.mirror_x, "Symmetry").on_hover_text(

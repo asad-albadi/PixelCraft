@@ -29,15 +29,16 @@ pub(super) struct Studio {
     // Twice the sprite coordinate, so both pixel centers and edges are exact.
     pub(super) symmetry_axes: [Option<i32>; 2],
     pub pixel_perfect: bool,
-    pub pressure: bool,
     pub force: f32,
+    pub force_available: bool,
     pub sheet: SheetOptions,
     sheet_use_timeline_layers: bool,
     sheet_slice: Option<String>,
     pub polygon: Vec<(i32, i32)>,
     pub mask: Option<Vec<bool>>,
     pub move_mask: Option<Vec<bool>>,
-    pub stroke: Vec<(i32, i32)>,
+    pub stroke: Vec<((i32, i32), f32)>,
+    pub stroke_force: Option<f32>,
     pub selection_origin: Option<(i32, i32, i32, i32)>,
     pub marquee_operation: Option<pixelcraft::productivity::SelectionOp>,
     dx: i32,
@@ -155,8 +156,8 @@ impl Default for Studio {
             mirror_y: false,
             symmetry_axes: [None; 2],
             pixel_perfect: false,
-            pressure: false,
             force: 1.,
+            force_available: false,
             sheet: SheetOptions::default(),
             sheet_use_timeline_layers: false,
             sheet_slice: None,
@@ -164,6 +165,7 @@ impl Default for Studio {
             mask: None,
             move_mask: None,
             stroke: vec![],
+            stroke_force: None,
             selection_origin: None,
             marquee_operation: None,
             dx: 1,
@@ -1803,8 +1805,7 @@ impl PixelCraft {
                         &mut self.studio.pixel_perfect,
                         "Pixel-perfect pencil (1 px)",
                     );
-                    ui.pc_checkbox(&mut self.studio.pressure, "Pressure controls brush size");
-                    ui.small("Pressure is used when provided by the tablet backend.");
+                    self.brush_dynamics_controls(ui);
                     ui.horizontal(|ui| {
                         if ui.pc_command_button("lasso", "Lasso").clicked() {
                             self.tool = Tool::Lasso;
@@ -2155,59 +2156,60 @@ impl PixelCraft {
     }
 
     pub(super) fn stroke_line(&mut self, a: (i32, i32), b: (i32, i32), color: Pixel) {
-        let (mut x, mut y) = a;
-        let dx = (b.0 - x).abs();
-        let sx = if x < b.0 { 1 } else { -1 };
-        let dy = -(b.1 - y).abs();
-        let sy = if y < b.1 { 1 } else { -1 };
-        let mut err = dx + dy;
-        loop {
-            if self.studio.stroke.last() != Some(&(x, y)) {
-                self.studio.stroke.push((x, y));
-            }
-            if (x, y) == b {
-                break;
-            }
-            let e = 2 * err;
-            if e >= dy {
-                err += dy;
-                x += sx
-            }
-            if e <= dx {
-                err += dx;
-                y += sy
-            }
+        let current = self.studio.force;
+        let previous = self.studio.stroke_force.replace(current);
+        if a == b && previous == Some(current) {
+            return;
         }
+        let first_force = previous.unwrap_or(current);
+        let steps = a.0.abs_diff(b.0).max(a.1.abs_diff(b.1));
+        let mut step = 0u32;
+        let mut pressure = || {
+            let t = if steps == 0 {
+                1.
+            } else {
+                step as f32 / steps as f32
+            };
+            step += 1;
+            first_force + (current - first_force) * t
+        };
         if self.studio.pixel_perfect && self.brush == 1 && self.tool == Tool::Pencil {
-            let mut path = vec![];
-            for &p in &self.studio.stroke {
-                if path.len() >= 2 {
-                    let c: (i32, i32) = path[path.len() - 1];
-                    let a: (i32, i32) = path[path.len() - 2];
-                    if pixelcraft::productivity::pixel_perfect_corner(a, c, p) {
-                        path.pop();
-                    }
+            let _: Result<(), std::convert::Infallible> = line_pixels(a, b, |point| {
+                let force = pressure();
+                if let Some((last, last_force)) = self.studio.stroke.last_mut()
+                    && *last == point
+                {
+                    *last_force = last_force.max(force);
+                } else {
+                    self.studio.stroke.push((point, force));
                 }
-                path.push(p);
+                Ok(())
+            });
+            let mut path: Vec<((i32, i32), f32)> = Vec::new();
+            for &(p, force) in &self.studio.stroke {
+                if let [.., (a, _), (corner, _)] = path.as_slice()
+                    && pixelcraft::productivity::pixel_perfect_corner(*a, *corner, p)
+                {
+                    path.pop();
+                }
+                path.push((p, force));
             }
             if let Some(base) = &self.stroke_base {
-                self.doc = base.clone()
+                self.doc = base.clone();
             }
             self.power.shade_seen.clear();
-            for p in path {
-                self.paint_at(p, color)
+            self.power.stroke_opacity.clear();
+            for (p, force) in path {
+                self.paint_at_force(p, color, force);
             }
         } else {
-            let start = self
-                .studio
-                .stroke
-                .iter()
-                .rposition(|p| *p == a)
-                .unwrap_or(0);
-            let points = self.studio.stroke[start..].to_vec();
-            for p in points {
-                self.paint_at(p, color)
-            }
+            let _: Result<(), std::convert::Infallible> = line_pixels(a, b, |point| {
+                let force = pressure();
+                if point != a || previous.is_none() || steps == 0 {
+                    self.paint_at_force(point, color, force);
+                }
+                Ok(())
+            });
         }
     }
 }

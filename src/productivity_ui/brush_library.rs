@@ -17,6 +17,8 @@ struct SavedBrush {
     mode: BrushMode,
     reverse: bool,
     ink: PaintInk,
+    #[serde(default)]
+    dynamics: BrushDynamics,
     stamp: Option<(usize, usize, Vec<Pixel>)>,
     #[serde(default)]
     alignment: ImageBrushAlignment,
@@ -170,6 +172,7 @@ impl PixelCraft {
                 .copied()
                 .unwrap_or_default(),
             stamp: stamp.cloned(),
+            dynamics: self.brush_dynamics(),
             alignment: self.power.image_brush_alignment,
             source_origin: self.power.image_brush_origin,
             ramp: self.power.brush_library.active_ramp.clone(),
@@ -205,6 +208,7 @@ impl PixelCraft {
             .ramp
             .filter(|name| self.power.brush_library.ramps.contains_key(name));
         self.set_tool_ink(brush.ink);
+        self.set_brush_dynamics(brush.dynamics);
         Ok(())
     }
 

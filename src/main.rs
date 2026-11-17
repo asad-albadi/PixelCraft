@@ -12,7 +12,9 @@ mod editor_filters;
 mod export_actions;
 mod file_path_dialog;
 mod fluent;
+mod freehand_stroke;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
+use freehand_stroke::{BrushDynamics, StrokeStabilizer};
 mod ui_icons;
 use ui_icons::UiIcons;
 mod palette_conversion;
@@ -776,6 +778,7 @@ struct PixelCraft {
     start: Option<(i32, i32)>,
     last: Option<(i32, i32)>,
     stroke_base: Option<Document>,
+    stroke_stabilizer: Option<StrokeStabilizer>,
     stroke_color: Pixel,
     texture: Option<egui::TextureHandle>,
     preview: Option<egui::TextureHandle>,
@@ -979,6 +982,7 @@ impl PixelCraft {
             start: None,
             last: None,
             stroke_base: None,
+            stroke_stabilizer: None,
             stroke_color: CLEAR,
             texture: None,
             preview: None,
@@ -1450,6 +1454,10 @@ impl PixelCraft {
     }
 
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
+        self.paint_at_force(p, color, self.studio.force);
+    }
+
+    fn paint_at_force(&mut self, p: (i32, i32), color: Pixel, force: f32) {
         self.doc.drawing_index = self.drawing_palette_index(color);
         if let Some(ti) = self.doc.layers[self.layer].tileset {
             let p = self
@@ -1505,8 +1513,9 @@ impl PixelCraft {
                 self.status = e;
             }
         } else {
-            let size = if self.studio.pressure {
-                (self.brush as f32 * self.studio.force).round().max(1.) as i32
+            let dynamics = self.brush_dynamics();
+            let size = if dynamics.pressure_size {
+                (self.brush as f32 * force).round().max(1.) as i32
             } else {
                 self.brush
             };
@@ -1518,7 +1527,16 @@ impl PixelCraft {
             let ny = 1 + usize::from(self.studio.mirror_y && mirror_y != p.1);
             for &y in &ys[..ny] {
                 for &x in &xs[..nx] {
-                    self.power_paint((x, y), color, size);
+                    if dynamics.pressure_opacity && self.studio.force_available {
+                        self.power_paint_opacity(
+                            (x, y),
+                            color,
+                            size,
+                            Some((force * 255.).round() as u8),
+                        );
+                    } else {
+                        self.power_paint((x, y), color, size);
+                    }
                 }
             }
         }
@@ -2290,6 +2308,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.start = None;
         self.last = None;
         self.stroke_base = None;
+        self.stroke_stabilizer = None;
+        self.power.stroke_opacity.clear();
     }
 
     fn clamp(&mut self) {
@@ -6624,16 +6644,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         if let Some(force) = ctx.input(|i| {
             i.events.iter().rev().find_map(|e| {
-                if let egui::Event::Touch { force, .. } = e {
-                    *force
+                if let egui::Event::Touch {
+                    phase: egui::TouchPhase::Start | egui::TouchPhase::Move,
+                    force: Some(force),
+                    ..
+                } = e
+                {
+                    force.is_finite().then_some(*force)
                 } else {
                     None
                 }
             })
         }) {
             self.studio.force = force.clamp(0., 1.);
-        } else if !ctx.input(|i| i.pointer.any_down()) {
+            self.studio.force_available = true;
+        } else if self.gesture_canvas.is_none() {
             self.studio.force = 1.;
+            self.studio.force_available = false;
         }
         if can_edit && response.hovered() {
             ctx.set_cursor_icon(if self.tool == Tool::Hand {
@@ -6783,12 +6810,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let transforming = self.canvas_transform.is_some();
         let over_symmetry_handle =
             self.draw_symmetry_guides(ui, &painter, board, pane, can_edit && !transforming);
-        let pos = pointer.filter(|p| r.contains(*p)).map(|p| {
-            (
-                ((p.x - board.min.x) / pixel_size.x).floor() as i32,
-                ((p.y - board.min.y) / pixel_size.y).floor() as i32,
-            )
-        });
+        let canvas_point = |p: Pos2| {
+            r.contains(p).then(|| {
+                (
+                    ((p.x - board.min.x) / pixel_size.x).floor() as i32,
+                    ((p.y - board.min.y) / pixel_size.y).floor() as i32,
+                )
+            })
+        };
+        let pos = pointer.and_then(canvas_point);
         let w = self.doc.width as i32;
         let h = self.doc.height as i32;
         let limits = (-rx * w, (rx + 1) * w - 1, -ry * h, (ry + 1) * h - 1);
@@ -6917,6 +6947,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.last = Some(p);
                 self.stroke_base = Some(self.doc.clone());
                 self.studio.stroke.clear();
+                self.studio.stroke_force = None;
                 self.power.shade_seen.clear();
                 self.studio.selection_origin = self.selection;
                 self.studio.move_mask = if self.tool == Tool::Move {
@@ -6944,6 +6975,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     } else {
                         self.stroke_color
                     };
+                    if self.doc.layers[self.layer].tileset.is_none() {
+                        self.stroke_stabilizer =
+                            Some(StrokeStabilizer::new(p, self.brush_dynamics().stabilizer));
+                        self.studio.stroke.push((p, self.studio.force));
+                        self.studio.stroke_force = Some(self.studio.force);
+                    }
                     self.paint_at(p, color);
                 }
             }
@@ -7040,14 +7077,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         } else {
                             self.stroke_color
                         };
-                        if self.doc.layers[self.layer].tileset.is_some()
+                        if self.stroke_stabilizer.is_some() {
+                            self.extend_freehand(Some(b), false, color);
+                        } else if self.doc.layers[self.layer].tileset.is_some()
                             && self.tile_pixel_mode != Some(TilePixelEdit::CreateVariant)
                         {
                             self.paint_at(b, color);
+                            self.last = Some(b);
                         } else {
                             self.stroke_line(self.last.unwrap_or(a), b, color);
+                            self.last = Some(b);
                         }
-                        self.last = Some(b);
                     }
                     Tool::Line | Tool::Rect | Tool::Ellipse => {
                         if let Some(base) = &self.stroke_base {
@@ -7059,6 +7099,37 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         } else if owns_gesture {
+            if self.stroke_stabilizer.is_some()
+                && can_edit
+                && self
+                    .gesture_button
+                    .is_some_and(|button| ctx.input(|i| i.pointer.button_released(button)))
+            {
+                let color = if self.tool == Tool::Eraser {
+                    CLEAR
+                } else {
+                    self.stroke_color
+                };
+                let release_position = ctx.input(|input| {
+                    input.events.iter().rev().find_map(|event| match event {
+                        egui::Event::PointerButton {
+                            pos,
+                            button,
+                            pressed: false,
+                            ..
+                        } if Some(*button) == self.gesture_button => Some(*pos),
+                        _ => None,
+                    })
+                });
+                let point = release_position
+                    .and_then(canvas_point)
+                    .or(pos)
+                    .map(|(x, y)| {
+                        let (x, y) = (x.clamp(limits.0, limits.1), y.clamp(limits.2, limits.3));
+                        self.snapped_canvas_point((x, y), repeats)
+                    });
+                self.extend_freehand(point, true, color);
+            }
             if matches!(self.tool, Tool::BlurBrush | Tool::JumbleBrush)
                 && can_edit
                 && self
@@ -7203,10 +7274,27 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 Tool::Pencil | Tool::Eraser | Tool::BlurBrush | Tool::JumbleBrush
             )
         {
-            let (x, y) = self.snapped_canvas_point((x, y), repeats);
-            let (width, height) = self
-                .active_image_brush_size()
-                .unwrap_or((self.brush, self.brush));
+            let raw = self.snapped_canvas_point((x, y), repeats);
+            let (x, y) = if owns_gesture && self.stroke_stabilizer.is_some() {
+                self.last.unwrap_or(raw)
+            } else {
+                raw
+            };
+            if (x, y) != raw {
+                let center = |(x, y): (i32, i32)| {
+                    board.min + Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * pixel_size
+                };
+                painter.line_segment(
+                    [center((x, y)), center(raw)],
+                    Stroke::new(1., self.colors().accent),
+                );
+            }
+            let size = if owns_gesture && self.brush_dynamics().pressure_size {
+                (self.brush as f32 * self.studio.force).round().max(1.) as i32
+            } else {
+                self.brush
+            };
+            let (width, height) = self.active_image_brush_size().unwrap_or((size, size));
             let size = pixel_size * Vec2::new(width as f32, height as f32);
             let p =
                 board.min + Vec2::new((x - width / 2) as f32, (y - height / 2) as f32) * pixel_size;

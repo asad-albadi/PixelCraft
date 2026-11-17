@@ -3619,3 +3619,162 @@ fn per_tool_inks_preserve_coverage_and_copy_translucent_color() {
     assert_eq!(app.tool_ink(), PaintInk::LockAlpha);
     assert_eq!(app.undo.len(), 3);
 }
+
+#[test]
+fn stabilized_pencil_lags_while_dragging_and_finishes_at_release() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-stabilizer.png")));
+    app.replace(Document::new(20, 10), None);
+    app.set_brush_dynamics(BrushDynamics {
+        stabilizer: 3,
+        ..Default::default()
+    });
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let center = |x| board.min + Vec2::new((x as f32 + 0.5) * 20., 90.);
+    let button = |x, pressed| egui::Event::PointerButton {
+        pos: center(x),
+        pressed,
+        button: egui::PointerButton::Primary,
+        modifiers: Default::default(),
+    };
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(center(2))],
+    );
+    discard_frame(&mut app, &ctx, size, 1., vec![button(2, true)]);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(center(10))],
+    );
+    let row = &app.doc.layers[0].cels[0];
+    assert_ne!(row[87], CLEAR);
+    assert_eq!(row[88], CLEAR);
+    assert_eq!(row[90], CLEAR);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![button(11, false), egui::Event::PointerGone],
+    );
+    assert!((2..=11).all(|x| app.doc.layers[0].cels[0][80 + x] == app.fg));
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert!(!app.doc.layers[0].cels[0].occupied());
+}
+
+#[test]
+fn tablet_pressure_controls_size_and_opacity_without_building_on_overlap() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-pressure.png")));
+    app.replace(Document::new(18, 12), None);
+    app.brush = 5;
+    app.set_brush_dynamics(BrushDynamics {
+        pressure_size: true,
+        pressure_opacity: true,
+        ..Default::default()
+    });
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let center = |x| board.min + Vec2::new((x as f32 + 0.5) * 20., 110.);
+    let button = |x, pressed| egui::Event::PointerButton {
+        pos: center(x),
+        pressed,
+        button: egui::PointerButton::Primary,
+        modifiers: Default::default(),
+    };
+    let touch = |x, phase, force| egui::Event::Touch {
+        device_id: egui::TouchDeviceId(0),
+        id: egui::TouchId(0),
+        phase,
+        pos: center(x),
+        force: Some(force),
+    };
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(center(2))],
+    );
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![button(2, true), touch(2, egui::TouchPhase::Start, 0.2)],
+    );
+    assert_eq!(app.doc.layers[0].cels[0][92][3], 51);
+    assert_eq!(app.doc.layers[0].cels[0][74], CLEAR);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![
+            egui::Event::PointerMoved(center(10)),
+            touch(10, egui::TouchPhase::Move, 0.8),
+        ],
+    );
+    assert_eq!(app.doc.layers[0].cels[0][100][3], 204);
+    assert_eq!(app.doc.layers[0].cels[0][82][3], 204);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![touch(10, egui::TouchPhase::Move, 0.4)],
+    );
+    assert_eq!(app.doc.layers[0].cels[0][100][3], 204);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![button(10, false), touch(10, egui::TouchPhase::End, 0.)],
+    );
+    assert_eq!(app.doc.layers[0].cels[0][100][3], 204);
+    assert_eq!(app.undo.len(), 1);
+    app.action("eraser");
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![button(10, true), touch(10, egui::TouchPhase::Start, 0.5)],
+    );
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![button(10, false), touch(10, egui::TouchPhase::End, 0.)],
+    );
+    assert_eq!(app.doc.layers[0].cels[0][100][3], 102);
+    app.action("pencil");
+    discard_frame(&mut app, &ctx, size, 1., click(center(15)));
+    assert_eq!(app.doc.layers[0].cels[0][105], app.fg);
+}
