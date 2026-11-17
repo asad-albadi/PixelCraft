@@ -1048,6 +1048,7 @@ fn unpack_sheet_samples(
     if let Some(tags) = meta["meta"]["frameTags"].as_array() {
         for t in tags {
             d.tags.push(FrameTag {
+                editor_id: Default::default(),
                 name: t["name"].as_str().unwrap_or("Animation").into(),
                 from: t["from"].as_u64().unwrap_or(0) as usize,
                 to: t["to"].as_u64().unwrap_or(0) as usize,

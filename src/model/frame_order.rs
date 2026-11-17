@@ -199,6 +199,7 @@ mod tests {
             doc.add_frame(frame, false);
         }
         doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Run".into(),
             from: 1,
             to: 4,

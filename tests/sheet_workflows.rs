@@ -287,6 +287,7 @@ fn packed_atlas_tags_use_global_frame_order_and_keep_source_metadata() {
         first.add_frame(previous, true);
     }
     first.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 2,
         to: 10,
@@ -298,6 +299,7 @@ fn packed_atlas_tags_use_global_frame_order_and_keep_source_metadata() {
     second.layers[0].cels[0].set(0, [71, 20, 95, 255]);
     second.add_frame(0, true);
     second.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 1,

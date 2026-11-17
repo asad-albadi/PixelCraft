@@ -20,6 +20,9 @@ impl Workspace {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(path.join("project")).unwrap();
+        // The restricted server uses a canonical root. The runner's temporary
+        // directory can contain a Windows short-name alias for an ancestor.
+        let path = path.canonicalize().unwrap();
         formats::save(&path.join("project/art.pixel"), &Document::new(2, 2)).unwrap();
         formats::save(&path.join("outside.pixel"), &Document::new(1, 1)).unwrap();
         Self(path)
@@ -178,6 +181,7 @@ fn export_batch_previews_exact_outputs_and_runs_the_ordered_operations() {
     let palette = w.project().join("colors.gpl");
     let mut doc = formats::load(&input).unwrap();
     doc.tags.push(pixelcraft::model::FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 0,
@@ -533,6 +537,7 @@ fn mcp_batch_preflights_later_tag_outputs() {
     let mut d = Document::new(1, 1);
     for name in ["first", "second"] {
         d.tags.push(pixelcraft::model::FrameTag {
+            editor_id: Default::default(),
             name: name.into(),
             from: 0,
             to: 0,
@@ -704,11 +709,16 @@ fn mcp_sequence_overwrite_replaces_only_generated_frames() {
     fs::create_dir(&dir).unwrap();
     fs::write(dir.join("frame-0001.png"), b"original").unwrap();
     fs::write(dir.join("notes.txt"), b"keep").unwrap();
-    let mut args = json!({"input":"art.pixel","output":"frames","format":"png-sequence"});
-    assert_error(&w.call("export", args.clone()), "Output already exists");
+    #[cfg(any(target_os = "linux", windows))]
+    let export = |args| w.call("export", args);
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let export = |args| file_call("export", args);
+    let mut args =
+        json!({"input":w.project().join("art.pixel"),"output":dir,"format":"png-sequence"});
+    assert_error(&export(args.clone()), "Output already exists");
     assert_eq!(fs::read(dir.join("frame-0001.png")).unwrap(), b"original");
     args["overwrite"] = json!(true);
-    let exported = w.call("export", args);
+    let exported = export(args);
     assert!(exported["isError"].is_null(), "{exported}");
     assert_eq!(image::open(dir.join("frame-0001.png")).unwrap().width(), 2);
     assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"keep");
@@ -921,6 +931,7 @@ fn sheet_filters_groups_and_frame_ranges_in_cli_and_mcp() {
     sprite.set_pixel(actor, 2, 1, [10, 80, 230, 255]);
     sprite.set_pixel(hidden, 2, 2, [60, 180, 40, 255]);
     sprite.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Jump".into(),
         from: 1,
         to: 2,
@@ -1112,6 +1123,7 @@ fn sheet_splits_layers_and_grid_cells_into_independent_animation_samples() {
         size: [2, 1],
     });
     sprite.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Step".into(),
         from: 0,
         to: 1,
@@ -1237,6 +1249,7 @@ fn sheet_templates_keep_names_and_unity_reimport_ids_stable() {
     sprite.durations = vec![90, 110];
     sprite.set_frame_name(1, r#"Pose "B": #2"#).unwrap();
     sprite.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Walk".into(),
         from: 0,
         to: 1,
@@ -1319,6 +1332,7 @@ fn sheet_templates_keep_names_and_unity_reimport_ids_stable() {
     sprite.add_layer();
     sprite.layers[1].name = "Ink".into();
     sprite.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Loop".into(),
         from: 1,
         to: 1,

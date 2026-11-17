@@ -549,6 +549,31 @@ local function copyObjectKeys(source,target)
   historyObjectKeys[target[index]]=historyObjectKeys[object]
  end
 end
+local setTagIdentity,tagIdentityWire
+do
+ local keysByWire=setmetatable({},{__mode='v'})
+ local nextKey=0
+ setTagIdentity=function(document,keys)
+  for index,wire in ipairs(keys or {})do
+   local key=keysByWire[wire] or {wire=wire}
+   keysByWire[wire]=key
+   historyObjectKeys[document.tags[index]]=key
+  end
+ end
+ tagIdentityWire=function(document)
+  local keys={}
+  for index,tag in ipairs((document or doc).tags)do
+   local key=historyObjectKey(tag)
+   if not key.wire then
+    nextKey=nextKey+1
+    key.wire='script:'..nextKey
+    keysByWire[key.wire]=key
+   end
+   keys[index]=key.wire
+  end
+  return keys
+ end
+end
 local function isTagUserData(chunk)
  return chunk.frame==0 and chunk.kind==0x2020 and chunk.owner=='tags'
 end

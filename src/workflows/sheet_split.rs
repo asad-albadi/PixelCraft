@@ -259,6 +259,7 @@ impl SplitLayout {
                 let label = group_label(layer, self.grid.then_some(cell));
                 if active.is_empty() {
                     tags.push(FrameTag {
+                        editor_id: Default::default(),
                         name: label,
                         from: base,
                         to: base + span - 1,
@@ -269,6 +270,7 @@ impl SplitLayout {
                 } else {
                     for &tag in &active {
                         tags.push(FrameTag {
+                            editor_id: Default::default(),
                             name: format!("{label}__{}", tag.name),
                             from: base + tag.from.max(first) - first,
                             to: base + tag.to.min(last) - first,

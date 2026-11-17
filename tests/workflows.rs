@@ -17,6 +17,7 @@ fn sheet_metadata_roundtrips_frames_tags_and_padding() {
     d.set_pixel(0, 1, 5, [0, 255, 0, 255]);
     d.durations = vec![70, 230];
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "walk".into(),
         from: 0,
         to: 1,
@@ -180,6 +181,7 @@ fn engine_presets_write_resources_with_animation_timing() {
     d.add_frame(0, false);
     d.durations = vec![70, 230];
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "walk".into(),
         from: 0,
         to: 1,
@@ -311,6 +313,7 @@ fn unity_reexport_keeps_sprite_ids_after_redraw_and_frame_insertion() {
     d.durations = vec![83, 120, 250];
     for (i, name) in ["idle", "walk", "jump"].into_iter().enumerate() {
         d.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: name.into(),
             from: i,
             to: i,

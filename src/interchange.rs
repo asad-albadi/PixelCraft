@@ -507,6 +507,7 @@ mod slice_sheet_limits {
             doc.add_frame(frame, false);
         }
         doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Idle".into(),
             from: 0,
             to: 7,

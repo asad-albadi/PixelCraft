@@ -1341,6 +1341,7 @@ pub fn decode_ase_with_resolver(
                         q += 17;
                         let name = read_string(data, &mut q)?;
                         d.tags.push(FrameTag {
+                            editor_id: Default::default(),
                             name,
                             from,
                             to,

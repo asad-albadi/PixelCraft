@@ -1289,6 +1289,7 @@ pub fn tag_document(d: &Document, index: usize) -> Result<Document, String> {
     }
     out.metadata.clear();
     out.tags = vec![FrameTag {
+        editor_id: Default::default(),
         from: 0,
         to: frames.len() - 1,
         direction: 0,

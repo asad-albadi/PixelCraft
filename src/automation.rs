@@ -499,13 +499,15 @@ pub fn apply_command_batch_until(
                 }
             }
             "set-tag" | "add-tag" => {
-                let tag: FrameTag =
+                let mut tag: FrameTag =
                     serde_json::from_value(c["tag"].clone()).map_err(|e| e.to_string())?;
                 if c["op"] == "add-tag" {
                     out.tags.push(tag);
                 } else {
                     let i = number(c, "index")?;
-                    *out.tags.get_mut(i).ok_or("Invalid tag")? = tag;
+                    let current = out.tags.get_mut(i).ok_or("Invalid tag")?;
+                    tag.editor_id = current.editor_id;
+                    *current = tag;
                 }
             }
             "remove-tag" => {

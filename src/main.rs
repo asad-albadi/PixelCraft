@@ -456,7 +456,8 @@ struct ScriptPreview {
 
 #[derive(Default)]
 struct ScriptTargets {
-    targets: std::collections::HashMap<String, EditorId>,
+    layer_targets: std::collections::HashMap<String, EditorId>,
+    tag_targets: std::collections::HashMap<String, EditorId>,
     cel_targets: std::collections::HashMap<u64, EditorId>,
 }
 
@@ -466,42 +467,75 @@ impl ScriptTargets {
     }
 
     fn expose_layers(&mut self, document: &Document) -> Vec<String> {
-        let known: std::collections::HashMap<_, _> = self
-            .targets
+        Self::expose(
+            &mut self.layer_targets,
+            document.layers.iter().map(|layer| layer.editor_id),
+        )
+    }
+
+    fn expose_tags(&mut self, document: &Document) -> Vec<String> {
+        Self::expose(
+            &mut self.tag_targets,
+            document.tags.iter().map(|tag| tag.editor_id),
+        )
+    }
+
+    fn expose(
+        targets: &mut std::collections::HashMap<String, EditorId>,
+        ids: impl Iterator<Item = EditorId>,
+    ) -> Vec<String> {
+        let known: std::collections::HashMap<_, _> = targets
             .iter()
             .map(|(key, id)| (Self::native_key(*id), key.clone()))
             .collect();
-        document
-            .layers
-            .iter()
-            .map(|layer| {
-                let native = Self::native_key(layer.editor_id);
-                if let Some(key) = known.get(&native) {
-                    key.clone()
-                } else {
-                    self.targets.insert(native.clone(), layer.editor_id);
-                    native
-                }
-            })
-            .collect()
+        ids.map(|id| {
+            let native = Self::native_key(id);
+            if let Some(key) = known.get(&native) {
+                key.clone()
+            } else {
+                targets.insert(native.clone(), id);
+                native
+            }
+        })
+        .collect()
     }
 
     fn apply_layers(&mut self, document: &mut Document, keys: &[String]) {
-        if keys.len() != document.layers.len() {
+        Self::apply(
+            &mut self.layer_targets,
+            document.layers.iter_mut().map(|layer| &mut layer.editor_id),
+            keys,
+        );
+    }
+
+    fn apply_tags(&mut self, document: &mut Document, keys: &[String]) {
+        Self::apply(
+            &mut self.tag_targets,
+            document.tags.iter_mut().map(|tag| &mut tag.editor_id),
+            keys,
+        );
+    }
+
+    fn apply<'a>(
+        targets: &mut std::collections::HashMap<String, EditorId>,
+        ids: impl ExactSizeIterator<Item = &'a mut EditorId>,
+        keys: &[String],
+    ) {
+        if keys.len() != ids.len() {
             return;
         }
         let mut seen = std::collections::HashSet::new();
-        for (key, layer) in keys.iter().zip(&mut document.layers) {
+        for (key, id) in keys.iter().zip(ids) {
             if !seen.insert(key) {
                 continue;
             }
-            if let Some(target) = self.targets.get(key) {
-                layer.editor_id = *target;
+            if let Some(target) = targets.get(key) {
+                *id = *target;
             } else if key
                 .strip_prefix("script:")
                 .is_some_and(|id| id.parse::<u64>().is_ok())
             {
-                self.targets.insert(key.to_owned(), layer.editor_id);
+                targets.insert(key.to_owned(), *id);
             }
         }
     }
@@ -2141,7 +2175,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .on_hover_text("Create one independent tile for each changed placement in a stroke");
             });
             self.slice_controls(ui, &mut edited);
-            ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
+            ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{editor_id:Default::default(),name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
             for(i,t)in edited.tags.iter_mut().enumerate(){ui.horizontal(|ui|{ui.text_edit_singleline(&mut t.name);let mut from=t.from+1;let mut to=t.to+1;ui.add(egui::DragValue::new(&mut from).range(1..=edited.durations.len()).prefix("From "));ui.add(egui::DragValue::new(&mut to).range(from..=edited.durations.len()).prefix("To "));t.from=from-1;t.to=to.max(from)-1;if ui_icons::button(ui, "trash", "Remove range", false, false).clicked(){remove_tag=Some(i);}});ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("direction",i)).selected_text(["Forward","Reverse","Ping-pong","Ping-pong reverse"][t.direction as usize]).show_ui(ui,|ui|{for (d,name)in ["Forward","Reverse","Ping-pong","Ping-pong reverse"].iter().enumerate(){ui.pc_selectable_value(&mut t.direction,d as u8,*name);}});if ui_icons::button(ui,"tag","Use for playback",self.active_tag==Some(i),false).clicked(){self.active_tag=Some(i);self.frame=if t.direction==1||t.direction==3{t.to}else{t.from};self.playback_reverse=t.direction==3;}});}
             if ui.pc_button("Use all frames for playback").clicked(){self.active_tag=None;}ui.small("Range names, endpoints and playback direction are saved in the project.");
         });
@@ -3824,6 +3858,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         "selection": Self::script_selection(&tab.doc, tab.selection, tab.mask.as_deref(), &tab.polygon), "zoom": tab.zoom,
                         "timelineRange": range,
                         "layerKeys": ScriptTargets::default().expose_layers(&tab.doc),
+                        "tagKeys": ScriptTargets::default().expose_tags(&tab.doc),
                     });
                     (tab.doc.clone(), options)
                 })
@@ -3861,7 +3896,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixelcraft::productivity::SelectionOp::Subtract => 2,
             pixelcraft::productivity::SelectionOp::Intersect => 3,
         };
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"sprayRadius":self.spray_radius,"sprayRate":self.spray_rate,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tagKeys":ScriptTargets::default().expose_tags(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"sprayRadius":self.spray_radius,"sprayRate":self.spray_rate,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -4058,6 +4093,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && let Some(tab) = self.script_preview.as_ref().map(|p| &p.visible)
             && (tab.drawn != self.doc
                 || !tab.drawn.same_editor_layer_targets(&self.doc)
+                || !tab.drawn.same_editor_tag_targets(&self.doc)
                 || (tab.generation != self.power.bridge_generation
                     && !tab.drawn.same_editor_targets(&self.doc))
                 || tab.site != (self.frame, self.layer)
@@ -4075,9 +4111,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .or_default();
             let layer_keys = targets.expose_layers(&self.doc);
             let cel_keys = targets.expose_cels(&self.doc);
+            let tag_keys = targets.expose_tags(&self.doc);
             self.script_ui.editor_update = Some(serde_json::json!({
                 "sprite":id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1,
-                "selection":self.current_script_selection(),"layerKeys":layer_keys,"celKeys":cel_keys,
+                "selection":self.current_script_selection(),"layerKeys":layer_keys,"celKeys":cel_keys,"tagKeys":tag_keys,
             }));
             let selection = self.script_selection_state();
             let tab = &mut self.script_preview.as_mut().unwrap().visible;
@@ -4158,9 +4195,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let targets = preview.layer_keys.entry(id).or_insert_with(|| {
                 let mut targets = ScriptTargets::default();
                 targets.expose_layers(&self.doc);
+                targets.expose_tags(&self.doc);
                 targets
             });
             targets.apply_layers(&mut document, &keys);
+            if let Ok(tags) = serde_json::from_value::<Vec<String>>(request["tagKeys"].clone()) {
+                targets.apply_tags(&mut document, &tags);
+            }
             if let Ok(cels) = serde_json::from_value::<Vec<extensions::ScriptCelTarget>>(
                 request["celKeys"].clone(),
             ) {
@@ -4229,14 +4270,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let targets = layer_keys.entry(sprite.id).or_insert_with(|| {
                 let mut targets = ScriptTargets::default();
                 targets.expose_layers(&self.doc);
+                targets.expose_tags(&self.doc);
                 targets
             });
             targets.apply_layers(&mut document, &sprite.layer_keys);
+            targets.apply_tags(&mut document, &sprite.tag_keys);
             let cel_targets_changed =
                 targets.apply_cels(&self.doc, &mut document, &sprite.cel_keys);
             let changed = self.doc != document
                 || (existing.is_some()
-                    && (cel_targets_changed || !self.doc.same_editor_layer_targets(&document)));
+                    && (cel_targets_changed
+                        || !self.doc.same_editor_layer_targets(&document)
+                        || !self.doc.same_editor_tag_targets(&document)));
             let selection = Self::decode_script_selection(&document, sprite.selection);
             let selection_changed = selection.bounds != self.selection
                 || selection.mask != self.studio.mask
@@ -8144,6 +8189,7 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
     app.doc.stamp(0, 0, 2, 2, [200, 40, 60, 255], 3);
     app.doc.add_frame(0, true);
     app.doc.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 1,
@@ -9582,6 +9628,18 @@ mod tests {
         doc.layers[1].name = "Keep".into();
         doc.add_frame(0, false);
         doc.layers[1].cels[1].set(0, [70, 80, 90, 255]);
+        for _ in 0..2 {
+            doc.tags.push(FrameTag {
+                editor_id: Default::default(),
+                name: "Same".into(),
+                from: 0,
+                to: 0,
+                direction: 0,
+                repeat: 0,
+                color: [1, 2, 3],
+            });
+        }
+        let original_tag = doc.tags[1].editor_id.runtime_key();
         let original_cel = doc.layers[1].cel_meta[1].editor_id.to_string();
         let original_layer = doc.layers[1].editor_id.to_string();
         app.replace(doc, None);
@@ -9599,6 +9657,8 @@ mod tests {
  local frame=sprite.frames[2]
  local cel=original:cel(frame)
  local image=cel.image
+ local removed,tag=sprite.tags[1],sprite.tags[2]
+ local newTag=sprite:newTag(1,1)
  local created=sprite:newLayer()
  created.name='Script layer'
  local replaced=created:cel(1)
@@ -9609,6 +9669,9 @@ mod tests {
  listener=sprite.events:on('change',function()
   phase=phase+1
   if phase==1 then
+   assert(tag==sprite.tags[1] and tag.name=='Renamed natively')
+   assert(newTag==sprite.tags[2])
+   assert(not pcall(function()return removed.name end))
    assert(original==sprite.layers[1] and original.name=='Keep')
    assert(created==sprite.layers[2] and created.name=='Script layer')
    assert(frame==sprite.frames[3] and frame.frameNumber==3)
@@ -9619,6 +9682,8 @@ mod tests {
    assert(not pcall(function()return replaced.opacity end))
    app.activeFrame=frame
   elseif phase==2 then
+   assert(removed==sprite.tags[1] and tag==sprite.tags[2])
+   assert(tag.name=='Same' and newTag==sprite.tags[3])
    assert(original==sprite.layers[2] and created==sprite.layers[3])
    assert(frame==sprite.frames[2] and cel==original:cel(frame))
    assert(replaced==created:cel(1) and replaced.opacity==255)
@@ -9626,6 +9691,9 @@ mod tests {
    assert(not pcall(function()return inserted.frameNumber end))
    app.activeFrame=frame
   else
+   assert(tag==sprite.tags[1] and newTag==sprite.tags[2])
+   assert(not pcall(function()return removed.name end))
+   newTag.name='Edited through retained handle'
    assert(phase==3 and frame==sprite.frames[3] and inserted==sprite.frames[2])
    assert(cel==created:cel(1) and vacated==original:cel(frame))
    assert(not pcall(function()return replaced.opacity end))
@@ -9647,6 +9715,8 @@ mod tests {
                 app.remember_action("Edit timeline while extension is open");
                 app.doc.swap_layers(0, 1);
                 app.doc.swap_layers(1, 2);
+                assert!(app.doc.remove_tag(0));
+                app.doc.tags[0].name = "Renamed natively".into();
                 app.doc.add_frame(0, false);
                 app.doc
                     .move_cel_range(CelRange::between((0, 2), (0, 2)), 1, 0, false)
@@ -9669,6 +9739,9 @@ mod tests {
             app.status
         );
         assert_eq!(app.status, "Applied extension changes");
+        assert_eq!(app.doc.tags[0].name, "Renamed natively");
+        assert_eq!(app.doc.tags[0].editor_id.runtime_key(), original_tag);
+        assert_eq!(app.doc.tags[1].name, "Edited through retained handle");
         assert_eq!(app.doc.layers[0].name, "Keep");
         assert_eq!(app.doc.layers[0].editor_id.to_string(), original_layer);
         assert_eq!(app.doc.layers[1].name, "Script layer");
@@ -10525,6 +10598,7 @@ mod tests {
         a.doc.set_pixel(0, 0, 0, [80, 120, 190, 255]);
         a.doc.set_pixel(1, 1, 1, [49, 220, 150, 255]);
         a.doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Loop".into(),
             from: 0,
             to: 4,
@@ -10697,6 +10771,7 @@ mod tests {
         a.doc = Document::new(2, 2);
         a.doc.add_frame(0, false);
         a.doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Walk".into(),
             from: 0,
             to: 1,
@@ -10819,6 +10894,7 @@ mod tests {
         }
         for (from, to, direction, repeat) in [(1, 4, 0, 2), (1, 3, 1, 2)] {
             a.doc.tags.push(FrameTag {
+                editor_id: Default::default(),
                 name: "Animation".into(),
                 from,
                 to,
@@ -10906,6 +10982,7 @@ mod tests {
             a.doc.add_frame(frame, false);
         }
         a.doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Reverse walk".into(),
             from: 1,
             to: 3,
@@ -10944,6 +11021,7 @@ mod tests {
             a.doc.add_frame(0, true);
         }
         a.doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Walk".into(),
             from: 1,
             to: 2,

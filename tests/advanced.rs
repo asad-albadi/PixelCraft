@@ -52,6 +52,7 @@ fn tiles_and_ranges_survive_native_project_roundtrip() {
     let l = d.layers.len() - 1;
     d.paint_tile(l, 0, 1, 0, 1).unwrap();
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 0,

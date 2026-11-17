@@ -41,6 +41,7 @@ fn indexed_gray_groups_tags_metadata_roundtrip() {
         d.layers[0].blend = BlendMode::Screen;
         d.layers[0].cel_meta[0].opacity = 190;
         d.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Walk".into(),
             from: 0,
             to: 0,
@@ -169,6 +170,7 @@ fn ase_preserves_palette_entry_names_layer_uuid_flags_and_tag_repeat() {
     d.layers[0].uuid = vec![42; 16];
     d.layers[0].ase_flags = 32;
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 0,

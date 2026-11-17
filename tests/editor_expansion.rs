@@ -4,6 +4,7 @@ use serde_json::json;
 fn repeat_counts_survive_sheet_roundtrip() {
     let mut d = Document::new(2, 2);
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "once".into(),
         from: 0,
         to: 0,
@@ -81,6 +82,7 @@ fn tagged_sheet_clips_overlapping_tags_and_carries_forward_slice_keys() {
     }
     for (name, from, to) in [("selected", 2, 4), ("overlap", 0, 3), ("outside", 5, 5)] {
         doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: name.into(),
             from,
             to,
@@ -182,6 +184,7 @@ fn godot_finite_repeats_and_unique_names() {
     d.add_frame(0, false);
     for (name, repeat) in [("walk", 2), ("walk", 1), ("walk_2", 0)] {
         d.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: name.into(),
             from: 0,
             to: 1,
@@ -253,6 +256,7 @@ fn godot_limits_expanded_keys_across_tags_before_writing() {
     }
     for name in ["one", "two"] {
         doc.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: name.into(),
             from: 0,
             to: 7,

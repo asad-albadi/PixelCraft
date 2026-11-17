@@ -823,6 +823,8 @@ impl SpriteSlice {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrameTag {
+    #[serde(skip)]
+    pub editor_id: EditorId,
     pub name: String,
     pub from: usize,
     pub to: usize,
@@ -1751,8 +1753,16 @@ impl Document {
             .eq(other.layers.iter().map(|layer| layer.editor_id.0))
     }
 
+    pub fn same_editor_tag_targets(&self, other: &Self) -> bool {
+        self.tags
+            .iter()
+            .map(|tag| tag.editor_id.runtime_key())
+            .eq(other.tags.iter().map(|tag| tag.editor_id.runtime_key()))
+    }
+
     pub fn same_editor_targets(&self, other: &Self) -> bool {
         self.editor_id.0 == other.editor_id.0
+            && self.same_editor_tag_targets(other)
             && self.layers.len() == other.layers.len()
             && self.layers.iter().zip(&other.layers).all(|(a, b)| {
                 a.editor_id.0 == b.editor_id.0

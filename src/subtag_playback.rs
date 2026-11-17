@@ -186,6 +186,7 @@ mod tests {
 
     fn tag(from: usize, to: usize, direction: u8, repeat: u16) -> FrameTag {
         FrameTag {
+            editor_id: Default::default(),
             name: String::new(),
             from,
             to,

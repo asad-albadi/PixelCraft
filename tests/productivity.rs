@@ -74,6 +74,7 @@ fn grid_import_spacing_layers_and_tag_direction() {
     let l = import_grid(&im, &GridImport { layers: true, ..g }).unwrap();
     assert_eq!(l.layers.len(), 2);
     let t = FrameTag {
+        editor_id: Default::default(),
         name: "x".into(),
         from: 1,
         to: 3,
@@ -157,6 +158,7 @@ fn batch_tags_keeps_sheet_direction_and_gif_playback_timing() {
         d.durations[f] = [70, 130, 210][f];
     }
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "../walk".into(),
         from: 0,
         to: 2,
@@ -204,6 +206,7 @@ fn batch_tag_gifs_preserve_repeat_counts_and_direction() {
     ] {
         for repeat in [0, 1, 2, u16::MAX] {
             d.tags = vec![FrameTag {
+                editor_id: Default::default(),
                 name: "walk".into(),
                 from: 0,
                 to: 2,
@@ -665,6 +668,7 @@ fn regression_large_ping_pong_gif_streams_repeated_frames() {
         d.add_frame(0, true);
     }
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "ping".into(),
         from: 0,
         to: 32,

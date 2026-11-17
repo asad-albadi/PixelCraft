@@ -548,6 +548,8 @@ pub struct ScriptSprite {
     pub layer_keys: Vec<String>,
     #[serde(default, rename = "celKeys")]
     pub cel_keys: Vec<ScriptCelTarget>,
+    #[serde(default, rename = "tagKeys")]
+    pub tag_keys: Vec<String>,
     pub baseline: Option<Document>,
     pub saved: Option<Document>,
     pub filename: PathBuf,
