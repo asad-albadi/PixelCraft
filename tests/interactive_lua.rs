@@ -177,6 +177,66 @@ dlg:show{wait=false}
 }
 
 #[test]
+fn lua_command_events_are_ordered_cancellable_and_removable_by_callback() {
+    let result = pixelcraft::extensions::run_source(
+        &Document::new(1, 1),
+        r#"
+local trace={}
+local function dropCommand(ev)
+ table.insert(trace,'before '..ev.name)
+ if ev.params.name=='Blocked' then ev.stopPropagation() end
+end
+app.events:on('beforecommand',dropCommand)
+local after=app.events:on('aftercommand',function(ev)
+ table.insert(trace,'after '..ev.name)
+end)
+app.command.NewLayer{name='Blocked'}
+assert(#app.activeSprite.layers==1)
+app.command.NewLayer{name='Allowed'}
+assert(#app.activeSprite.layers==2)
+app.events:off(dropCommand)
+app.events:off(after)
+app.command.NewLayer{name='Unobserved'}
+assert(table.concat(trace,';')=='before NewLayer;before NewLayer;after NewLayer')
+local layer=app.activeLayer
+local notices=0
+local listeners=app.activeSprite.events
+listeners:on('layername',function(ev)
+ assert(ev.layer==layer)
+ notices=notices+1
+end)
+app.transaction(function() layer.name='Edited' end)
+local fromUndo=false
+listeners:on('change',function(ev) fromUndo=ev.fromUndo end)
+app.command.Undo()
+assert(fromUndo and layer.name=='Unobserved')
+app.command.Redo()
+assert(fromUndo and layer.name=='Edited' and notices==3)
+local sprite=app.activeSprite
+local filenames=0
+listeners:on('filenamechange',function(ev)
+ assert(ev.oldFilename=='' and ev.filename=='new name.pixel')
+ filenames=filenames+1
+end)
+sprite.filename='new name.pixel'
+sprite.filename='new name.pixel'
+assert(filenames==1)
+local transitions={}
+app.events:on('beforesitechange',function() transitions[#transitions+1]=app.activeLayer.name end)
+app.events:on('sitechange',function() transitions[#transitions+1]=app.activeLayer.name end)
+app.activeLayer=sprite.layers[2]
+app.activeLayer=sprite.layers[2]
+assert(table.concat(transitions,',')=='Edited,Allowed')
+"#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.layers[2].name, "Edited");
+}
+
+#[test]
 fn actual_file_bridge_saves_and_reopens_a_project() {
     use pixelcraft::{extensions::script_file_request, formats};
     let dir = std::env::temp_dir().join(format!("pixelcraft-script-files-{}", std::process::id()));

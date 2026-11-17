@@ -42,6 +42,8 @@ Use `Dialog:tab` and `Dialog:endtabs` to group controls into pages. Each group e
 
 Installed scripts can register commands, nested groups, and separators in their `init` function. Use `plugin:deleteCommand` and `plugin:deleteMenuGroup` during registration to remove entries. Each package appears under Extensions, and custom group IDs are scoped to the declaring script. `Reload extensions` rebuilds the installed menus in the background. The editor starts a fresh Lua invocation when a command is selected. A command can use `onenabled` to check the current sprite before running.
 
+Sprite listeners receive `filenamechange`, `layername`, `layeropacity`, `layervisibility`, and `layerblendmode`. Modeless Lua receives native document, site, filename, and drawing-color changes. The sprite `change` event reports `fromUndo` for undo and redo in both the editor and Lua. Use `beforesitechange` to read the previous site from the script. Calls through `app.command` emit `beforecommand` and `aftercommand` with the command name and parameters. A `beforecommand` listener can cancel the call with `ev.stopPropagation()`. Remove listeners by their handle or their callback.
+
 Custom canvas/graphics-context widgets, exact original dialog layouts/tab groups, radio exclusivity, dialog bounds positioning, full editor mouse/paint events, hot-reloading and extension command menu placement are not implemented. Concurrent editor/script edits use document snapshots rather than independent per-operation history. Prefer finishing/stopping an extension before unrelated structural editing.
 
 ## Contributions

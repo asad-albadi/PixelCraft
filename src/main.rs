@@ -697,6 +697,8 @@ struct ScriptTabPreview {
     drawn: Document,
     generation: u64,
     site: (usize, usize),
+    path: Option<PathBuf>,
+    colors: [Pixel; 2],
     selection: ScriptSelectionState,
 }
 
@@ -2469,6 +2471,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return false;
         }
         self.power.bridge_generation += 1;
+        self.script_ui.history_generation = self
+            .script_job
+            .is_some()
+            .then_some(self.power.bridge_generation);
         self.stop_playback(false);
         while self.undo.len() > position {
             let entry = self.undo.pop().expect("history target is valid");
@@ -4210,6 +4216,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             drawn: self.doc.clone(),
             generation: self.power.bridge_generation,
             site: (self.frame, self.layer),
+            path: self.path.clone(),
+            colors: [self.fg, self.bg],
             selection: self.script_selection_state(),
         }
     }
@@ -4243,36 +4251,74 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn show_script_ui(&mut self, ctx: &egui::Context) {
         if self.script_ui.modeless
             && let Some(tab) = self.script_preview.as_ref().map(|p| &p.visible)
-            && (tab.drawn != self.doc
+        {
+            let changed = tab.drawn != self.doc
                 || !tab.drawn.same_editor_layer_targets(&self.doc)
                 || (tab.generation != self.power.bridge_generation
-                    && !tab.drawn.same_editor_targets(&self.doc))
-                || tab.site != (self.frame, self.layer)
+                    && !tab.drawn.same_editor_targets(&self.doc));
+            let site_changed = tab.site != (self.frame, self.layer);
+            let colors = [self.fg, self.bg];
+            if changed
+                || site_changed
+                || tab.path != self.path
+                || tab.colors != colors
                 || tab.selection.bounds != self.selection
                 || tab.selection.mask != self.studio.mask
-                || tab.selection.polygon != self.studio.polygon)
-        {
-            let id = tab.id;
-            let targets = self
-                .script_preview
-                .as_mut()
-                .unwrap()
-                .layer_keys
-                .entry(id)
-                .or_default();
-            let layer_keys = targets.expose_layers(&self.doc);
-            let cel_keys = targets.expose_cels(&self.doc);
-            let metadata_keys = targets.expose_metadata(&self.doc);
-            self.script_ui.editor_update = Some(serde_json::json!({
-                "sprite":id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1,
-                "selection":self.current_script_selection(),"layerKeys":layer_keys,"celKeys":cel_keys,"metadataKeys":metadata_keys,
-            }));
-            let selection = self.script_selection_state();
-            let tab = &mut self.script_preview.as_mut().unwrap().visible;
-            tab.drawn = self.doc.clone();
-            tab.generation = self.power.bridge_generation;
-            tab.site = (self.frame, self.layer);
-            tab.selection = selection;
+                || tab.selection.polygon != self.studio.polygon
+            {
+                let id = tab.id;
+                // Lua may still be running a previous callback. Coalesce native
+                // edits without losing a pending document when only the site moves.
+                let mut update = self
+                    .script_ui
+                    .editor_update
+                    .take()
+                    .filter(|pending| pending["sprite"] == id)
+                    .unwrap_or_else(|| serde_json::json!({"sprite":id}));
+                update["frame"] = serde_json::json!(self.frame + 1);
+                update["layer"] = serde_json::json!(self.layer + 1);
+                update["selection"] = serde_json::json!(self.current_script_selection());
+                if site_changed {
+                    update["siteChanged"] = serde_json::json!(true);
+                }
+                if tab.path != self.path {
+                    let filename = self
+                        .path
+                        .as_ref()
+                        .map(|path| path.to_string_lossy())
+                        .unwrap_or_default();
+                    update["filename"] = serde_json::json!(filename);
+                }
+                if tab.colors != colors {
+                    update["colors"] = serde_json::json!(colors);
+                }
+                if changed {
+                    let targets = self
+                        .script_preview
+                        .as_mut()
+                        .unwrap()
+                        .layer_keys
+                        .entry(id)
+                        .or_default();
+                    update["document"] = serde_json::json!(self.doc);
+                    update["changed"] = serde_json::json!(true);
+                    update["fromUndo"] = serde_json::json!(
+                        self.script_ui.history_generation == Some(self.power.bridge_generation)
+                    );
+                    update["layerKeys"] = serde_json::json!(targets.expose_layers(&self.doc));
+                    update["celKeys"] = serde_json::json!(targets.expose_cels(&self.doc));
+                    update["metadataKeys"] = serde_json::json!(targets.expose_metadata(&self.doc));
+                }
+                self.script_ui.editor_update = Some(update);
+                let selection = self.script_selection_state();
+                let tab = &mut self.script_preview.as_mut().unwrap().visible;
+                tab.drawn = self.doc.clone();
+                tab.generation = self.power.bridge_generation;
+                tab.site = (self.frame, self.layer);
+                tab.path = self.path.clone();
+                tab.colors = colors;
+                tab.selection = selection;
+            }
         }
         let updated_sprite = self
             .script_ui
@@ -4375,6 +4421,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         preview.visible.drawn = self.doc.clone();
         preview.visible.generation = self.power.bridge_generation;
         preview.visible.site = (self.frame, self.layer);
+        preview.visible.path = self.path.clone();
+        preview.visible.colors = [self.fg, self.bg];
         if let Ok(wire) =
             serde_json::from_value::<extensions::ScriptSelection>(request["selection"].clone())
         {
@@ -9908,8 +9956,21 @@ mod tests {
  dialog:show{wait=false}
  local listener,vacated,inserted,duplicatedTile
  local phase=0
- listener=sprite.events:on('change',function()
+ local layerNameChanges=0
+ local colorChanges=0
+ local colorListener=app.events:on('fgcolorchange',function()
+  assert(app.fgColor==Color('#213345'))
+  colorChanges=colorChanges+1
+ end)
+ local nameListener=sprite.events:on('layername',function(ev)
+  assert(ev.layer==original)
+  layerNameChanges=layerNameChanges+1
+ end)
+ listener=sprite.events:on('change',function(ev)
   phase=phase+1
+  assert(ev.fromUndo==(phase>1))
+  assert(layerNameChanges==phase)
+  assert(colorChanges==1)
   if phase==1 then
    assert(tag==sprite.tags[1] and tag.name=='Renamed natively')
    assert(newTag==sprite.tags[2])
@@ -9922,7 +9983,7 @@ mod tests {
    assert(newSlice==sprite.slices[2] and newSet==sprite.tilesets[2])
    assert(not pcall(function()return removedSlice.name end))
    assert(not pcall(function()return removedSet.name end))
-   assert(original==sprite.layers[1] and original.name=='Keep')
+   assert(original==sprite.layers[1] and original.name=='Renamed layer')
    assert(created==sprite.layers[2] and created.name=='Script layer')
    assert(frame==sprite.frames[3] and frame.frameNumber==3)
    inserted=sprite.frames[2]
@@ -9956,6 +10017,8 @@ mod tests {
    assert(cel==created:cel(1) and vacated==original:cel(frame))
    assert(not pcall(function()return replaced.opacity end))
    image:drawPixel(2,0,Color('#0b2137'))
+   sprite.events:off(nameListener)
+   app.events:off(colorListener)
    sprite.events:off(listener)
    dialog:close()
   end
@@ -9973,6 +10036,8 @@ mod tests {
                 app.remember_action("Edit timeline while extension is open");
                 app.doc.swap_layers(0, 1);
                 app.doc.swap_layers(1, 2);
+                app.doc.layers[0].name = "Renamed layer".into();
+                app.fg = [33, 51, 69, 255];
                 assert!(app.doc.remove_tag(0));
                 app.doc.tags[0].name = "Renamed natively".into();
                 app.doc.slices.remove(0);
@@ -10015,7 +10080,7 @@ mod tests {
         assert_eq!(app.doc.tilesets[0].name, "Edited tileset after redo");
         assert_eq!(app.doc.tilesets[0].tiles[0][0], [17, 51, 85, 255]);
         assert_eq!(app.doc.tilesets[0].tiles[2][0], [71, 81, 91, 255]);
-        assert_eq!(app.doc.layers[0].name, "Keep");
+        assert_eq!(app.doc.layers[0].name, "Renamed layer");
         assert_eq!(app.doc.layers[0].editor_id.to_string(), original_layer);
         assert_eq!(app.doc.layers[1].name, "Script layer");
         assert_eq!(

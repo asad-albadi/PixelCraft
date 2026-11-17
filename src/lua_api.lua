@@ -605,6 +605,8 @@ end
 local tilesetHandle,spriteTilesets,assignLayerTileset,snapshotTileset,detachedTileset
 local cloneDocumentState,insertFrameIdentity,retainFrameExportIds,cel,rebuildHandles
 local setLayerIdentity,layerIdentityWire,celIdentityWire,reconcileDocumentState
+local scriptLayerChanged
+local layerEventFields={name='name',opacity='opacity',isVisible='visible',blendMode='blend'}
 do
  -- Keep Lua handles and their identity tokens out of the serialized document.
  local states=setmetatable({},{__mode='k'})
@@ -811,8 +813,10 @@ do
     if field=='cel' then return function(_,frame)return cel(layerIndex(key),frameNumber(frame))end end
     if field=='parent' then return layer.parent and layerHandles[layer.parent+1] or sprite end
    end,
-   __newindex=function(_,field,value)
+   __newindex=function(handle,field,value)
     local layer=doc.layers[layerIndex(key)]
+    local property=layerEventFields[field]
+    local previous=property and layer[property]
     if field=='name' then layer.name=tostring(value)
     elseif field=='opacity' then layer.opacity=opacityByte(value)
     elseif field=='isVisible' then layer.visible=not not value
@@ -821,6 +825,9 @@ do
     elseif field=='tileset' then assignLayerTileset(layer,value)
     elseif field=='parent' then layer.parent=value~=sprite and layerNumber(value)-1 or nil
     else error('Unsupported layer field: '..field) end
+    if property and previous~=layer[property] and scriptLayerChanged then
+     scriptLayerChanged(property,handle)
+    end
    end,
   }),sprite)
   layers[key]=handle

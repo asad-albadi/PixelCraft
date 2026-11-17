@@ -24,6 +24,7 @@ pub struct ScriptUi {
     pub use_system_clipboard: Option<bool>,
     pub modeless: bool,
     pub editor_update: Option<Value>,
+    pub history_generation: Option<u64>,
     applied_dialog_bounds: HashMap<u64, u64>,
     canvases: canvas::Canvases,
 }

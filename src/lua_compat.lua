@@ -27,12 +27,58 @@ end
 local function events()
  local handlers,nextId={},0;local e={}
  function e:on(name,fn) assert(type(fn)=='function');nextId=nextId+1;handlers[nextId]={name,fn};return nextId end
- function e:off(id) handlers[id]=nil end
- function e:_hasHandlers()return next(handlers)~=nil end
- function e:_emit(name,event) local pending={} for id,h in pairs(handlers) do if h[1]==name then pending[#pending+1]={id,h[2]} end end;for _,h in ipairs(pending) do if handlers[h[1]] then h[2](event or {}) end end end
+ function e:off(listener)
+  if type(listener)=='function' then
+   for id,entry in pairs(handlers)do if entry[2]==listener then handlers[id]=nil end end
+  else handlers[listener]=nil end
+ end
+ function e:_hasHandlers(name)
+  if not name then return next(handlers)~=nil end
+  for _,entry in pairs(handlers)do if entry[1]==name then return true end end
+  return false
+ end
+ function e:_emit(name,event)
+  local pending={}
+  for id,entry in pairs(handlers)do if entry[1]==name then pending[#pending+1]=id end end
+  table.sort(pending)
+  event=event or {}
+  for _,id in ipairs(pending)do if handlers[id] then handlers[id][2](event) end end
+ end
  return e
 end
 local spriteEvents,appEvents=events(),events()
+local function setScriptColor(index,value)
+ local previous=scriptColors[index]
+ if previous[1]==value[1] and previous[2]==value[2] and
+    previous[3]==value[3] and previous[4]==value[4] then return end
+ scriptColors[index]=value
+ appEvents:_emit(index==1 and 'fgcolorchange' or 'bgcolorchange')
+end
+local emitLayerChanges
+do
+ local names={name='layername',opacity='layeropacity',visible='layervisibility',blend='layerblendmode'}
+ scriptLayerChanged=function(property,layer)
+  spriteEvents:_emit(names[property],{layer=layer})
+ end
+ emitLayerChanges=function(previous)
+  local watched={}
+  for _,field in ipairs{'name','opacity','visible','blend'}do
+   if spriteEvents:_hasHandlers(names[field]) then watched[#watched+1]=field end
+  end
+  if #watched==0 then return end
+  local old={}
+  for i,key in ipairs(layerIdentityWire(previous))do old[key]=previous.layers[i] end
+  local changes={}
+  for i,key in ipairs(layerIdentityWire(doc))do
+   if old[key] then
+    for _,field in ipairs(watched)do
+     if old[key][field]~=doc.layers[i][field] then changes[#changes+1]={field,layerHandles[i]} end
+    end
+   end
+  end
+  for _,change in ipairs(changes)do scriptLayerChanged(change[1],change[2]) end
+ end
+end
 local selectionMethods={}
 local function selection(mask)
  local s={_mask=mask or {}}
@@ -65,6 +111,12 @@ function selectionMethods:intersect(v) local m=points(v);for k in pairs(self._ma
 function selectionMethods:invert() local m=points(Rectangle(0,0,doc.width,doc.height));for k in pairs(self._mask)do m[k]=nil end;self._mask=m end
 local spriteSelection=Selection((_pw_options or {}).selection)
 local filename=(_pw_options or {}).filename or ''
+local function setFilename(value)
+ if filename==value then return end
+ local previous=filename
+ filename=value
+ spriteEvents:_emit('filenamechange',{filename=value,oldFilename=previous})
+end
 local spriteIndex=getmetatable(sprite).__index
 getmetatable(sprite).__index=function(t,k)
  if k=='spec' then
@@ -74,7 +126,7 @@ getmetatable(sprite).__index=function(t,k)
  return spriteIndex(t,k)
 end
 local oldSpriteAssign=getmetatable(sprite).__newindex
-getmetatable(sprite).__newindex=function(t,k,v) if k=='selection' then spriteSelection=bindSpriteHandle(Selection(v),t) elseif k=='filename' then filename=v elseif k=='transparentColor' then doc.transparent_index=v else oldSpriteAssign(t,k,v) end end
+getmetatable(sprite).__newindex=function(t,k,v) if k=='selection' then spriteSelection=bindSpriteHandle(Selection(v),t) elseif k=='filename' then setFilename(v) elseif k=='transparentColor' then doc.transparent_index=v else oldSpriteAssign(t,k,v) end end
 local undo,redo={},{}
 local activeSprite=sprite
 local workspace={sprite}
@@ -199,6 +251,7 @@ local function selectionWire(mask)
  return result
 end
 local function activateSprite(handle)
+ if activeSprite~=handle then appEvents:_emit('beforesitechange') end
  loadSpriteContext(handle)
  if activeSprite~=handle then
   activeSprite=handle
@@ -246,15 +299,23 @@ rawset(app,'transaction',function(a,b)
  if contexts[owner] then
   withSprite(owner,function()
    if not result[1] then restore(before)
-   elseif transactionDepth==0 then undo[#undo+1]=before;redo={};spriteEvents:_emit('change') end
+   elseif transactionDepth==0 then undo[#undo+1]=before;redo={};spriteEvents:_emit('change',{fromUndo=false}) end
   end)
  end
  if not result[1] then error(result[2]) end
  return table.unpack(result,2,result.n)
 end)
 local function command(fn) return function(p) return app.transaction(function()return fn(p or {})end) end end
-app.command.Undo=function()if #undo>0 then redo[#redo+1]=snapshot();restore(table.remove(undo));spriteEvents:_emit('change') end end
-app.command.Redo=function()if #redo>0 then undo[#undo+1]=snapshot();restore(table.remove(redo));spriteEvents:_emit('change') end end
+local function transferHistory(source,destination)
+ if #source==0 then return end
+ local previous=doc
+ destination[#destination+1]=snapshot()
+ restore(table.remove(source))
+ emitLayerChanges(previous)
+ spriteEvents:_emit('change',{fromUndo=true})
+end
+app.command.Undo=function()transferHistory(undo,redo)end
+app.command.Redo=function()transferHistory(redo,undo)end
 for _,name in ipairs{'NewFrame','NewEmptyFrame'}do app.command[name]=command(app.command[name])end
 local newLayerCommand=app.command.NewLayer
 app.command.NewLayer=command(function(p) newLayerCommand();if p.name then app.activeLayer.name=p.name end;if p.group then doc.layers[activeLayer].group=true end end)
@@ -692,8 +753,14 @@ getmetatable(app).__index=function(t,k)
 end
 getmetatable(app).__newindex=function(t,k,v)
  if k=='activeSprite' then activateSprite(v)
- elseif k=='fgColor' then scriptColors[1]=unpackColor(v);appEvents:_emit('fgcolorchange') elseif k=='bgColor' then scriptColors[2]=unpackColor(v);appEvents:_emit('bgcolorchange') elseif k=='tool' then tool=type(v)=='string' and {id=v} or v
- else appAssign(t,k,v);if k=='activeFrame' or k=='activeLayer' then appEvents:_emit('sitechange') end end
+ elseif k=='fgColor' then setScriptColor(1,unpackColor(v)) elseif k=='bgColor' then setScriptColor(2,unpackColor(v)) elseif k=='tool' then tool=type(v)=='string' and {id=v} or v
+ else
+  local changed=(k=='activeFrame' and activeFrame~=frameNumber(v)) or
+                (k=='activeLayer' and activeLayer~=layerNumber(v))
+  if changed then appEvents:_emit('beforesitechange') end
+  appAssign(t,k,v)
+  if changed then appEvents:_emit('sitechange') end
+ end
 end
 app.pixelColor.graya=function(g,a)return (pixelInteger(g)&255)|((pixelInteger(a==nil and 255 or a)&255)<<8)end
 app.pixelColor.grayaV=function(v)return pixelInteger(v)&255 end
@@ -722,8 +789,8 @@ function imageMethods:isEqual(other)if self.width~=other.width or self.height~=o
 function imageMethods:drawSprite(s,f,pos)assert(s==sprite);pos=pos or Point();for li,l in ipairs(doc.layers)do if l.visible and not l.group then self:drawImage(cel(li,frameNumber(f)).image,pos,l.opacity)end end end
 function spriteMethods:saveAs(path)
  local response=host{op='save',path=path,document=doc}
- filename=response.path or path
  if (_pw_options or {}).editorWorkspace then contexts[self].saved=copy(doc) end
+ setFilename(response.path or path)
  return true
 end
 function spriteMethods:saveCopyAs(path)host{op='save',path=type(path)=='table' and path.filename or path,document=doc};return true end
@@ -757,6 +824,26 @@ end
 app.command.SaveFile=function()assert(filename~='','Sprite has no filename');sprite:saveAs(filename)end
 app.command.SaveFileAs=function(p)assert(p and p.filename,'SaveFileAs requires filename');sprite:saveAs(p.filename)end
 app.command.SaveFileCopyAs=function(p)sprite:saveCopyAs(p.filename)end
+do
+ local actions=app.command
+ rawset(app,'command',setmetatable({},{
+  __index=function(_,name)
+   local execute=actions[name]
+   return function(params)
+    local stopped=false
+    local args=params or {}
+    if appEvents:_hasHandlers('beforecommand') then
+     appEvents:_emit('beforecommand',{name=name,params=args,stopPropagation=function()stopped=true end})
+    end
+    if stopped then return end
+    local result=table.pack(execute(args))
+    appEvents:_emit('aftercommand',{name=name,params=args})
+    return table.unpack(result,1,result.n)
+   end
+  end,
+  __newindex=function(_,name,callback)actions[name]=callback end,
+ }))
+end
 rawset(app,'open',function(path)
  local loaded=host{op='open',path=path}
  loaded.path=loaded.path or path
@@ -953,12 +1040,26 @@ _pw_loop=function()
     end
    end
    if contexts[target] then withSprite(target,function()
-    local updated=expandDocumentPixels(editor.document)
-    reconcileDocumentState(updated,editor.layerKeys,editor.celKeys)
-    setMetadataIdentity(updated,editor.metadataKeys)
-    doc=updated;activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer
+    local previous=doc
+    if editor.siteChanged then appEvents:_emit('beforesitechange') end
+    if editor.document then
+     local updated=expandDocumentPixels(editor.document)
+     reconcileDocumentState(updated,editor.layerKeys,editor.celKeys)
+     setMetadataIdentity(updated,editor.metadataKeys)
+     doc=updated
+     rebuildHandles()
+    end
+    activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer
     if editor.selection then spriteSelection._mask=points(editor.selection) end
-    rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')
+    if editor.filename~=nil then setFilename(editor.filename) end
+    if editor.colors then
+     for index,color in ipairs(editor.colors)do setScriptColor(index,color) end
+    end
+    if editor.document and editor.changed~=false then
+     emitLayerChanges(previous)
+     spriteEvents:_emit('change',{fromUndo=editor.fromUndo==true})
+    end
+    if editor.siteChanged then appEvents:_emit('sitechange') end
    end)end
   end
   if response.cancelled then break end
