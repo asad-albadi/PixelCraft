@@ -435,8 +435,12 @@ pub fn prepare_raster_layer(
     let area = target.width * target.height;
     let mut layer = Layer::new(name, target.width, target.height, target.durations.len());
     let source_pixels = source.composite(0);
-    let source_pixels = if target.color_profile.is_empty() && !source.color_profile.is_empty() {
-        crate::color::to_srgb(&source.color_profile, &source_pixels).unwrap_or(source_pixels)
+    let source_pixels = if target.color_profile != source.color_profile {
+        crate::color::transform_pixels(
+            &source.color_profile,
+            &target.color_profile,
+            &source_pixels,
+        )?
     } else {
         source_pixels
     };

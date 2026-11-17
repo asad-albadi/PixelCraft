@@ -182,6 +182,7 @@ struct Preferences {
     sample_references: bool,
     eyedropper: EyedropperOptions,
     gradient: GradientOptions,
+    import_profile: pixelcraft::color::ImportProfile,
     whole_pixel_wheel_zoom: bool,
 }
 impl Default for Preferences {
@@ -203,6 +204,7 @@ impl Default for Preferences {
             sample_references: false,
             eyedropper: EyedropperOptions::default(),
             gradient: GradientOptions::default(),
+            import_profile: pixelcraft::color::ImportProfile::default(),
             whole_pixel_wheel_zoom: false,
         }
     }
@@ -643,6 +645,27 @@ impl PixelCraft {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.collapsing("Color management", |ui| {
+            use pixelcraft::color::ImportProfile;
+            let policy = &mut self.power.preferences.import_profile;
+            let before = *policy;
+            let label = |policy| match policy {
+                ImportProfile::Preserve => "Preserve embedded profile",
+                ImportProfile::ConvertToSrgb => "Convert to sRGB",
+                ImportProfile::AssignSrgb => "Assign sRGB",
+            };
+            egui::ComboBox::from_label("Image import profile")
+                .selected_text(label(*policy))
+                .show_ui(ui, |ui| {
+                    for value in [ImportProfile::Preserve, ImportProfile::ConvertToSrgb, ImportProfile::AssignSrgb] {
+                        ui.pc_selectable_value(policy, value, label(value));
+                    }
+                });
+            ui.small("Imported layers match the destination profile. Assign sRGB treats their source values as sRGB.");
+            if before != *policy {
+                self.save_workflow_preferences();
+            }
+        });
         ui.collapsing("New sprites", |ui| {
             let p = &mut self.power.preferences;
             let before = (p.new_sprite_size(), p.default_grid);
@@ -994,15 +1017,35 @@ impl PixelCraft {
             p.file_name().unwrap_or_default().to_string_lossy()
         );
         let into_layer = matches!(target, OpenTarget::RasterLayer { .. });
+        let import_policy = self.power.preferences.import_profile;
+        let native = p
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| {
+                ["pixel", "ase", "aseprite"]
+                    .iter()
+                    .any(|native| native.eq_ignore_ascii_case(ext))
+            });
         self.open_job = Some(FileOpenJob {
             target,
             receiver: rx,
         });
         std::thread::spawn(move || {
             let result = if into_layer {
-                read_raster_layer(&p)
-            } else {
+                read_raster_layer(&p).and_then(|source| {
+                    let policy = if import_policy == pixelcraft::color::ImportProfile::AssignSrgb {
+                        import_policy
+                    } else {
+                        pixelcraft::color::ImportProfile::Preserve
+                    };
+                    pixelcraft::color::apply_import_profile(source, policy)
+                })
+            } else if native {
                 formats::load(&p)
+            } else {
+                formats::load(&p).and_then(|source| {
+                    pixelcraft::color::apply_import_profile(source, import_policy)
+                })
             };
             let _ = tx.send((p, result));
         });

@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod color_profiles;
 mod color_wheel;
 mod editor_filters;
 mod export_actions;
@@ -693,6 +694,7 @@ struct PixelCraft {
     replace_color: Option<ReplaceColor>,
     editor_filter: Option<editor_filters::FilterDialog>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
+    profile_dialog: Option<color_profiles::ProfileDialog>,
     color_wheel: color_wheel::ColorWheel,
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
@@ -885,6 +887,7 @@ impl PixelCraft {
             replace_color: None,
             editor_filter: None,
             palette_conversion: None,
+            profile_dialog: None,
             color_wheel: color_wheel::ColorWheel::default(),
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
@@ -2155,6 +2158,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.replace_color.is_some()
             || self.editor_filter.is_some()
             || self.palette_conversion.is_some()
+            || self.profile_dialog.is_some()
             || self.rename_frame.is_some()
             || self.help
             || self.properties_open
@@ -3343,6 +3347,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "clear" => self.clear(),
             "filters" => self.open_filters(),
             "palette-conversion" => self.open_palette_conversion(),
+            "color-profile" => self.open_profile_dialog(),
             "replace-color" => {
                 self.stop_playback(false);
                 self.replace_color = Some(ReplaceColor {
@@ -4300,6 +4305,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     vec![
                         ("Properties, layers, tiles & ranges…", "properties"),
                         ("Palette and Indexed Color…", "palette-conversion"),
+                        ("Color Profile…", "color-profile"),
                         ("Canvas size…", "resizecanvas"),
                         ("Sprite size…", "spritesize"),
                         ("Duplicate sprite", "duplicatesprite"),
@@ -7062,6 +7068,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.replace_color_dialog(ctx);
         self.filters_dialog(ctx);
         self.palette_conversion_dialog(ctx);
+        self.document_profile_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let mut cancel = false;

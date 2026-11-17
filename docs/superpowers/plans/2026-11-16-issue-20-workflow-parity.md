@@ -204,6 +204,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 15 complete. Palette tools sort the current frame's swatches by hue, saturation, value, luminance, RGB, alpha, or name, and can reverse noncontiguous picks. Reordering preserves indexed artwork and applies the same slot mapping to compatible frame palettes. Range and individual picks are available in the inspector. Both ramp operations support shortest-arc hue interpolation. RGB, RYB, and normal-map wheels can set either drawing swatch. Formatting, strict Clippy, and 584 Windows all-target tests passed.
 
+- Item 16 document and import checkpoint. Sprite → Color Profile assigns or converts to sRGB or an ICC file in one undo edit. Conversion covers cels, off-canvas pixels, palettes, and tiles while preserving alpha and shared backing. Import settings preserve, convert, or assign sRGB for raster inputs. Import as Layer converts directly to the destination profile. Opening native projects retains the authored profile. Formatting, strict Clippy, and 587 Windows all-target tests passed. Monitor and custom display-profile selection remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

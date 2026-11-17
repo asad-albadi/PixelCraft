@@ -2839,6 +2839,40 @@ fn symmetry_handles_move_independently_and_reflect_pencil_strokes() {
 }
 
 #[test]
+fn document_profile_dialog_converts_and_undoes_in_one_step() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-profile.png")));
+    let mut doc = Document::new(2, 1);
+    doc.layers[0].cels[0].set(0, [128, 128, 128, 91]);
+    doc.color_profile = vec![1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let snapshot = doc.clone();
+    app.replace(doc, None);
+    app.action("color-profile");
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let button = text_position(&mut output, "Convert profile");
+    discard_frame(&mut app, &ctx, size, 1., click(button));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while app.profile_dialog.is_some() {
+        assert!(
+            Instant::now() < deadline,
+            "profile conversion did not complete"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    assert!(app.doc.color_profile.is_empty());
+    assert!((186..=190).contains(&app.doc.layers[0].cels[0][0][0]));
+    assert_eq!(app.doc.layers[0].cels[0][0][3], 91);
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert_eq!(app.doc, snapshot);
+}
+
+#[test]
 fn color_wheel_applies_normal_map_colors_to_secondary_swatch() {
     let ctx = egui::Context::default();
     let size = Vec2::new(1180., 840.);
