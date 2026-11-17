@@ -5,13 +5,21 @@ use crate::ui_icons::UiIcons;
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::mpsc,
     time::{Duration, Instant},
 };
 pub struct Request {
     pub value: Value,
     pub reply: mpsc::Sender<Value>,
+}
+
+pub struct EditorCommand {
+    pub id: u64,
+    pub action: String,
+    pub name: &'static str,
+    pub params: Value,
+    pub document: String,
 }
 
 pub fn authorize_extension_request(
@@ -54,6 +62,13 @@ pub struct ScriptUi {
     pub modeless: bool,
     pub editor_update: Option<Value>,
     pub history_generation: Option<u64>,
+    before_commands: bool,
+    after_commands: bool,
+    command_id: u64,
+    commands: VecDeque<EditorCommand>,
+    command_in_progress: Option<EditorCommand>,
+    completed_command: Option<Value>,
+    pub command_decision: Option<Request>,
     applied_dialog_bounds: HashMap<u64, u64>,
     canvases: canvas::Canvases,
 }
@@ -70,7 +85,50 @@ impl ScriptUi {
         self.receiver = None;
         self.pending = None;
         self.modeless = false;
+        self.before_commands = false;
+        self.after_commands = false;
+        self.commands.clear();
+        self.command_in_progress = None;
+        self.completed_command = None;
+        self.command_decision = None;
         self.canvases = canvas::Canvases::default();
+    }
+
+    pub fn queue_command(
+        &mut self,
+        action: &str,
+        name: &'static str,
+        params: Value,
+        document: String,
+    ) -> bool {
+        if !self.before_commands && !self.after_commands {
+            return false;
+        }
+        if self.commands.len() < 32 {
+            self.command_id += 1;
+            self.commands.push_back(EditorCommand {
+                id: self.command_id,
+                action: action.to_owned(),
+                name,
+                params,
+                document,
+            });
+        }
+        true
+    }
+
+    pub fn take_command(&mut self, id: &Value) -> Option<EditorCommand> {
+        if self.command_in_progress.as_ref().map(|command| command.id) == id.as_u64() {
+            self.command_in_progress.take()
+        } else {
+            None
+        }
+    }
+
+    pub fn complete_command(&mut self, command: EditorCommand) {
+        if self.after_commands {
+            self.completed_command = Some(json!({"name":command.name,"params":command.params}));
+        }
     }
 
     #[cfg(test)]
@@ -94,12 +152,28 @@ impl ScriptUi {
             && let Some(Ok(request)) = self.receiver.as_ref().map(|rx| rx.try_recv())
         {
             let op = request.value["op"].as_str().unwrap_or("");
-            self.modeless = op == "pump";
+            if op == "pump" {
+                self.modeless = true;
+                self.before_commands = request.value["beforeCommands"] == true;
+                self.after_commands = request.value["afterCommands"] == true;
+            } else if matches!(
+                op,
+                "dialog"
+                    | "alert"
+                    | "preferences"
+                    | "filePermission"
+                    | "processPermission"
+                    | "networkPermission"
+            ) {
+                self.modeless = false;
+            }
             if matches!(op, "activate" | "closePreview" | "refresh" | "pump") {
                 self.preview = Some(request.value.clone());
             }
             if matches!(op, "activate" | "closePreview" | "refresh" | "preferences") {
                 let _ = request.reply.send(json!({}));
+            } else if op == "editorCommandDecision" {
+                self.command_decision = Some(request);
             } else if matches!(op, "clipboardRead" | "clipboardWrite")
                 && self.use_system_clipboard.is_some()
             {
@@ -215,9 +289,11 @@ impl ScriptUi {
             }
             if op == "pump"
                 && response.is_none()
-                && self
-                    .received
-                    .is_some_and(|t| t.elapsed() >= Duration::from_millis(16))
+                && (self.completed_command.is_some()
+                    || (self.command_in_progress.is_none() && !self.commands.is_empty())
+                    || self
+                        .received
+                        .is_some_and(|t| t.elapsed() >= Duration::from_millis(16)))
             {
                 response = Some(json!({}));
             }
@@ -240,10 +316,22 @@ impl ScriptUi {
             if !dialog_bounds.is_empty() {
                 value["dialogBounds"] = json!(dialog_bounds);
             }
-            if op == "pump"
-                && let Some(editor) = self.editor_update.take()
-            {
-                value["editor"] = editor;
+            if op == "pump" {
+                if let Some(editor) = self.editor_update.take() {
+                    value["editor"] = editor;
+                }
+                if value["cancelled"] != true {
+                    if let Some(command) = self.completed_command.take() {
+                        value["completedCommand"] = command;
+                    }
+                    if self.command_in_progress.is_none()
+                        && let Some(command) = self.commands.pop_front()
+                    {
+                        value["command"] =
+                            json!({"id":command.id,"name":command.name,"params":command.params});
+                        self.command_in_progress = Some(command);
+                    }
+                }
             }
             value["time"] = json!(self.started.map_or(0., |t| t.elapsed().as_secs_f64()));
             if let Some(request) = self.pending.take() {

@@ -3525,6 +3525,47 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn action(&mut self, s: &str) {
+        if self.script_ui.modeless {
+            let name = match s {
+                "undo" => "Undo",
+                "redo" => "Redo",
+                "copy" => "Copy",
+                "cut" => "Cut",
+                "paste" => "Paste",
+                "clear" => "Clear",
+                "selectall" => "SelectAll",
+                "deselect" => "DeselectMask",
+                "reselect" => "ReselectMask",
+                "invert-selection" => "InvertMask",
+                "layer" => "NewLayer",
+                "deletelayer" => "RemoveLayer",
+                "frame" => "NewFrame",
+                "blank" => "NewEmptyFrame",
+                "deleteframe" => "RemoveFrame",
+                "reverse-frames" => "ReverseFrames",
+                "prev" => "GotoPreviousFrame",
+                "next" => "GotoNextFrame",
+                "flipx" | "flipy" => "Flip",
+                _ => "",
+            };
+            if !name.is_empty() {
+                let params = match s {
+                    "flipx" => serde_json::json!({"orientation":"horizontal"}),
+                    "flipy" => serde_json::json!({"orientation":"vertical"}),
+                    _ => serde_json::json!({}),
+                };
+                if self
+                    .script_ui
+                    .queue_command(s, name, params, self.doc.editor_id.to_string())
+                {
+                    return;
+                }
+            }
+        }
+        self.perform_action(s);
+    }
+
+    fn perform_action(&mut self, s: &str) {
         self.canvas_transform = None;
         self.cancel_gesture();
         if self.studio_action(s) {
@@ -4360,6 +4401,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if let Some(request) = self.script_ui.clipboard_request.take() {
             self.handle_script_clipboard(request);
         }
+        if let Some(request) = self.script_ui.command_decision.take() {
+            self.handle_script_command(request);
+        }
         let Some(request) = self.script_ui.preview.take() else {
             return;
         };
@@ -4377,6 +4421,25 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         {
             self.show_script_tab(id, document, &request);
         }
+    }
+
+    fn handle_script_command(&mut self, request: script_ui::Request) {
+        let value = request.value;
+        let command = self.script_ui.take_command(&value["id"]);
+        if let Some(command) = command
+            && value["allowed"] == true
+            && command.document == self.doc.editor_id.to_string()
+            && self.script_ui.editor_update.is_none()
+            && let Some(visible) = self.script_preview.as_ref().map(|p| &p.visible)
+            && value["sprite"] == visible.id
+            && let Ok(document) = serde_json::from_value::<Document>(value["document"].clone())
+            && document.validate().is_ok()
+        {
+            self.show_script_tab(visible.id, document, &value);
+            self.perform_action(&command.action);
+            self.script_ui.complete_command(command);
+        }
+        let _ = request.reply.send(serde_json::json!({}));
     }
 
     fn remove_script_preview_tab(&mut self, id: u32) {
@@ -9919,6 +9982,80 @@ mod tests {
         assert_eq!(edited.mask.as_deref(), Some(&[true, false, true][..]));
         assert_eq!(edited.undo[0].doc, background);
         assert_eq!(edited.undo[0].label, "Run extension");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn modeless_lua_can_cancel_native_clear_and_observe_the_next_clear() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let mut doc = Document::new(2, 1);
+        doc.layers[0].cels[0].set(0, [70, 80, 90, 255]);
+        app.replace(doc, None);
+        let directory = std::env::temp_dir().join(format!(
+            "pixelcraft-lua-native-command-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("commands.lua");
+        std::fs::write(
+            &path,
+            r#"
+ local before,after
+ local attempts=0
+ before=app.events:on('beforecommand',function(ev)
+  assert(ev.name=='Clear' and type(ev.params)=='table')
+  assert(app.activeImage:getPixel(0,0)==app.pixelColor.rgba(70,80,90,255))
+  attempts=attempts+1
+  if attempts==1 then
+   ev.stopPropagation()
+   app.activeImage:putPixel(1,0,app.pixelColor.rgba(11,33,55,255))
+  end
+ end)
+ after=app.events:on('aftercommand',function(ev)
+  assert(ev.name=='Clear' and attempts==2)
+  assert(app.activeImage:getPixel(0,0)==0)
+  app.activeImage:putPixel(1,0,app.pixelColor.rgba(51,33,11,255))
+  app.events:off(before)
+  app.events:off(after)
+ end)
+ "#,
+        )
+        .unwrap();
+        app.start_script(path, None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut phase = 0;
+        while app.script_job.is_some() && Instant::now() < deadline {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| app.show_script_ui(&ctx));
+            output.textures_delta.clear();
+            let pixels = &app.doc.layers[0].cels[0];
+            if phase == 0 && app.script_ui.modeless {
+                let input = egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: Key::Delete,
+                        physical_key: Some(Key::Delete),
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                };
+                let _ = ctx.run_ui(input, |_| app.shortcuts(&ctx));
+                assert_eq!(app.doc.layers[0].cels[0][0], [70, 80, 90, 255]);
+                phase = 1;
+            } else if phase == 1 && pixels[1] == [11, 33, 55, 255] {
+                assert_eq!(pixels[0], [70, 80, 90, 255]);
+                app.action("clear");
+                phase = 2;
+            }
+            app.poll_script();
+            std::thread::yield_now();
+        }
+        assert!(app.script_job.is_none(), "Lua script timed out");
+        assert_eq!(phase, 2);
+        assert_eq!(app.status, "Applied extension changes");
+        assert_eq!(app.doc.layers[0].cels[0][0], CLEAR);
+        assert_eq!(app.doc.layers[0].cels[0][1], [51, 33, 11, 255]);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

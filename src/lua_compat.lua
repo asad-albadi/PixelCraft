@@ -1042,7 +1042,7 @@ _pw_loop=function()
   local visible={};for _,d in ipairs(dialogs)do if d._visible then visible[#visible+1]=dialogSpec(d)end end
   local running=false;for _,t in ipairs(timers)do running=running or t.isRunning end
   if #visible==0 and not running and not appEvents:_hasHandlers() and not (activeSprite and spriteEvents:_hasHandlers()) then break end
-  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,layerKeys=layerIdentityWire(),celKeys=celIdentityWire(),metadataKeys=metadataIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=activeSprite and selectionWire(spriteSelection)}
+  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,layerKeys=layerIdentityWire(),celKeys=celIdentityWire(),metadataKeys=metadataIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=activeSprite and selectionWire(spriteSelection),beforeCommands=appEvents:_hasHandlers('beforecommand'),afterCommands=appEvents:_hasHandlers('aftercommand')}
   receiveDialogBounds(response)
   if response.editor then
    local editor=response.editor
@@ -1077,6 +1077,17 @@ _pw_loop=function()
    end)end
   end
   if response.cancelled then break end
+  if response.completedCommand then
+   appEvents:_emit('aftercommand',response.completedCommand)
+  end
+  if response.command then
+   local event=response.command
+   local stopped=false
+   if appEvents:_hasHandlers('beforecommand') then
+    appEvents:_emit('beforecommand',{name=event.name,params=event.params,stopPropagation=function()stopped=true end})
+   end
+   host{op='editorCommandDecision',id=event.id,allowed=not stopped,sprite=activeSprite and contexts[activeSprite].id,document=not stopped and doc or nil,layerKeys=not stopped and layerIdentityWire() or nil,celKeys=not stopped and celIdentityWire() or nil,metadataKeys=not stopped and metadataIdentityWire() or nil,frame=activeFrame,layer=activeLayer,selection=activeSprite and selectionWire(spriteSelection)}
+  end
   if response.dialog then dispatch(dialogs[response.dialog],response) end
   local now=response.time or 0
   for _,timer in ipairs(timers)do if timer.isRunning then if timer._next==0 then timer._next=now+timer.interval elseif now>=timer._next then timer._next=now+timer.interval;timer._callback()end end end
