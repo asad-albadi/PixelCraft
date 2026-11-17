@@ -237,6 +237,215 @@ assert(table.concat(transitions,',')=='Edited,Allowed')
 }
 
 #[test]
+fn permissioned_http_and_process_results_reach_editor_lua() {
+    run_source_with_host(
+        &Document::new(1, 1),
+        r#"
+local r=app.network.request{url='http://127.0.0.1:4000/report',method='POST',
+ body='{"done":true}',contentType='application/json'}
+assert(r.status==202 and r.body=='accepted')
+local child=app.process.launch{executable='/usr/bin/helper',args={'--output','sample file.png'}}
+assert(child.pid==321)
+"#,
+        0,
+        0,
+        None,
+        None,
+        json!({}),
+        Box::new(|request| match request["op"].as_str().unwrap() {
+            "preferences" => Ok(json!({})),
+            "networkRequest" => {
+                assert_eq!(request["url"], "http://127.0.0.1:4000/report");
+                assert_eq!(request["method"], "POST");
+                assert_eq!(request["body"], r#"{"done":true}"#);
+                Ok(json!({"status":202,"body":"accepted","contentType":"text/plain"}))
+            }
+            "processRequest" => {
+                assert_eq!(request["executable"], "/usr/bin/helper");
+                assert_eq!(request["args"], json!(["--output", "sample file.png"]));
+                Ok(json!({"pid":321}))
+            }
+            _ => panic!("Unexpected request: {request}"),
+        }),
+    )
+    .unwrap();
+}
+
+#[test]
+fn network_permission_precedes_connect_and_redirects_need_a_new_request() {
+    use pixelcraft::extensions::script_network_request;
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        time::{Duration, Instant},
+    };
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let redirect = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    redirect.set_nonblocking(true).unwrap();
+    let location = format!("http://{}/unapproved", redirect.local_addr().unwrap());
+    let url = format!("http://{}/report", listener.local_addr().unwrap());
+    let request =
+        json!({"url":url,"method":"POST","body":"approved data","contentType":"text/plain"});
+
+    let denied = script_network_request(&request, |target| {
+        assert!(target.starts_with(&format!("POST {url}")));
+        assert!(target.contains("approved data"));
+        Err("Denied".into())
+    });
+    assert_eq!(denied.unwrap_err(), "Denied");
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    for url in [
+        "http://example.com/",
+        "https://user@example.com/",
+        "https://example.com/#hidden",
+        "file:///tmp/pixelcraft",
+    ] {
+        let result = script_network_request(&json!({"url":url}), |_| {
+            panic!("Invalid URL reached permission")
+        });
+        assert!(result.is_err(), "{url}");
+    }
+
+    let server = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) => panic!("Approved HTTP request did not arrive: {error}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut reader = BufReader::new(&mut stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.starts_with("POST /report HTTP/1.1"));
+        let mut length = None;
+        loop {
+            line.clear();
+            let count = reader.read_line(&mut line).unwrap();
+            assert!(count > 0, "Truncated request headers");
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = Some(value.trim().parse::<usize>().unwrap());
+            }
+        }
+        assert_eq!(length, Some(13));
+        let mut bytes = [0; 13];
+        reader.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"approved data");
+        write!(stream,"HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+    });
+    let response = script_network_request(&request, |_| Ok(())).unwrap();
+    assert_eq!(response["status"], 302);
+    server.join().unwrap();
+    assert_eq!(
+        redirect.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+#[ignore = "Run by the approved-process integration test"]
+fn process_writes_fixture_marker() {
+    let cwd = std::env::current_dir().unwrap();
+    if cwd.join("pixelcraft-process-fixture").is_file() {
+        let temporary = cwd.join("child-started.tmp");
+        std::fs::write(&temporary, b"started").unwrap();
+        std::fs::rename(temporary, cwd.join("child-started")).unwrap();
+    }
+}
+
+#[test]
+fn process_permission_precedes_launch_and_preserves_the_argument_list() {
+    use pixelcraft::extensions::script_process_request;
+    let dir = std::env::temp_dir().join(format!("pixelcraft-process-grant-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("pixelcraft-process-fixture"), []).unwrap();
+    let marker = dir.join("child-started");
+    let executable = std::env::current_exe().unwrap();
+    let request = json!({
+        "executable":executable,"args":["--ignored","--exact","process_writes_fixture_marker"],
+        "workingDirectory":dir,
+    });
+    let denied = script_process_request(&dir, &request, |target| {
+        assert!(target.contains("process_writes_fixture_marker"));
+        assert!(target.contains("Working directory"));
+        Err("Denied".into())
+    });
+    assert_eq!(denied.unwrap_err(), "Denied");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(!marker.exists());
+
+    #[cfg(windows)]
+    assert!(
+        script_process_request(
+            &dir,
+            &json!({"executable":dir.join("test.cmd")}),
+            |_| panic!("Batch file reached process grant")
+        )
+        .is_err()
+    );
+    assert!(
+        script_process_request(&dir, &json!({"executable":"helper"}), |_| panic!(
+            "Relative executable reached process grant"
+        ))
+        .is_err()
+    );
+
+    let result = script_process_request(&dir, &request, |_| Ok(())).unwrap();
+    assert!(result["pid"].as_u64().unwrap() > 0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !marker.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(std::fs::read(marker).unwrap(), b"started");
+    loop {
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => break,
+            Err(_) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => panic!("Could not remove process fixture: {error}"),
+        }
+    }
+}
+
+#[test]
+fn headless_lua_has_no_network_or_process_permission_host() {
+    pixelcraft::extensions::run_source(
+        &Document::new(1, 1),
+        r#"
+local function denied(call)
+ local ok,err=pcall(call)
+ assert(not ok and string.find(err,'interactive editor session',1,true))
+end
+denied(function() app.network.request{url='http://127.0.0.1:1234/'} end)
+denied(function() app.process.launch{executable='/usr/bin/true'} end)
+assert(os.execute==nil and io==nil)
+"#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
 fn file_authorization_gates_writes_and_each_referenced_input() {
     use pixelcraft::extensions::script_file_request_with_authorization;
     let dir = std::env::temp_dir().join(format!("pixelcraft-file-permit-{}", std::process::id()));

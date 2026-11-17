@@ -4079,28 +4079,34 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     &base,
                                     &request,
                                     |purpose, path| {
-                                        let (reply, decision) = std::sync::mpsc::channel();
-                                        ui_tx
-                                            .send(script_ui::Request {
-                                                value: serde_json::json!({
-                                                    "op":"filePermission",
-                                                    "purpose":purpose,
-                                                    "path":format!("{path:?}"),
-                                                    "script":format!("{script:?}"),
-                                                }),
-                                                reply,
-                                            })
-                                            .map_err(|_| "Editor closed".to_string())?;
-                                        if decision
-                                            .recv()
-                                            .is_ok_and(|response| response["allowed"] == true)
-                                        {
-                                            Ok(())
-                                        } else {
-                                            Err("Extension file access denied".into())
-                                        }
+                                        script_ui::authorize_extension_request(
+                                            &ui_tx,
+                                            &script,
+                                            "filePermission",
+                                            purpose,
+                                            &format!("{path:?}"),
+                                        )
                                     },
                                 );
+                            }
+                            if op == "networkRequest" {
+                                return extensions::script_network_request(&request, |target| {
+                                    script_ui::authorize_extension_request(
+                                        &ui_tx,
+                                        &script,
+                                        "networkPermission",
+                                        "Send an HTTP request",
+                                        target,
+                                    )
+                                });
+                            }
+                            if op == "processRequest" {
+                                return extensions::script_process_request(&base, &request, |target| {
+                                    script_ui::authorize_extension_request(
+                                        &ui_tx, &script, "processPermission",
+                                        "Start a program with your operating-system permissions", target,
+                                    )
+                                });
                             }
                             if op == "clipboardApply" {
                                 return Self::apply_script_paste(&request);

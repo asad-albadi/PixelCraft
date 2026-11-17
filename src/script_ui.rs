@@ -13,6 +13,35 @@ pub struct Request {
     pub value: Value,
     pub reply: mpsc::Sender<Value>,
 }
+
+pub fn authorize_extension_request(
+    sender: &mpsc::Sender<Request>,
+    script: &std::path::Path,
+    op: &str,
+    purpose: &str,
+    target: &str,
+) -> Result<(), String> {
+    let (reply, decision) = mpsc::channel();
+    sender
+        .send(Request {
+            value: json!({"op":op,"purpose":purpose,"path":target,"script":format!("{script:?}")}),
+            reply,
+        })
+        .map_err(|_| "Editor closed".to_string())?;
+    if decision
+        .recv()
+        .is_ok_and(|response| response["allowed"] == true)
+    {
+        Ok(())
+    } else {
+        let domain = match op {
+            "filePermission" => "file",
+            "processPermission" => "process",
+            _ => "network",
+        };
+        Err(format!("Extension {domain} access denied"))
+    }
+}
 #[derive(Default)]
 pub struct ScriptUi {
     receiver: Option<mpsc::Receiver<Request>>,
@@ -86,11 +115,23 @@ impl ScriptUi {
         let op = request.value["op"].as_str().unwrap_or("").to_string();
         let mut response = None;
         let mut dialog_bounds = Vec::new();
-        if op == "filePermission" {
+        if matches!(
+            op.as_str(),
+            "filePermission" | "networkPermission" | "processPermission"
+        ) {
             let mut decision = None;
-            let dismissed = crate::fluent::modal_dialog(ctx, "Extension file access", |ui| {
+            let title = match op.as_str() {
+                "filePermission" => "Extension file access",
+                "processPermission" => "Extension process access",
+                _ => "Extension network access",
+            };
+            let dismissed = crate::fluent::modal_dialog(ctx, title, |ui| {
                 ui.label(request.value["purpose"].as_str().unwrap_or("Access a file"));
-                ui.monospace(request.value["path"].as_str().unwrap_or(""));
+                egui::ScrollArea::vertical()
+                    .max_height(180.)
+                    .show(ui, |ui| {
+                        ui.monospace(request.value["path"].as_str().unwrap_or(""));
+                    });
                 ui.small(request.value["script"].as_str().unwrap_or(""));
                 ui.horizontal(|ui| {
                     if ui.pc_button("Deny").clicked() {

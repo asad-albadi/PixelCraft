@@ -24,6 +24,20 @@ local function host(request,engine)
  if value.error then error(value.error) end
  return value
 end
+rawset(app,'network',{
+ request=function(options)
+  assert(type(options)=='table' and type(options.url)=='string','HTTP request requires a URL')
+  return host{op='networkRequest',url=options.url,method=options.method,
+   body=options.body,contentType=options.contentType}
+ end,
+})
+rawset(app,'process',{
+ launch=function(options)
+  assert(type(options)=='table' and type(options.executable)=='string','Process launch requires an executable path')
+  return host{op='processRequest',executable=options.executable,args=options.args or {},
+   workingDirectory=options.workingDirectory}
+ end,
+})
 local function events()
  local handlers,nextId={},0;local e={}
  function e:on(name,fn) assert(type(fn)=='function');nextId=nextId+1;handlers[nextId]={name,fn};return nextId end

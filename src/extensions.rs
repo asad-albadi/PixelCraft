@@ -1,4 +1,9 @@
 //! Independent local extensions. Never discovers or launches another editor.
+mod network;
+mod process;
+pub use network::script_network_request;
+pub use process::script_process_request;
+
 use crate::{formats, model::Document};
 use serde::{Deserialize, Serialize};
 use std::{
