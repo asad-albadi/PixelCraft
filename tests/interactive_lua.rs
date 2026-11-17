@@ -23,6 +23,81 @@ fn dialog_callbacks_timer_events_and_params_change_the_sprite() {
     assert_eq!(result.layers[0].cels[0][1], [0, 25, 0, 255]);
 }
 #[test]
+fn tabbed_dialog_preserves_group_selection_and_reports_native_bounds() {
+    let mut request_count = 0;
+    run_source_with_host(
+        &Document::new(1, 1),
+        r#"
+local clicked,changed=0,0
+local dlg=Dialog{title='Tabbed extension'}
+dlg.bounds=Rectangle(18,24,300,180)
+dlg:tab{id='first',text='First',onclick=function(ev)
+ assert(ev.tab=='first' and dlg.data.page=='first')
+ assert(dlg.bounds.x==30 and dlg.bounds.y==40)
+ dlg.bounds=Rectangle(42,60,280,200)
+ clicked=clicked+1
+end}:entry{id='one',text='first value'}
+   :tab{id='second',text='Second'}:entry{id='two',text='second value'}
+   :endtabs{id='page',selected='second',onchange=function(ev)
+    assert(ev.tab=='first')
+    changed=changed+1
+   end}
+   :button{id='done',text='Close'}
+assert(dlg.data.page=='second')
+dlg:show()
+assert(clicked==1 and changed==1 and dlg.data.two=='second value')
+assert(dlg.bounds.x==44 and dlg.bounds.height==222)
+dlg:show{wait=false,bounds=Rectangle(30,32,260,180)}
+local timer
+timer=Timer{interval=0.05,ontick=function()
+ assert(dlg.bounds.x==90 and dlg.bounds.height==185)
+ timer:stop()
+ dlg:close()
+end}
+timer:start()
+"#,
+        0,
+        0,
+        None,
+        None,
+        json!({}),
+        Box::new(move |request| {
+            if request["op"] == "preferences" {
+                assert_eq!(request_count, 4);
+                return Ok(json!({}));
+            }
+            request_count += 1;
+            if request["op"] == "pump" {
+                assert_eq!(request["dialogs"][0]["bounds"], json!([30, 32, 260, 180]));
+                return Ok(json!({
+                    "time":request_count as f64,"dialogBounds":[{"id":1,"bounds":[90,70,260,185]}],
+                }));
+            }
+            assert_eq!(request["op"], "dialog");
+            let spec = &request["dialog"];
+            let group = spec["widgets"][0]["hostId"].as_str().unwrap();
+            assert_eq!(spec["widgets"][0]["kind"], "tabs");
+            assert_eq!(spec["widgets"][1]["tabId"], "first");
+            assert_eq!(spec["widgets"][2]["tabId"], "second");
+            assert!(spec["widgets"][3]["tabId"].is_null());
+            if request_count == 1 {
+                assert_eq!(spec["bounds"], json!([18, 24, 300, 180]));
+                assert_eq!(spec["data"]["page"], "second");
+                Ok(json!({
+                    "tabGroup":group,"tabId":"first","tabChanged":true,"event":{"tab":"first"},
+                    "data":{"page":"first"}, "dialogBounds":[{"id":1,"bounds":[30,40,320,201]}]
+                }))
+            } else {
+                assert_eq!(request_count, 2);
+                assert_eq!(spec["bounds"], json!([42, 60, 280, 200]));
+                Ok(json!({"widget":"done","dialogBounds":[{"id":1,"bounds":[44,62,299,222]}]}))
+            }
+        }),
+    )
+    .unwrap();
+}
+
+#[test]
 fn actual_file_bridge_saves_and_reopens_a_project() {
     use pixelcraft::{extensions::script_file_request, formats};
     let dir = std::env::temp_dir().join(format!("pixelcraft-script-files-{}", std::process::id()));

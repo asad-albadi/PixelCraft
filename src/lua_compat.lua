@@ -779,31 +779,110 @@ function Timer(t)
  timers[#timers+1]=timer;return timer
 end
 local function dialogSpec(d)
- local w={};for _,widget in ipairs(d._widgets)do local item={};for k,v in pairs(widget)do if type(v)~='function'then item[k]=v end end;item.id=widget.id or widget._hostId;w[#w+1]=item end
- return {id=d._id,title=d.title,widgets=w,data=d.data}
+ local w={}
+ for _,widget in ipairs(d._widgets)do
+  local item={}
+  for k,v in pairs(widget)do if k~='tabs' and type(v)~='function' then item[k]=v end end
+  item.id=widget.id or widget._hostId
+  item.hostId,item.tabGroup,item.tabId=widget._hostId,widget._tabGroup,widget._tabId
+  if widget.kind=='tabs' then
+   item.tabs={}
+   for _,tab in ipairs(widget.tabs)do
+    item.tabs[#item.tabs+1]={key=tab.key,id=tab.id,text=tab.text or '',visible=tab.visible,enabled=tab.enabled}
+   end
+  end
+  w[#w+1]=item
+ end
+ local b=d._requestedBounds
+ return {id=d._id,title=d.title,widgets=w,data=d.data,resizable=d._resizable,
+  bounds=b and {b.x,b.y,b.width,b.height},boundsRevision=d._boundsRevision}
+end
+local function receiveDialogBounds(response)
+ for _,entry in ipairs(response.dialogBounds or {})do
+  local dialog=dialogs[entry.id]
+  if dialog then dialog._bounds=Rectangle(entry.bounds) end
+ end
 end
 local function dispatch(d,response)
+ receiveDialogBounds(response)
  if response.data then for k,v in pairs(response.data)do if type(d.data[k])=='table' and getmetatable(d.data[k]) and getmetatable(d.data[k]).__name=='Color' then v=Color(v)end;d.data[k]=v end end
- for _,w in ipairs(d._widgets)do if (w.id or w._hostId)==response.widget then local callback=w.onclick or w.onchange;if callback then callback(response.event or {})elseif w.kind=='button'then d:close() end;break end end
+ if response.tabGroup then
+  for _,group in ipairs(d._widgets)do
+   if group.kind=='tabs' and group._hostId==response.tabGroup then
+    for _,tab in ipairs(group.tabs)do
+     if tab.key==response.tabId then
+      if tab.onclick then tab.onclick(response.event) end
+      if response.tabChanged and group.onchange then group.onchange(response.event) end
+      break
+     end
+    end
+    break
+   end
+  end
+ else
+  for _,w in ipairs(d._widgets)do if (w.id or w._hostId)==response.widget then local callback=w.onclick or w.onchange;if callback then callback(response.event or {})elseif w.kind=='button'then d:close() end;break end end
+ end
  if response.closed then d:close()end
 end
 function Dialog(t)
  if not nativeHost then return nil end
- t=type(t)=='table' and t or {title=t};local d={title=t.title or 'Extension',data={},bounds=Rectangle(0,0,300,200),_widgets={},_id=#dialogs+1,_visible=false,_onclose=t.onclose}
+ t=type(t)=='table' and t or {title=t}
+ local d=setmetatable({title=t.title or 'Extension',data={},_bounds=Rectangle(0,0,300,200),
+  _boundsRevision=0,_widgets={},_id=#dialogs+1,_visible=false,_onclose=t.onclose,
+  _resizable=t.resizable~=false and t.resizeable~=false},{
+  __index=function(self,key)if key=='bounds' then return Rectangle(self._bounds) end end,
+  __newindex=function(self,key,value)
+   if key=='bounds' then
+    local bounds=Rectangle(value)
+    assert(bounds.width>0 and bounds.height>0,'Dialog bounds must have positive size')
+    self._bounds=bounds
+    self._requestedBounds=bounds
+    self._boundsRevision=self._boundsRevision+1
+   else rawset(self,key,value) end
+  end,
+ })
  for _,kind in ipairs{'label','entry','number','slider','check','radio','combobox','color','shades','button','separator','file'}do
   d[kind]=function(self,w)w=w or {};w.kind=kind;w._hostId="widget:"..(#self._widgets+1);self._widgets[#self._widgets+1]=w
+   local group=self._activeTabs
+   if group then w._tabGroup=group._hostId;w._tabId=group.tabs[#group.tabs].key end
    if w.id then self.data[w.id]=kind=='check' or kind=='radio' or kind=='button' and (w.selected or false) or kind=='color' and Color(w.color or {}) or kind=='shades' and (w.colors or {}) or kind=='slider' and (w.value or w.min or 0) or kind=='number' and tonumber(w.text or '0') or kind=='combobox' and (w.option or (w.options or {})[1] or '') or kind=='file' and (w.filename or '') or w.text or ''
     if kind=='check' or kind=='radio' or kind=='button' then self.data[w.id]=w.selected or false end
    end;return self end
  end
  function d:newrow()return self end
- function d:tab(t)return self:separator(t)end
- function d:endtabs()return self end
+ function d:tab(t)
+  t=t or {}
+  local group=self._activeTabs
+  if not group then
+   group={kind='tabs',_hostId='tabs:'..(#self._widgets+1),tabs={}}
+   self._widgets[#self._widgets+1]=group
+   self._activeTabs=group
+  end
+  local key=t.id or group._hostId..':'..(#group.tabs+1)
+  assert(type(key)=='string','Tab id must be a string')
+  for _,tab in ipairs(group.tabs)do assert(tab.key~=key,'Tab ids must be unique within a group') end
+  group.tabs[#group.tabs+1]={key=key,id=t.id,text=t.text,onclick=t.onclick,enabled=t.enabled,visible=t.visible}
+  return self
+ end
+ function d:endtabs(t)
+  local group=self._activeTabs
+  if not group then return self end
+  t=t or {}
+  group.id,group.label,group.onchange=t.id,t.label,t.onchange
+  local selected=group.tabs[1].key
+  for _,tab in ipairs(group.tabs)do if tab.key==t.selected then selected=tab.key;break end end
+  self.data[group.id or group._hostId]=selected
+  self._activeTabs=nil
+  return self
+ end
  function d:modify(w)for _,item in ipairs(self._widgets)do if item.id==w.id then for k,v in pairs(w)do item[k]=v end;if w.text and (item.kind=='entry' or item.kind=='number' or item.kind=='label')then self.data[w.id]=item.kind=='number' and tonumber(w.text) or w.text end;if w.value~=nil then self.data[w.id]=w.value end;if w.selected~=nil then self.data[w.id]=w.selected end end end;return self end
  function d:close()if self._visible then self._visible=false;if self._onclose then self._onclose()end end;return self end
  function d:repaint()return self end
  function d:show(options)
-  options=options or {};self._visible=true
+  options=options or {}
+  self:endtabs()
+  if options.bounds then self.bounds=options.bounds end
+  self._visible=true
   if options.wait~=false then while self._visible do dispatch(self,host{op='dialog',dialog=dialogSpec(self)})end end
   return self
  end
@@ -824,6 +903,7 @@ _pw_loop=function()
   local running=false;for _,t in ipairs(timers)do running=running or t.isRunning end
   if #visible==0 and not running and not appEvents:_hasHandlers() and not (activeSprite and spriteEvents:_hasHandlers()) then break end
   local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,layerKeys=layerIdentityWire(),celKeys=celIdentityWire(),metadataKeys=metadataIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=activeSprite and selectionWire(spriteSelection)}
+  receiveDialogBounds(response)
   if response.editor then
    local editor=response.editor
    local target=sprite

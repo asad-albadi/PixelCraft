@@ -3,6 +3,7 @@ use crate::ui_icons::UiIcons;
 use eframe::egui::{self, Color32};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     sync::mpsc,
     time::{Duration, Instant},
 };
@@ -21,6 +22,7 @@ pub struct ScriptUi {
     pub use_system_clipboard: Option<bool>,
     pub modeless: bool,
     pub editor_update: Option<Value>,
+    applied_dialog_bounds: HashMap<u64, u64>,
 }
 impl ScriptUi {
     pub fn connect(&mut self, rx: mpsc::Receiver<Request>, native_clipboard: bool) {
@@ -61,6 +63,7 @@ impl ScriptUi {
         };
         let op = request.value["op"].as_str().unwrap_or("").to_string();
         let mut response = None;
+        let mut dialog_bounds = Vec::new();
         if matches!(op.as_str(), "clipboardRead" | "clipboardWrite") {
             if crate::fluent::modal_dialog(ctx, "Extension clipboard access", |ui| {
                 ui.label("Allow this extension to read and write images and text on the system clipboard?");
@@ -109,7 +112,12 @@ impl ScriptUi {
                     .unwrap_or_default()
             };
             for dialog in &mut dialogs {
-                if let Some(value) = draw_dialog(ctx, dialog) {
+                if let Some(value) = draw_dialog(
+                    ctx,
+                    dialog,
+                    &mut dialog_bounds,
+                    &mut self.applied_dialog_bounds,
+                ) {
                     response = Some(value);
                 }
             }
@@ -142,6 +150,9 @@ impl ScriptUi {
                 }
             });
         if let Some(mut value) = response {
+            if !dialog_bounds.is_empty() {
+                value["dialogBounds"] = json!(dialog_bounds);
+            }
             if op == "pump"
                 && let Some(editor) = self.editor_update.take()
             {
@@ -155,49 +166,349 @@ impl ScriptUi {
         ctx.request_repaint_after(Duration::from_millis(16));
     }
 }
-fn draw_dialog(ctx: &egui::Context, dialog: &mut Value) -> Option<Value> {
+fn draw_dialog(
+    ctx: &egui::Context,
+    dialog: &mut Value,
+    bounds: &mut Vec<Value>,
+    applied_bounds: &mut HashMap<u64, u64>,
+) -> Option<Value> {
     let title = dialog["title"].as_str().unwrap_or("Extension").to_string();
     let dialog_id = dialog["id"].as_u64().unwrap_or(0);
     let widgets = dialog["widgets"].as_array().cloned().unwrap_or_default();
+    let revision = dialog["boundsRevision"].as_u64().unwrap_or(0);
+    let window_id = egui::Id::new(("lua-dialog", dialog_id));
+    let mut open = true;
+    let mut window = egui::Window::new(title)
+        .id(window_id)
+        .open(&mut open)
+        .resizable(dialog["resizable"] != false)
+        .default_width(330.);
+    let requested_bounds = serde_json::from_value::<[i32; 4]>(dialog["bounds"].clone())
+        .ok()
+        .filter(|bounds| bounds[2] > 0 && bounds[3] > 0);
+    if let Some([x, y, width, height]) = requested_bounds {
+        let viewport = ctx.content_rect();
+        let size = egui::vec2(width as f32, height as f32).min(viewport.size());
+        let pos = egui::pos2(x as f32, y as f32);
+        window = window
+            .default_rect(egui::Rect::from_min_size(pos, size))
+            .vscroll(true);
+        if applied_bounds.insert(dialog_id, revision) != Some(revision) {
+            // Apply the requested geometry once so later frames support native dragging.
+            window = window.fixed_pos(pos).min_size(size).max_size(size);
+        }
+    }
     let data = dialog.get_mut("data").unwrap();
     let mut response = None;
-    let mut open = true;
-    egui::Window::new(title).id(egui::Id::new(("lua-dialog",dialog_id))).open(&mut open).default_width(330.).show(ctx,|ui|{
-        egui::ScrollArea::vertical().max_height(550.).show(ui,|ui|{for (n,w) in widgets.iter().enumerate(){
-            if w["visible"]==false {continue;}
-            ui.push_id(n,|ui|{ui.add_enabled_ui(w["enabled"]!=false,|ui|{
-                let id=w["id"].as_str().unwrap_or("");
-                let label=w["label"].as_str().unwrap_or("");
-                let text=w["text"].as_str().unwrap_or("").replace('&',"");
-                let kind=w["kind"].as_str().unwrap_or("");
-                if !label.is_empty(){ui.label(label);}
-                let mut changed=false;let mut event=json!({});
-                match kind {
-                    "label"=>{ui.label(data[id].as_str().unwrap_or(&text));},
-                    "separator"=>{ui.separator();if !text.is_empty(){ui.strong(text);}},
-                    "button"=>{if ui.pc_button(&text).clicked(){data[id]=json!(true);changed=true;}},
-                    "check"|"radio"=>{let mut value=data[id].as_bool().unwrap_or(false);changed=ui.checkbox(&mut value,&text).changed();data[id]=json!(value);},
-                    "entry"|"file"=>{let mut value=data[id].as_str().unwrap_or("").to_string();changed=ui.text_edit_singleline(&mut value).changed();if kind=="file"&&ui.pc_small_button("Browse…").clicked(){let path=if w["save"]==true {rfd::FileDialog::new().set_file_name(&value).save_file()}else{rfd::FileDialog::new().pick_file()};if let Some(p)=path{value=p.to_string_lossy().to_string();changed=true;}}data[id]=json!(value);},
-                    "number"=>{let mut value=data[id].as_f64().unwrap_or(0.);changed=ui.add(egui::DragValue::new(&mut value).max_decimals(w["decimals"].as_u64().unwrap_or(0)as usize)).changed();data[id]=json!(value);},
-                    "slider"=>{let mut value=data[id].as_f64().unwrap_or(0.);changed=ui.add(egui::Slider::new(&mut value,w["min"].as_f64().unwrap_or(0.)..=w["max"].as_f64().unwrap_or(100.)).integer()).changed();data[id]=json!(value);},
-                    "combobox"=>{let mut value=data[id].as_str().unwrap_or("").to_string();egui::ComboBox::from_id_salt((dialog_id,n)).selected_text(&value).show_ui(ui,|ui|{if let Some(options)=w["options"].as_array(){for option in options{let s=option.as_str().unwrap_or("");if ui.selectable_value(&mut value,s.to_string(),s).changed(){changed=true;}}}});data[id]=json!(value);},
-                    "color"=>{let c=&data[id];let mut rgba=[c["r"].as_u64().unwrap_or(0)as u8,c["g"].as_u64().unwrap_or(0)as u8,c["b"].as_u64().unwrap_or(0)as u8,c["a"].as_u64().unwrap_or(255)as u8];changed=ui.color_edit_button_srgba_unmultiplied(&mut rgba).changed();data[id]=json!({"r":rgba[0],"g":rgba[1],"b":rgba[2],"a":rgba[3]});},
-                    "shades"=>{if let Some(colors)=w["colors"].as_array(){ui.horizontal_wrapped(|ui|{for c in colors{let color=Color32::from_rgba_unmultiplied(c["r"].as_u64().unwrap_or(0)as u8,c["g"].as_u64().unwrap_or(0)as u8,c["b"].as_u64().unwrap_or(0)as u8,c["a"].as_u64().unwrap_or(255)as u8);if ui.add(egui::Button::new("   ").fill(color)).clicked(){changed=true;event=json!({"color":c,"button":1});}}});}},
-                    _=>{ui.label(format!("Unsupported widget: {kind}"));},
-                }
-                if changed {response=Some(json!({"dialog":dialog_id,"widget":id,"data":data,"event":event}));}
-            });});
-        }});
+    let mut active_tabs = HashMap::new();
+    let mut draw_widgets = |ui: &mut egui::Ui| {
+        for (n, w) in widgets.iter().enumerate() {
+            if w["visible"] == false {
+                continue;
+            }
+            if w["kind"] == "tabs" {
+                draw_tabs(ui, w, data, dialog_id, &mut active_tabs, &mut response);
+                continue;
+            }
+            if let Some(group) = w["tabGroup"].as_str()
+                && active_tabs.get(group).copied() != w["tabId"].as_str()
+            {
+                continue;
+            }
+            ui.push_id(n, |ui| {
+                ui.add_enabled_ui(w["enabled"] != false, |ui| {
+                    let id = w["id"].as_str().unwrap_or("");
+                    let label = w["label"].as_str().unwrap_or("");
+                    let text = w["text"].as_str().unwrap_or("").replace('&', "");
+                    let kind = w["kind"].as_str().unwrap_or("");
+                    if !label.is_empty() {
+                        ui.label(label);
+                    }
+                    let mut changed = false;
+                    let mut event = json!({});
+                    match kind {
+                        "label" => {
+                            ui.label(data[id].as_str().unwrap_or(&text));
+                        }
+                        "separator" => {
+                            ui.separator();
+                            if !text.is_empty() {
+                                ui.strong(text);
+                            }
+                        }
+                        "button" => {
+                            if ui.pc_button(&text).clicked() {
+                                data[id] = json!(true);
+                                changed = true;
+                            }
+                        }
+                        "check" | "radio" => {
+                            let mut value = data[id].as_bool().unwrap_or(false);
+                            changed = ui.checkbox(&mut value, &text).changed();
+                            data[id] = json!(value);
+                        }
+                        "entry" | "file" => {
+                            let mut value = data[id].as_str().unwrap_or("").to_string();
+                            changed = ui.text_edit_singleline(&mut value).changed();
+                            if kind == "file" && ui.pc_small_button("Browse…").clicked() {
+                                let path = if w["save"] == true {
+                                    rfd::FileDialog::new().set_file_name(&value).save_file()
+                                } else {
+                                    rfd::FileDialog::new().pick_file()
+                                };
+                                if let Some(p) = path {
+                                    value = p.to_string_lossy().to_string();
+                                    changed = true;
+                                }
+                            }
+                            data[id] = json!(value);
+                        }
+                        "number" => {
+                            let mut value = data[id].as_f64().unwrap_or(0.);
+                            changed = ui
+                                .add(
+                                    egui::DragValue::new(&mut value)
+                                        .max_decimals(w["decimals"].as_u64().unwrap_or(0) as usize),
+                                )
+                                .changed();
+                            data[id] = json!(value);
+                        }
+                        "slider" => {
+                            let mut value = data[id].as_f64().unwrap_or(0.);
+                            changed = ui
+                                .add(
+                                    egui::Slider::new(
+                                        &mut value,
+                                        w["min"].as_f64().unwrap_or(0.)
+                                            ..=w["max"].as_f64().unwrap_or(100.),
+                                    )
+                                    .integer(),
+                                )
+                                .changed();
+                            data[id] = json!(value);
+                        }
+                        "combobox" => {
+                            let mut value = data[id].as_str().unwrap_or("").to_string();
+                            egui::ComboBox::from_id_salt((dialog_id, n))
+                                .selected_text(&value)
+                                .show_ui(ui, |ui| {
+                                    if let Some(options) = w["options"].as_array() {
+                                        for option in options {
+                                            let s = option.as_str().unwrap_or("");
+                                            if ui
+                                                .selectable_value(&mut value, s.to_string(), s)
+                                                .changed()
+                                            {
+                                                changed = true;
+                                            }
+                                        }
+                                    }
+                                });
+                            data[id] = json!(value);
+                        }
+                        "color" => {
+                            let c = &data[id];
+                            let mut rgba = [
+                                c["r"].as_u64().unwrap_or(0) as u8,
+                                c["g"].as_u64().unwrap_or(0) as u8,
+                                c["b"].as_u64().unwrap_or(0) as u8,
+                                c["a"].as_u64().unwrap_or(255) as u8,
+                            ];
+                            changed = ui.color_edit_button_srgba_unmultiplied(&mut rgba).changed();
+                            data[id] = json!({"r":rgba[0],"g":rgba[1],"b":rgba[2],"a":rgba[3]});
+                        }
+                        "shades" => {
+                            if let Some(colors) = w["colors"].as_array() {
+                                ui.horizontal_wrapped(|ui| {
+                                    for c in colors {
+                                        let color = Color32::from_rgba_unmultiplied(
+                                            c["r"].as_u64().unwrap_or(0) as u8,
+                                            c["g"].as_u64().unwrap_or(0) as u8,
+                                            c["b"].as_u64().unwrap_or(0) as u8,
+                                            c["a"].as_u64().unwrap_or(255) as u8,
+                                        );
+                                        if ui.add(egui::Button::new("   ").fill(color)).clicked() {
+                                            changed = true;
+                                            event = json!({"color":c,"button":1});
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                        _ => {
+                            ui.label(format!("Unsupported widget: {kind}"));
+                        }
+                    }
+                    if changed {
+                        response =
+                            Some(json!({"dialog":dialog_id,"widget":id,"data":data,"event":event}));
+                    }
+                });
+            });
+        }
+    };
+    let window_response = window.show(ctx, |ui| {
+        if requested_bounds.is_some() {
+            draw_widgets(ui);
+        } else {
+            egui::ScrollArea::vertical()
+                .max_height(550.)
+                .show(ui, draw_widgets);
+        }
     });
+    if let Some(window) = window_response {
+        let rect = window.response.rect;
+        bounds.push(json!({"id":dialog_id,"bounds":[
+            rect.min.x.round() as i32, rect.min.y.round() as i32,
+            rect.width().round() as i32, rect.height().round() as i32,
+        ]}));
+    }
     if !open {
         response = Some(json!({"dialog":dialog_id,"closed":true,"data":data}));
     }
     response
 }
 
+fn draw_tabs<'a>(
+    ui: &mut egui::Ui,
+    group: &'a Value,
+    data: &mut Value,
+    dialog_id: u64,
+    active_tabs: &mut HashMap<&'a str, &'a str>,
+    response: &mut Option<Value>,
+) {
+    let (Some(group_id), Some(data_id), Some(tabs)) = (
+        group["hostId"].as_str(),
+        group["id"].as_str(),
+        group["tabs"].as_array(),
+    ) else {
+        return;
+    };
+    let visible = tabs.iter().filter(|tab| tab["visible"] != false);
+    let key = |tab: &'a Value| tab["key"].as_str();
+    let requested = if let Some(index) = data[data_id].as_u64() {
+        index
+            .checked_sub(1)
+            .and_then(|index| tabs.get(index as usize))
+            .and_then(key)
+    } else {
+        data[data_id].as_str()
+    };
+    let mut selected = visible
+        .clone()
+        .filter_map(key)
+        .find(|tab| Some(*tab) == requested)
+        .or_else(|| visible.clone().next().and_then(key));
+    if let Some(label) = group["label"].as_str() {
+        ui.label(label);
+    }
+    ui.push_id(group_id, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for tab in visible {
+                let Some(tab_key) = key(tab) else {
+                    continue;
+                };
+                let label = tab["text"].as_str().unwrap_or("").replace('&', "");
+                let button = egui::Button::selectable(selected == Some(tab_key), label);
+                if ui.add_enabled(tab["enabled"] != false, button).clicked() {
+                    let changed = selected != Some(tab_key);
+                    selected = Some(tab_key);
+                    data[data_id] = json!(tab_key);
+                    *response = Some(json!({
+                        "dialog":dialog_id,"tabGroup":group_id,"tabId":tab_key,"tabChanged":changed,
+                        "data":data,"event":{"tab":tab["id"].as_str().unwrap_or("")},
+                    }));
+                }
+            }
+        });
+    });
+    if let Some(selected) = selected {
+        active_tabs.insert(group_id, selected);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clicking_native_dialog_tabs_changes_the_visible_controls() {
+        let ctx = egui::Context::default();
+        let mut bounds = Vec::new();
+        let mut applied_bounds = HashMap::new();
+        let mut dialog = json!({
+            "id":7,"title":"Tabbed dialog","bounds":[40,55,320,200],"boundsRevision":1,
+            "data":{"page":"second"},
+            "widgets":[
+                {"kind":"tabs","id":"page","hostId":"tabs:1","tabs":[
+                    {"id":"first","key":"first","text":"First tab"},
+                    {"id":"second","key":"second","text":"Second tab"}
+                ]},
+                {"kind":"label","id":"a","tabGroup":"tabs:1","tabId":"first","text":"First body"},
+                {"kind":"label","id":"b","tabGroup":"tabs:1","tabId":"second","text":"Second body"},
+                {"kind":"label","id":"tail","text":"Always visible"}
+            ]
+        });
+        let text = |output: &egui::FullOutput, label| {
+            output.shapes.iter().find_map(|shape| {
+                if let egui::Shape::Text(item) = &shape.shape
+                    && item.galley.text() == label
+                {
+                    return Some(item.pos + item.galley.size() * 0.5);
+                }
+                None
+            })
+        };
+        let mut frame = |events, new_bounds: Option<[i32; 4]>| {
+            if let Some(new_bounds) = new_bounds {
+                dialog["bounds"] = json!(new_bounds);
+                dialog["boundsRevision"] = json!(2);
+            }
+            let mut reply = None;
+            bounds.clear();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(850., 620.),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |_| {
+                reply = draw_dialog(&ctx, &mut dialog, &mut bounds, &mut applied_bounds);
+            });
+            output.textures_delta.clear();
+            (output, reply, bounds[0]["bounds"].clone())
+        };
+        frame(vec![], None);
+        let (output, _, outer) = frame(vec![], None);
+        assert_eq!(outer[0], 40);
+        assert_eq!(outer[1], 55);
+        assert!(outer[2].as_i64().unwrap() >= 300);
+        assert!(outer[3].as_i64().unwrap() >= 175);
+        assert!(text(&output, "Second body").is_some());
+        assert!(text(&output, "Always visible").is_some());
+        assert!(text(&output, "First body").is_none());
+        let pos = text(&output, "First tab").unwrap();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![egui::Event::PointerMoved(pos)], None);
+        let (output, response, _) = frame(vec![button(true), button(false)], None);
+        let response = response.expect("Tab button callback");
+        assert_eq!(response["event"]["tab"], "first");
+        assert_eq!(response["data"]["page"], "first");
+        assert_eq!(response["tabChanged"], true);
+        assert!(text(&output, "First body").is_some());
+        assert!(text(&output, "Second body").is_none());
+        frame(vec![], Some([82, 107, 276, 249]));
+        let (output, _, outer) = frame(vec![], None);
+        assert_eq!(outer, json!([82, 107, 276, 249]));
+        assert!(text(&output, "First body").is_some());
+    }
+
     #[test]
     fn extension_clipboard_requires_a_native_choice_and_remembers_internal_mode() {
         let context = egui::Context::default();
@@ -252,7 +563,9 @@ mod tests {
         let mut dialog = json!({"id":1,"title":"Extension UI","data":{"amount":"12","apply":false},"widgets":[{"kind":"entry","id":"amount","label":"Amount"},{"kind":"button","id":"apply","text":"Apply"}]});
         // Exercise the same widget renderer used by the running editor.
         let mut result = ctx.run_ui(egui::RawInput::default(), |ui| {
-            assert!(draw_dialog(ui.ctx(), &mut dialog).is_none());
+            assert!(
+                draw_dialog(ui.ctx(), &mut dialog, &mut Vec::new(), &mut HashMap::new()).is_none()
+            );
         });
         assert!(!result.shapes.is_empty());
         assert_eq!(dialog["data"]["amount"], "12");

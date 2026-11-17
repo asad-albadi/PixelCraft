@@ -236,6 +236,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 3 macOS packaging checkpoint. Native Apple Silicon and Intel runners build the vendored Lua source into a per-architecture dylib and statically link the existing WebP decoder. The reusable workflow runs from pull requests and desktop releases. It packages an ad-hoc signed application with its icon and notices and verifies checksum, architecture, system-only linked libraries, Lua, WebP, and a nonblank graphical startup after relocation. Bundle layout tests, workflow syntax and matrix checks, shell syntax, strict Clippy, and 611 Windows all-target tests passed. Native CI and release publication remain pending.
 
+- Item 3 Apple Silicon execution verified in Actions run 44027773808. The packaged application passed native startup, Lua, and WebP checks, and the downloaded ZIP matched its SHA-256 file. Intel reached the tests but the million-pixel Lua console snapshot exceeded its time budget on that runner. The serializer now emits integer RGBA tuples together to reduce the work per pixel without extending the budget. Intel still needs a passing package run.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -300,6 +302,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
   - Slices, tilesets, and tiles now share the modeless identity bridge. The Windows editor regression exercises equal-valued slices and tilesets, native renaming and deletion, two identical tiles changing order, a duplicate with its own identity, and writes through a retained tile image after native undo and redo. Tile identity remains outside native and ASE persistence.
   - The Windows and Linux release jobs now include an isolated desktop test that supplies multiline Unicode text via a native clipboard handle, reads it in editor Lua, and reads back the image Lua writes. Execution on the release runners is pending.
 - [ ] **46. Expand extension panels and lifecycle.** Support custom drawing canvases, tabbed dialogs and bounds, more editor events, command menu registration and removal, and reload.
+  - Lua dialog tab groups show only the active page and retain hidden widget values. The tab button and the group's selection change deliver separate callbacks. Dialogs accept and report viewport bounds in modal and modeless sessions. Tests cover a pointer-driven page switch, programmatic repositioning and resizing of the same window, and the Lua callbacks and selection data. Canvas, events, and lifecycle remain open.
 - [ ] **47. Define permissioned system APIs for scripts.** Specify what file, process, and network access can be granted, and test that denied operations stay blocked.
 
 ## Editor and MCP workflow controls

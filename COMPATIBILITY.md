@@ -36,6 +36,8 @@ Lua exposes properties for the default ASE user map and properties(name) for ext
 
 Real egui controls support Dialog label, entry, number, slider, check/radio, combobox, color, shades, separator, file and button widgets; data, modify, show, close, repaint and callback handling. Modal dialogs pause the worker; wait=false dialogs continue through the event pump. Unnamed button callbacks work. Timers run periodically from elapsed editor time; they can be started/stopped and retain their callbacks. app.events supports color/site changes, sprite.events supports change, and handlers can be removed. refresh previews edits in the editor. Stop extension exits the interactive pump. Editor-backed sessions remain active while they own dialogs, timers or subscribed events.
 
+Use `Dialog:tab` and `Dialog:endtabs` to group controls into pages. Each group exposes its selected tab ID through `Dialog.data`. Tab clicks and group selection changes have separate callbacks. Controls keep their values when their page is hidden. Assign a rectangle to `dialog.bounds` or pass it to `Dialog:show` to position and size the window in editor coordinates. The live bounds follow native dragging and resizing, and the editor constrains the window to the available viewport.
+
 Custom canvas/graphics-context widgets, exact original dialog layouts/tab groups, radio exclusivity, dialog bounds positioning, full editor mouse/paint events, hot-reloading and extension command menu placement are not implemented. Concurrent editor/script edits use document snapshots rather than independent per-operation history. Prefer finishing/stopping an extension before unrelated structural editing.
 
 ## Contributions
