@@ -168,6 +168,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 cel move identity checkpoint. Modeless Lua binds accessed cel slots to native runtime IDs. Its editor request-loop regression moves a cel to a different layer and frame, then uses the original image handle to paint the destination, checks that the replaced cel handle is invalid, and confirms the moved native ID survives commit. Native editor undo of a replaced cel, other object types, detached clipboard tileset metadata, and system clipboard verification remain open.
 
+- Item 45 native history identity checkpoint. Modeless Lua retains weak references to frame and cel handles while their objects are absent. The Windows editor test verifies restoration of an overwritten cel on native undo, invalidation of the vacated cel, and restoration of the same inserted frame and vacated cel on redo. Lua rollback and undo also retain the frame export ID reservation. Identity for other object types and native clipboard and detached tileset metadata remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

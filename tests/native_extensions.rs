@@ -1852,6 +1852,7 @@ fn lua_layer_frame_and_cel_handles_survive_edits_undo_and_redo() {
     assert_eq!(output.layers.len(), 1);
     assert_eq!(output.layers[0].name, "Keep");
     assert_eq!(output.durations[3], 125);
+    assert_eq!(output.frame_export_id(0), 4);
     assert_eq!(output.layers[0].cel_meta[3].opacity, 150);
     assert_eq!(output.layers[0].cels[3][4], [77, 13, 29, 255]);
 }

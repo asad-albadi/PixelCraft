@@ -537,7 +537,7 @@ local function isTagUserData(chunk)
  return chunk.frame==0 and chunk.kind==0x2020 and chunk.owner=='tags'
 end
 local tilesetHandle,spriteTilesets,assignLayerTileset,snapshotTileset,detachedTileset
-local cloneDocumentState,insertFrameIdentity,cel,rebuildHandles
+local cloneDocumentState,insertFrameIdentity,retainFrameExportIds,cel,rebuildHandles
 local setLayerIdentity,layerIdentityWire,celIdentityWire,reconcileDocumentState
 do
  -- Keep Lua handles and their identity tokens out of the serialized document.
@@ -547,6 +547,7 @@ do
  local frames=setmetatable({},{__mode='kv'})
  local cels=setmetatable({},{__mode='kv'})
  local keysByWire=setmetatable({},{__mode='v'})
+ local celKeysByWire=setmetatable({},{__mode='v'})
  local nextLayerKey,nextCelKey=0,0
  local state
 
@@ -584,21 +585,22 @@ do
   local current=state(doc)
   local oldIds=doc.frame_export_ids and doc.frame_export_ids.frames
   local newIds=document.frame_export_ids and document.frame_export_ids.frames
-  local previous={}
-  for i,key in ipairs(current.frameKeys)do previous[oldIds and oldIds[i] or i-1]=key end
+  local history=current.frameHistory
+  for i,key in ipairs(current.frameKeys)do history[oldIds and oldIds[i] or i-1]=key end
   local next=state(document)
+  next.frameHistory=history
   for i=1,#document.durations do
-   next.frameKeys[i]=previous[newIds and newIds[i] or i-1] or next.frameKeys[i]
+   next.frameKeys[i]=history[newIds and newIds[i] or i-1] or next.frameKeys[i]
   end
   setLayerIdentity(document,keys)
   if not celKeys then
    next.celRows=current.celRows
    return
   end
-  local previousCels={}
-  for key in pairs(current.celSlots)do previousCels[key.wire]=key end
   for _,entry in ipairs(celKeys)do
-   local key=previousCels[entry.key]
+   -- A retained handle keeps its token alive even when undo history is
+   -- the only place the editor still has that cel.
+   local key=celKeysByWire[entry.key]
    local layer=document.layers[entry.layer]
    local owner=layer and layerKeys[layer]
    local frame=next.frameKeys[entry.frame]
@@ -615,7 +617,7 @@ do
   if value then return value end
   local keys={}
   for i=1,#document.durations do keys[i]={} end
-  value={frameKeys=keys,celRows={},celSlots={}}
+  value={frameKeys=keys,frameHistory=setmetatable({},{__mode='v'}),celRows={},celSlots={}}
   states[document]=value
   return value
  end
@@ -630,7 +632,8 @@ do
    for frame,key in pairs(row)do copied[frame]=key end
    rows[layer]=copied
   end
-  states[target]={frameKeys=table.move(keys,1,#keys,1,{}),celRows=rows,celSlots={}}
+  states[target]={frameKeys=table.move(keys,1,#keys,1,{}),frameHistory=previous.frameHistory,
+   celRows=rows,celSlots={}}
   for i,layer in ipairs(source.layers)do layerKeys[target.layers[i]]=layerKeys[layer] end
   return target
  end
@@ -658,6 +661,7 @@ do
   if not key then
    nextCelKey=nextCelKey+1
    key={wire=nextCelKey}
+   celKeysByWire[nextCelKey]=key
    row[frame]=key
    value.celSlots[key]={layer=owner,frame=frame}
   end
@@ -981,13 +985,25 @@ local function insertFrameMetadata(index)
  end
 end
 
+local function explicitFrameExportIds(document)
+ local ids=document.frame_export_ids
+ if not ids then
+  ids={frames={},next=#document.durations}
+  for i=1,#document.durations do ids.frames[i]=i-1 end
+  document.frame_export_ids=ids
+ end
+ return ids
+end
+retainFrameExportIds=function(previous,restored)
+ local previousNext=previous.frame_export_ids and previous.frame_export_ids.next or #previous.durations
+ local restoredNext=restored.frame_export_ids and restored.frame_export_ids.next or #restored.durations
+ if previousNext>restoredNext then explicitFrameExportIds(restored).next=previousNext end
+end
 local function insertFrameExportId(index)
  local ids=doc.frame_export_ids
  if not ids then
   if index>#doc.durations then return end
-  ids={frames={},next=#doc.durations}
-  for i=1,#doc.durations do ids.frames[i]=i-1 end
-  doc.frame_export_ids=ids
+  ids=explicitFrameExportIds(doc)
  end
  assert(ids.next<=4294967295,'Frame export ID limit exceeded')
  table.insert(ids.frames,index,ids.next)

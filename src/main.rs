@@ -3891,6 +3891,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             if changed {
                 self.doc = document;
+            } else {
+                self.doc.retain_frame_export_id_counter(&document);
             }
             if let Some(path) = path {
                 self.path = Some(path);
@@ -8647,28 +8649,46 @@ mod tests {
  local replaced=created:cel(1)
  local dialog=Dialog{title='Timeline identity'}
  dialog:show{wait=false}
- local listener
+ local listener,vacated,inserted
+ local phase=0
  listener=sprite.events:on('change',function()
-  assert(original==sprite.layers[1] and original.name=='Keep')
-  assert(created==sprite.layers[2] and created.name=='Script layer')
-  assert(frame==sprite.frames[3] and frame.frameNumber==3)
-  assert(cel==created:cel(1) and cel.layer==created and cel.frameNumber==1)
-  assert(original:cel(frame)~=cel)
-  assert(not pcall(function()return replaced.opacity end))
-  image:drawPixel(2,0,Color('#0b2137'))
-  sprite.events:off(listener)
-  dialog:close()
+  phase=phase+1
+  if phase==1 then
+   assert(original==sprite.layers[1] and original.name=='Keep')
+   assert(created==sprite.layers[2] and created.name=='Script layer')
+   assert(frame==sprite.frames[3] and frame.frameNumber==3)
+   inserted=sprite.frames[2]
+   assert(cel==created:cel(1) and cel.layer==created and cel.frameNumber==1)
+   vacated=original:cel(frame)
+   assert(vacated~=cel)
+   assert(not pcall(function()return replaced.opacity end))
+   app.activeFrame=frame
+  elseif phase==2 then
+   assert(original==sprite.layers[2] and created==sprite.layers[3])
+   assert(frame==sprite.frames[2] and cel==original:cel(frame))
+   assert(replaced==created:cel(1) and replaced.opacity==255)
+   assert(not pcall(function()return vacated.opacity end))
+   assert(not pcall(function()return inserted.frameNumber end))
+   app.activeFrame=frame
+  else
+   assert(phase==3 and frame==sprite.frames[3] and inserted==sprite.frames[2])
+   assert(cel==created:cel(1) and vacated==original:cel(frame))
+   assert(not pcall(function()return replaced.opacity end))
+   image:drawPixel(2,0,Color('#0b2137'))
+   sprite.events:off(listener)
+   dialog:close()
+  end
  end)
  "#,
         )
         .unwrap();
         app.start_script(path, None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        let mut edited = false;
+        let mut phase = 0;
         while app.script_job.is_some() && Instant::now() < deadline {
             let mut output = ctx.run_ui(egui::RawInput::default(), |_| app.show_script_ui(&ctx));
             output.textures_delta.clear();
-            if !edited && app.script_ui.modeless && app.doc.layers.len() == 3 {
+            if phase == 0 && app.script_ui.modeless && app.doc.layers.len() == 3 {
                 app.remember_action("Edit timeline while extension is open");
                 app.doc.swap_layers(0, 1);
                 app.doc.swap_layers(1, 2);
@@ -8676,13 +8696,23 @@ mod tests {
                 app.doc
                     .move_cel_range(CelRange::between((0, 2), (0, 2)), 1, 0, false)
                     .unwrap();
-                edited = true;
+                phase = 1;
+            } else if phase == 1 && app.frame == 2 {
+                app.undo();
+                phase = 2;
+            } else if phase == 2 && app.frame == 1 {
+                app.redo();
+                phase = 3;
             }
             app.poll_script();
             std::thread::yield_now();
         }
         assert!(app.script_job.is_none(), "Lua script timed out");
-        assert!(edited, "The script preview was never presented");
+        assert_eq!(
+            phase, 3,
+            "The modeless edits did not reach redo: {}",
+            app.status
+        );
         assert_eq!(app.status, "Applied extension changes");
         assert_eq!(app.doc.layers[0].name, "Keep");
         assert_eq!(app.doc.layers[0].editor_id.to_string(), original_layer);

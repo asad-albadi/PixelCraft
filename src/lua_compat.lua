@@ -227,7 +227,14 @@ if (_pw_options or {}).editorWorkspace then
  end
 end
 local function snapshot() return {document=cloneDocumentState(doc),mask=copy(spriteSelection._mask),frame=activeFrame,layer=activeLayer} end
-local function restore(s) doc=cloneDocumentState(s.document);spriteSelection=bindSpriteHandle(selection(copy(s.mask)),sprite);activeFrame=s.frame;activeLayer=s.layer;rebuildHandles() end
+local function restore(s)
+ local restored=cloneDocumentState(s.document)
+ retainFrameExportIds(doc,restored)
+ doc=restored
+ spriteSelection=bindSpriteHandle(selection(copy(s.mask)),sprite)
+ activeFrame,activeLayer=s.frame,s.layer
+ rebuildHandles()
+end
 local transactionDepth=0
 rawset(app,'transaction',function(a,b)
  local owner,before=sprite,snapshot()
