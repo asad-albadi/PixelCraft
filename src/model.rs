@@ -2635,6 +2635,25 @@ impl Document {
             }
         }
     }
+    /// Read one authored layer pixel without allocating a full layer raster.
+    pub fn sample_layer(&self, layer: usize, frame: usize, x: i32, y: i32) -> Option<Pixel> {
+        let index = self.index(x, y)?;
+        let layer_data = self.layers.get(layer)?;
+        if let Some(set) = layer_data
+            .tileset
+            .and_then(|index| self.tilesets.get(index))
+        {
+            let Some((geometry, col, row)) = self.tile_at_point(layer, frame, (x, y)) else {
+                return Some(CLEAR);
+            };
+            let placement = layer_data.tile_cels[frame][row * geometry.columns + col];
+            let px = (i64::from(x) - i64::from(geometry.x)) as usize % set.width;
+            let py = (i64::from(y) - i64::from(geometry.y)) as usize % set.height;
+            return Some(set.placement_pixel(placement, px, py));
+        }
+        Some(layer_data.cels.get(frame)?[index])
+    }
+
     pub fn layer_pixels(&self, l: usize, f: usize) -> Vec<Pixel> {
         if self.layers[l].tileset.is_none() {
             return self.layers[l].cels[f].to_vec();

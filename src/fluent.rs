@@ -611,11 +611,12 @@ impl PixelCraft {
                     }
                     ui.scope(|ui| {
                         ui.spacing_mut().interact_size = Vec2::new(32., 28.);
+                        let mut color = self.fg;
                         if ui
-                            .color_edit_button_srgba_unmultiplied(&mut self.fg)
+                            .color_edit_button_srgba_unmultiplied(&mut color)
                             .changed()
                         {
-                            self.set_active_color(self.fg);
+                            self.set_active_color(color);
                         }
                     });
                     if !narrow {
@@ -1008,6 +1009,11 @@ impl PixelCraft {
             )),
         )
         .ui(ui, |ui| self.tools(ui));
+        if self.tool == Tool::Picker {
+            self.eyedropper_controls(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
         if self.tool == Tool::Fill {
             self.fill_controls(ui);
             toggle(ui, &mut self.grid, "Pixel grid");

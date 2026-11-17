@@ -293,6 +293,13 @@ pub struct ReferenceImage {
     pub opacity: u8,
     pub visible: bool,
 }
+impl ReferenceImage {
+    pub fn sample_pixel(&self, x: usize, y: usize) -> Pixel {
+        let mut pixel = self.pixels[y * self.width + x];
+        pixel[3] = ((u16::from(pixel[3]) * u16::from(self.opacity) + 127) / 255) as u8;
+        pixel
+    }
+}
 pub fn read_image(path: &Path) -> Result<RgbaImage, String> {
     let mut reader = mcp_io::image_reader(path)
         .map_err(|e| e.to_string())?
@@ -1226,6 +1233,28 @@ pub(crate) fn expand_atlas_inputs_with_path_check(
     Ok(out)
 }
 
+fn reference_coordinates(reference: &ReferenceImage, x: i32, y: i32) -> Option<(usize, usize)> {
+    let rx = ((x as f32 - reference.x) / reference.scale).floor();
+    let ry = ((y as f32 - reference.y) / reference.scale).floor();
+    (rx >= 0. && ry >= 0. && rx < reference.width as f32 && ry < reference.height as f32)
+        .then_some((rx as usize, ry as usize))
+}
+
+/// Sample the uppermost visible docked reference covering this canvas position.
+pub fn sample_reference_image(d: &Document, x: i32, y: i32) -> Option<Pixel> {
+    [false, true].into_iter().find_map(|behind| {
+        d.references
+            .iter()
+            .rev()
+            .filter(|reference| {
+                reference.visible && !reference.floating && reference.behind == behind
+            })
+            .find_map(|reference| {
+                reference_coordinates(reference, x, y).map(|(x, y)| reference.sample_pixel(x, y))
+            })
+    })
+}
+
 /// Sample the rendered reference stack, excluding checkerboard and onion skin.
 pub fn sample_canvas(d: &Document, frame: usize, x: i32, y: i32, references: bool) -> Pixel {
     let artwork = d.index(x, y).map_or(CLEAR, |i| {
@@ -1247,14 +1276,8 @@ pub fn sample_canvas(d: &Document, frame: usize, x: i32, y: i32, references: boo
             if !r.visible || r.floating || r.behind != behind {
                 continue;
             }
-            let rx = ((x as f32 - r.x) / r.scale).floor();
-            let ry = ((y as f32 - r.y) / r.scale).floor();
-            if rx >= 0. && ry >= 0. && rx < r.width as f32 && ry < r.height as f32 {
-                color = over(
-                    color,
-                    r.pixels[ry as usize * r.width + rx as usize],
-                    r.opacity,
-                );
+            if let Some((x, y)) = reference_coordinates(r, x, y) {
+                color = over(color, r.pixels[y * r.width + x], r.opacity);
             }
         }
     }

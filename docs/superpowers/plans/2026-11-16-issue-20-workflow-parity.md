@@ -184,6 +184,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 48 complete. Edit opens the keyboard shortcut editor for capture, conflict review, individual removal, and per-command reset to the active preset. Capture blocks editor dispatch, recognizes Ctrl and Cmd aliases, and protects clipboard, navigation, and system shortcuts. Escape and Cancel leave bindings intact. The Windows UI test verifies conflict review and replacement, alias conflicts, clipboard input, cancellation, reset, and persistence. Formatting, strict Clippy, and 561 Windows all-target tests passed.
 
+- Item 17 complete. The eyedropper can sample visible artwork, the active layer, or reference images, and can pick full RGBA, color, alpha, individual RGB channels, grayscale, or a palette index. Primary and secondary clicks target separate swatches. The Windows UI test checks source selection, per-button channel updates, exact translucent RGB, duplicate indexed swatch identity, and an unchanged undo history. Formatting, strict Clippy, and 562 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -205,7 +207,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **14. Generate palettes and improve indexed conversion.** Build an editable palette from artwork and expose conversion dithering and transparent-index controls.
 - [ ] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.
 - [ ] **16. Extend ICC color management.** Assign and convert document profiles, choose import policies, and select a monitor, sRGB, or custom display profile.
-- [ ] **17. Add eyedropper sampling controls.** Choose the sampling source and pick specific color or alpha channels.
+- [x] **17. Add eyedropper sampling controls.** Choose the sampling source and pick specific color or alpha channels.
 - [ ] **18. Make symmetry axes movable.** Position each axis independently on the canvas.
 
 ## Layers, timeline, and tilemaps

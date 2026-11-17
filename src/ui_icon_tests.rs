@@ -2669,3 +2669,112 @@ fn shortcut_capture_checks_conflicts_reserved_keys_escape_and_command_reset() {
     );
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn eyedropper_source_and_channels_target_each_drawing_color() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-eyedropper.png")));
+    let mut doc = Document::new(4, 2);
+    doc.layers[0].cels[0].set(0, [170, 70, 30, 255]);
+    doc.add_layer();
+    doc.layers[1].cels[0].set(0, [21, 61, 171, 102]);
+    doc.references
+        .push(pixelcraft::productivity::ReferenceImage {
+            name: "Ref".into(),
+            width: 1,
+            height: 1,
+            pixels: vec![[200, 130, 80, 180]].into(),
+            x: 0.,
+            y: 0.,
+            scale: 1.,
+            opacity: 255,
+            visible: true,
+            behind: false,
+            floating: false,
+        });
+    let merged = doc.composite(0)[0];
+    app.replace(doc, None);
+    app.layer = 1;
+    app.tool = Tool::Picker;
+    app.fg = [1, 2, 3, 255];
+    app.bg = [50, 60, 70, 210];
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 22.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let point = board.min + Vec2::new(board.width() / 8., board.height() / 4.);
+    let click_color = |app: &mut PixelCraft, button| {
+        discard_frame(
+            app,
+            &ctx,
+            size,
+            1.,
+            vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        discard_frame(
+            app,
+            &ctx,
+            size,
+            1.,
+            vec![egui::Event::PointerButton {
+                pos: point,
+                button,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    };
+    let choose = |app: &mut PixelCraft, current, option| {
+        let mut out = frame(app, &ctx, size, 1., vec![]);
+        let combo = text_position(&mut out, current);
+        discard_frame(app, &ctx, size, 1., click(combo));
+        let mut out = frame(app, &ctx, size, 1., vec![]);
+        let option = text_position(&mut out, option);
+        discard_frame(app, &ctx, size, 1., click(option));
+    };
+    click_color(&mut app, egui::PointerButton::Primary);
+    assert_eq!(app.fg, merged);
+    choose(&mut app, "Visible layers", "Active layer");
+    choose(&mut app, "Color and alpha", "Alpha only");
+    click_color(&mut app, egui::PointerButton::Secondary);
+    assert_eq!(app.bg, [50, 60, 70, 102]);
+    assert_eq!(app.fg, merged);
+
+    choose(&mut app, "Alpha only", "Red only");
+    click_color(&mut app, egui::PointerButton::Primary);
+    assert_eq!(app.fg, [21, merged[1], merged[2], 255]);
+
+    choose(&mut app, "Active layer", "Reference images");
+    choose(&mut app, "Red only", "Color and alpha");
+    click_color(&mut app, egui::PointerButton::Primary);
+    assert_eq!(app.fg, [200, 130, 80, 180]);
+
+    let duplicate = [35, 85, 155, 255];
+    app.doc
+        .import_palette(vec![CLEAR, duplicate, duplicate])
+        .unwrap();
+    app.doc.set_color_mode(ColorMode::Indexed);
+    app.doc.drawing_index = Some(2);
+    app.doc.set_pixel(1, 0, 0, duplicate);
+    app.doc.drawing_index = None;
+    choose(&mut app, "Reference images", "Active layer");
+    choose(&mut app, "Color and alpha", "Palette index");
+    click_color(&mut app, egui::PointerButton::Secondary);
+    assert_eq!(app.secondary_palette_index, Some(2));
+    assert_eq!(app.bg, duplicate);
+    assert!(app.undo.is_empty());
+}

@@ -6,6 +6,61 @@ use pixelcraft::{
     workflows::SheetOptions,
 };
 use serde::{Deserialize, Serialize};
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum EyedropperSource {
+    #[default]
+    Visible,
+    Active,
+    References,
+}
+
+impl EyedropperSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Visible => "Visible layers",
+            Self::Active => "Active layer",
+            Self::References => "Reference images",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum EyedropperChannel {
+    #[default]
+    ColorAlpha,
+    Color,
+    Alpha,
+    Red,
+    Green,
+    Blue,
+    Gray,
+    GrayAlpha,
+    PaletteIndex,
+}
+
+impl EyedropperChannel {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ColorAlpha => "Color and alpha",
+            Self::Color => "Color only",
+            Self::Alpha => "Alpha only",
+            Self::Red => "Red only",
+            Self::Green => "Green only",
+            Self::Blue => "Blue only",
+            Self::Gray => "Grayscale",
+            Self::GrayAlpha => "Grayscale and alpha",
+            Self::PaletteIndex => "Palette index",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+struct EyedropperOptions {
+    source: EyedropperSource,
+    channel: EyedropperChannel,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Preferences {
@@ -23,6 +78,7 @@ struct Preferences {
     default_grid: bool,
     background_updates: bool,
     sample_references: bool,
+    eyedropper: EyedropperOptions,
     whole_pixel_wheel_zoom: bool,
 }
 impl Default for Preferences {
@@ -42,6 +98,7 @@ impl Default for Preferences {
             default_grid: false,
             background_updates: false,
             sample_references: false,
+            eyedropper: EyedropperOptions::default(),
             whole_pixel_wheel_zoom: false,
         }
     }
@@ -1603,15 +1660,140 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 }
             });
     }
-    pub(super) fn sample_color(&self, x: i32, y: i32) -> Pixel {
-        sample_canvas(
-            &self.doc,
-            self.frame,
-            x,
-            y,
-            self.power.preferences.sample_references,
-        )
+    pub(super) fn eyedropper_controls(&mut self, ui: &mut egui::Ui) {
+        let options = &mut self.power.preferences.eyedropper;
+        let before = *options;
+        ui.label("Sample");
+        egui::ComboBox::from_id_salt("eyedropper-source")
+            .selected_text(options.source.label())
+            .show_ui(ui, |ui| {
+                for source in [
+                    EyedropperSource::Visible,
+                    EyedropperSource::Active,
+                    EyedropperSource::References,
+                ] {
+                    ui.pc_selectable_value(&mut options.source, source, source.label());
+                }
+            });
+        ui.label("Pick");
+        egui::ComboBox::from_id_salt("eyedropper-channel")
+            .height(320.)
+            .selected_text(options.channel.label())
+            .show_ui(ui, |ui| {
+                use EyedropperChannel::*;
+                for channel in [
+                    ColorAlpha,
+                    Color,
+                    Alpha,
+                    Red,
+                    Green,
+                    Blue,
+                    Gray,
+                    GrayAlpha,
+                    PaletteIndex,
+                ] {
+                    ui.pc_selectable_value(&mut options.channel, channel, channel.label());
+                }
+            });
+        if before != *options && self.shot.is_none() {
+            self.save_workflow_preferences();
+        }
     }
+
+    pub(super) fn eyedropper_picks_tiles(&self) -> bool {
+        self.power.preferences.eyedropper == EyedropperOptions::default()
+    }
+
+    pub(super) fn pick_color(&mut self, (x, y): (i32, i32), secondary: bool) {
+        let (sample, index) = match self.power.preferences.eyedropper.source {
+            EyedropperSource::Visible => (
+                Some(sample_canvas(
+                    &self.doc,
+                    self.frame,
+                    x,
+                    y,
+                    self.power.preferences.sample_references,
+                )),
+                None,
+            ),
+            EyedropperSource::Active => {
+                let layer = &self.doc.layers[self.layer];
+                let index = if self.doc.color_mode == ColorMode::Indexed && layer.tileset.is_none()
+                {
+                    self.doc.index(x, y).and_then(|index| {
+                        layer.cel_meta[self.frame]
+                            .indices
+                            .as_ref()
+                            .and_then(|indices| indices.get(index))
+                            .map(|index| usize::from(*index))
+                    })
+                } else {
+                    None
+                };
+                (self.doc.sample_layer(self.layer, self.frame, x, y), index)
+            }
+            EyedropperSource::References => (sample_reference_image(&self.doc, x, y), None),
+        };
+        if let Some(sample) = sample {
+            self.apply_eyedropper_sample(sample, index, secondary);
+        }
+    }
+
+    fn apply_eyedropper_sample(
+        &mut self,
+        sample: Pixel,
+        authored_index: Option<usize>,
+        secondary: bool,
+    ) {
+        use EyedropperChannel::*;
+        let current = if secondary { self.bg } else { self.fg };
+        let [r, g, b, a] = sample;
+        let mut slot = None;
+        let color = match self.power.preferences.eyedropper.channel {
+            ColorAlpha => {
+                slot = authored_index;
+                sample
+            }
+            Alpha => [current[0], current[1], current[2], a],
+            GrayAlpha => convert(sample, ColorMode::Grayscale, &[]),
+            PaletteIndex => {
+                let palette = if self.doc.color_mode == ColorMode::Indexed {
+                    self.doc.editing_palette(self.layer, self.frame)
+                } else {
+                    self.doc.palette_for(self.frame).to_vec()
+                };
+                let index = authored_index
+                    .filter(|&index| index < palette.len())
+                    .unwrap_or_else(|| nearest(sample, &palette));
+                slot = Some(index);
+                let Some(&color) = palette.get(index) else {
+                    return;
+                };
+                color
+            }
+            _ if a == 0 => return,
+            Color => [r, g, b, current[3]],
+            Red => [r, current[1], current[2], current[3]],
+            Green => [current[0], g, current[2], current[3]],
+            Blue => [current[0], current[1], b, current[3]],
+            Gray => {
+                let [gray, _, _, _] = convert(sample, ColorMode::Grayscale, &[]);
+                [gray, gray, gray, current[3]]
+            }
+        };
+        if color == current && slot.is_none() {
+            return;
+        }
+        if secondary {
+            self.set_secondary_color(color, slot);
+        } else {
+            self.set_active_color(color);
+            if let Some(index) = slot {
+                self.palette_index = index;
+            }
+        }
+    }
+
     pub(super) fn draw_references(&mut self, ui: &mut egui::Ui, board: Rect) {
         self.draw_references_pass(ui, board, false, true);
     }
@@ -1670,18 +1852,31 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                                     .fit_to_exact_size(size * scale)
                                     .sense(Sense::click()),
                             );
-                            if response.clicked()
-                                && self.power.preferences.sample_references
+                            let picker = self.tool == Tool::Picker;
+                            let explicit_reference = picker
+                                && self.power.preferences.eyedropper.source
+                                    == EyedropperSource::References;
+                            let secondary = picker && response.secondary_clicked();
+                            if (response.clicked() || secondary)
+                                && (self.power.preferences.sample_references || explicit_reference)
                                 && let Some(pos) = response.interact_pointer_pos()
                             {
                                 let xy = (pos - response.rect.min) / scale;
                                 let x = (xy.x as usize).min(r.width - 1);
                                 let y = (xy.y as usize).min(r.height - 1);
-                                self.set_drawing_color(over(
-                                    CLEAR,
-                                    r.pixels[y * r.width + x],
-                                    r.opacity,
-                                ));
+                                if picker {
+                                    self.apply_eyedropper_sample(
+                                        r.sample_pixel(x, y),
+                                        None,
+                                        secondary,
+                                    );
+                                } else {
+                                    self.set_drawing_color(over(
+                                        CLEAR,
+                                        r.pixels[y * r.width + x],
+                                        r.opacity,
+                                    ));
+                                }
                             }
                         });
                     if !open {

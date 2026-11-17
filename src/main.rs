@@ -6329,13 +6329,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let sample_color = ctx.input(|i| i.modifiers.alt);
             if sample_color || self.tool == Tool::Picker {
                 let p = hover.unwrap();
-                if sample_color || self.tile_pixel_mode.is_some() || !self.pick_tile(p) {
-                    let color = self.sample_color(p.0, p.1);
-                    if secondary {
-                        self.set_secondary_color(color, None);
-                    } else {
-                        self.set_active_color(color);
-                    }
+                if sample_color
+                    || self.tile_pixel_mode.is_some()
+                    || !self.eyedropper_picks_tiles()
+                    || !self.pick_tile(p)
+                {
+                    self.pick_color(p, secondary);
                 }
             } else if self.tool == Tool::Wand {
                 let op = ctx.input(|i| {
