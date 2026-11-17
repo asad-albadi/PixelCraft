@@ -3334,3 +3334,126 @@ fn polygon_and_contour_draw_covered_pixels_in_one_undoable_edit() {
     app.undo();
     assert_eq!(app.doc, doc);
 }
+
+#[test]
+fn cubic_curve_clicks_show_a_draft_then_commit_a_masked_stroke() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-curve.png")));
+    let doc = Document::new(13, 9);
+    app.replace(doc, None);
+    app.action("curve");
+    app.fg = [212, 50, 40, 255];
+    app.selection = Some((2, 0, 12, 8));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let center = |(x, y): (i32, i32)| board.min + Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * 20.;
+    for point in [(1, 7), (11, 7), (1, 1)] {
+        discard_frame(&mut app, &ctx, size, 1., click(center(point)));
+        assert!(
+            !app.doc.layers[0].cels[0].occupied(),
+            "The draft wrote into the cel"
+        );
+        assert!(app.undo.is_empty());
+    }
+    let mut preview = frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(center((11, 1)))],
+    );
+    preview.textures_delta.clear();
+    assert!(preview.shapes.iter().any(|shape| {
+        matches!(&shape.shape, egui::Shape::Path(path)
+            if path.points.contains(&center((6, 3)))
+                && path.points.first() == Some(&center((1, 7)))
+                && path.points.last() == Some(&center((11, 7))))
+    }));
+    assert!(app.undo.is_empty());
+    discard_frame(&mut app, &ctx, size, 1., click(center((11, 1))));
+    let pixels = &app.doc.layers[0].cels[0];
+    assert_eq!(pixels[7 * 13 + 1], CLEAR);
+    assert_eq!(pixels[7 * 13 + 11], app.fg);
+    assert_eq!(pixels[3 * 13 + 6], app.fg);
+    assert_eq!(pixels[7 * 13 + 6], CLEAR);
+    assert_eq!(app.undo.len(), 1);
+    app.undo();
+    assert!(!app.doc.layers[0].cels[0].occupied());
+}
+
+#[test]
+fn spray_tool_keeps_emitting_at_rest_with_configured_rate_and_radius() {
+    fn stroke(rate: u16) -> Vec<usize> {
+        let ctx = egui::Context::default();
+        let size = Vec2::new(1180., 840.);
+        let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-spray.png")));
+        let doc = Document::new(64, 64);
+        app.replace(doc, None);
+        app.action("spray");
+        app.fg = [240, 80, 55, 255];
+        app.spray_rate = rate;
+        app.spray_radius = 12;
+        app.selection = Some((32, 0, 63, 63));
+        for _ in 0..3 {
+            discard_frame(&mut app, &ctx, size, 1., vec![]);
+        }
+        app.zoom = 4.;
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        let board = Rect::from_center_size(
+            layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+            app.sprite_display_size() * app.zoom,
+        );
+        let pos = board.min + Vec2::splat(32.5 * app.zoom);
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            pressed,
+            button: egui::PointerButton::Primary,
+            modifiers: Default::default(),
+        };
+        let pixels = |app: &PixelCraft| {
+            app.doc.layers[0].cels[0]
+                .iter()
+                .enumerate()
+                .filter_map(|(i, color)| (*color != CLEAR).then_some(i))
+                .collect::<Vec<_>>()
+        };
+        discard_frame(
+            &mut app,
+            &ctx,
+            size,
+            1.,
+            vec![egui::Event::PointerMoved(pos)],
+        );
+        discard_frame(&mut app, &ctx, size, 1., vec![button(true)]);
+        let initial = pixels(&app).len();
+        for _ in 0..10 {
+            discard_frame(&mut app, &ctx, size, 1., vec![]);
+        }
+        discard_frame(&mut app, &ctx, size, 1., vec![button(false)]);
+        let finished = pixels(&app);
+        assert!(finished.len() > initial);
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        assert_eq!(pixels(&app), finished);
+        assert_eq!(app.undo.len(), 1);
+        app.undo();
+        assert!(pixels(&app).is_empty());
+        finished
+    }
+
+    let slow = stroke(20);
+    let fast = stroke(180);
+    assert!(fast.len() * 2 > slow.len() * 5);
+    assert!(fast.into_iter().all(|i| {
+        let x = (i % 64) as i32 - 32;
+        let y = (i / 64) as i32 - 32;
+        x >= 0 && x * x + y * y <= 12 * 12
+    }));
+}

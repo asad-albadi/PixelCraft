@@ -6,6 +6,7 @@
 mod canvas_transform;
 mod color_profiles;
 mod color_wheel;
+mod curve_tool;
 mod display_profiles;
 mod editor_filters;
 mod export_actions;
@@ -20,6 +21,7 @@ mod productivity_ui;
 mod script_ui;
 mod selection_tools;
 mod shortcut_editor;
+mod spray_tool;
 use shortcut_editor::{ShortcutChord, ShortcutEdit};
 mod studio;
 mod subtag_playback;
@@ -112,10 +114,12 @@ fn read_theme_preference(bytes: &[u8]) -> egui::ThemePreference {
 #[derive(Clone, Copy, PartialEq)]
 enum Tool {
     Pencil,
+    Spray,
     Eraser,
     Fill,
     Picker,
     Line,
+    Curve,
     Rect,
     Ellipse,
     Polygon,
@@ -137,9 +141,11 @@ impl Tool {
             Self::Select => "selection",
             Self::SelectEllipse => "elliptical-marquee",
             Self::Pencil => "pencil",
+            Self::Spray => "spray",
             Self::Eraser => "eraser",
             Self::Fill => "fill",
             Self::Line => "line",
+            Self::Curve => "curve",
             Self::Ellipse => "ellipse",
             Self::Polygon => "polygon",
             Self::Contour => "contour",
@@ -164,6 +170,7 @@ impl Tool {
             Self::PolygonLasso => "polygonal_lasso",
             Self::Wand => "magic_wand",
             Self::Line => "line",
+            Self::Curve => "curve",
             Self::Rect if filled => "filled_rectangle",
             Self::Rect => "rectangle",
             Self::Ellipse if filled => "filled_ellipse",
@@ -177,10 +184,12 @@ impl Tool {
     fn name(self) -> &'static str {
         match self {
             Self::Pencil => "Pencil",
+            Self::Spray => "Spray",
             Self::Eraser => "Eraser",
             Self::Fill => "Paint bucket",
             Self::Picker => "Eyedropper",
             Self::Line => "Line",
+            Self::Curve => "Bézier curve",
             Self::Rect => "Rectangle",
             Self::Ellipse => "Ellipse",
             Self::Polygon => "Polygon",
@@ -712,6 +721,9 @@ struct PixelCraft {
     used_colors_job: Option<std::sync::mpsc::Receiver<(Document, Vec<Pixel>)>>,
     used_colors: Vec<Pixel>,
     brush: i32,
+    spray_radius: i32,
+    spray_rate: u16,
+    spray_stroke: Option<spray_tool::SprayStroke>,
     zoom: f32,
     wheel_zoom_steps: f32,
     pan: Vec2,
@@ -733,6 +745,7 @@ struct PixelCraft {
     replace_color: Option<ReplaceColor>,
     editor_filter: Option<editor_filters::FilterDialog>,
     canvas_transform: Option<canvas_transform::CanvasTransform>,
+    curve_draft: Option<curve_tool::CurveDraft>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
     profile_dialog: Option<color_profiles::ProfileDialog>,
     selection_tools: selection_tools::SelectionTools,
@@ -908,6 +921,9 @@ impl PixelCraft {
             used_colors_job: None,
             used_colors: vec![],
             brush: 1,
+            spray_radius: 8,
+            spray_rate: 60,
+            spray_stroke: None,
             zoom: 10.,
             wheel_zoom_steps: 0.,
             pan: Vec2::ZERO,
@@ -929,6 +945,7 @@ impl PixelCraft {
             replace_color: None,
             editor_filter: None,
             canvas_transform: None,
+            curve_draft: None,
             palette_conversion: None,
             profile_dialog: None,
             selection_tools: selection_tools::SelectionTools::default(),
@@ -2243,6 +2260,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn cancel_gesture(&mut self) {
         self.selection_tools.cancel_polygon();
+        self.curve_draft = None;
+        self.spray_stroke = None;
         self.studio.marquee_operation = None;
         self.gesture_canvas = None;
         self.gesture_button = None;
@@ -3572,6 +3591,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "properties" => self.properties_open = true,
             "pencil" => self.tool = Tool::Pencil,
+            "spray" => self.tool = Tool::Spray,
             "eraser" => self.tool = Tool::Eraser,
             "fill" => self.tool = Tool::Fill,
             "picker" => self.tool = Tool::Picker,
@@ -3582,6 +3602,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "elliptical-marquee" => self.tool = Tool::SelectEllipse,
             "polygonal-lasso" => self.tool = Tool::PolygonLasso,
             "polygon" => self.tool = Tool::Polygon,
+            "curve" => self.tool = Tool::Curve,
             "contour" => self.tool = Tool::Contour,
             "wand" => self.tool = Tool::Wand,
             "workflow" => self.power.open = true,
@@ -4275,6 +4296,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.curve_draft.is_some()
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape))
+        {
+            self.cancel_curve();
+            return;
+        }
         if self.canvas_transform.is_some() && ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.canvas_transform = None;
             self.status = "Canvas transform cancelled".into();
@@ -4810,10 +4837,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn tools(&mut self, ui: &mut egui::Ui) {
         for t in [
             Tool::Pencil,
+            Tool::Spray,
             Tool::Eraser,
             Tool::Fill,
             Tool::Picker,
             Tool::Line,
+            Tool::Curve,
             Tool::Rect,
             Tool::Ellipse,
             Tool::Polygon,
@@ -6723,7 +6752,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         let draws = matches!(
             self.tool,
-            Tool::Pencil | Tool::Eraser | Tool::Line | Tool::Rect | Tool::Ellipse
+            Tool::Pencil | Tool::Spray | Tool::Eraser | Tool::Line | Tool::Rect | Tool::Ellipse
         );
         let accepts_copies = draws
             || matches!(self.tool, Tool::Fill | Tool::Wand | Tool::Picker)
@@ -6760,6 +6789,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     || !self.pick_tile(p)
                 {
                     self.pick_color(p, secondary);
+                }
+            } else if self.tool == Tool::Spray {
+                self.begin_spray(p, pane, button, &ctx);
+            } else if self.tool == Tool::Curve {
+                if secondary {
+                    self.cancel_curve();
+                } else {
+                    self.curve_click(pane, self.snapped_canvas_point(raw, repeats));
                 }
             } else if matches!(self.tool, Tool::PolygonLasso | Tool::Polygon) {
                 if secondary {
@@ -6853,6 +6890,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let down = self
             .gesture_button
             .is_some_and(|button| ctx.input(|i| i.pointer.button_down(button)));
+        if owns_gesture && can_edit && down && self.tool == Tool::Spray {
+            let point = on_canvas.map(|point| self.snapped_canvas_point(point, repeats));
+            self.spray_tick(point, &ctx);
+        }
         let gradient_release = self.tool == Tool::Gradient
             && self
                 .gesture_button
@@ -7006,6 +7047,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if !transforming {
             self.draw_selection_mask(&painter, board, r);
         }
+        if !transforming && self.tool == Tool::Curve {
+            let preview = on_canvas
+                .filter(|&(x, y)| self.doc.index(x, y).is_some())
+                .map(|point| self.snapped_canvas_point(point, repeats));
+            self.draw_curve_draft(&painter, board, pane, preview);
+        }
         if matches!(
             self.tool,
             Tool::PolygonLasso | Tool::Polygon | Tool::Contour
@@ -7065,6 +7112,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         if can_edit {
             self.draw_canvas_transform(ui, &painter, board, pane);
+        }
+        if !transforming
+            && self.tool == Tool::Spray
+            && let Some(raw) = on_canvas
+        {
+            let (x, y) = self.snapped_canvas_point(raw, repeats);
+            painter.add(egui::Shape::ellipse_stroke(
+                board.min + Vec2::new(x as f32 + 0.5, y as f32 + 0.5) * pixel_size,
+                pixel_size * (self.spray_radius as f32 + 0.5),
+                Stroke::new(1., Color32::WHITE),
+            ));
         }
         if !transforming
             && let Some((x, y)) = on_canvas

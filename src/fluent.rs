@@ -1014,6 +1014,23 @@ impl PixelCraft {
             toggle(ui, &mut self.grid, "Pixel grid");
             return;
         }
+        if self.tool == Tool::Spray {
+            ui.label("Radius");
+            ui.add(
+                egui::DragValue::new(&mut self.spray_radius)
+                    .range(1..=64)
+                    .suffix(" px"),
+            );
+            ui.label("Rate");
+            ui.add(
+                egui::DragValue::new(&mut self.spray_rate)
+                    .range(1..=240)
+                    .suffix(" dots/s"),
+            );
+            toggle(ui, &mut self.studio.mirror_x, "Symmetry");
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
         ui.add_sized(
             [if short { 50. } else { 90. }, if short { 28. } else { 32. }],
             egui::DragValue::new(&mut self.brush)

@@ -1954,3 +1954,28 @@ fn lua_polygon_and_contour_use_native_boundary_and_fill_coverage() {
     assert_eq!(cel[54][3], 255);
     assert_eq!(cel[0], CLEAR);
 }
+
+#[test]
+fn lua_cubic_curve_renders_connected_pixels_between_native_endpoints() {
+    let doc = Document::new(13, 9);
+    let output = run_source(
+        &doc,
+        r#"
+ local red=Color('#de4422')
+ app.useTool{tool='curve',points={Point(1,7),Point(1,1),Point(11,1),Point(11,7)},color=red}
+ assert(not pcall(function()
+   app.useTool{tool='curve',points={Point(0,0),Point(1,1)},color=red}
+ end))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let cel = &output.layers[0].cels[0];
+    let red = [222, 68, 34, 255];
+    assert_eq!(cel[7 * 13 + 1], red);
+    assert_eq!(cel[7 * 13 + 11], red);
+    assert_eq!(cel[3 * 13 + 6], red);
+    assert_eq!(cel[7 * 13 + 6], CLEAR);
+}

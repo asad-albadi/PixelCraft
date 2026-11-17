@@ -6,6 +6,7 @@ use std::{borrow::Cow, ops::RangeInclusive};
 
 mod artwork_palette;
 mod canvas_resize;
+pub mod curve;
 pub use artwork_palette::{generate_artwork_palette, generate_artwork_palette_until};
 pub mod filters;
 mod rotsprite;
@@ -22,6 +23,13 @@ mod sprite_transform;
 pub use canvas_resize::resize_canvas;
 pub use sprite_resize::{resample_sprite, trim_sprite};
 pub use sprite_transform::{Orientation, duplicate_sprite, orient_sprite};
+
+/// SplitMix64's finalizer, used to reproduce seeded painting effects.
+pub fn mix_paint_seed(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
+    value ^ (value >> 31)
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Transform {

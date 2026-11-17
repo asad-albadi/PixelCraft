@@ -471,17 +471,12 @@ fn paint_polygon(
     Ok(())
 }
 
-fn mix_seed(mut value: u64) -> u64 {
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d049bb133111eb);
-    value ^ (value >> 31)
-}
-
 fn keep_noisy_pixel(polygon: &Polygon, x: i32, y: i32) -> bool {
     let coord = |x: i32, y: i32| (u64::from(x as u32) << 32) | u64::from(y as u32);
     let cluster_size = i32::from(polygon.edge_noise).div_euclid(2) + 1;
-    let coarse = mix_seed(polygon.seed ^ coord(x / cluster_size, y / cluster_size));
-    let fine = mix_seed(polygon.seed.wrapping_add(1) ^ coord(x, y));
+    let coarse =
+        crate::workflows::mix_paint_seed(polygon.seed ^ coord(x / cluster_size, y / cluster_size));
+    let fine = crate::workflows::mix_paint_seed(polygon.seed.wrapping_add(1) ^ coord(x, y));
     let depth = f64::from(polygon.edge_noise) * (3 * (coarse & 255) + (fine & 255)) as f64 / 1020.0;
     let center = (f64::from(x) + 0.5, f64::from(y) + 0.5);
     polygon
@@ -618,7 +613,7 @@ fn paint_stroke(
     let mut state = stroke.seed;
     let mut random = || {
         state = state.wrapping_add(0x9e3779b97f4a7c15);
-        mix_seed(state)
+        crate::workflows::mix_paint_seed(state)
     };
     let mut shade_seen = std::collections::HashSet::new();
     let stride = doc.width;

@@ -226,21 +226,17 @@ impl PixelCraft {
                         return;
                     }
                 };
-                let mut result = self.doc.clone();
-                result.drawing_index = self.drawing_palette_index(color);
-                for (index, hit) in hits.into_iter().enumerate() {
-                    if hit
-                        && self
-                            .selected((index % result.width) as i32, (index / result.width) as i32)
-                    {
-                        result.set_pixel(layer, frame, index, color);
-                    }
-                }
-                result.drawing_index = None;
-                if result != self.doc {
-                    self.remember_action(if contour { "Filled contour" } else { "Polygon" });
-                    self.doc = result;
-                }
+                self.apply_shape_coverage(
+                    color,
+                    if contour { "Filled contour" } else { "Polygon" },
+                    |paint| {
+                        for (index, hit) in hits.into_iter().enumerate() {
+                            if hit {
+                                paint(index);
+                            }
+                        }
+                    },
+                );
                 self.status = if contour {
                     "Drew filled contour"
                 } else {
@@ -248,6 +244,27 @@ impl PixelCraft {
                 }
                 .into();
             }
+        }
+    }
+
+    pub(super) fn apply_shape_coverage(
+        &mut self,
+        color: Pixel,
+        label: &'static str,
+        visit: impl FnOnce(&mut dyn FnMut(usize)),
+    ) {
+        let mut result = self.doc.clone();
+        result.drawing_index = self.drawing_palette_index(color);
+        let (layer, frame, width) = (self.layer, self.frame, result.width);
+        visit(&mut |index| {
+            if self.selected((index % width) as i32, (index / width) as i32) {
+                result.set_pixel(layer, frame, index, color);
+            }
+        });
+        result.drawing_index = None;
+        if result != self.doc {
+            self.remember_action(label);
+            self.doc = result;
         }
     }
 

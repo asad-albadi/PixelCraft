@@ -19,6 +19,7 @@ enum Tool {
     Rectangle(bool),
     Ellipse(bool),
     Polygon(bool),
+    Curve,
     Fill,
     Picker,
     Selection(selection::Kind),
@@ -36,6 +37,7 @@ impl Tool {
             "filled_ellipse" => Ok(Self::Ellipse(true)),
             "polygon" => Ok(Self::Polygon(false)),
             "filled_polygon" | "filled_contour" => Ok(Self::Polygon(true)),
+            "curve" => Ok(Self::Curve),
             "paint_bucket" | "fill" => Ok(Self::Fill),
             "eyedropper" => Ok(Self::Picker),
             "rectangular_marquee" => Ok(Self::Selection(selection::Kind::Rectangle)),
@@ -112,7 +114,7 @@ fn check_work(
             .map(|segment| distance(segment[0], segment[1]))
             .sum::<u64>()
             .max(1),
-        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) => 1,
+        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) | Tool::Curve => 1,
     };
     let brush = match tool {
         Tool::Rectangle(true) | Tool::Ellipse(true) => 1,
@@ -148,6 +150,22 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Result<Vec<bool>, String>
             doc.wraparound.into(),
         );
     }
+    if matches!(tool, Tool::Curve) {
+        let controls = stroke
+            .points
+            .as_slice()
+            .try_into()
+            .map_err(|_| "Curve needs a start, two controls, and an end")?;
+        let pixels = crate::workflows::curve::cubic_coverage(
+            (doc.width, doc.height),
+            controls,
+            (size, stroke.brush_shape.unwrap_or(doc.brush_shape)),
+            doc.wraparound.into(),
+        )?;
+        let mut hits = vec![false; doc.width * doc.height];
+        pixels.visit_nonclear(|i, _| hits[i] = true);
+        return Ok(hits);
+    }
 
     // Use the same native raster routines as the editor, then apply ink once to
     // each covered pixel. Overlapping brush stamps must not accumulate opacity.
@@ -177,7 +195,7 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Result<Vec<bool>, String>
             }
         }
         Tool::Ellipse(filled) => mask.ellipse(0, 0, a, b, white, filled, size),
-        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) => {
+        Tool::Fill | Tool::Picker | Tool::Selection(_) | Tool::Polygon(_) | Tool::Curve => {
             unreachable!("Handled outside brush coverage")
         }
     }

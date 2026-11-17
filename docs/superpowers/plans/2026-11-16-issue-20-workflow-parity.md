@@ -216,6 +216,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 9 follow-up. The pointer regression now selects a timeline range with Shift. Scale and skew use that range as well as individually selected cels.
 
+- Item 5 curve and spray checkpoint. The cubic Bézier tool places two endpoints and then two controls and shows the flattened path as the cursor moves. The editor and Lua draw the curve using the native brush footprint. The editor spray tool has radius and dots-per-second controls and emits on a held pointer with or without motion. Tests verify curve preview geometry, clipped commits, idle emission, rate and radius, and undo. Formatting, strict Clippy, and 600 Windows all-target tests passed. Text, blur, and jumble remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
