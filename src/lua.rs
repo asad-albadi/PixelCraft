@@ -461,8 +461,21 @@ impl ScriptRuntime {
                 "Native scripts are limited to one million stored pixels per invocation".into(),
             );
         }
-        let runtime = Runtime::new(host)?;
-        runtime.eval(&format!("_pw_options={}", literal(&options)))?;
+        let ui_host = host.is_some();
+        let mut host = host;
+        let runtime = Runtime::new(Some(Box::new(move |request| {
+            if request["op"] == "useTool" {
+                crate::lua_tools::use_tool(request)
+            } else if let Some(host) = host.as_mut() {
+                host(request)
+            } else {
+                Err("This operation requires an interactive editor session".into())
+            }
+        })))?;
+        runtime.eval(&format!(
+            "_pw_options={}; _pw_has_ui_host={ui_host}",
+            literal(&options)
+        ))?;
         runtime.eval(&format!(
             "_pw_document={}; _pw_frame={frame}; _pw_layer={layer}; _pw_colors={}",
             literal(&serde_json::to_value(doc).map_err(|e| e.to_string())?),

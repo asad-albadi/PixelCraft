@@ -115,6 +115,20 @@ enum Tool {
     Wand,
 }
 impl Tool {
+    fn script_name(self, filled: bool) -> Option<&'static str> {
+        Some(match self {
+            Self::Pencil => "pencil",
+            Self::Eraser => "eraser",
+            Self::Fill => "paint_bucket",
+            Self::Picker => "eyedropper",
+            Self::Line => "line",
+            Self::Rect if filled => "filled_rectangle",
+            Self::Rect => "rectangle",
+            Self::Ellipse if filled => "filled_ellipse",
+            Self::Ellipse => "ellipse",
+            _ => return None,
+        })
+    }
     fn name(self) -> &'static str {
         match self {
             Self::Pencil => "Pencil",
@@ -3231,7 +3245,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(serde_json::json!({}));
         let selection = Self::script_selection(self.selection);
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -8176,7 +8190,7 @@ mod tests {
             &path,
             r#"
  app.activeSprite=app.sprites[1]
- app.activeImage:drawPixel(2,0,Color('#ff9966'))
+ app.useTool{color=Color('#ff9966'),points={Point(2,0)}}
  app.refresh()
  local transient=app.open('new.pixel')
  app.activeImage:drawPixel(1,0,Color('#6699ff'))

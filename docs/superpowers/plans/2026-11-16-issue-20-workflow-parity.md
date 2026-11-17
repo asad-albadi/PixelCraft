@@ -146,6 +146,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 tileset clipboard checkpoint. Lua can attach a tileset to an image clipboard entry, read it as a detached object, and import it as an independent set into another sprite. Windows regressions cover source deletion, separate clipboard copies, sparse tile artwork over the editor bridge, and import into a second tab. The clipboard payload preserves grid, tile pixels, base index, and flags. Direct tilemap cell clipboard data, opaque ASE user data, and system clipboard verification remain open, along with native tool invocation, typed properties, and broader identity.
 
+- Item 45 native tool checkpoint. The editor and headless Lua share app.useTool with native raster brush and shape coverage, alpha, fill matching, and composite eyedropper sampling. Tests cover explicit cel targeting, selection holes, locking, undo and redo, overlapping opacity, fill tolerance, and an editor live preview. Tilemap and selection tools and alternate freehand algorithms remain open. Typed properties and broader object identity remain pending.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

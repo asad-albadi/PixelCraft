@@ -1071,3 +1071,80 @@ fn lua_clipboard_tilesets_survive_source_deletion_and_import_independently() {
     assert_eq!(output.ase_tilesets[0].base_index, 7);
     assert_eq!(output.layers[1].tileset, Some(0));
 }
+
+#[test]
+fn lua_native_tools_target_cels_and_respect_selection_and_undo() {
+    let mut doc = Document::new(6, 3);
+    doc.add_frame(0, false);
+    doc.add_layer();
+    let output = run_source(&doc, r#"
+ local sprite=app.activeSprite
+ local original=app.activeCel
+ local target=sprite.layers[2]:cel(2)
+ assert(not app.isUIAvailable and _pw_host==nil)
+ sprite.selection=Selection(Rectangle(1,0,4,3))
+ sprite.selection:subtract(Rectangle(3,1,1,1))
+ app.useTool{tool='pencil',cel=target,color=Color('#5599dd'),points={Point(0,1),Point(5,1)}}
+ assert(app.activeCel.layer==original.layer and app.activeCel.frame==original.frame)
+ assert(target.image:getPixel(1,1)==app.pixelColor.rgba(85,153,221,255))
+ app.command.Undo()
+ assert(sprite.layers[2]:cel(2).image:getPixel(1,1)==0)
+ app.command.Redo()
+ assert(sprite.layers[2]:cel(2).image:getPixel(1,1)==app.pixelColor.rgba(85,153,221,255))
+ local layer=sprite.layers[2]
+ layer.isEditable=false
+ assert(not pcall(function() app.useTool{tool='eraser',layer=layer,frame=2,points={Point(1,1)}} end))
+ -- Refresh the layer handle if the failed transaction restored a snapshot.
+ sprite.layers[2].isEditable=true
+ app.useTool{tool='filled_rectangle',layer=sprite.layers[2],frame=2,
+  color=Color('#aa4422'),points={Point(1,0),Point(2,0)}}
+ app.useTool{tool='eyedropper',layer=sprite.layers[2],frame=2,points={Point(1,0)}}
+ assert(app.fgColor==Color('#aa4422'))
+ assert(not pcall(function() app.useTool{tool='pencil',points={Point(1000000000,0)}} end))
+ "#,0,0,None).unwrap();
+    let cel = &output.layers[1].cels[1];
+    assert_eq!(cel[1], [170, 68, 34, 255]);
+    assert_eq!(cel[2], [170, 68, 34, 255]);
+    assert_eq!(cel[6], CLEAR);
+    assert_eq!(cel[7], [85, 153, 221, 255]);
+    assert_eq!(cel[8], [85, 153, 221, 255]);
+    assert_eq!(cel[9], CLEAR);
+    assert_eq!(cel[10], [85, 153, 221, 255]);
+    assert_eq!(cel[11], CLEAR);
+    assert_eq!(output.layers[0].cels[0][1], CLEAR);
+}
+
+#[test]
+fn lua_native_brush_applies_opacity_once_and_fill_uses_native_color_matching() {
+    let mut doc = Document::new(6, 4);
+    for (index, color) in [
+        (18, [70, 60, 50, 255]),
+        (22, [72, 59, 50, 255]),
+        (23, [85, 60, 50, 255]),
+    ] {
+        doc.layers[0].cels[0].set(index, color);
+    }
+    let output = run_source(
+        &doc,
+        r#"
+ app.bgColor=Color('#5080b0')
+ app.useTool{button=2,brush=Brush{type=BrushType.SQUARE,size=2},opacity=128,
+  points={Point(1,1),Point(2,1),Point(1,1)}}
+ app.useTool{tool='paint_bucket',color=Color('#c86432'),tolerance=3,
+  contiguous=false,points={Point(0,3)}}
+ app.useTool{tool='eraser',opacity=128,points={Point(1,1)}}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let pixels = &output.layers[0].cels[0];
+    assert_eq!(pixels[0], [80, 128, 176, 128]);
+    assert_eq!(pixels[7], [80, 128, 176, 64]);
+    assert_eq!(pixels[8], [80, 128, 176, 128]);
+    assert_eq!(pixels[9], CLEAR);
+    assert_eq!(pixels[18], [200, 100, 50, 255]);
+    assert_eq!(pixels[22], [200, 100, 50, 255]);
+    assert_eq!(pixels[23], [85, 60, 50, 255]);
+}

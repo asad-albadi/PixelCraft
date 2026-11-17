@@ -13,10 +13,14 @@ local function json(v,key)
  end
  error('Unsupported host value: '..t)
 end
-local nativeHost=_pw_host
-local function host(request)
- assert(nativeHost,'This operation requires an interactive editor session')
- local value=assert(load(nativeHost(json(request)),'host response','t',{}))();start=clock()
+local engineHost=_pw_host
+local nativeHost=_pw_has_ui_host and engineHost or nil
+_pw_host=nil;_pw_has_ui_host=nil
+local function host(request,engine)
+ local backend=engine and engineHost or nativeHost
+ assert(backend,'This operation requires an interactive editor session')
+ local value=assert(load(backend(json(request)),'host response','t',{}))()
+ if not engine then start=clock() end
  if value.error then error(value.error) end
  return value
 end
@@ -516,7 +520,67 @@ preferences.documentSettings=preferences.documentSettings or {grid={bounds=Recta
 preferences.document=function()return preferences.documentSettings end
 preferences.toolSettings=preferences.toolSettings or {}
 preferences.tool=function(id)preferences.toolSettings[id]=preferences.toolSettings[id] or {opacity=255,tolerance=0,contiguous=true};return preferences.toolSettings[id]end
-local tool={id='pencil'}
+local toolOptions=_pw_options or {}
+local tool={id=toolOptions.tool or 'pencil'}
+BrushType={CIRCLE='Round',SQUARE='Square',DIAMOND='Diamond',HORIZONTAL='Horizontal',VERTICAL='Vertical'}
+Ink={SIMPLE='simple',ALPHA_COMPOSITING='alpha-compositing',COPY_COLOR='copy-color'}
+function Brush(options)
+ if type(options)=='number' then options={size=options} end
+ options=options or {}
+ return {size=options.size or 1,type=options.type or BrushType.CIRCLE}
+end
+rawset(app,'useTool',function(options)
+ assert(type(options)=='table','Expected tool options')
+ assert(type(options.points)=='table' and #options.points>=1 and #options.points<=4096,
+  'Supply 1–4096 tool points')
+ assert(options.tilemapMode==nil and options.tilesetMode==nil and options.freehandAlgorithm==nil,
+  'This tool entry point supports raster strokes')
+ local target=options.cel or options.layer or options.frame
+ local owner=(type(target)=='table' and spriteOwners[target]) or activeSprite
+ assert(owner,'No active sprite for the tool')
+ local name=options.tool or tool
+ if type(name)=='table' then name=name.id end
+ assert(type(name)=='string','Expected a tool name')
+ local points={}
+ for i,value in ipairs(options.points)do
+  assert(type(value)=='table','Expected a point')
+  local point=Point(value);points[i]={point.x,point.y}
+ end
+ return withSprite(owner,function()
+  local layer,frame=activeLayer,activeFrame
+  if options.cel then
+   assert(spriteOwners[options.cel]==owner,'Invalid tool cel')
+   layer,frame=layerNumber(options.cel.layer),frameNumber(options.cel.frame)
+  else
+   if options.layer then layer=layerNumber(options.layer) end
+   if options.frame then frame=frameNumber(options.frame) end
+  end
+  assert(layer and frame and layer%1==0 and frame%1==0 and layer>=1 and frame>=1,'Invalid tool target')
+  local selectionPoints
+  if not spriteSelection.isEmpty then
+   selectionPoints={}
+   for _,point in pairs(spriteSelection._mask)do selectionPoints[#selectionPoints+1]={point.x,point.y} end
+  end
+  local brush=options.brush and Brush(options.brush)
+  local right=options.button==2 or options.button=='right'
+  local color=options.color~=nil and unpackColor(Color(options.color))
+   or (right and (options.bgColor and unpackColor(Color(options.bgColor)) or scriptColors[2]) or scriptColors[1])
+  local result=host({op='useTool',document=doc,tool=name,layer=layer-1,frame=frame-1,
+   points=points,selection=selectionPoints,brush_shape=brush and brush.type,size=brush and brush.size or toolOptions.brushSize or 1,
+   ink=options.ink or Ink.SIMPLE,color=color,opacity=options.opacity==nil and 255 or byte(options.opacity),
+   tolerance=byte(options.tolerance or toolOptions.fillTolerance),
+   contiguous=options.contiguous==true or (options.contiguous==nil and toolOptions.fillContiguous~=false)},true)
+  if result.color then
+   if right then app.bgColor=Color(result.color) else app.fgColor=Color(result.color) end
+  elseif result.layer then
+   app.transaction(function()
+    local edited=expandDocumentPixels({layers={result.layer}}).layers[1]
+    doc.layers[layer].cels,doc.layers[layer].cel_meta=edited.cels,edited.cel_meta
+   end)
+  end
+ end)
+end)
+
 rawset(app,'params',copy((_pw_options or {}).params or {}))
 rawset(app,'isUIAvailable',nativeHost~=nil)
 rawset(app,'events',appEvents)

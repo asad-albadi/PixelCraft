@@ -3,6 +3,7 @@ pub mod formats;
 pub mod model;
 
 mod lua;
+mod lua_tools;
 
 pub mod color;
 pub mod contributions;
