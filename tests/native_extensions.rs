@@ -630,6 +630,69 @@ fn extensions_install_disable_and_uninstall_inside_own_directory() {
     fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn extension_command_discovery_respects_registration_order_and_removal() {
+    let root = std::env::temp_dir().join(format!("pixelcraft-menu-order-{}", std::process::id()));
+    let source = root.join("source");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("package.json"),
+        r#"{"name":"menu-order","contributes":{"scripts":[{"path":"menu.lua"}]}}"#,
+    )
+    .unwrap();
+    fs::write(
+        source.join("menu.lua"),
+        r#"
+function init(p)
+ p:newMenuGroup{id='paint',title='Painting',group='extensions'}
+ p:newMenuGroup{id='hidden',title='Hidden group',group='extensions'}
+ p:newCommand{id='hidden-command',group='hidden',onclick=function() end}
+ p:deleteMenuGroup('hidden')
+ p:newCommand{id='z',title='First',group='paint',onclick=function() end}
+ p:newCommand{id='removed',title='Removed',group='paint',onclick=function() end}
+ p:newMenuSeparator{group='paint'}
+ p:newCommand{id='a',title='Second',group='paint',onclick=function() end}
+ p:deleteCommand{id='removed'}
+end
+"#,
+    )
+    .unwrap();
+    let manager = Manager::at(root.join("data")).unwrap();
+    let id = manager.install(&source).unwrap();
+    let menu = manager.menus().unwrap().remove(0);
+    use pixelcraft::extensions::PluginMenuItem;
+    let [PluginMenuItem::Group { title, items }] = menu.items.as_slice() else {
+        panic!("Expected exactly one visible menu group");
+    };
+    assert_eq!(title, "Painting");
+    assert!(matches!(
+        items.as_slice(),
+        [
+            PluginMenuItem::Command(_),
+            PluginMenuItem::Separator,
+            PluginMenuItem::Command(_)
+        ]
+    ));
+    let commands = manager.commands().unwrap();
+    assert_eq!(
+        commands.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        ["z", "a"]
+    );
+    fs::write(
+        &commands[0].script,
+        r#"
+function init(p)
+ p:newCommand{id='removed',title='Removed',onclick=function() end}
+ p:deleteCommand('removed')
+end
+"#,
+    )
+    .unwrap();
+    assert!(manager.commands().unwrap().is_empty());
+    manager.uninstall(&id).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn manifest_cannot_escape_its_package() {
     let root = std::env::temp_dir().join(format!("pw-bad-package-{}", std::process::id()));
     fs::create_dir_all(&root).unwrap();

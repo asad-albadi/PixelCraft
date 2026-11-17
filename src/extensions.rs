@@ -127,6 +127,135 @@ pub struct PluginCommand {
     #[serde(default)]
     pub script: PathBuf,
 }
+
+#[derive(Clone, Debug)]
+pub struct PluginMenu {
+    pub title: String,
+    pub items: Vec<PluginMenuItem>,
+}
+
+#[derive(Clone, Debug)]
+pub enum PluginMenuItem {
+    Command(PluginCommand),
+    Group { title: String, items: Vec<Self> },
+    Separator,
+}
+
+impl PluginMenuItem {
+    fn collect_commands(self, commands: &mut Vec<PluginCommand>) {
+        match self {
+            Self::Command(command) => commands.push(command),
+            Self::Group { items, .. } => {
+                for item in items {
+                    item.collect_commands(commands);
+                }
+            }
+            Self::Separator => {}
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct ScriptRegistration {
+    registered: bool,
+    entries: Vec<MenuRegistration>,
+}
+
+#[derive(Deserialize)]
+struct MenuRegistration {
+    group: String,
+    #[serde(flatten)]
+    entry: MenuEntry,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum MenuEntry {
+    Command {
+        id: String,
+        title: String,
+    },
+    Group {
+        id: String,
+        title: String,
+        #[serde(default)]
+        hidden: bool,
+    },
+    Separator,
+}
+
+fn build_script_menu(
+    entries: Vec<MenuRegistration>,
+    package: &str,
+    script: &Path,
+) -> Vec<PluginMenuItem> {
+    use std::collections::{HashMap, HashSet};
+    let groups: HashSet<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            MenuEntry::Group { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    let mut children: HashMap<String, Vec<MenuEntry>> = HashMap::new();
+    for MenuRegistration { group, entry } in entries {
+        let parent = if groups.contains(&group) {
+            group
+        } else {
+            String::new()
+        };
+        children.entry(parent).or_default().push(entry);
+    }
+
+    fn expand(
+        children: &mut HashMap<String, Vec<MenuEntry>>,
+        group: &str,
+        package: &str,
+        script: &Path,
+        depth: usize,
+    ) -> Vec<PluginMenuItem> {
+        if depth == 24 {
+            return Vec::new();
+        }
+        let mut menu = Vec::new();
+        for entry in children.remove(group).unwrap_or_default() {
+            match entry {
+                MenuEntry::Group {
+                    id,
+                    title,
+                    hidden: false,
+                } => {
+                    let items = expand(children, &id, package, script, depth + 1);
+                    if !items.is_empty() {
+                        menu.push(PluginMenuItem::Group { title, items });
+                    }
+                }
+                MenuEntry::Command { id, title } => {
+                    menu.push(PluginMenuItem::Command(PluginCommand {
+                        id,
+                        title,
+                        package: package.to_owned(),
+                        script: script.to_path_buf(),
+                    }))
+                }
+                MenuEntry::Separator
+                    if menu
+                        .last()
+                        .is_some_and(|item| !matches!(item, PluginMenuItem::Separator)) =>
+                {
+                    menu.push(PluginMenuItem::Separator);
+                }
+                _ => {}
+            }
+        }
+        if matches!(menu.last(), Some(PluginMenuItem::Separator)) {
+            menu.pop();
+        }
+        menu
+    }
+
+    expand(&mut children, "", package, script, 0)
+}
 #[derive(Clone, Debug)]
 pub struct Manager {
     pub root: PathBuf,
@@ -306,38 +435,62 @@ impl Manager {
         result
     }
     pub fn commands(&self) -> Result<Vec<PluginCommand>, String> {
-        let mut out = vec![];
+        let mut commands = Vec::new();
+        for menu in self.menus()? {
+            for item in menu.items {
+                item.collect_commands(&mut commands);
+            }
+        }
+        Ok(commands)
+    }
+
+    pub fn menus(&self) -> Result<Vec<PluginMenu>, String> {
+        let mut menus = Vec::new();
         for p in self.list()?.into_iter().filter(|p| p.enabled) {
+            let mut items = Vec::new();
             for s in &p.manifest.contributes.scripts {
                 let script = p.directory.join(safe_path(&s.path)?);
                 let source = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
                 // Plain scripts can open dialogs immediately. A discovery-only
                 // failure must not hide them from the explicit Run action.
-                let json =
-                    crate::lua::execute(&Document::new(1, 1), &source, 0, 0, None, true, None)
-                        .unwrap_or_else(|_| "[]".into());
-                let mut commands: Vec<PluginCommand> =
-                    serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                if commands.is_empty() {
-                    commands.push(PluginCommand {
+                let registration = match crate::lua::execute(
+                    &Document::new(1, 1),
+                    &source,
+                    0,
+                    0,
+                    None,
+                    true,
+                    None,
+                ) {
+                    Ok(json) => serde_json::from_str::<ScriptRegistration>(&json)
+                        .map_err(|e| e.to_string())?,
+                    Err(_) => ScriptRegistration::default(),
+                };
+                if registration.registered {
+                    items.extend(build_script_menu(registration.entries, &p.id, &script));
+                } else {
+                    items.push(PluginMenuItem::Command(PluginCommand {
                         id: String::new(),
                         title: script
                             .file_stem()
                             .unwrap_or_default()
                             .to_string_lossy()
                             .into_owned(),
-                        package: String::new(),
-                        script: PathBuf::new(),
-                    });
+                        package: p.id.clone(),
+                        script,
+                    }));
                 }
-                for command in &mut commands {
-                    command.package = p.id.clone();
-                    command.script = script.clone();
-                }
-                out.extend(commands);
+            }
+            let title = if p.manifest.display_name.is_empty() {
+                p.id
+            } else {
+                p.manifest.display_name
+            };
+            if !items.is_empty() {
+                menus.push(PluginMenu { title, items });
             }
         }
-        Ok(out)
+        Ok(menus)
     }
     pub fn asset(&self, id: &str, asset: &Contribution) -> Result<PathBuf, String> {
         let dir = self.extension_dir(id)?;

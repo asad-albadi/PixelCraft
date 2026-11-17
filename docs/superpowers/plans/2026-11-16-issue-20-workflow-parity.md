@@ -240,11 +240,13 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 3 Apple Silicon execution verified in Actions run 44027773808. The packaged application passed native startup, Lua, and WebP checks, and the downloaded ZIP matched its SHA-256 file. Intel reached the tests but the million-pixel Lua console snapshot exceeded its time budget on that runner. The serializer now emits integer RGBA tuples together to reduce the work per pixel without extending the budget. Intel still needs a passing package run.
 
+- Item 3 complete. Actions run 44030607653 passed on both macOS architectures, including the Lua console regression, signed bundle validation, Lua and WebP smoke checks, and graphical startup from the relocated application. Both architecture ZIPs are available as release-workflow artifacts. The downloaded Intel ZIP matched its SHA-256 file.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
 - [x] **2. Recover individual documents and raw images.** Browse backups, recover or delete them independently, and salvage readable images as layers or frames.
-- [ ] **3. Ship macOS builds.** Add a native Lua runtime, macOS CI and startup tests, and release packages for Apple Silicon and Intel.
+- [x] **3. Ship macOS builds.** Add a native Lua runtime, macOS CI and startup tests, and release packages for Apple Silicon and Intel.
 - [ ] **4. Expand Windows and Linux packaging.** Publish and smoke-test a standalone Windows executable, a Linux tarball, and a Debian package.
 
 ## Drawing, selections, and color
@@ -306,6 +308,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **46. Expand extension panels and lifecycle.** Support custom drawing canvases, tabbed dialogs and bounds, more editor events, command menu registration and removal, and reload.
   - Lua dialog tab groups show only the active page and retain hidden widget values. The tab button and the group's selection change deliver separate callbacks. Dialogs accept and report viewport bounds in modal and modeless sessions. Tests cover a pointer-driven page switch, programmatic repositioning and resizing of the same window, and the Lua callbacks and selection data. Canvas, events, and lifecycle remain open.
   - Dialog canvases now draw rectangles, line paths, text, and nearest-neighbor image previews through a bounded paint callback. The editor caches artwork between requests and retains unchanged textures across repaint. The tests exercise clipping, image crops, Lua repaint, pointer release outside the widget, and focused keyboard dispatch. Additional editor events, command menu lifecycle, and reload remain open.
+  - Installed extensions register ordered menus, nested groups, and separators. Commands and group subtrees removed during registration are absent from the editor menu. The Extensions menu reloads asynchronously and launches the current command on the active sprite. Tests cover removing the last command, group removal, stable ordering, and editing and running an installed plugin through the native menu. The editor still uses one Lua invocation per command. Runtime registration persistence and additional editor events remain open.
 - [ ] **47. Define permissioned system APIs for scripts.** Specify what file, process, and network access can be granted, and test that denied operations stay blocked.
 
 ## Editor and MCP workflow controls

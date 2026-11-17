@@ -1245,9 +1245,58 @@ end,NewEmptyFrame=function()
  app.activeFrame=sprite:newEmptyFrame(activeFrame+1)
 end},{__index=function(_,k)return function()error('Unsupported command: '..k)end end}))
 _pw_plugin={preferences={}}
-function _pw_plugin:newCommand(c) assert(type(c.id)=='string' and type(c.onclick)=='function','Command requires id and onclick');commands[c.id]=c end
-function _pw_plugin:newMenuGroup(_) end
-function _pw_plugin:newMenuSeparator(_) end
+local pluginRegistration
+do
+ local entries,positions={},{}
+ local registered=false
+ local function put(key,entry)
+  registered=true
+  local position=positions[key] or (#entries+1)
+  positions[key]=position
+  entries[position]=entry
+ end
+ local function identifier(value)
+  if type(value)=='table' then value=value.id end
+  assert(type(value)=='string' and #value>0 and #value<=200,'An extension entry requires an id')
+  return value
+ end
+ local function title(value,id)
+  assert(value==nil or type(value)=='string' and #value<=1024,'Invalid extension menu title')
+  return value or id
+ end
+ local function parent(value)
+  return value and identifier(value) or ''
+ end
+ function _pw_plugin:newCommand(c)
+  local id=identifier(c)
+  assert(type(c.onclick)=='function','Command requires onclick')
+  put('command:'..id,{kind='command',id=id,title=title(c.title,id),group=parent(c.group)})
+  commands[id]=c
+ end
+ function _pw_plugin:deleteCommand(value)
+  local id=identifier(value)
+  commands[id]=nil
+  if positions['command:'..id] then put('command:'..id,false) end
+ end
+ function _pw_plugin:newMenuGroup(c)
+  local id=identifier(c)
+  put('group:'..id,{kind='group',id=id,title=title(c.title,id),group=parent(c.group)})
+ end
+ function _pw_plugin:deleteMenuGroup(value)
+  local id=identifier(value)
+  if positions['group:'..id] then
+   entries[positions['group:'..id]].hidden=true
+  end
+ end
+ function _pw_plugin:newMenuSeparator(c)
+  put('separator:'..(#entries+1),{kind='separator',group=parent(c and c.group)})
+ end
+ pluginRegistration=function()
+  local result={}
+  for _,entry in ipairs(entries)do if entry then result[#result+1]=entry end end
+  return {registered=registered,entries=result}
+ end
+end
 local encodeJson
 do
  local kind, walk, length, at, stringify = type, next, rawlen, rawget, tostring
@@ -1333,11 +1382,14 @@ function _pw_snapshot()
 end
 function _pw_finish(command,discover)
  if type(init)=='function' then init(_pw_plugin) end
- local list={} for id,c in pairs(commands) do list[#list+1]={id=id,title=c.title or id} end
- if command and command~='' then assert(commands[command],'Plugin command was not registered: '..command);commands[command].onclick() end
+ if command and command~='' then
+  local entry=assert(commands[command],'Plugin command was not registered: '..command)
+  assert(not entry.onenabled or entry.onenabled(),'Plugin command is currently disabled: '..command)
+  entry.onclick()
+ end
  if not discover and _pw_loop then _pw_loop() end
  hook()
- local result=discover and list or doc
+ local result=discover and pluginRegistration() or doc
  if not discover and _pw_workspace_snapshot then result=_pw_workspace_snapshot() end
  _pw_result=encodeJson(result)
 end

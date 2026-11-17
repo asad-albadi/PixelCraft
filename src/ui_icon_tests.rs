@@ -1248,6 +1248,82 @@ fn view_menu_can_hide_and_restore_inspector() {
 }
 
 #[test]
+fn extensions_menu_reloads_installed_commands_and_runs_the_current_script() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.replace(Document::new(2, 1), None);
+    let size = Vec2::new(1180., 840.);
+    let root = std::env::temp_dir().join(format!("pixelcraft-reload-menu-{}", std::process::id()));
+    let source = root.join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(source.join("package.json"),
+        r#"{"name":"reload-menu","displayName":"Reload fixture","contributes":{"scripts":[{"path":"menu.lua"}]}}"#,
+    ).unwrap();
+    let old = r#"
+function init(p)
+ p:newMenuGroup{id='paint',title='Paint controls',group='extensions'}
+ p:newCommand{id='paint-old',title='Old paint',group='paint',onclick=function() end}
+end
+"#;
+    std::fs::write(source.join("menu.lua"), old).unwrap();
+    let manager = pixelcraft::extensions::Manager::at(root.join("installed")).unwrap();
+    manager.install(&source).unwrap();
+    let installed = manager.commands().unwrap().remove(0).script;
+    app.extension_manager = Some(manager);
+    app.refresh_extensions();
+    let await_reload = |app: &mut PixelCraft| {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.extension_reload.is_some() && Instant::now() < deadline {
+            discard_frame(app, &ctx, size, 1., vec![]);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            app.extension_reload.is_none(),
+            "Extension discovery timed out"
+        );
+    };
+    await_reload(&mut app);
+    assert_eq!(app.plugin_menus.len(), 1);
+    let new = r#"
+function init(p)
+ p:newMenuGroup{id='paint',title='Paint controls',group='extensions'}
+ p:newCommand{id='paint-now',title='Paint current sprite',group='paint',onclick=function()
+  app.activeImage:drawPixel(1,0,Color('#0d3551'))
+ end}
+end
+"#;
+    std::fs::write(installed, new).unwrap();
+    let click_label = |app: &mut PixelCraft, label: &str| {
+        let mut output = frame(app, &ctx, size, 1., vec![]);
+        let pos = text_position(&mut output, label);
+        discard_frame(app, &ctx, size, 1., click(pos));
+        discard_frame(app, &ctx, size, 1., vec![]);
+    };
+    click_label(&mut app, "Extensions");
+    click_label(&mut app, "Reload extensions");
+    await_reload(&mut app);
+    if let [PluginMenuItem::Group { items, .. }] = app.plugin_menus[0].items.as_slice()
+        && let [PluginMenuItem::Command(command)] = items.as_slice()
+    {
+        assert_eq!(command.id, "paint-now");
+    } else {
+        panic!("Reloaded extension did not contain the current registered command");
+    }
+    click_label(&mut app, "Extensions");
+    click_label(&mut app, "Reload fixture");
+    click_label(&mut app, "Paint controls");
+    click_label(&mut app, "Paint current sprite");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.script_job.is_some() && Instant::now() < deadline {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(app.status, "Applied extension changes");
+    assert_eq!(app.doc.layers[0].cels[0][1], [13, 53, 81, 255]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_close_dialog_cancel_preserves_edits_and_discard_checks_remaining_tabs() {
     let ctx = egui::Context::default();
     let mut app = PixelCraft::with_context(&ctx, None);

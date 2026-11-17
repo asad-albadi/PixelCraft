@@ -36,7 +36,7 @@ use export_actions::{ExportJob, ExportKind, ExportRecipe, export_layer_ids, load
 #[cfg(test)]
 use pixelcraft::extensions::Session;
 use pixelcraft::{
-    extensions::{self, Manager, PluginCommand},
+    extensions::{self, Manager, PluginCommand, PluginMenu, PluginMenuItem},
     formats,
     model::*,
     updates::{self, AboutInfo, INSTALLED_VERSION, Release},
@@ -446,6 +446,11 @@ struct SpriteTab {
     symmetry_axes: [Option<i32>; 2],
     previous_selection: Option<selection_tools::RememberedMask>,
 }
+struct ExtensionReload {
+    receiver: std::sync::mpsc::Receiver<Result<Vec<PluginMenu>, String>>,
+    rerun: bool,
+}
+
 struct ScriptPreview {
     initial_tab: usize,
     tab_count: usize,
@@ -933,7 +938,8 @@ struct PixelCraft {
     next_update_check: Option<Instant>,
     extensions_open: bool,
     extension_manager: Option<Manager>,
-    plugin_commands: Vec<PluginCommand>,
+    plugin_menus: Vec<PluginMenu>,
+    extension_reload: Option<ExtensionReload>,
     extension_error: String,
     #[cfg(test)]
     extension_session: Option<Session>,
@@ -1143,7 +1149,8 @@ impl PixelCraft {
             next_update_check: None,
             extensions_open: false,
             extension_manager: Manager::new().ok(),
-            plugin_commands: vec![],
+            plugin_menus: vec![],
+            extension_reload: None,
             extension_error: String::new(),
             #[cfg(test)]
             extension_session: None,
@@ -3746,7 +3753,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "help" => self.help = true,
             "about" => self.about = true,
             "extensions" => {
-                self.refresh_extensions();
                 self.extensions_open = true;
             }
             "demo" => self.request(Pending::Demo),
@@ -3769,14 +3775,99 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         Ok(())
     }
     fn refresh_extensions(&mut self) {
-        if let Some(manager) = &self.extension_manager {
-            match manager.commands() {
-                Ok(commands) => {
-                    self.plugin_commands = commands;
-                    self.extension_error.clear();
-                }
-                Err(e) => self.extension_error = e,
+        if let Some(reload) = &mut self.extension_reload {
+            reload.rerun = true;
+            return;
+        }
+        let Some(manager) = self.extension_manager.clone() else {
+            return;
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(manager.menus());
+        });
+        self.extension_reload = Some(ExtensionReload {
+            receiver,
+            rerun: false,
+        });
+    }
+
+    fn poll_extension_reload(&mut self, ctx: &egui::Context) {
+        use std::sync::mpsc::TryRecvError;
+        let Some(reload) = &self.extension_reload else {
+            return;
+        };
+        let result = match reload.receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(40));
+                return;
             }
+            Err(TryRecvError::Disconnected) => {
+                Err("Extension reload stopped before completing".into())
+            }
+        };
+        let rerun = reload.rerun;
+        self.extension_reload = None;
+        if rerun {
+            self.refresh_extensions();
+            ctx.request_repaint();
+            return;
+        }
+        match result {
+            Ok(menus) => {
+                self.plugin_menus = menus;
+                self.extension_error.clear();
+            }
+            Err(error) => {
+                self.plugin_menus.clear();
+                self.extension_error = error;
+            }
+        }
+    }
+
+    fn extension_menu(&self, ui: &mut egui::Ui) -> Option<PluginCommand> {
+        fn items(
+            ui: &mut egui::Ui,
+            entries: &[PluginMenuItem],
+            command: &mut Option<PluginCommand>,
+        ) {
+            for (index, item) in entries.iter().enumerate() {
+                ui.push_id(index, |ui| match item {
+                    PluginMenuItem::Command(entry) => {
+                        if ui_icons::button(ui, "terminal", &entry.title, false, true).clicked() {
+                            *command = Some(entry.clone());
+                            ui.close();
+                        }
+                    }
+                    PluginMenuItem::Group {
+                        title,
+                        items: children,
+                    } => {
+                        ui.menu_button(title, |ui| items(ui, children, command));
+                    }
+                    PluginMenuItem::Separator => {
+                        ui.separator();
+                    }
+                });
+            }
+        }
+        let mut command = None;
+        let enabled = self.script_job.is_none() && self.extension_reload.is_none();
+        for (index, entry) in self.plugin_menus.iter().enumerate() {
+            ui.push_id(index, |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    ui.menu_button(&entry.title, |ui| items(ui, &entry.items, &mut command));
+                });
+            });
+        }
+        command
+    }
+
+    fn launch_plugin_command(&mut self, command: PluginCommand) {
+        let id = (!command.id.is_empty()).then_some(command.id);
+        if let Err(error) = self.start_script(command.script, id) {
+            self.status = error;
         }
     }
     fn script_selection(
@@ -4032,6 +4123,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn extension_action(&mut self, action: &str) -> Result<(), String> {
         match action {
+            "reload-extensions" => {
+                self.extension_manager
+                    .as_ref()
+                    .ok_or("Extension storage is unavailable")?;
+                self.refresh_extensions();
+            }
             "run-lua" => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Lua script", &["lua"])
@@ -4774,6 +4871,26 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             .inner;
                         if response.clicked() {
                             action = Some(a);
+                            ui.close();
+                        }
+                    }
+                    if title == "Extensions" {
+                        let reload_available =
+                            self.extension_manager.is_some() && self.script_job.is_none();
+                        if ui
+                            .add_enabled_ui(reload_available, |ui| {
+                                ui.pc_button("Reload extensions")
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            self.refresh_extensions();
+                        }
+                        if self.extension_reload.is_some() {
+                            ui.spinner();
+                        }
+                        if let Some(command) = self.extension_menu(ui) {
+                            self.launch_plugin_command(command);
                             ui.close();
                         }
                     }
@@ -7744,7 +7861,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ui.label("Install plugins, themes, palettes and shortcuts for PixelCraft.");
                 ui.collapsing("Aseprite compatibility",|ui|{egui::ScrollArea::vertical().max_height(260.).show(ui,|ui|{ui.label(include_str!("../COMPATIBILITY.md"));});});
                 ui.small("Lua runs inside PixelCraft. Supported API: app, Sprite, Layer, Cel, Image, Color, palettes, tags and plugin commands. Dialogs, callbacks, events and timers run in the editor. See COMPATIBILITY.md for supported APIs and limitations.");
-                ui.horizontal_wrapped(|ui|{for(label,id)in [("Run .lua…","run-lua"),("Install package…","install-extension"),("Install folder…","install-folder")]{if ui.add_enabled_ui(self.script_job.is_none(),|ui| ui.pc_button(label)).inner.clicked(){action=Some(id);}}});
+                ui.horizontal_wrapped(|ui|{for(label,id)in [("Run .lua…","run-lua"),("Install package…","install-extension"),("Install folder…","install-folder"),("Reload extensions","reload-extensions")]{if ui.add_enabled_ui(self.script_job.is_none(),|ui| ui.pc_button(label)).inner.clicked(){action=Some(id);}}});
                 ui.separator();
                 if let Some(manager)=&self.extension_manager {
                     ui.small(format!("Storage: {}",manager.root.display()));
@@ -7752,9 +7869,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}});if p.enabled{for a in &p.manifest.contributes.palettes{if ui.pc_button(format!("Use palette: {}",a.path)).clicked(){asset=Some(("palette",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.themes{if ui.pc_button(format!("Use theme: {}",a.path)).clicked(){asset=Some(("theme",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.languages{if ui.pc_button(format!("Use language: {}",a.id)).clicked(){asset=Some(("language",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.dithering_matrices{if ui.pc_button(format!("Use dithering: {}",a.id)).clicked(){asset=Some(("dither",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.shortcuts{if ui.pc_button(format!("Use shortcuts: {}",a.path)).clicked(){asset=Some(("shortcuts",p.id.clone(),a.clone()));}}}}},Err(e)=>{ui.label(e);}}
                 }else{ui.label("Extension storage could not be created.");}
                 ui.separator();ui.strong("Plugin commands");
-                for c in &self.plugin_commands{if ui.add_enabled_ui(self.script_job.is_none(),|ui| ui_icons::local_button(ui,"terminal",&format!("{} · {}",c.package,c.title))).inner.clicked(){run=Some(c.clone());}}
+                run=self.extension_menu(ui);
                 if !self.extension_error.is_empty(){ui_icons::feedback(ui,"error",&self.extension_error);}
-                if self.script_job.is_some(){ui.spinner();ctx.request_repaint_after(Duration::from_millis(100));}ui.label(&self.status);
+                if self.script_job.is_some() || self.extension_reload.is_some(){ui.spinner();ctx.request_repaint_after(Duration::from_millis(100));}ui.label(&self.status);
             });
             self.extensions_open = open;
             if let Some((id, enabled)) = change {
@@ -7778,11 +7895,8 @@ if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}}
                     self.status = format!("Extension failed: {e}");
                 }
             }
-            if let Some(c) = run
-                && let Err(e) =
-                    self.start_script(c.script, if c.id.is_empty() { None } else { Some(c.id) })
-            {
-                self.status = e;
+            if let Some(command) = run {
+                self.launch_plugin_command(command);
             }
             if let Some(action) = action {
                 self.cancel_gesture();
@@ -7916,6 +8030,7 @@ impl PixelCraft {
         self.settings_dialog(&ctx);
         self.show_script_ui(&ctx);
         self.poll_script();
+        self.poll_extension_reload(&ctx);
         if self.script_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

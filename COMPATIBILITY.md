@@ -40,6 +40,8 @@ Use `Dialog:tab` and `Dialog:endtabs` to group controls into pages. Each group e
 
 `Dialog:canvas` paints through the `context` of its `onpaint` event. The context supports filled and stroked rectangles, stroked line paths, text, and cropped or scaled images. It exposes dimensions, color, stroke width, opacity, and `save` and `restore`. Use `Dialog:repaint` to update the drawing. The editor clips the drawing to its widget and samples images with nearest-neighbor filtering. Input callbacks receive local pointer coordinates, button and modifier state, wheel deltas, and focused key presses and releases. Canvas dimensions may be up to 1024 pixels on each axis. Each paint can issue up to 2048 commands and supply up to 131072 image pixels.
 
+Installed scripts can register commands, nested groups, and separators in their `init` function. Use `plugin:deleteCommand` and `plugin:deleteMenuGroup` during registration to remove entries. Each package appears under Extensions, and custom group IDs are scoped to the declaring script. `Reload extensions` rebuilds the installed menus in the background. The editor starts a fresh Lua invocation when a command is selected. A command can use `onenabled` to check the current sprite before running.
+
 Custom canvas/graphics-context widgets, exact original dialog layouts/tab groups, radio exclusivity, dialog bounds positioning, full editor mouse/paint events, hot-reloading and extension command menu placement are not implemented. Concurrent editor/script edits use document snapshots rather than independent per-operation history. Prefer finishing/stopping an extension before unrelated structural editing.
 
 ## Contributions
