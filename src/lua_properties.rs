@@ -1,6 +1,7 @@
-//! Edits the default ASE user property map while retaining untouched entries.
+//! Edits and transfers ASE user property maps while retaining untouched entries.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DEPTH: usize = 128;
@@ -237,10 +238,14 @@ impl<'a> Chunk<'a> {
                 encode_map(&mut maps, id, &entries)?;
             }
         }
-        let flags = (self.flags & !4) | if count == 0 { 0 } else { 4 };
+        self.encode(maps)
+    }
+
+    fn encode(&self, maps: Vec<u8>) -> Result<Vec<u8>, String> {
+        let flags = (self.flags & !4) | if maps.is_empty() { 0 } else { 4 };
         let mut output = flags.to_le_bytes().to_vec();
         output.extend_from_slice(self.prefix);
-        if count != 0 {
+        if !maps.is_empty() {
             dword(&mut output, maps.len() + 4)?;
             output.extend(maps);
         }
@@ -337,17 +342,19 @@ fn encoded_entry(key: &str, value: &Property) -> Result<Vec<u8>, String> {
 
 struct ExternalFiles<'a> {
     chunks: &'a [Vec<u8>],
-    used_ids: std::collections::HashSet<u32>,
-    match_id: Option<u32>,
+    used_ids: HashSet<u32>,
+    names: HashMap<String, u32>,
+    ids: HashMap<u32, String>,
     first_end: usize,
 }
 
 impl<'a> ExternalFiles<'a> {
-    fn scan(chunks: &'a [Vec<u8>], namespace: &str) -> Result<Self, String> {
+    fn scan(chunks: &'a [Vec<u8>]) -> Result<Self, String> {
         let mut files = Self {
             chunks,
             used_ids: Default::default(),
-            match_id: None,
+            names: Default::default(),
+            ids: Default::default(),
             first_end: 0,
         };
         for (index, bytes) in chunks.iter().enumerate() {
@@ -362,8 +369,9 @@ impl<'a> ExternalFiles<'a> {
                 let kind = reader.take(8)?[0];
                 let name = reader.text()?;
                 files.used_ids.insert(id);
-                if id != 0 && kind == 2 && name == namespace {
-                    files.match_id.get_or_insert(id);
+                if id != 0 && kind == 2 {
+                    files.names.entry(name.clone()).or_insert(id);
+                    files.ids.entry(id).or_insert(name);
                 }
             }
             if index == 0 {
@@ -373,19 +381,22 @@ impl<'a> ExternalFiles<'a> {
         Ok(files)
     }
 
-    fn add(&self, id: u32, namespace: &str) -> Result<Vec<u8>, String> {
+    fn add(&self, entries: &[(u32, String)]) -> Result<Vec<u8>, String> {
         let mut data = self
             .chunks
             .first()
             .map_or_else(|| vec![0; 12], |first| first[..self.first_end].to_vec());
         let count = u32::from_le_bytes(data[..4].try_into().expect("external file count"));
-        if count >= 65536 {
+        let count = (count as usize).saturating_add(entries.len());
+        if count > 65536 {
             return Err("ASE external files chunk exceeds the entry limit".into());
         }
-        data[..4].copy_from_slice(&(count + 1).to_le_bytes());
-        data.extend_from_slice(&id.to_le_bytes());
-        data.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
-        text(&mut data, namespace)?;
+        data[..4].copy_from_slice(&(count as u32).to_le_bytes());
+        for (id, namespace) in entries {
+            data.extend_from_slice(&id.to_le_bytes());
+            data.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
+            text(&mut data, namespace)?;
+        }
         if let Some(first) = self.chunks.first() {
             data.extend_from_slice(&first[self.first_end..]);
         }
@@ -396,7 +407,81 @@ impl<'a> ExternalFiles<'a> {
     }
 }
 
+#[derive(Deserialize)]
+struct TilesetPropertyImport {
+    data: Vec<Vec<u8>>,
+    source: Vec<Vec<u8>>,
+    external: Vec<Vec<u8>>,
+}
+
+fn import_tileset(value: Value) -> Result<Value, String> {
+    let request: TilesetPropertyImport =
+        serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if request
+        .data
+        .iter()
+        .chain(&request.source)
+        .chain(&request.external)
+        .map(Vec::len)
+        .sum::<usize>()
+        > crate::extensions::MAX_TILESET_METADATA_BYTES
+    {
+        return Err("Tileset metadata exceeds the clipboard limit".into());
+    }
+    let source = ExternalFiles::scan(&request.source)?;
+    let mut destination = ExternalFiles::scan(&request.external)?;
+    let mut additions = Vec::new();
+    let mut assigned = HashMap::new();
+    let mut candidates = 1..=u32::MAX;
+    let mut result = Vec::with_capacity(request.data.len());
+    for bytes in &request.data {
+        let chunk = Chunk::decode(bytes)?;
+        if chunk.maps.is_empty() {
+            result.push(bytes.clone());
+            continue;
+        }
+        let mut maps = Vec::new();
+        dword(&mut maps, chunk.maps.len())?;
+        for map in &chunk.maps {
+            let id = if map.id == 0 {
+                0
+            } else if let Some(&id) = assigned.get(&map.id) {
+                id
+            } else {
+                let name = source
+                    .ids
+                    .get(&map.id)
+                    .ok_or("Missing tileset property namespace")?;
+                let id = if let Some(&id) = destination.names.get(name) {
+                    id
+                } else {
+                    let id = candidates
+                        .find(|id| !destination.used_ids.contains(id))
+                        .ok_or("No ASE extension ID available")?;
+                    destination.used_ids.insert(id);
+                    destination.names.insert(name.clone(), id);
+                    additions.push((id, name.clone()));
+                    id
+                };
+                assigned.insert(map.id, id);
+                id
+            };
+            maps.extend_from_slice(&id.to_le_bytes());
+            maps.extend_from_slice(&map.bytes[4..]);
+        }
+        result.push(chunk.encode(maps)?);
+    }
+    if additions.is_empty() {
+        Ok(json!({"data":result}))
+    } else {
+        Ok(json!({"data":result,"external":destination.add(&additions)?}))
+    }
+}
+
 pub(crate) fn request(value: Value) -> Result<Value, String> {
+    if value["action"] == "importTileset" {
+        return import_tileset(value);
+    }
     let bytes: Vec<u8> =
         serde_json::from_value(value["data"].clone()).map_err(|e| e.to_string())?;
     let chunk = Chunk::decode(&bytes)?;
@@ -407,8 +492,12 @@ pub(crate) fn request(value: Value) -> Result<Value, String> {
     } else {
         vec![]
     };
-    let files = ExternalFiles::scan(&external, namespace)?;
-    let map_id = if namespaced { files.match_id } else { Some(0) };
+    let files = ExternalFiles::scan(&external)?;
+    let map_id = if namespaced {
+        files.names.get(namespace).copied()
+    } else {
+        Some(0)
+    };
     let entries = map_id
         .and_then(|id| chunk.property_map(id))
         .map_or(&[][..], |map| &map.entries);
@@ -461,5 +550,7 @@ pub(crate) fn request(value: Value) -> Result<Value, String> {
     let id = (1..=u32::MAX)
         .find(|id| !files.used_ids.contains(id) && chunk.property_map(*id).is_none())
         .ok_or("No ASE extension ID available")?;
-    Ok(json!({"data":chunk.with_entries(id, new_entries)?,"external":files.add(id, namespace)?}))
+    Ok(
+        json!({"data":chunk.with_entries(id, new_entries)?,"external":files.add(&[(id, namespace.to_owned())])?}),
+    )
 }

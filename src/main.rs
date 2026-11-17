@@ -188,6 +188,10 @@ struct ClipboardTileset {
     set: Tileset,
     flags: u32,
     base_index: i16,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    user_data: Vec<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    external: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -3005,6 +3009,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 || set.height > MAX_DIMENSION
                 || set.name.len() > u16::MAX as usize
                 || tileset.flags & 1 != 0
+                || tileset.user_data.len() > set.tiles.len() + 2
+                || tileset.user_data.iter().any(|chunk| chunk.len() < 4)
+                || tileset.external.iter().any(|chunk| chunk.len() < 12)
+                || tileset
+                    .user_data
+                    .iter()
+                    .chain(&tileset.external)
+                    .map(Vec::len)
+                    .sum::<usize>()
+                    > extensions::MAX_TILESET_METADATA_BYTES
                 || area
                     .saturating_mul(set.tiles.len())
                     .saturating_add(image.pixels.len())
@@ -8430,16 +8444,30 @@ mod tests {
  local tiles=sprite:newTileset(Rectangle(0,0,2,2),2)
  tiles.name='Clipboard tiles'
  tiles.baseIndex=19
+ tiles.properties.kind='terrain'
+ tiles.properties('shared/namespace').grid=Point(2,2)
+ tiles:tile(1).properties('source/only').density=0.75
  tiles:tile(1).image:drawPixel(1,0,Color('#112233'))
  app.clipboard.content={image=im,selection=Selection(Rectangle(10,20,1,1)),
   palette=Palette(2),tileset=tiles}
  sprite:deleteTileset(tiles)
  local saved=app.clipboard.content
  assert(saved.selection:contains(10,20) and saved.tileset.baseIndex==19)
+ assert(saved.tileset.properties.kind=='terrain')
+ assert(saved.tileset.properties('shared/namespace').grid==Point(2,2))
+ saved.tileset:tile(1).properties('source/only').density=0.5
+ assert(app.clipboard.content.tileset:tile(1).properties('source/only').density==0.75)
  app.command.Paste{position=Point(2,0)}
  local destination=app.sprites[2]
  app.activeSprite=destination
+ destination.properties('destination/only').label='keep'
+ destination.properties('shared/namespace').label='other'
  local imported=destination:newTileset(saved.tileset)
+ assert(imported.properties('shared/namespace').grid==Point(2,2))
+ assert(imported:tile(1).properties('source/only').density==0.5)
+ assert(imported:tile(1).properties('destination/only').density==nil)
+ assert(destination.properties('destination/only').label=='keep')
+ assert(destination.properties('shared/namespace').label=='other')
  assert(imported:tile(1).image:getPixel(1,0)==app.pixelColor.rgba(17,34,51,255))
  assert(imported:tile(1).image:getPixel(0,1)==0)
  local map=destination:newTilemap(imported)
@@ -8477,6 +8505,22 @@ mod tests {
         assert_eq!(imported.tilesets[0].tiles[0][1], [17, 34, 51, 255]);
         assert_eq!(imported.ase_tilesets[0].base_index, 19);
         assert_eq!(imported.layers[1].tile_cels[0], vec![1]);
+        let ase = formats::encode_ase(imported).unwrap();
+        let reopened = formats::decode_ase(&ase).unwrap();
+        extensions::run_source(
+            &reopened,
+            r#"
+ local sprite=app.activeSprite
+ assert(sprite.properties('destination/only').label=='keep')
+ assert(sprite.tilesets[1].properties.kind=='terrain')
+ assert(sprite.tilesets[1].properties('shared/namespace').grid==Point(2,2))
+ assert(sprite.tilesets[1]:tile(1).properties('source/only').density==0.5)
+ "#,
+            0,
+            0,
+            None,
+        )
+        .unwrap();
         let native = editor.clipboard.as_ref().unwrap().native_pixels();
         assert_eq!(native, vec![[80, 110, 140, 128], CLEAR]);
         editor.remember_native_image(2, 1, native);

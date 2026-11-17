@@ -14,8 +14,43 @@ do
   error('Tileset is deleted or belongs to another document state')
  end
 
- local function propertySlot(setIndex,ordinal)
-  return 'tileset:'..(setIndex-1),0,ordinal
+ local function propertySlot(set,ordinal)
+  local information=detached[set]
+  if information then return 'tileset:0',0,ordinal,information.metadata end
+  return 'tileset:'..(setIndex(set)-1),0,ordinal
+ end
+
+ local function metadataChunks(metadata,owner)
+  local user,external={},{}
+  local firstExternal
+  for _,chunk in ipairs(metadata)do
+   if chunk.frame==0 then
+    if chunk.owner==owner and chunk.kind==0x2020 then
+     user[#user+1]=chunk.data
+    elseif chunk.owner=='' and chunk.kind==0x2008 then
+     firstExternal=firstExternal or chunk
+     external[#external+1]=chunk.data
+    end
+   end
+  end
+  return user,external,firstExternal
+ end
+
+ local function importTilesetProperties(source,owner,target)
+  local data,external=metadataChunks(source,owner)
+  if #data==0 then return end
+  return importUserData(data,external,target)
+ end
+
+ local function appendTilesetProperties(metadata,owner,imported,firstExternal)
+  if not imported then return end
+  for _,data in ipairs(imported.data)do
+   metadata[#metadata+1]={frame=0,kind=0x2020,owner=owner,data=data}
+  end
+  if imported.external then
+   if firstExternal then firstExternal.data=imported.external
+   else metadata[#metadata+1]={frame=0,kind=0x2008,owner='',data=imported.external} end
+  end
  end
 
  local function tilesetObject(handle)
@@ -118,12 +153,10 @@ do
   if not detached[set] then bindSpriteHandle(handle,sprite) end
   tileObjects[handle]={set=set,pixels=pixels}
   tileHandles[key]=handle
-  if not detached[set] then
-   bindUserProperties(handle,sprite,function()
-    local current,tileIndex=tileObject(handle)
-    return propertySlot(setIndex(current),tileIndex+2)
-   end)
-  end
+  bindUserProperties(handle,not detached[set] and sprite or false,function()
+   local current,tileIndex=tileObject(handle)
+   return propertySlot(current,tileIndex+2)
+  end)
   return handle
  end
 
@@ -171,11 +204,9 @@ do
   if not detached[set] then bindSpriteHandle(handle,sprite) end
   tilesetObjects[handle]=set
   tilesetHandles[set]=handle
-  if not detached[set] then
-   bindUserProperties(handle,sprite,function()
-    return propertySlot(setIndex(set),1)
-   end)
-  end
+  bindUserProperties(handle,not detached[set] and sprite or false,function()
+   return propertySlot(set,1)
+  end)
   return handle
  end
 
@@ -183,8 +214,14 @@ do
   local function snapshot()
    local set,index=tilesetObject(handle)
    local info=detached[set] or infoAt(index)
+   local data,external
+   if not index then data,external=metadataChunks(info.metadata,'tileset:0')
+   else
+    local portable=importTilesetProperties(doc.metadata,'tileset:'..(index-1),{})
+    if portable then data,external=portable.data,portable.external and {portable.external} end
+   end
    return {set=copy(set),flags=info and (info.flags & ~1) or 6,
-    base_index=info and info.base_index or 1}
+    base_index=info and info.base_index or 1,user_data=data,external=external}
   end
   local owner=spriteOwners[handle]
   if owner then return withSprite(owner,snapshot) end
@@ -194,7 +231,14 @@ do
  detachedTileset=function(snapshot)
   local set=copy(snapshot.set)
   expandDocumentPixels({layers={},tilesets={set}})
-  detached[set]={flags=snapshot.flags,base_index=snapshot.base_index}
+  local metadata={}
+  for _,data in ipairs(snapshot.user_data or {})do
+   metadata[#metadata+1]={frame=0,kind=0x2020,owner='tileset:0',data=copy(data)}
+  end
+  for _,data in ipairs(snapshot.external or {})do
+   metadata[#metadata+1]={frame=0,kind=0x2008,owner='',data=copy(data)}
+  end
+  detached[set]={flags=snapshot.flags,base_index=snapshot.base_index,metadata=metadata}
   return tilesetHandle(set)
  end
 
@@ -268,8 +312,16 @@ do
    for i=1,count-1 do set.tiles[i]=Image(set.width,set.height)._pixels end
   end
   local index=#doc.tilesets+1
+  local owner='tileset:'..(index-1)
+  local imported,firstExternal
+  if sourceInfo and sourceInfo.metadata then
+   local _,external,first=metadataChunks(doc.metadata,owner)
+   firstExternal=first
+   imported=importTilesetProperties(sourceInfo.metadata,'tileset:0',external)
+  end
   doc.tilesets[index]=set
   rememberInsertedSet(index,sourceInfo)
+  appendTilesetProperties(doc.metadata,owner,imported,firstExternal)
   if sourceIndex then
    local owner='tileset:'..(sourceIndex-1)
    for i=1,#doc.metadata do

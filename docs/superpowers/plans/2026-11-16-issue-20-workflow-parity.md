@@ -170,6 +170,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 native history identity checkpoint. Modeless Lua retains weak references to frame and cel handles while their objects are absent. The Windows editor test verifies restoration of an overwritten cel on native undo, invalidation of the vacated cel, and restoration of the same inserted frame and vacated cel on redo. Lua rollback and undo also retain the frame export ID reservation. Identity for other object types and native clipboard and detached tileset metadata remain open.
 
+- Item 45 detached tileset metadata checkpoint. Lua clipboard copies now carry typed tileset and tile user data. Detached objects keep independent property maps. Import remaps extension IDs by name and preserves original value bytes and destination metadata. Windows tests cover source deletion, independent edits, legacy user-data text and color bytes, cross-tab import with colliding IDs, and ASE save and reopen. The Windows system clipboard and remaining object identity cases still require verification.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

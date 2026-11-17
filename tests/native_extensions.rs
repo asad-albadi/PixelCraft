@@ -1047,10 +1047,20 @@ fn lua_clipboard_tilesets_survive_source_deletion_and_import_independently() {
         height: 2,
         tiles: vec![vec![[20, 40, 60, 255]; 4].into()],
     });
+    let text_color = [3, 0, b's', b'e', b'a', 4, 5, 6, 255];
+    let mut user_data = vec![3, 0, 0, 0];
+    user_data.extend(text_color);
+    doc.metadata.push(pixelcraft::model::MetadataChunk {
+        frame: 0,
+        kind: 0x2020,
+        owner: "tileset:0".into(),
+        data: user_data,
+    });
     let output = run_source(&doc, r#"
  local sprite=app.activeSprite
  local source=sprite.tilesets[1]
  source.baseIndex=7
+ source.properties.terrain='sand'
  app.clipboard.content={image=Image(1,1),tileset=source}
  source:tile(1).image:drawPixel(0,0,Color('#ffffff'))
  sprite:deleteTileset(source)
@@ -1061,6 +1071,7 @@ fn lua_clipboard_tilesets_survive_source_deletion_and_import_independently() {
  assert(app.clipboard.content.tileset:tile(1).image:getPixel(0,0)==app.pixelColor.rgba(20,40,60,255))
  local imported=sprite:newTileset(saved)
  assert(imported~=saved and imported.baseIndex==7)
+ assert(imported.properties.terrain=='sand')
  saved.name='local change'
  assert(imported.name=='shore')
  assert(not pcall(function() sprite:newTilemap(saved) end))
@@ -1068,6 +1079,12 @@ fn lua_clipboard_tilesets_survive_source_deletion_and_import_independently() {
  "#,0,0,None).unwrap();
     assert_eq!(output.tilesets[0].tiles[0][0], [34, 17, 68, 255]);
     assert_eq!(output.tilesets[0].tiles[0][1], [20, 40, 60, 255]);
+    let user_data = output
+        .metadata
+        .iter()
+        .find(|chunk| chunk.owner == "tileset:0" && chunk.kind == 0x2020)
+        .unwrap();
+    assert_eq!(&user_data.data[4..13], &text_color);
     assert_eq!(output.ase_tilesets[0].base_index, 7);
     assert_eq!(output.layers[1].tileset, Some(0));
 }

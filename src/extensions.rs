@@ -530,6 +530,8 @@ impl Session {
 /// Lua stays on its worker thread while the editor owns all UI operations.
 pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
 
+pub const MAX_TILESET_METADATA_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(serde::Deserialize)]
 pub struct ScriptWorkspace {
     pub active: Option<u32>,

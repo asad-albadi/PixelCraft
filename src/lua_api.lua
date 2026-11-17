@@ -526,7 +526,8 @@ local function putCelImage(l,fi,im,pos)
   if px>=0 and py>=0 and px<doc.width and py<doc.height then pixels[py*doc.width+px+1]=color elseif color[4]~=0 then m.outside[#m.outside+1]={x=px,y=py,color=color} end
  end end
 end
-local bindUserProperties=function(handle)return handle end
+local bindUserProperties,importUserData
+bindUserProperties=function(handle)return handle end
 local function findObject(list,target,description)
  for index,value in ipairs(list)do
   if value==target then return index end

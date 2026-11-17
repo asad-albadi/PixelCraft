@@ -75,9 +75,9 @@ do
   return value
  end
 
- local function objectMetadata(owner,frame,ordinal)
+ local function objectMetadata(metadata,owner,frame,ordinal)
   local count=0
-  for _,chunk in ipairs(doc.metadata)do
+  for _,chunk in ipairs(metadata)do
    if chunk.frame==frame and chunk.kind==0x2020 and chunk.owner==owner then
     count=count+1
     if count==ordinal then return chunk,count end
@@ -87,15 +87,16 @@ do
  end
 
  local function call(resolve,action,key,value,namespace)
-  local owner,frame,ordinal=resolve()
+  local owner,frame,ordinal,detached=resolve()
   ordinal=ordinal or 1
-  local previous,count=objectMetadata(owner,frame,ordinal)
+  local metadata=detached or doc.metadata
+  local previous,count=objectMetadata(metadata,owner,frame,ordinal)
   local data=previous and previous.data or {0,0,0,0}
   local request={op='aseProperties',action=action,data=data,key=key,namespace=namespace}
   local firstExternal
   if namespace and namespace~='' then
    request.external={}
-   for _,chunk in ipairs(doc.metadata)do
+   for _,chunk in ipairs(metadata)do
     if chunk.frame==0 and chunk.kind==0x2008 and chunk.owner=='' then
      firstExternal=firstExternal or chunk
      request.external[#request.external+1]=chunk.data
@@ -116,20 +117,26 @@ do
    end
   end
   if identical and not response.external then return end
-  app.transaction(function()
+  local function apply()
    if previous then previous.data=response.data
    else
     -- Positional ASE user data needs placeholders for earlier tags or tiles.
     for _=count+1,ordinal-1 do
-     table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data={0,0,0,0}})
+     table.insert(metadata,{frame=frame,kind=0x2020,owner=owner,data={0,0,0,0}})
     end
-    table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data=response.data})
+    table.insert(metadata,{frame=frame,kind=0x2020,owner=owner,data=response.data})
    end
    if response.external then
     if firstExternal then firstExternal.data=response.external
-    else table.insert(doc.metadata,{frame=0,kind=0x2008,owner='',data=response.external}) end
+    else table.insert(metadata,{frame=0,kind=0x2008,owner='',data=response.external}) end
    end
-  end)
+  end
+  if detached then apply() else app.transaction(apply) end
+ end
+
+ local function withOwner(owner,fn,...)
+  if owner==false then return fn(...) end
+  return withSprite(owner,fn,...)
  end
 
  local function properties(handle,owner,resolve,namespace)
@@ -140,21 +147,21 @@ do
   local proxy=setmetatable({},{
    __index=function(_,key)
     assert(type(key)=='string','Property name must be a string')
-    return withSprite(owner,function()return decodeValue(call(resolve,'read',key,nil,namespace).property)end)
+    return withOwner(owner,function()return decodeValue(call(resolve,'read',key,nil,namespace).property)end)
    end,
    __newindex=function(_,key,value)
     assert(type(key)=='string','Property name must be a string')
-    withSprite(owner,call,resolve,'set',key,value,namespace)
+    withOwner(owner,call,resolve,'set',key,value,namespace)
    end,
    __pairs=function()
-    local result=withSprite(owner,call,resolve,'read',nil,nil,namespace)
+    local result=withOwner(owner,call,resolve,'read',nil,nil,namespace)
     local values={}
     for _,entry in ipairs(result.properties)do values[entry.key]=decodeValue(entry.value) end
     return next,values,nil
    end,
    __call=function(_,name,value)
     assert(type(name)=='string','Expected an extension name')
-    if value~=nil then withSprite(owner,call,resolve,'replace',nil,value,name) end
+    if value~=nil then withOwner(owner,call,resolve,'replace',nil,value,name) end
     return properties(handle,owner,resolve,name)
    end,
   })
@@ -165,17 +172,20 @@ do
  local function install(meta,resolve,owner)
   local get,set=meta.__index,meta.__newindex
   meta.__index=function(handle,key)
-   if key=='properties' then return properties(handle,owner or handle,resolve) end
+   if key=='properties' then return properties(handle,owner==nil and handle or owner,resolve) end
    return get(handle,key)
   end
   meta.__newindex=function(handle,key,value)
-   if key=='properties' then return withSprite(owner or handle,call,resolve,'replace',nil,value) end
+   if key=='properties' then return withOwner(owner==nil and handle or owner,call,resolve,'replace',nil,value) end
    return set(handle,key,value)
   end
  end
  bindUserProperties=function(handle,owner,resolve)
   install(getmetatable(handle),resolve,owner)
   return handle
+ end
+ importUserData=function(data,source,external)
+  return host({op='aseProperties',action='importTileset',data=data,source=source,external=external},true)
  end
  local function spriteSlot()return 'palette',0 end
  -- The initial sprite already has its own owner wrapper. Later sprites use spriteMeta.
