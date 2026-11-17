@@ -3245,7 +3245,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(serde_json::json!({}));
         let selection = Self::script_selection(self.selection);
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let tilemap_mode = u8::from(self.tile_pixel_mode.is_none());
+        let tileset_mode = match self.tile_pixel_mode {
+            Some(TilePixelEdit::ReuseVariant) => 1,
+            Some(TilePixelEdit::CreateVariant) => 2,
+            _ => 0,
+        };
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -8118,6 +8124,8 @@ mod tests {
  local imported=destination:newTileset(saved.tileset)
  assert(imported:tile(1).image:getPixel(1,0)==app.pixelColor.rgba(17,34,51,255))
  assert(imported:tile(1).image:getPixel(0,1)==0)
+ local map=destination:newTilemap(imported)
+ app.useTool{layer=map,tool='pencil',points={Point(0,0)}}
  app.activeSprite=sprite
  "#,
         )
@@ -8150,6 +8158,7 @@ mod tests {
         assert_eq!(imported.tilesets[0].name, "Clipboard tiles");
         assert_eq!(imported.tilesets[0].tiles[0][1], [17, 34, 51, 255]);
         assert_eq!(imported.ase_tilesets[0].base_index, 19);
+        assert_eq!(imported.layers[1].tile_cels[0], vec![1]);
         let native = editor.clipboard.as_ref().unwrap().native_pixels();
         assert_eq!(native, vec![[80, 110, 140, 128], CLEAR]);
         editor.remember_native_image(2, 1, native);

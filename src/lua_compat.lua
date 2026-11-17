@@ -522,6 +522,11 @@ preferences.toolSettings=preferences.toolSettings or {}
 preferences.tool=function(id)preferences.toolSettings[id]=preferences.toolSettings[id] or {opacity=255,tolerance=0,contiguous=true};return preferences.toolSettings[id]end
 local toolOptions=_pw_options or {}
 local tool={id=toolOptions.tool or 'pencil'}
+TilemapMode={PIXELS=0,TILES=1}
+TilesetMode={MANUAL=0,AUTO=1,STACK=2}
+rawset(app,'fgTile',toolOptions.fgTile or 1)
+rawset(app,'bgTile',toolOptions.bgTile or 0)
+
 BrushType={CIRCLE='Round',SQUARE='Square',DIAMOND='Diamond',HORIZONTAL='Horizontal',VERTICAL='Vertical'}
 Ink={SIMPLE='simple',ALPHA_COMPOSITING='alpha-compositing',COPY_COLOR='copy-color'}
 function Brush(options)
@@ -533,8 +538,7 @@ rawset(app,'useTool',function(options)
  assert(type(options)=='table','Expected tool options')
  assert(type(options.points)=='table' and #options.points>=1 and #options.points<=4096,
   'Supply 1–4096 tool points')
- assert(options.tilemapMode==nil and options.tilesetMode==nil and options.freehandAlgorithm==nil,
-  'This tool entry point supports raster strokes')
+ assert(options.freehandAlgorithm==nil,'Alternate freehand algorithms are unsupported')
  local target=options.cel or options.layer or options.frame
  local owner=(type(target)=='table' and spriteOwners[target]) or activeSprite
  assert(owner,'No active sprite for the tool')
@@ -563,19 +567,47 @@ rawset(app,'useTool',function(options)
   end
   local brush=options.brush and Brush(options.brush)
   local right=options.button==2 or options.button=='right'
-  local color=options.color~=nil and unpackColor(Color(options.color))
-   or (right and (options.bgColor and unpackColor(Color(options.bgColor)) or scriptColors[2]) or scriptColors[1])
+  local isTilemap=doc.layers[layer] and doc.layers[layer].tileset~=nil
+  local tilemapMode=options.tilemapMode
+  if tilemapMode==nil and isTilemap then tilemapMode=toolOptions.tilemapMode or TilemapMode.TILES end
+  local tile,color
+  if tilemapMode==TilemapMode.TILES then
+   tile=options.tile or (right and options.bgColor) or options.color or (right and app.bgTile or app.fgTile)
+   if type(tile)=='table' then tile=tile.tile end
+   assert(math.type(tile)=='integer' and tile>=0 and tile<=0xffffffff,'Expected a packed tile ID')
+   color=scriptColors[1]
+  else
+   color=options.color~=nil and unpackColor(Color(options.color))
+    or (right and (options.bgColor and unpackColor(Color(options.bgColor)) or scriptColors[2]) or scriptColors[1])
+  end
   local result=host({op='useTool',document=doc,tool=name,layer=layer-1,frame=frame-1,
+   tilemap_mode=tilemapMode,tileset_mode=options.tilesetMode or (isTilemap and toolOptions.tilesetMode or nil),tile=tile,
    points=points,selection=selectionPoints,brush_shape=brush and brush.type,size=brush and brush.size or toolOptions.brushSize or 1,
    ink=options.ink or Ink.SIMPLE,color=color,opacity=options.opacity==nil and 255 or byte(options.opacity),
    tolerance=byte(options.tolerance or toolOptions.fillTolerance),
    contiguous=options.contiguous==true or (options.contiguous==nil and toolOptions.fillContiguous~=false)},true)
-  if result.color then
+  if result.tile~=nil then
+   if right then app.bgTile=result.tile else app.fgTile=result.tile end
+  elseif result.color then
    if right then app.bgColor=Color(result.color) else app.fgColor=Color(result.color) end
   elseif result.layer then
    app.transaction(function()
     local edited=expandDocumentPixels({layers={result.layer}}).layers[1]
-    doc.layers[layer].cels,doc.layers[layer].cel_meta=edited.cels,edited.cel_meta
+    local target=doc.layers[layer]
+    target.cels,target.cel_meta,target.tile_cels=edited.cels,edited.cel_meta,edited.tile_cels
+    if result.tile_updates then
+     local set=doc.tilesets[result.tileset]
+     for _,update in ipairs(result.tile_updates)do
+      local decoded={tiles={update.pixels}}
+      expandDocumentPixels({layers={},tilesets={decoded}})
+      local pixels=set.tiles[update.index]
+      if pixels then
+       for i,color in ipairs(decoded.tiles[1])do pixels[i]=color end
+      else
+       set.tiles[update.index]=decoded.tiles[1]
+      end
+     end
+    end
    end)
   end
  end)

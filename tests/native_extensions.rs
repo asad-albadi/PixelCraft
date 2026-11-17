@@ -1148,3 +1148,89 @@ fn lua_native_brush_applies_opacity_once_and_fill_uses_native_color_matching() {
     assert_eq!(pixels[22], [200, 100, 50, 255]);
     assert_eq!(pixels[23], [85, 60, 50, 255]);
 }
+
+#[test]
+fn lua_tilemap_strokes_use_native_placements_and_tileset_modes() {
+    let mut doc = Document::new(6, 2);
+    doc.tilesets.push(Tileset {
+        name: "Terrain".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![
+            vec![[30, 60, 90, 255]; 4].into(),
+            vec![[90, 60, 30, 255]; 4].into(),
+        ],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0] = vec![1, 1, 2];
+    doc.add_frame(0, true);
+    doc.link_cel(1, 1, 0).unwrap();
+    assert!(doc.layers[1].cel_meta[0].artwork_link.is_some());
+    let output = run_source(&doc, r#"
+ local sprite=app.activeSprite
+ local layer=sprite.layers[2]
+ app.fgTile=0x80000002
+ sprite.selection=Selection(Rectangle(1,0,1,1))
+ app.useTool{tool='paint_bucket',layer=layer,frame=2,points={Point(0,0)},tilemapMode=TilemapMode.TILES}
+ sprite.selection:deselect()
+ app.bgTile=0x40000001
+ app.useTool{tool='pencil',button=2,layer=layer,frame=2,points={Point(4,0)},tilemapMode=TilemapMode.TILES}
+ app.useTool{tool='eyedropper',layer=layer,frame=2,points={Point(4,0)},tilemapMode=TilemapMode.TILES}
+ assert(app.fgTile==0x40000001)
+ app.useTool{tool='eraser',layer=layer,frame=2,points={Point(2,0)},tilemapMode=TilemapMode.TILES}
+ app.useTool{tool='pencil',layer=layer,frame=2,points={Point(0,0)},
+  tilemapMode=TilemapMode.PIXELS,tilesetMode=TilesetMode.MANUAL,color=Color('#446688')}
+ app.useTool{tool='pencil',layer=layer,frame=2,points={Point(4,0),Point(5,0)},
+  tilemapMode=TilemapMode.PIXELS,tilesetMode=TilesetMode.STACK,color=Color('#882244')}
+ assert(#sprite.tilesets[1]==4)
+ app.command.Undo()
+ assert(#sprite.tilesets[1]==3)
+ app.command.Redo()
+ assert(#sprite.tilesets[1]==4)
+ "#,0,0,None).unwrap();
+    assert_eq!(
+        output.layers[1].tile_cels[0],
+        vec![0x8000_0002, 0, 0x4000_0001]
+    );
+    assert_eq!(
+        output.layers[1].tile_cels[1],
+        vec![0x8000_0002, 0, 0x4000_0003]
+    );
+    let set = &output.tilesets[0];
+    assert_eq!(set.tiles.len(), 3);
+    assert_eq!(set.tiles[0][2], [30, 60, 90, 255]);
+    assert_eq!(set.tiles[1][0], [90, 60, 30, 255]);
+    assert_eq!(set.tiles[1][1], [68, 102, 136, 255]);
+    assert_eq!(set.tiles[2][2], [136, 34, 68, 255]);
+    assert_eq!(set.tiles[2][3], [136, 34, 68, 255]);
+}
+
+#[test]
+fn lua_tilemap_auto_keeps_placement_edits_when_an_existing_tile_matches() {
+    let mut doc = Document::new(2, 1);
+    doc.tilesets.push(Tileset {
+        name: "Variants".into(),
+        width: 2,
+        height: 1,
+        tiles: vec![
+            vec![[40, 50, 60, 255]; 2].into(),
+            vec![[10, 20, 30, 255], [40, 50, 60, 255]].into(),
+        ],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0] = vec![1];
+    let output = run_source(
+        &doc,
+        r#"
+ local layer=app.activeSprite.layers[2]
+ app.useTool{layer=layer,tool='pencil',points={Point(0,0)},color=Color('#0a141e'),
+   tilemapMode=TilemapMode.PIXELS,tilesetMode=TilesetMode.AUTO}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(output.layers[1].tile_cels[0], vec![2]);
+    assert_eq!(output.tilesets, doc.tilesets);
+}

@@ -148,6 +148,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 native tool checkpoint. The editor and headless Lua share app.useTool with native raster brush and shape coverage, alpha, fill matching, and composite eyedropper sampling. Tests cover explicit cel targeting, selection holes, locking, undo and redo, overlapping opacity, fill tolerance, and an editor live preview. Tilemap and selection tools and alternate freehand algorithms remain open. Typed properties and broader object identity remain pending.
 
+- Item 45 native tilemap tool checkpoint. Lua can place or erase tiles, fill matching placements, pick packed tile IDs, and paint tile pixels through native shared, reused, or stacked artwork modes. The Windows regressions cover linked frames, flip-aware addressing, selection intersection, undo and redo of a variant, reuse without an artwork update, and desktop placement in a second tab. Selection tools, alternate freehand algorithms, typed properties, and broader identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

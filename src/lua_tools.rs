@@ -1,3 +1,5 @@
+mod tiles;
+
 use crate::lua::MAX_SCRIPT_PIXELS;
 use crate::model::{BrushShape, CLEAR, Document, MAX_BRUSH_SIZE, MAX_DIMENSION, Pixel, over};
 use crate::productivity::matching_on_axes;
@@ -58,6 +60,9 @@ struct Stroke {
     opacity: u8,
     tolerance: u8,
     contiguous: bool,
+    tilemap_mode: Option<u8>,
+    tileset_mode: Option<u8>,
+    tile: Option<u32>,
 }
 
 fn distance(a: Point, b: Point) -> u64 {
@@ -151,6 +156,23 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Vec<bool> {
         .collect()
 }
 
+fn stroke_color(tool: Tool, ink: &Ink, opacity: u8, previous: Pixel, source: Pixel) -> Pixel {
+    match (tool, ink) {
+        (Tool::Eraser, _) => {
+            let mut color = previous;
+            color[3] = ((u16::from(color[3]) * u16::from(255 - opacity) + 127) / 255) as u8;
+            if color[3] == 0 { CLEAR } else { color }
+        }
+        (_, Ink::CopyColor) => {
+            let mut color = source;
+            color[3] = ((u16::from(color[3]) * u16::from(opacity) + 127) / 255) as u8;
+            color
+        }
+        (_, Ink::Simple) if source[3] == 0 => CLEAR,
+        _ => over(previous, source, opacity),
+    }
+}
+
 pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
     let mut stroke: Stroke = serde_json::from_value(value).map_err(|e| e.to_string())?;
     let tool = Tool::parse(&stroke.tool)?;
@@ -165,6 +187,15 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
     if stroke.frame >= doc.durations.len() {
         return Err("Invalid tool frame".into());
     }
+    if stroke.tilemap_mode.is_some_and(|mode| mode > 1) {
+        return Err("Invalid tilemap mode".into());
+    }
+    if let Some(tileset) = layer.tileset {
+        return tiles::use_tilemap_tool(&mut stroke, tool, size, tileset);
+    }
+    if stroke.tilemap_mode == Some(1) || stroke.tileset_mode.is_some() {
+        return Err("Choose a tilemap layer".into());
+    }
     if matches!(tool, Tool::Picker) {
         let (x, y) = stroke.points[0];
         let index = doc
@@ -172,7 +203,7 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
             .ok_or("Eyedropper point is outside the canvas")?;
         return Ok(json!({"color":doc.composite(stroke.frame)[index]}));
     }
-    if !doc.editable(stroke.layer) || layer.tileset.is_some() {
+    if !doc.editable(stroke.layer) {
         return Err("Choose an editable raster layer".into());
     }
     if stroke.opacity == 0 {
@@ -197,21 +228,7 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
             continue;
         }
         let previous = doc.layers[stroke.layer].cels[stroke.frame][i];
-        let color = match (tool, &stroke.ink) {
-            (Tool::Eraser, _) => {
-                let mut color = previous;
-                color[3] =
-                    ((u16::from(color[3]) * u16::from(255 - stroke.opacity) + 127) / 255) as u8;
-                if color[3] == 0 { CLEAR } else { color }
-            }
-            (_, Ink::CopyColor) => {
-                let mut color = source;
-                color[3] = ((u16::from(color[3]) * u16::from(stroke.opacity) + 127) / 255) as u8;
-                color
-            }
-            (_, Ink::Simple) if source[3] == 0 => CLEAR,
-            _ => over(previous, source, stroke.opacity),
-        };
+        let color = stroke_color(tool, &stroke.ink, stroke.opacity, previous, source);
         if color != previous {
             doc.set_pixel(stroke.layer, stroke.frame, i, color);
             changed = true;

@@ -50,7 +50,7 @@ impl TileTransform {
 }
 
 impl Tileset {
-    pub(super) fn source_offset(
+    pub(crate) fn source_offset(
         &self,
         placement: u32,
         mut x: usize,
