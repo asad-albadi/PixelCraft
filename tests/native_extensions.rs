@@ -1037,3 +1037,37 @@ fn lua_clipboard_preserves_detached_selections_and_palettes() {
         ]
     );
 }
+
+#[test]
+fn lua_clipboard_tilesets_survive_source_deletion_and_import_independently() {
+    let mut doc = Document::new(4, 2);
+    doc.tilesets.push(Tileset {
+        name: "shore".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![vec![[20, 40, 60, 255]; 4].into()],
+    });
+    let output = run_source(&doc, r#"
+ local sprite=app.activeSprite
+ local source=sprite.tilesets[1]
+ source.baseIndex=7
+ app.clipboard.content={image=Image(1,1),tileset=source}
+ source:tile(1).image:drawPixel(0,0,Color('#ffffff'))
+ sprite:deleteTileset(source)
+ local saved=app.clipboard.content.tileset
+ assert(saved.name=='shore' and #saved==2 and saved.baseIndex==7)
+ assert(saved:tile(1).image:getPixel(0,0)==app.pixelColor.rgba(20,40,60,255))
+ saved:tile(1).image:drawPixel(0,0,Color('#221144'))
+ assert(app.clipboard.content.tileset:tile(1).image:getPixel(0,0)==app.pixelColor.rgba(20,40,60,255))
+ local imported=sprite:newTileset(saved)
+ assert(imported~=saved and imported.baseIndex==7)
+ saved.name='local change'
+ assert(imported.name=='shore')
+ assert(not pcall(function() sprite:newTilemap(saved) end))
+ sprite:newTilemap(imported)
+ "#,0,0,None).unwrap();
+    assert_eq!(output.tilesets[0].tiles[0][0], [34, 17, 68, 255]);
+    assert_eq!(output.tilesets[0].tiles[0][1], [20, 40, 60, 255]);
+    assert_eq!(output.ase_tilesets[0].base_index, 7);
+    assert_eq!(output.layers[1].tileset, Some(0));
+}

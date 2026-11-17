@@ -167,6 +167,13 @@ struct ClipboardMask {
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct ClipboardTileset {
+    set: Tileset,
+    flags: u32,
+    base_index: i16,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 struct Clipboard {
     w: usize,
     h: usize,
@@ -175,6 +182,8 @@ struct Clipboard {
     selection: Option<ClipboardMask>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     palette: Option<Vec<Pixel>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tileset: Option<ClipboardTileset>,
 }
 
 impl Clipboard {
@@ -185,6 +194,7 @@ impl Clipboard {
             pixels,
             selection: None,
             palette: None,
+            tileset: None,
         }
     }
 
@@ -2586,6 +2596,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixels,
             selection: mask,
             palette: Some(self.doc.palette_for(self.frame).to_vec()),
+            tileset: None,
         });
     }
 
@@ -2813,6 +2824,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .is_some_and(|palette| palette.is_empty() || palette.len() > 256)
         {
             return Err("Invalid clipboard selection or palette".into());
+        }
+        if image.tileset.as_ref().is_some_and(|tileset| {
+            let set = &tileset.set;
+            let area = set.width.saturating_mul(set.height);
+            set.width == 0
+                || set.height == 0
+                || set.width > MAX_DIMENSION
+                || set.height > MAX_DIMENSION
+                || set.name.len() > u16::MAX as usize
+                || tileset.flags & 1 != 0
+                || area
+                    .saturating_mul(set.tiles.len())
+                    .saturating_add(image.pixels.len())
+                    > 1_000_000
+                || set.tiles.iter().any(|pixels| pixels.len() != area)
+        }) {
+            return Err("Invalid clipboard tileset or Lua clipboard pixel budget exceeded".into());
         }
         Ok(image)
     }
@@ -8027,6 +8055,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut editor = PixelCraft::with_context(&ctx, None);
         editor.replace(Document::new(4, 1), None);
+        editor.open_document(Document::new(1, 1), None);
+        editor.switch_tab(0);
         editor.doc.layers[0].cels[0].set(0, [3, 60, 90, 128]);
         editor.doc.layers[0].cels[0].set(1, [210, 60, 100, 255]);
         editor.doc.layers[0].cels[0].set(2, [10, 20, 30, 255]);
@@ -8059,9 +8089,22 @@ mod tests {
  local im=Image(2,1,ColorMode.RGB)
  im:drawPixel(0,0,Color{r=80,g=110,b=140,a=128})
  im:drawPixel(1,0,Color('#ff0000'))
- app.clipboard.content={image=im,selection=Selection(Rectangle(10,20,1,1)),palette=Palette(2)}
- assert(app.clipboard.content.selection:contains(10,20))
+ local tiles=sprite:newTileset(Rectangle(0,0,2,2),2)
+ tiles.name='Clipboard tiles'
+ tiles.baseIndex=19
+ tiles:tile(1).image:drawPixel(1,0,Color('#112233'))
+ app.clipboard.content={image=im,selection=Selection(Rectangle(10,20,1,1)),
+  palette=Palette(2),tileset=tiles}
+ sprite:deleteTileset(tiles)
+ local saved=app.clipboard.content
+ assert(saved.selection:contains(10,20) and saved.tileset.baseIndex==19)
  app.command.Paste{position=Point(2,0)}
+ local destination=app.sprites[2]
+ app.activeSprite=destination
+ local imported=destination:newTileset(saved.tileset)
+ assert(imported:tile(1).image:getPixel(1,0)==app.pixelColor.rgba(17,34,51,255))
+ assert(imported:tile(1).image:getPixel(0,1)==0)
+ app.activeSprite=sprite
  "#,
         )
         .unwrap();
@@ -8088,10 +8131,16 @@ mod tests {
             [80, 110, 140, 128]
         );
         assert_eq!(editor.undo.len(), 1);
+        assert!(editor.doc.tilesets.is_empty());
+        let imported = &editor.tabs[1].as_ref().unwrap().doc;
+        assert_eq!(imported.tilesets[0].name, "Clipboard tiles");
+        assert_eq!(imported.tilesets[0].tiles[0][1], [17, 34, 51, 255]);
+        assert_eq!(imported.ase_tilesets[0].base_index, 19);
         let native = editor.clipboard.as_ref().unwrap().native_pixels();
         assert_eq!(native, vec![[80, 110, 140, 128], CLEAR]);
         editor.remember_native_image(2, 1, native);
         assert!(editor.clipboard.as_ref().unwrap().selection.is_some());
+        assert!(editor.clipboard.as_ref().unwrap().tileset.is_some());
         assert_eq!(
             editor
                 .clipboard
@@ -8105,6 +8154,7 @@ mod tests {
         );
         editor.remember_native_image(2, 1, vec![CLEAR; 2]);
         assert!(editor.clipboard.as_ref().unwrap().selection.is_none());
+        assert!(editor.clipboard.as_ref().unwrap().tileset.is_none());
         assert!(editor.clipboard.as_ref().unwrap().palette.is_none());
         std::fs::remove_file(path).unwrap();
     }

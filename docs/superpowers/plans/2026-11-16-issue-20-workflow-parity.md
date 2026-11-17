@@ -144,6 +144,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 selection and palette clipboard checkpoint. Image content can include a detached selection mask and palette. GUI and Lua copy preserve the selected pixels and active frame palette. Native and headless paste skip masked-out pixels. The editor bridge tests palette and mask retention when a matching bitmap returns and removal when a different bitmap arrives. Actual desktop clipboard exchange remains unverified. The system clipboard carries bitmap and text data. Clipboard tilesets, native tool invocation, typed properties, and broader identity remain open.
 
+- Item 45 tileset clipboard checkpoint. Lua can attach a tileset to an image clipboard entry, read it as a detached object, and import it as an independent set into another sprite. Windows regressions cover source deletion, separate clipboard copies, sparse tile artwork over the editor bridge, and import into a second tab. The clipboard payload preserves grid, tile pixels, base index, and flags. Direct tilemap cell clipboard data, opaque ASE user data, and system clipboard verification remain open, along with native tool invocation, typed properties, and broader identity.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

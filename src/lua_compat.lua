@@ -304,7 +304,7 @@ do
    if format~='clear' then localClipboard[format]=copy(data) end
   end
  end
- local function writeImage(im,mask,palette)
+ local function writeImage(im,mask,palette,tileset)
   assert(type(im)=='table' and im._pixels and im.width and im.height,'Expected a clipboard image')
   assert(im.width*im.height<=1000000,'Clipboard image exceeds the Lua pixel budget')
   local region
@@ -317,7 +317,12 @@ do
     region.selected[y*im.width+x+1]=mask:contains(x+bounds.x,y+bounds.y)
    end end
   end
-  write('image',{w=im.width,h=im.height,pixels=im._pixels,selection=region,palette=palette})
+  if tileset then
+   local set=tileset.set
+   assert(im.width*im.height+set.width*set.height*#set.tiles<=1000000,
+    'Clipboard tileset exceeds the Lua pixel budget')
+  end
+  write('image',{w=im.width,h=im.height,pixels=im._pixels,selection=region,palette=palette,tileset=tileset})
  end
  local function writeText(text)
   assert(type(text)=='string','Expected clipboard text')
@@ -337,7 +342,8 @@ do
     local data=read('image')
     if data then
      return {image=clipboardImage(data),selection=clipboardSelection(data),
-      palette=data.palette and detachedPalette(copy(data.palette))}
+      palette=data.palette and detachedPalette(copy(data.palette)),
+      tileset=data.tileset and detachedTileset(data.tileset)}
     end
     return {text=read('text')}
    end
@@ -347,14 +353,15 @@ do
    if key=='image' then writeImage(value)
    elseif key=='text' then writeText(value)
    elseif key=='content' and type(value)=='table' then
-    assert(value.tileset==nil,'Clipboard tileset data is unsupported')
-    assert(value.image~=nil or (value.selection==nil and value.palette==nil),
-     'Clipboard selection and palette require an image')
+    assert(value.image~=nil or (value.selection==nil and value.palette==nil and value.tileset==nil),
+     'Clipboard selection, palette and tileset require an image')
     assert(value.image==nil or value.text==nil,'Choose image or text clipboard content')
     if value.image~=nil then
      local colors
      if value.palette~=nil then colors=paletteColors(value.palette) end
-     writeImage(value.image,value.selection,colors)
+     local tileset
+     if value.tileset~=nil then tileset=snapshotTileset(value.tileset) end
+     writeImage(value.image,value.selection,colors,tileset)
     elseif value.text~=nil then writeText(value.text)
     else clear() end
    else error('Unsupported clipboard assignment: '..key) end

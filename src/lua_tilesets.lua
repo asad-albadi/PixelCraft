@@ -2,6 +2,7 @@
 do
  local TILE_ID_MASK=0x1fffffff
  local tilesetHandles=setmetatable({},{__mode='kv'})
+ local detached=setmetatable({},{__mode='k'})
  local tilesetObjects=setmetatable({},{__mode='k'})
  local tileHandles=setmetatable({},{__mode='kv'})
  local tileObjects=setmetatable({},{__mode='k'})
@@ -15,12 +16,19 @@ do
 
  local function tilesetObject(handle)
   local set=assert(tilesetObjects[handle],'Invalid tileset')
+  if detached[set] then return set end
   return set,setIndex(set)
+ end
+
+ local function documentTileset(handle)
+  local set,index=tilesetObject(handle)
+  assert(index,'Import the clipboard tileset into this sprite first')
+  return set,index
  end
 
  local function tileObject(handle)
   local entry=assert(tileObjects[handle],'Invalid tile')
-  setIndex(entry.set)
+  if not detached[entry.set] then setIndex(entry.set) end
   if not entry.pixels then return entry.set,0 end
   for i,pixels in ipairs(entry.set.tiles)do
    if pixels==entry.pixels then return entry.set,i,pixels end
@@ -68,6 +76,10 @@ do
 
  local function tileImage(handle)
   local set,_,pixels=tileObject(handle)
+  if detached[set] then
+   if not pixels then return Image(set.width,set.height,ColorMode.RGB) end
+   return image(pixels,set.width,set.height,ColorMode.RGB,0)
+  end
   if not pixels then return Image(set.width,set.height) end
   local document=doc
   local im=image(pixels,set.width,set.height)
@@ -82,7 +94,7 @@ do
   if index~=0 and not pixels then return nil end
   local key=pixels or set
   if tileHandles[key] then return tileHandles[key] end
-  local handle=bindSpriteHandle(setmetatable({},{
+  local handle=setmetatable({},{
    __index=function(self,k)
     if k=='image' then return tileImage(self) end
     local _,index=tileObject(self)
@@ -98,7 +110,8 @@ do
     assert(#replacement==set.width*set.height,'Invalid tile pixels')
     for i,color in ipairs(replacement)do pixels[i]=color end
    end,
-  }),sprite)
+  })
+  if not detached[set] then bindSpriteHandle(handle,sprite) end
   tileObjects[handle]={set=set,pixels=pixels}
   tileHandles[key]=handle
   return handle
@@ -117,7 +130,7 @@ do
 
  tilesetHandle=function(set)
   if tilesetHandles[set] then return tilesetHandles[set] end
-  local handle=bindSpriteHandle(setmetatable({},{
+  local handle=setmetatable({},{
    __index=function(self,k)
     local value,index=tilesetObject(self)
     if methods[k] then return methods[k] end
@@ -127,7 +140,7 @@ do
       bounds=Rectangle(0,0,value.width,value.height)}
     end
     if k=='baseIndex' then
-     local info=infoAt(index)
+     local info=detached[value] or infoAt(index)
      return info and info.base_index or 1
     end
    end,
@@ -139,14 +152,35 @@ do
      set.name=name
     elseif k=='baseIndex' then
      assert(math.type(value)=='integer' and value>=-32768 and value<=32767,'Invalid tileset base index')
-     preserveInfo(index).base_index=value
+     local info=detached[set] or preserveInfo(index)
+     info.base_index=value
     else error('Unsupported tileset assignment: '..k) end
    end,
    __len=function(self) return #tilesetObject(self).tiles+1 end,
-  }),sprite)
+  })
+  if not detached[set] then bindSpriteHandle(handle,sprite) end
   tilesetObjects[handle]=set
   tilesetHandles[set]=handle
   return handle
+ end
+
+ snapshotTileset=function(handle)
+  local function snapshot()
+   local set,index=tilesetObject(handle)
+   local info=detached[set] or infoAt(index)
+   return {set=copy(set),flags=info and (info.flags & ~1) or 6,
+    base_index=info and info.base_index or 1}
+  end
+  local owner=spriteOwners[handle]
+  if owner then return withSprite(owner,snapshot) end
+  return snapshot()
+ end
+
+ detachedTileset=function(snapshot)
+  local set=copy(snapshot.set)
+  expandDocumentPixels({layers={},tilesets={set}})
+  detached[set]={flags=snapshot.flags,base_index=snapshot.base_index}
+  return tilesetHandle(set)
  end
 
  spriteTilesets=function()
@@ -195,10 +229,10 @@ do
   local source=tilesetObjects[grid]
   local set,sourceInfo,sourceIndex
   if source then
-   sourceIndex=setIndex(source)
+   source,sourceIndex=tilesetObject(grid)
    tilesetBudget(source.width,source.height,#source.tiles)
    set=copy(source)
-   sourceInfo=infoAt(sourceIndex)
+   sourceInfo=detached[source] or infoAt(sourceIndex)
   else
    local bounds
    if grid==nil then
@@ -255,7 +289,7 @@ do
  end
 
  function spriteMethods:newTile(handle,index)
-  local set,setIndex=tilesetObject(handle)
+  local set,setIndex=documentTileset(handle)
   index=index or #set.tiles+1
   assert(math.type(index)=='integer' and index>=1 and index<=#set.tiles+1,'Invalid tile index')
   tilesetBudget(set.width,set.height,1)
@@ -267,7 +301,7 @@ do
 
  function spriteMethods:deleteTile(handle,index)
   local set,position
-  if tilesetObjects[handle] then set,position=tilesetObject(handle)
+  if tilesetObjects[handle] then set,position=documentTileset(handle)
   else
    set,index=tileObject(handle)
    position=setIndex(set)
@@ -280,7 +314,7 @@ do
 
  assignLayerTileset=function(layer,handle)
   assert(layer.tileset,'Choose a tilemap layer')
-  local set,index=tilesetObject(handle)
+  local set,index=documentTileset(handle)
   local old=doc.tilesets[layer.tileset+1]
   assert(set.width==old.width and set.height==old.height,'Replacement tile size must match')
   for _,cells in ipairs(layer.tile_cels)do
@@ -292,7 +326,7 @@ do
  end
 
  function spriteMethods:newTilemap(handle)
-  local set,index=tilesetObject(handle)
+  local set,index=documentTileset(handle)
   local layer=self:newLayer()
   local value=doc.layers[layer._index]
   value.name='Tile layer'
