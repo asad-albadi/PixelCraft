@@ -198,6 +198,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 51 complete. File and live MCP share tolerance fill, one-pixel outlines, offset shadows, RGBA creation backgrounds, group creation and removal, reparenting by index or live ID, and native blend editing. Effects reuse editor raster logic and count toward the batch work limit. Tests exercise Windows MCP stdio, live preview without mutation, commit and undo, nested groups, stable parent targeting, removal with child promotion, canvas color, and cycle and work-limit rejection. Formatting, strict Clippy, and 574 Windows all-target tests passed.
 
+- Item 13 complete. Edit → Filters offers brightness and contrast, point-based curves, an editable 3×3 convolution with presets, and a 3×3 median despeckle with threshold. Targets include current and selected timeline cels, active-layer frames, current-frame layers, or all editable cels, with optional selection and channel restrictions. Cancellable background previews leave the active document untouched until Apply. Linked cel writes follow the editor's linked artwork rules. Model and Windows UI tests cover the filter math, mask holes and channel targeting, preview, cancel, commit, and undo. Formatting, strict Clippy, and 577 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -215,7 +217,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.
 - [x] **11. Resize the canvas with anchors and offsets.** Apply resizing across layers and frames, including tilemaps.
 - [x] **12. Add whole-sprite operations.** Resample, auto-trim, duplicate, rotate, and flip sprites across layers and frames.
-- [ ] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.
+- [x] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.
 - [ ] **14. Generate palettes and improve indexed conversion.** Build an editable palette from artwork and expose conversion dithering and transparent-index controls.
 - [ ] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.
 - [ ] **16. Extend ICC color management.** Assign and convert document profiles, choose import policies, and select a monitor, sRGB, or custom display profile.

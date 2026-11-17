@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::{borrow::Cow, ops::RangeInclusive};
 
 mod canvas_resize;
+pub mod filters;
 mod rotsprite;
 mod sheet_layout;
 mod sheet_split;

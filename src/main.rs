@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod editor_filters;
 mod export_actions;
 mod file_path_dialog;
 mod fluent;
@@ -688,6 +689,7 @@ struct PixelCraft {
     redo: Vec<HistoryEntry>,
     selection: Option<(i32, i32, i32, i32)>,
     replace_color: Option<ReplaceColor>,
+    editor_filter: Option<editor_filters::FilterDialog>,
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
     clipboard_target: Option<ClipboardTarget>,
@@ -877,6 +879,7 @@ impl PixelCraft {
             redo: vec![],
             selection: None,
             replace_color: None,
+            editor_filter: None,
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
             clipboard_target: None,
@@ -2138,6 +2141,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.settings_open
             || self.rename.is_some()
             || self.replace_color.is_some()
+            || self.editor_filter.is_some()
             || self.rename_frame.is_some()
             || self.help
             || self.properties_open
@@ -3324,6 +3328,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.clear()
             }
             "clear" => self.clear(),
+            "filters" => self.open_filters(),
             "replace-color" => {
                 self.stop_playback(false);
                 self.replace_color = Some(ReplaceColor {
@@ -4259,6 +4264,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Paste as Reference", "paste-as-reference"),
                         ("Clear   Delete", "clear"),
                         ("Replace Color…", "replace-color"),
+                        ("Filters…", "filters"),
                         ("Select all   Ctrl+A", "selectall"),
                         ("Deselect   Esc", "deselect"),
                         ("Settings…", "settings"),
@@ -6530,7 +6536,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.texture = Some(self.frame_texture(&ctx, self.frame));
         }
         let rotation_preview = self.rotation_preview(ui, board);
-        if let Some(t) = rotation_preview.as_ref().or(self.texture.as_ref()) {
+        if let Some(t) = self
+            .filter_texture()
+            .or(rotation_preview.as_ref())
+            .or(self.texture.as_ref())
+        {
             for &copy in copies {
                 painter.image(
                     t.id(),
@@ -7035,6 +7045,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         self.replace_color_dialog(ctx);
+        self.filters_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let mut cancel = false;

@@ -287,6 +287,64 @@ fn updater_rejects_corruption_and_wrong_filename() {
     assert!(verify_checksum(b"abc", &format!("{sum}  other.exe"), "app.exe").is_err());
 }
 #[test]
+fn filter_targets_selection_and_reads_neighborhood_from_original_pixels() {
+    use pixelcraft::workflows::filters::{Filter, apply_filter};
+    let mut doc = Document::new(3, 3);
+    let base = [30, 64, 90, 255];
+    doc.layers[0].cels[0] = vec![base; 9].into();
+    doc.set_pixel(0, 0, 4, [220, 6, 2, 255]);
+    doc.add_frame(0, true);
+    let source = doc.clone();
+    let mut mask = vec![false; 9];
+    mask[4] = true;
+    let (filtered, changes) = apply_filter(
+        &doc,
+        &[(0, 0)],
+        [1, 1, 2, 2],
+        Some(&mask),
+        &Filter::Despeckle { threshold: 25 },
+        [true, false, true, false],
+    )
+    .unwrap();
+    assert_eq!(changes, 1);
+    assert_eq!(filtered.layers[0].cels[0][4], [30, 6, 90, 255]);
+    assert_eq!(filtered.layers[0].cels[0][3], base);
+    assert_eq!(filtered.layers[0].cels[1][4], [220, 6, 2, 255]);
+    assert_eq!(doc, source);
+}
+
+#[test]
+fn filter_curves_brightness_and_kernel_share_the_expected_channel_math() {
+    use pixelcraft::workflows::filters::{Filter, apply_filter};
+    let mut doc = Document::new(3, 1);
+    doc.layers[0].cels[0] = vec![[0, 50, 80, 255], [90, 50, 80, 255], [0, 50, 80, 255]].into();
+    let red = [true, false, false, false];
+    let apply = |filter| {
+        apply_filter(&doc, &[(0, 0)], [0, 0, 3, 1], None, &filter, red)
+            .unwrap()
+            .0
+    };
+    let curved = apply(Filter::Curves(vec![(0, 0), (90, 180), (255, 255)]));
+    assert_eq!(curved.layers[0].cels[0][1], [180, 50, 80, 255]);
+    let bright = apply(Filter::BrightnessContrast {
+        brightness: 20,
+        contrast: 0,
+    });
+    assert_eq!(bright.layers[0].cels[0][1], [141, 50, 80, 255]);
+    let flat = apply(Filter::BrightnessContrast {
+        brightness: 0,
+        contrast: -100,
+    });
+    assert_eq!(flat.layers[0].cels[0][1], [128, 50, 80, 255]);
+    let blur = apply(Filter::Convolution {
+        weights: [1; 9],
+        divisor: 9,
+        bias: 0,
+    });
+    assert_eq!(blur.layers[0].cels[0].to_vec(), [[30, 50, 80, 255]; 3]);
+}
+
+#[test]
 fn ramps_append_without_recoloring_indexed_frames() {
     let mut d = Document::new(1, 1);
     d.import_palette(vec![CLEAR, [255, 0, 0, 255], [0, 0, 255, 255]])
