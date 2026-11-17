@@ -65,6 +65,7 @@ local oldSpriteAssign=getmetatable(sprite).__newindex
 getmetatable(sprite).__newindex=function(t,k,v) if k=='selection' then spriteSelection=bindSpriteHandle(Selection(v),t) elseif k=='filename' then filename=v elseif k=='transparentColor' then doc.transparent_index=v else oldSpriteAssign(t,k,v) end end
 local undo,redo={},{}
 local activeSprite=sprite
+local initialSprite=sprite
 local workspace={sprite}
 local contexts={[sprite]={id=1}}
 local nextSpriteId=2
@@ -119,6 +120,22 @@ local function activateSprite(handle)
  if activeSprite~=handle then
   activeSprite=handle
   appEvents:_emit('sitechange')
+ end
+end
+if (_pw_options or {}).editorWorkspace then
+ _pw_workspace_snapshot=function()
+  saveSpriteContext()
+  local result={sprites={},colors=scriptColors,active=activeSprite and contexts[activeSprite].id}
+  for _,handle in ipairs(workspace)do
+   local entry=contexts[handle]
+   local bounds=entry.selection.bounds
+   result.sprites[#result.sprites+1]={
+    id=entry.id,document=entry.document,baseline=entry.baseline,filename=entry.filename,
+    saved=entry.saved,frame=entry.frame,layer=entry.layer,
+    selection={x=bounds.x,y=bounds.y,width=bounds.width,height=bounds.height},
+   }
+  end
+  return result
  end
 end
 local function snapshot() return {document=copy(doc),mask=copy(spriteSelection._mask),frame=activeFrame,layer=activeLayer} end
@@ -319,7 +336,12 @@ function imageMethods:drawPixel(x,y,p)
 end
 function imageMethods:isEqual(other)if self.width~=other.width or self.height~=other.height then return false end;for i,p in ipairs(self._pixels)do for c=1,4 do if p[c]~=other._pixels[i][c]then return false end end end;return true end
 function imageMethods:drawSprite(s,f,pos)assert(s==sprite);pos=pos or Point();for li,l in ipairs(doc.layers)do if l.visible and not l.group then self:drawImage(cel(li,frameNumber(f)).image,pos,l.opacity)end end end
-function spriteMethods:saveAs(path)host{op='save',path=path,document=doc};filename=path;return true end
+function spriteMethods:saveAs(path)
+ local response=host{op='save',path=path,document=doc}
+ filename=response.path or path
+ if (_pw_options or {}).editorWorkspace then contexts[self].saved=copy(doc) end
+ return true
+end
 function spriteMethods:saveCopyAs(path)host{op='save',path=type(path)=='table' and path.filename or path,document=doc};return true end
 function spriteMethods:close()
  assert(contexts[self],'Sprite is closed')
@@ -351,8 +373,9 @@ rawset(app,'open',function(path)
  assert(total+area(loaded.document)<=1000000,'Lua workspace exceeds the script pixel budget')
  local handle=setmetatable({},spriteMeta)
  bindSpriteHandle(handle,handle)
- contexts[handle]={id=nextSpriteId,document=expandDocumentPixels(loaded.document),filename=path,
-  frame=1,layer=1,selection=bindSpriteHandle(Selection(),handle),events=events(),undo={},redo={}}
+ local baseline=(_pw_options or {}).editorWorkspace and copy(loaded.document) or nil
+ contexts[handle]={id=nextSpriteId,document=expandDocumentPixels(loaded.document),filename=loaded.path or path,
+  baseline=baseline,frame=1,layer=1,selection=bindSpriteHandle(Selection(),handle),events=events(),undo={},redo={}}
  nextSpriteId=nextSpriteId+1
  workspace[#workspace+1]=handle
  loadSpriteContext(handle)
@@ -399,23 +422,28 @@ function Dialog(t)
  dialogs[#dialogs+1]=d;return d
 end
 rawset(app,'alert',function(t)if not nativeHost then print(type(t)=='table' and (t.text or t.title or '') or t);return 1 end;return host{op='alert',value=t}.button or 1 end)
-rawset(app,'refresh',function()if nativeHost then host{op='refresh',document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}end end)
+rawset(app,'refresh',function()if nativeHost then host{op='refresh',sprite=activeSprite and contexts[activeSprite].id,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}end end)
 _pw_loop=function()
  if not nativeHost then for _,timer in ipairs(timers)do assert(not timer.isRunning,'Timers require an interactive session')end;return end
  while true do
   local visible={};for _,d in ipairs(dialogs)do if d._visible then visible[#visible+1]=dialogSpec(d)end end
   local running=false;for _,t in ipairs(timers)do running=running or t.isRunning end
-  if #visible==0 and not running and not appEvents:_hasHandlers() and not spriteEvents:_hasHandlers() then break end
-  local response=host{op='pump',dialogs=visible,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
+  if #visible==0 and not running and not appEvents:_hasHandlers() and not (activeSprite and spriteEvents:_hasHandlers()) then break end
+  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
   if response.editor then
-   local editor=response.editor;doc=expandDocumentPixels(editor.document);activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer;rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')
+   local editor=response.editor
+   local target=(_pw_options or {}).editorWorkspace and initialSprite or sprite
+   if contexts[target] then withSprite(target,function()
+    doc=expandDocumentPixels(editor.document);activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer
+    rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')
+   end)end
   end
   if response.cancelled then break end
   if response.dialog then dispatch(dialogs[response.dialog],response) end
   local now=response.time or 0
   for _,timer in ipairs(timers)do if timer.isRunning then if timer._next==0 then timer._next=now+timer.interval elseif now>=timer._next then timer._next=now+timer.interval;timer._callback()end end end
  end
- host{op='preferences',selection=spriteSelection.bounds,preferences=preferences,pluginPreferences=_pw_plugin.preferences,colors=scriptColors,frame=activeFrame,layer=activeLayer}
+ host{op='preferences',selection=activeSprite and spriteSelection.bounds or Rectangle(),preferences=preferences,pluginPreferences=_pw_plugin.preferences,colors=scriptColors,frame=activeFrame,layer=activeLayer}
 end
 _pw_plugin.preferences=copy((_pw_options or {}).pluginPreferences or {})
 

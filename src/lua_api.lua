@@ -744,5 +744,7 @@ function _pw_finish(command,discover)
  if command and command~='' then assert(commands[command],'Plugin command was not registered: '..command);commands[command].onclick() end
  if not discover and _pw_loop then _pw_loop() end
  hook()
- _pw_result=encodeJson(discover and list or doc)
+ local result=discover and list or doc
+ if not discover and _pw_workspace_snapshot then result=_pw_workspace_snapshot() end
+ _pw_result=encodeJson(result)
 end

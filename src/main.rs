@@ -16,8 +16,10 @@ mod system_appearance;
 mod system_clipboard;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use export_actions::{ExportJob, ExportKind, ExportRecipe, export_layer_ids, load_atlas_inputs};
+#[cfg(test)]
+use pixelcraft::extensions::Session;
 use pixelcraft::{
-    extensions::{self, Manager, PluginCommand, Session},
+    extensions::{self, Manager, PluginCommand},
     formats,
     model::*,
     updates::{self, AboutInfo, INSTALLED_VERSION, Release},
@@ -496,10 +498,12 @@ struct PixelCraft {
     extension_manager: Option<Manager>,
     plugin_commands: Vec<PluginCommand>,
     extension_error: String,
+    #[cfg(test)]
     extension_session: Option<Session>,
     script_ui: script_ui::ScriptUi,
     script_preview_doc: Option<Document>,
-    script_job: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    script_origin: Option<Document>,
+    script_job: Option<std::sync::mpsc::Receiver<Result<extensions::ScriptWorkspace, String>>>,
     shot: Option<PathBuf>,
     shot_frames: u32,
     shot_requested: bool,
@@ -677,10 +681,12 @@ impl PixelCraft {
             extension_manager: Manager::new().ok(),
             plugin_commands: vec![],
             extension_error: String::new(),
+            #[cfg(test)]
             extension_session: None,
             script_job: None,
             script_ui: script_ui::ScriptUi::default(),
             script_preview_doc: None,
+            script_origin: None,
             shot,
             shot_frames: 0,
             shot_requested: false,
@@ -2015,7 +2021,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.cancel_gesture();
         self.split_canvas = None;
         self.active_canvas = CanvasPane::Primary;
-        self.extension_session = None;
+        #[cfg(test)]
+        {
+            self.extension_session = None;
+        }
         self.active_tag = None;
         self.preview_playback = None;
         self.palette_index = 0;
@@ -2117,7 +2126,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
         self.preview_playback = None;
-        self.extension_session = None;
+        #[cfg(test)]
+        {
+            self.extension_session = None;
+        }
         self.render_snapshot = None;
         self.stop_playback(false);
         self.hover = None;
@@ -2795,6 +2807,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             _ => {}
         }
     }
+    #[cfg(test)]
     fn import_extension_result(&mut self) -> Result<(), String> {
         let session = self
             .extension_session
@@ -2821,15 +2834,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn start_script(&mut self, script: PathBuf, command: Option<String>) -> Result<(), String> {
-        let session = Session::new(&self.doc)?;
         let (tx, rx) = std::sync::mpsc::channel();
-        let work = session.clone();
         let doc = self.doc.clone();
         let (frame, layer) = (self.frame, self.layer);
         let colors = [self.fg, self.bg];
         let (ui_tx, ui_rx) = std::sync::mpsc::channel::<script_ui::Request>();
         self.script_ui.connect(ui_rx);
         self.script_preview_doc = Some(self.doc.clone());
+        self.script_origin = Some(self.doc.clone());
         let preferences_path = extensions::config_directory().join("lua-preferences.json");
         let saved_preferences: serde_json::Value = std::fs::read(&preferences_path)
             .ok()
@@ -2846,13 +2858,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         .unwrap_or(std::path::Path::new("."))
                         .to_path_buf();
                     let mut preferences = saved_preferences;
-                    extensions::run_source_with_host(
+                    extensions::run_workspace_with_host(
                         &doc,
                         &source,
                         frame,
                         layer,
                         command.as_deref(),
-                        Some(colors),
+                        colors,
                         options,
                         Box::new(move |request| {
                             let op = request["op"].as_str().unwrap_or("");
@@ -2891,11 +2903,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             rx.recv().map_err(|_| "Editor closed".to_string())
                         }),
                     )
-                })
-                .and_then(|d| formats::save(&work.result_path(), &d));
+                });
             let _ = tx.send(result);
         });
-        self.extension_session = Some(session);
         self.script_job = Some(rx);
         self.stop_playback(false);
         self.status = "Running embedded Lua…".into();
@@ -2952,12 +2962,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Some(Ok(result)) => {
                 self.script_job = None;
                 self.script_ui.disconnect();
-                if let Some(session) = &self.extension_session
-                    && let Ok(original) = formats::load(&session.input_path())
-                {
+                if let Some(original) = self.script_origin.take() {
                     self.doc = original;
                 }
-                let result = result.and_then(|()| self.import_extension_result());
+                self.script_preview_doc = None;
+                self.render_snapshot = None;
+                let result = result.and_then(|workspace| self.apply_script_workspace(workspace));
                 if let Err(e) = result {
                     self.status = format!("Extension failed: {e}");
                 }
@@ -2965,16 +2975,88 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.script_job = None;
                 self.script_ui.disconnect();
-                if let Some(session) = &self.extension_session
-                    && let Ok(original) = formats::load(&session.input_path())
-                {
+                if let Some(original) = self.script_origin.take() {
                     self.doc = original;
                 }
+                self.script_preview_doc = None;
+                self.render_snapshot = None;
                 self.status =
                     "Extension failed: the Lua worker stopped. Your sprite is unchanged.".into();
             }
             _ => {}
         }
+    }
+
+    fn apply_script_workspace(
+        &mut self,
+        workspace: extensions::ScriptWorkspace,
+    ) -> Result<(), String> {
+        let initial_tab = self.active_tab;
+        let mut active_tab = None;
+        let initial_closed = workspace.sprites.iter().all(|sprite| sprite.id != 1);
+        for sprite in workspace.sprites {
+            let path = sprite
+                .filename
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .filter(|ext| {
+                    ["pixel", "ase", "aseprite"]
+                        .iter()
+                        .any(|item| item.eq_ignore_ascii_case(ext))
+                })
+                .map(|_| sprite.filename.clone());
+            if sprite.id == 1 {
+                self.switch_tab(initial_tab);
+            } else {
+                let baseline = sprite.baseline.ok_or("Missing opened sprite baseline")?;
+                self.open_document(baseline, path.clone());
+            }
+            let mut document = sprite.document;
+            document.editor_id = self.doc.editor_id;
+            if self.doc != document {
+                self.remember_action("Run extension");
+                self.doc = document;
+            }
+            if let Some(path) = path {
+                self.path = Some(path);
+                if let Some(saved) = sprite.saved {
+                    self.saved = saved;
+                }
+            }
+            self.frame = sprite.frame.saturating_sub(1);
+            self.layer = sprite.layer.saturating_sub(1);
+            self.clamp();
+            let selection = sprite.selection;
+            self.selection = (selection.width > 0 && selection.height > 0).then(|| {
+                (
+                    selection.x,
+                    selection.y,
+                    selection.x.saturating_add(selection.width - 1),
+                    selection.y.saturating_add(selection.height - 1),
+                )
+            });
+            if Some(sprite.id) == workspace.active {
+                active_tab = Some(self.active_tab);
+            }
+        }
+        if initial_closed {
+            self.switch_tab(initial_tab);
+            let count = self.tabs.len();
+            self.request(Pending::CloseTab);
+            if self.pending.is_some() {
+                return Ok(());
+            }
+            if self.tabs.len() < count {
+                active_tab = active_tab.map(|index| index - usize::from(index > initial_tab));
+            }
+        }
+        if let Some(index) = active_tab {
+            self.switch_tab(index);
+        }
+        [self.fg, self.bg] = workspace.colors;
+        self.set_active_color(self.fg);
+        self.status = "Applied extension changes".into();
+        Ok(())
     }
     #[cfg(test)]
     fn action_tooltip(&self, action: &str, label: &str) -> String {
@@ -6025,36 +6107,15 @@ impl PixelCraft {
         }
         self.script_ui.show(&ctx);
         if let Some(request) = self.script_ui.preview.take()
-            && let Ok(document) = serde_json::from_value::<Document>(request["document"].clone())
+            && request["sprite"] == 1
+            && let Ok(mut document) =
+                serde_json::from_value::<Document>(request["document"].clone())
             && document.validate().is_ok()
             && self.script_ui.editor_update.is_none()
         {
+            document.editor_id = self.doc.editor_id;
             self.doc = document;
             self.script_preview_doc = Some(self.doc.clone());
-        }
-        if let Some(context) = self.script_ui.final_context.take() {
-            let s = &context["selection"];
-            self.selection = match (
-                s["x"].as_i64(),
-                s["y"].as_i64(),
-                s["width"].as_i64(),
-                s["height"].as_i64(),
-            ) {
-                (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => {
-                    Some((x as i32, y as i32, (x + w - 1) as i32, (y + h - 1) as i32))
-                }
-                _ => None,
-            };
-            if let Ok(colors) = serde_json::from_value::<[Pixel; 2]>(context["colors"].clone()) {
-                self.fg = colors[0];
-                self.bg = colors[1];
-                self.set_active_color(self.fg);
-            }
-            self.frame = context["frame"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
-            self.selected_cels = None;
-            self.timeline_frames = TimelineHeaders::default();
-            self.timeline_layers = TimelineHeaders::default();
-            self.layer = context["layer"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
         }
         self.poll_script();
         if self.script_job.is_some() {
@@ -7431,6 +7492,87 @@ mod tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc.drawing_grid(), DrawingGrid::default());
+    }
+
+    #[test]
+    fn lua_file_workspace_commits_separate_editor_tabs_and_rolls_back_errors() {
+        let ctx = egui::Context::default();
+        let mut a = PixelCraft::with_context(&ctx, None);
+        a.replace(Document::new(3, 1), None);
+        let original_id = a.doc.editor_id;
+        let dir = std::env::temp_dir().join(format!("pixelcraft-lua-tabs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("second.pixel");
+        let script = dir.join("script.lua");
+        formats::save(&source, &Document::new(2, 2)).unwrap();
+        let complete = |app: &mut PixelCraft| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while app.script_job.is_some() && Instant::now() < deadline {
+                let mut output =
+                    ctx.run_ui(egui::RawInput::default(), |_| app.script_ui.show(&ctx));
+                output.textures_delta.clear();
+                app.poll_script();
+                std::thread::yield_now();
+            }
+            assert!(app.script_job.is_none(), "Lua script timed out");
+        };
+        std::fs::write(
+            &script,
+            r#"
+ app.activeImage:drawPixel(2,0,Color('#110022'))
+ app.activeSprite.selection=Selection(Rectangle(1,0,2,1))
+ app.open('second.pixel')
+ app.activeImage:drawPixel(1,0,Color('#004499'))
+ app.activeSprite.selection=Selection(Rectangle(1,0,1,2))
+ "#,
+        )
+        .unwrap();
+        a.start_script(script.clone(), None).unwrap();
+        complete(&mut a);
+        assert_eq!(a.tabs.len(), 2, "{}", a.status);
+        assert_eq!(a.path.as_deref(), Some(source.as_path()));
+        assert_eq!(a.doc.composite(0)[1], [0, 68, 153, 255]);
+        assert!(a.dirty());
+        assert_eq!(a.selection, Some((1, 0, 1, 1)));
+        assert_eq!(a.tabs[0].as_ref().unwrap().selection, Some((1, 0, 2, 0)));
+        assert_eq!(a.tabs[0].as_ref().unwrap().doc.editor_id, original_id);
+        assert_eq!(
+            a.tabs[0].as_ref().unwrap().doc.composite(0)[2],
+            [17, 0, 34, 255]
+        );
+        let prior = a.doc.clone();
+        std::fs::write(
+            &script,
+            r#"
+ app.activeImage:drawPixel(1,0,Color('#ffffff'))
+ app.open('second.pixel')
+ error('test rollback')
+ "#,
+        )
+        .unwrap();
+        a.start_script(script.clone(), None).unwrap();
+        complete(&mut a);
+        assert_eq!(a.tabs.len(), 2);
+        assert_eq!(a.doc, prior);
+        assert!(a.status.contains("test rollback"));
+
+        a.saved = a.doc.clone();
+        std::fs::write(
+            &script,
+            r#"
+ local original=app.activeSprite
+ local transient=app.open('second.pixel')
+ transient:close()
+ original:close()
+ "#,
+        )
+        .unwrap();
+        a.start_script(script, None).unwrap();
+        complete(&mut a);
+        assert_eq!(a.tabs.len(), 1, "{}", a.status);
+        assert_eq!(a.doc.editor_id, original_id);
+        assert_eq!(a.doc.composite(0)[2], [17, 0, 34, 255]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

@@ -1765,10 +1765,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     }
 
     fn live_busy(&self) -> bool {
-        self.start.is_some()
-            || self.script_job.is_some()
-            || self.extension_session.is_some()
-            || self.power.reference_drag.is_some()
+        self.start.is_some() || self.script_job.is_some() || self.power.reference_drag.is_some()
     }
 
     fn begin_live_request(

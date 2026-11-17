@@ -529,6 +529,83 @@ impl Session {
 /// Interactive hosts receive declarative widgets and validated document snapshots;
 /// Lua stays on its worker thread while the editor owns all UI operations.
 pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
+
+#[derive(serde::Deserialize)]
+pub struct ScriptWorkspace {
+    pub active: Option<u32>,
+    pub sprites: Vec<ScriptSprite>,
+    pub colors: [[u8; 4]; 2],
+}
+
+#[derive(serde::Deserialize)]
+pub struct ScriptSprite {
+    pub id: u32,
+    pub document: Document,
+    pub baseline: Option<Document>,
+    pub saved: Option<Document>,
+    pub filename: PathBuf,
+    pub frame: usize,
+    pub layer: usize,
+    pub selection: ScriptSelection,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ScriptSelection {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Preserve the existing script host inputs"
+)]
+pub fn run_workspace_with_host(
+    doc: &Document,
+    source: &str,
+    frame: usize,
+    layer: usize,
+    command: Option<&str>,
+    colors: [[u8; 4]; 2],
+    mut options: serde_json::Value,
+    host: ScriptHost,
+) -> Result<ScriptWorkspace, String> {
+    options["editorWorkspace"] = serde_json::Value::Bool(true);
+    let json = crate::lua::execute_with_host(
+        doc,
+        source,
+        frame,
+        layer,
+        command,
+        false,
+        Some(colors),
+        options,
+        Some(host),
+    )?;
+    let workspace: ScriptWorkspace = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+    let mut ids = std::collections::HashSet::new();
+    let mut pixels = 0usize;
+    for sprite in &workspace.sprites {
+        if sprite.id == 0 || !ids.insert(sprite.id) || (sprite.id != 1 && sprite.baseline.is_none())
+        {
+            return Err("Invalid sprite identity in extension result".into());
+        }
+        sprite.document.validate()?;
+        pixels = pixels.saturating_add(sprite.document.logical_pixels());
+        for snapshot in sprite.baseline.iter().chain(sprite.saved.iter()) {
+            snapshot.validate()?;
+        }
+    }
+    if pixels > crate::lua::MAX_SCRIPT_PIXELS
+        || workspace.active.is_some_and(|id| !ids.contains(&id))
+        || (workspace.active.is_none() && !workspace.sprites.is_empty())
+    {
+        return Err("Invalid extension workspace result".into());
+    }
+    Ok(workspace)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Preserve the established public API"
@@ -573,7 +650,7 @@ pub fn script_file_request(
                     "Native scripts are limited to one million pixels per invocation".into(),
                 );
             }
-            Ok(json!({"document":document}))
+            Ok(json!({"document":document,"path":path}))
         }
         "readScript" => {
             let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
@@ -597,7 +674,7 @@ pub fn script_file_request(
                 "gif" => formats::export_gif(&path, &d)?,
                 _ => formats::save(&path, &d)?,
             };
-            Ok(json!({}))
+            Ok(json!({"path":path}))
         }
         "isFile" => Ok(json!({"value":path.is_file()})),
         "isDirectory" => Ok(json!({"value":path.is_dir()})),

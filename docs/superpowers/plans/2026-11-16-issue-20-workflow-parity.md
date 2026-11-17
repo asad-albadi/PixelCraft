@@ -128,6 +128,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 44 in progress. The Lua worker now keeps independent opened sprites, supports selecting app.activeSprite and closing either active or inactive sprites, and binds sprite/frame/layer/cel/image/palette/selection access to the owning document. The existing script pixel budget applies to opened documents. Regression tests check active selection, preserved inactive handles and editable state, per-sprite saves, close behavior, and rejection of a foreign layer or a workspace that exceeds the limit. Formatting, strict Clippy, and 530 Windows all-target tests passed. The desktop still consumes a single active result from the worker. Publishing independent results to editor tabs and switching or closing those tabs remain open.
 
+- Item 44 desktop checkpoint. Successful scripts commit each opened sprite to its own tab, preserving per-tab selection and undo state relative to the opening or saved baseline. A failed script restores the original editor document and leaves other tabs alone. Closing an initial clean sprite closes its tab. A sprite opened and closed in the same script leaves no tab. Access to existing inactive editor tabs and live switching during scripts remain pending.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

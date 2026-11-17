@@ -19,7 +19,6 @@ pub struct ScriptUi {
     pub preview: Option<Value>,
     pub modeless: bool,
     pub editor_update: Option<Value>,
-    pub final_context: Option<Value>,
 }
 impl ScriptUi {
     pub fn connect(&mut self, rx: mpsc::Receiver<Request>) {
@@ -43,10 +42,7 @@ impl ScriptUi {
             if op == "refresh" || op == "pump" {
                 self.preview = Some(request.value.clone());
             }
-            if op == "refresh" {
-                let _ = request.reply.send(json!({}));
-            } else if op == "preferences" {
-                self.final_context = Some(request.value.clone());
+            if op == "refresh" || op == "preferences" {
                 let _ = request.reply.send(json!({}));
             } else {
                 self.pending = Some(request);
