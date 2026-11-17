@@ -298,6 +298,9 @@ pub(super) struct PowerTools {
     ramp_from: usize,
     ramp_to: usize,
     ramp_steps: usize,
+    ramp_interpolation: pixelcraft::workflows::RampInterpolation,
+    palette_sort: PaletteSort,
+    palette_picks: Option<(EditorId, Vec<usize>)>,
 }
 impl Default for PowerTools {
     fn default() -> Self {
@@ -341,6 +344,9 @@ impl Default for PowerTools {
             ramp_from: 0,
             ramp_to: 1,
             ramp_steps: 5,
+            ramp_interpolation: pixelcraft::workflows::RampInterpolation::Rgb,
+            palette_sort: PaletteSort::Hue,
+            palette_picks: None,
         }
     }
 }
@@ -766,6 +772,78 @@ impl PixelCraft {
         }
     }
 
+    pub(super) fn picked_swatches(&self) -> &[usize] {
+        self.power
+            .palette_picks
+            .as_ref()
+            .filter(|(document, slots)| {
+                *document == self.doc.editor_id
+                    && slots.iter().all(|&slot| slot < self.doc.palette.len())
+            })
+            .map_or(&[], |(_, slots)| slots)
+    }
+
+    pub(super) fn select_palette_swatch(
+        &mut self,
+        slot: usize,
+        color: Pixel,
+        modifiers: egui::Modifiers,
+    ) {
+        if modifiers.shift {
+            let anchor = self.palette_index.min(self.doc.palette.len() - 1);
+            let slots = (slot.min(anchor)..=slot.max(anchor)).collect();
+            self.power.palette_picks = Some((self.doc.editor_id, slots));
+        } else if modifiers.command || modifiers.ctrl {
+            let mut slots = self.picked_swatches().to_vec();
+            if let Some(index) = slots.iter().position(|&picked| picked == slot) {
+                slots.remove(index);
+            } else {
+                slots.push(slot);
+            }
+            self.power.palette_picks = Some((self.doc.editor_id, slots));
+        } else {
+            self.power.palette_picks = None;
+            self.fg = color;
+            self.palette_index = slot;
+        }
+    }
+
+    fn apply_palette_order(&mut self, reverse: bool) {
+        let mut next = self.doc.clone();
+        let selected = self.picked_swatches();
+        let result = if reverse && selected.is_empty() {
+            let (a, b) = (self.power.ramp_from, self.power.ramp_to);
+            next.reverse_palette_entries(&(a.min(b)..=a.max(b)).collect::<Vec<_>>())
+        } else if reverse {
+            next.reverse_palette_entries(selected)
+        } else {
+            next.sort_palette_by_frame(selected, self.power.palette_sort, Some(self.frame))
+        };
+        let remap = match result {
+            Ok(remap) => remap,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        if next == self.doc {
+            return;
+        }
+        self.remember_action(if reverse {
+            "Reverse palette swatches"
+        } else {
+            "Sort palette swatches"
+        });
+        self.doc = next;
+        for slot in
+            std::iter::once(&mut self.palette_index).chain(self.secondary_palette_index.iter_mut())
+        {
+            if let Some(mapped) = remap.get(*slot) {
+                *slot = *mapped;
+            }
+        }
+    }
+
     fn palette_arrangement_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Palette order & ramps", |ui| {
             let max = self.doc.palette.len() - 1;
@@ -782,6 +860,39 @@ impl PixelCraft {
             if ui.pc_button("Move swatch to position").clicked() {
                 self.move_palette_swatch(self.power.ramp_from, self.power.ramp_to);
             }
+            let name = |sort| match sort {
+                PaletteSort::Hue => "Hue",
+                PaletteSort::Saturation => "Saturation",
+                PaletteSort::Value => "Value",
+                PaletteSort::Luminance => "Luminance",
+                PaletteSort::Rgb => "RGB channels",
+                PaletteSort::Alpha => "Alpha",
+                PaletteSort::Name => "Swatch name",
+            };
+            egui::ComboBox::from_label("Sort by").selected_text(name(self.power.palette_sort)).show_ui(ui, |ui| {
+                for sort in [PaletteSort::Hue, PaletteSort::Saturation, PaletteSort::Value, PaletteSort::Luminance, PaletteSort::Rgb, PaletteSort::Alpha, PaletteSort::Name] {
+                    ui.pc_selectable_value(&mut self.power.palette_sort, sort, name(sort));
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                if ui.pc_button(if self.picked_swatches().is_empty() { "Sort palette" } else { "Sort selected swatches" }).clicked() {
+                    self.apply_palette_order(false);
+                }
+                if ui.pc_button("Reverse selected swatches").clicked() {
+                    self.apply_palette_order(true);
+                }
+            });
+            let interpolation = |space| match space {
+                pixelcraft::workflows::RampInterpolation::Rgb => "RGB",
+                pixelcraft::workflows::RampInterpolation::Hue => "Hue",
+            };
+            egui::ComboBox::from_label("Ramp interpolation")
+                .selected_text(interpolation(self.power.ramp_interpolation))
+                .show_ui(ui, |ui| {
+                    for mode in [pixelcraft::workflows::RampInterpolation::Rgb, pixelcraft::workflows::RampInterpolation::Hue] {
+                        ui.pc_selectable_value(&mut self.power.ramp_interpolation, mode, interpolation(mode));
+                    }
+                });
             ui.add(
                 egui::DragValue::new(&mut self.power.ramp_steps)
                     .range(2..=256)
@@ -791,10 +902,11 @@ impl PixelCraft {
                 ui.pc_button("Add ramp between swatches").clicked()
             }).inner {
                 let mut next = self.doc.clone();
-                match next.palette_ramp(
+                match next.palette_ramp_interpolated(
                     self.power.ramp_from,
                     self.power.ramp_to,
                     self.power.ramp_steps,
+                    self.power.ramp_interpolation,
                 ) {
                     Ok(()) => {
                         self.remember_action("Add palette ramp");
@@ -812,10 +924,11 @@ impl PixelCraft {
 
     fn replace_palette_ramp(&mut self) {
         let mut next = self.doc.clone();
-        let remap = match next.replace_palette_span(
+        let remap = match next.replace_palette_span_interpolated(
             self.power.ramp_from,
             self.power.ramp_to,
             self.power.ramp_steps,
+            self.power.ramp_interpolation,
         ) {
             Ok(remap) => remap,
             Err(error) => {

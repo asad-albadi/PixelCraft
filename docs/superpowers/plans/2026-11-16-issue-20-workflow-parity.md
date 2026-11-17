@@ -202,6 +202,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 14 complete. Sprite → Palette and Indexed Color generates an editable palette from the current frame or all visible artwork frames. It keeps exact colors that fit and uses a histogram and weighted median cuts for larger ranges. Indexed conversion supports a chosen transparent slot, nearest swatches, Bayer 2×2/4×4/8×8, or an installed ordered matrix. Conversion with the existing palette retains frame palettes and remaps authored slots when transparency moves. Tile artwork and off-canvas pixels are also converted. Cancellable background work commits as one undo edit. Formatting, strict Clippy, and 580 Windows all-target tests passed. Error-diffusion dithering remains a follow-up parity check.
 
+- Item 15 complete. Palette tools sort the current frame's swatches by hue, saturation, value, luminance, RGB, alpha, or name, and can reverse noncontiguous picks. Reordering preserves indexed artwork and applies the same slot mapping to compatible frame palettes. Range and individual picks are available in the inspector. Both ramp operations support shortest-arc hue interpolation. RGB, RYB, and normal-map wheels can set either drawing swatch. Formatting, strict Clippy, and 584 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -221,7 +223,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **12. Add whole-sprite operations.** Resample, auto-trim, duplicate, rotate, and flip sprites across layers and frames.
 - [x] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.
 - [x] **14. Generate palettes and improve indexed conversion.** Build an editable palette from artwork and expose conversion dithering and transparent-index controls.
-- [ ] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.
+- [x] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.
 - [ ] **16. Extend ICC color management.** Assign and convert document profiles, choose import policies, and select a monitor, sRGB, or custom display profile.
 - [x] **17. Add eyedropper sampling controls.** Choose the sampling source and pick specific color or alpha channels.
 - [x] **18. Make symmetry axes movable.** Position each axis independently on the canvas.

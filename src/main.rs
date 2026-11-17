@@ -3,6 +3,7 @@
     windows_subsystem = "windows"
 )]
 
+mod color_wheel;
 mod editor_filters;
 mod export_actions;
 mod file_path_dialog;
@@ -692,6 +693,7 @@ struct PixelCraft {
     replace_color: Option<ReplaceColor>,
     editor_filter: Option<editor_filters::FilterDialog>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
+    color_wheel: color_wheel::ColorWheel,
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
     clipboard_target: Option<ClipboardTarget>,
@@ -883,6 +885,7 @@ impl PixelCraft {
             replace_color: None,
             editor_filter: None,
             palette_conversion: None,
+            color_wheel: color_wheel::ColorWheel::default(),
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
             clipboard_target: None,

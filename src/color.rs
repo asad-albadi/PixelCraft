@@ -1,6 +1,40 @@
 //! Convert only display buffers. Stored color values and profiles remain lossless.
 use crate::model::*;
 use moxcms::{ColorProfile, DataColorSpace, Layout, ToneReprCurve, TransformOptions};
+
+pub fn rgb_to_hsv([r, g, b, _]: Pixel) -> [f32; 3] {
+    let [r, g, b] = [r, g, b].map(|byte| f32::from(byte) / 255.);
+    let high = r.max(g).max(b);
+    let low = r.min(g).min(b);
+    let delta = high - low;
+    let hue = if delta == 0. {
+        0.
+    } else if high == r {
+        ((g - b) / delta).rem_euclid(6.)
+    } else if high == g {
+        (b - r) / delta + 2.
+    } else {
+        (r - g) / delta + 4.
+    };
+    [hue / 6., if high == 0. { 0. } else { delta / high }, high]
+}
+
+pub fn hsv_to_rgb([hue, saturation, value]: [f32; 3], alpha: u8) -> Pixel {
+    let hue = hue.rem_euclid(1.) * 6.;
+    let chroma = value * saturation;
+    let mid = chroma * (1. - (hue.rem_euclid(2.) - 1.).abs());
+    let offset = value - chroma;
+    let rgb = match hue as u8 {
+        0 => [chroma, mid, 0.],
+        1 => [mid, chroma, 0.],
+        2 => [0., chroma, mid],
+        3 => [0., mid, chroma],
+        4 => [mid, 0., chroma],
+        _ => [chroma, 0., mid],
+    };
+    let [r, g, b] = rgb.map(|value| ((value + offset) * 255.).round() as u8);
+    [r, g, b, alpha]
+}
 pub fn display_pixels(d: &Document, f: usize) -> Result<Vec<Pixel>, String> {
     to_srgb(&d.color_profile, &d.composite(f))
 }

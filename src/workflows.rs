@@ -373,7 +373,49 @@ pub fn crop(d: &mut Document, b: [i32; 4]) -> Result<(), String> {
     Ok(())
 }
 pub fn ramp(a: Pixel, b: Pixel, n: usize) -> Vec<Pixel> {
+    ramp_interpolated(a, b, n, RampInterpolation::Rgb)
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RampInterpolation {
+    #[default]
+    Rgb,
+    Hue,
+}
+
+pub fn ramp_interpolated(a: Pixel, b: Pixel, n: usize, space: RampInterpolation) -> Vec<Pixel> {
     let n = n.clamp(2, 256);
+    if space == RampInterpolation::Hue {
+        let [mut start, saturation, value] = crate::color::rgb_to_hsv(a);
+        let [mut end, end_saturation, end_value] = crate::color::rgb_to_hsv(b);
+        if saturation == 0. {
+            start = end;
+        }
+        if end_saturation == 0. {
+            end = start;
+        }
+        let arc = (end - start + 0.5).rem_euclid(1.) - 0.5;
+        return (0..n)
+            .map(|i| {
+                if i == 0 {
+                    return a;
+                }
+                if i == n - 1 {
+                    return b;
+                }
+                let t = i as f32 / (n - 1) as f32;
+                let lerp = |u: f32, v: f32| u + (v - u) * t;
+                crate::color::hsv_to_rgb(
+                    [
+                        start + arc * t,
+                        lerp(saturation, end_saturation),
+                        lerp(value, end_value),
+                    ],
+                    lerp(f32::from(a[3]), f32::from(b[3])).round() as u8,
+                )
+            })
+            .collect();
+    }
     (0..n)
         .map(|i| {
             std::array::from_fn(|c| {

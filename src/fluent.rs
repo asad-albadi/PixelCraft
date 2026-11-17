@@ -450,7 +450,7 @@ impl PixelCraft {
 
         let mut reorder = None;
         ui.collapsing("Document palette", |ui| {
-            ui.small("Drag to reorder. Right-click to set the secondary color.");
+            ui.small("Shift-click selects a range. Ctrl/Cmd-click toggles a swatch.");
             let palette = if self.doc.color_mode == ColorMode::Indexed {
                 self.doc.editing_palette(self.layer, self.frame)
             } else {
@@ -495,8 +495,7 @@ impl PixelCraft {
                                 }
                                 let color = [r, g, b, a];
                                 if response.clicked() {
-                                    self.fg = color;
-                                    self.palette_index = slot;
+                                    self.select_palette_swatch(slot, color, ui.input(|i| i.modifiers));
                                 }
                                 let reorder_menu = ui.input(|i| i.modifiers.shift)
                                     || response.context_menu_opened();
@@ -504,7 +503,8 @@ impl PixelCraft {
                                     self.set_secondary_color(color, Some(slot));
                                 }
                                 let secondary = self.secondary_palette_index == Some(slot) && self.bg == color;
-                                let selected = self.palette_index == slot && self.fg == color;
+                                let selected = self.picked_swatches().contains(&slot)
+                                    || (self.picked_swatches().is_empty() && self.palette_index == slot && self.fg == color);
                                 let name = self
                                     .doc
                                     .palette_names
@@ -582,6 +582,9 @@ impl PixelCraft {
                             }
                         });
                 });
+            if ui.pc_small_button("Palette tools…").clicked() {
+                self.action("workflow");
+            }
         });
         if let Some((from, to)) = reorder {
             self.move_palette_swatch(from, to);
@@ -632,6 +635,7 @@ impl PixelCraft {
                         self.fg[0], self.fg[1], self.fg[2]
                     ));
                 }
+                self.color_wheel_ui(ui);
                 ui.add_space(8.);
                 ui.horizontal(|ui| {
                     if ui_icons::local_button(ui, "plus", "Add color").clicked() {

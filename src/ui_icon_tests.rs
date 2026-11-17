@@ -2839,6 +2839,32 @@ fn symmetry_handles_move_independently_and_reflect_pencil_strokes() {
 }
 
 #[test]
+fn color_wheel_applies_normal_map_colors_to_secondary_swatch() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-color-wheel.png")));
+    let primary = app.fg;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let pick = |app: &mut PixelCraft, label| {
+        let mut out = frame(app, &ctx, size, 1., vec![]);
+        let pos = text_position(&mut out, label);
+        discard_frame(app, &ctx, size, 1., click(pos));
+    };
+    pick(&mut app, "Color wheel");
+    pick(&mut app, "RGB wheel");
+    pick(&mut app, "Normal-map wheel");
+    pick(&mut app, "Secondary swatch");
+    let disk = layout_rect(&ctx, "color-wheel-disk");
+    let old_alpha = app.bg[3];
+    discard_frame(&mut app, &ctx, size, 1., click(disk.center()));
+    assert_eq!(app.bg, [128, 128, 255, old_alpha]);
+    assert_eq!(app.fg, primary);
+    assert!(app.undo.is_empty());
+}
+
+#[test]
 fn palette_ramp_controls_replace_span_and_undo_as_one_edit() {
     let ctx = egui::Context::default();
     let size = Vec2::new(1180., 840.);

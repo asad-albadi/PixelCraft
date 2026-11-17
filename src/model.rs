@@ -8,6 +8,8 @@ mod layer_conversion;
 mod layer_operations;
 mod layer_order;
 mod palette_span;
+mod palette_tools;
+pub use palette_tools::PaletteSort;
 mod tile_operations;
 pub use cel_selection::CelSelection;
 pub use layer_conversion::LayerConversion;
@@ -1926,52 +1928,28 @@ impl Document {
     }
     /// Move a swatch, remapping indices rather than recoloring existing artwork.
     pub fn reorder_palette(&mut self, from: usize, to: usize) -> Result<(), String> {
-        let n = self.palette.len();
-        if from >= n || to >= n {
+        let count = self.palette.len();
+        if from >= count || to >= count {
             return Err("Invalid palette position".into());
         }
-        if self
-            .frame_palettes
-            .iter()
-            .any(|p| !p.is_empty() && p.len() != n)
-        {
-            return Err("Frame palettes must have matching sizes to reorder".into());
-        }
-        let mut order: Vec<usize> = (0..n).collect();
+        let mut order: Vec<usize> = (0..count).collect();
         let item = order.remove(from);
         order.insert(to, item);
-        let mut remap = vec![0; n];
-        for (new, old) in order.iter().enumerate() {
-            remap[*old] = new;
-        }
-        let reorder = |p: &mut Vec<Pixel>| {
-            if !p.is_empty() {
-                let old = p.clone();
-                *p = order.iter().map(|i| old[*i]).collect();
-            }
-        };
-        reorder(&mut self.palette);
-        for p in &mut self.frame_palettes {
-            reorder(p);
-        }
-        self.palette_names.resize(n, String::new());
-        let name = self.palette_names.remove(from);
-        self.palette_names.insert(to, name);
-        self.transparent_index = remap[self.transparent_index.min(n - 1)];
-        self.drawing_index = self.drawing_index.map(|i| remap[i.min(n - 1)]);
-        for l in &mut self.layers {
-            for m in &mut l.cel_meta {
-                if let Some(indices) = &mut m.indices {
-                    for i in Arc::make_mut(indices) {
-                        *i = remap.get(*i as usize).copied().unwrap_or(0) as u8;
-                    }
-                }
-            }
-        }
+        self.permute_palette(&order)?;
         Ok(())
     }
     /// Append intermediate shades without changing any existing palette slots.
     pub fn palette_ramp(&mut self, from: usize, to: usize, steps: usize) -> Result<(), String> {
+        self.palette_ramp_interpolated(from, to, steps, crate::workflows::RampInterpolation::Rgb)
+    }
+
+    pub fn palette_ramp_interpolated(
+        &mut self,
+        from: usize,
+        to: usize,
+        steps: usize,
+        interpolation: crate::workflows::RampInterpolation,
+    ) -> Result<(), String> {
         if from >= self.palette.len()
             || to >= self.palette.len()
             || !(3..=256).contains(&steps)
@@ -1986,11 +1964,17 @@ impl Document {
         {
             return Err("Frame palettes must have matching sizes to add a shared ramp".into());
         }
-        let colors = crate::workflows::ramp(self.palette[from], self.palette[to], steps);
+        let colors = crate::workflows::ramp_interpolated(
+            self.palette[from],
+            self.palette[to],
+            steps,
+            interpolation,
+        );
         self.palette.extend_from_slice(&colors[1..steps - 1]);
         for p in &mut self.frame_palettes {
             if !p.is_empty() {
-                let ramp = crate::workflows::ramp(p[from], p[to], steps);
+                let ramp =
+                    crate::workflows::ramp_interpolated(p[from], p[to], steps, interpolation);
                 p.extend_from_slice(&ramp[1..steps - 1]);
             }
         }

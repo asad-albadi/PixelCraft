@@ -405,6 +405,52 @@ fn indexed_conversion_dithers_midtones_without_changing_endpoints_or_frame_palet
 }
 
 #[test]
+fn palette_sort_and_noncontiguous_reverse_preserve_indexed_artwork() {
+    use pixelcraft::model::PaletteSort;
+    let mut doc = Document::new(4, 1);
+    doc.set_color_mode(ColorMode::Indexed);
+    let red = [190, 30, 20, 255];
+    let green = [10, 70, 20, 255];
+    let blue = [20, 30, 180, 255];
+    doc.import_palette(vec![CLEAR, red, blue, green]).unwrap();
+    for (index, color) in [CLEAR, red, blue, green].into_iter().enumerate() {
+        doc.set_pixel(0, 0, index, color);
+    }
+    let colors = doc.layers[0].cels[0].clone();
+    assert_eq!(
+        doc.sort_palette(&[], PaletteSort::Hue).unwrap(),
+        [0, 1, 3, 2]
+    );
+    assert_eq!(doc.palette, [CLEAR, red, green, blue]);
+    assert_eq!(doc.reverse_palette_entries(&[3, 1]).unwrap(), [0, 3, 2, 1]);
+    assert_eq!(doc.palette, [CLEAR, blue, green, red]);
+    assert!(doc.layers[0].cels[0].shares_storage(&colors));
+    assert_eq!(
+        doc.layers[0].cel_meta[0]
+            .indices
+            .as_ref()
+            .unwrap()
+            .as_slice(),
+        [0, 3, 1, 2]
+    );
+}
+
+#[test]
+fn hue_palette_ramps_follow_short_arc_and_keep_alpha() {
+    use pixelcraft::workflows::{RampInterpolation, ramp_interpolated};
+    let colors = ramp_interpolated(
+        [255, 0, 128, 100],
+        [255, 128, 0, 200],
+        3,
+        RampInterpolation::Hue,
+    );
+    assert_eq!(
+        colors,
+        [[255, 0, 128, 100], [255, 0, 0, 150], [255, 128, 0, 200]]
+    );
+}
+
+#[test]
 fn ramps_append_without_recoloring_indexed_frames() {
     let mut d = Document::new(1, 1);
     d.import_palette(vec![CLEAR, [255, 0, 0, 255], [0, 0, 255, 255]])

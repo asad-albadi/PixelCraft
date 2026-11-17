@@ -1,4 +1,5 @@
 use super::{ColorMode, Document, Pixel, Pixels};
+use crate::workflows::{RampInterpolation, ramp_interpolated};
 use std::{collections::HashMap, sync::Arc};
 
 struct PaletteRamp {
@@ -15,9 +16,14 @@ impl PaletteRamp {
         steps: usize,
         remap: &[usize],
         reserved: Option<usize>,
+        interpolation: RampInterpolation,
     ) -> Self {
-        let mut shades =
-            crate::workflows::ramp(old[low], old[high], steps - usize::from(reserved.is_some()));
+        let mut shades = ramp_interpolated(
+            old[low],
+            old[high],
+            steps - usize::from(reserved.is_some()),
+            interpolation,
+        );
         if let Some(slot) = reserved {
             shades.insert(remap[slot] - low, old[slot]);
         }
@@ -65,6 +71,16 @@ impl Document {
         first: usize,
         last: usize,
         steps: usize,
+    ) -> Result<Vec<usize>, String> {
+        self.replace_palette_span_interpolated(first, last, steps, RampInterpolation::Rgb)
+    }
+
+    pub fn replace_palette_span_interpolated(
+        &mut self,
+        first: usize,
+        last: usize,
+        steps: usize,
+        interpolation: RampInterpolation,
     ) -> Result<Vec<usize>, String> {
         let (low, high) = (first.min(last), first.max(last));
         if low == high || !(2..=256).contains(&steps) {
@@ -132,6 +148,7 @@ impl Document {
             steps,
             &remap,
             reserved,
+            interpolation,
         )];
         let mut variants = HashMap::from([(self.palette.as_slice(), 0)]);
         let frame_variant: Vec<_> = self
@@ -144,7 +161,13 @@ impl Document {
                     *variants.entry(palette.as_slice()).or_insert_with(|| {
                         let variant = ramps.len();
                         ramps.push(PaletteRamp::new(
-                            palette, low, high, steps, &remap, reserved,
+                            palette,
+                            low,
+                            high,
+                            steps,
+                            &remap,
+                            reserved,
+                            interpolation,
                         ));
                         variant
                     })
