@@ -558,7 +558,7 @@ rawset(app,'fgTile',toolOptions.fgTile or 1)
 rawset(app,'bgTile',toolOptions.bgTile or 0)
 
 BrushType={CIRCLE='Round',SQUARE='Square',DIAMOND='Diamond',HORIZONTAL='Horizontal',VERTICAL='Vertical'}
-Ink={SIMPLE='simple',ALPHA_COMPOSITING='alpha-compositing',COPY_COLOR='copy-color'}
+Ink={SIMPLE='simple',ALPHA_COMPOSITING='alpha-compositing',COPY_COLOR='copy-color',LOCK_ALPHA='lock-alpha'}
 function Brush(options)
  if type(options)=='number' then options={size=options} end
  options=options or {}

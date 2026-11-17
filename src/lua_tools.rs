@@ -4,7 +4,7 @@ mod tiles;
 
 use crate::lua::MAX_SCRIPT_PIXELS;
 use crate::model::{BrushShape, CLEAR, Document, MAX_BRUSH_SIZE, MAX_DIMENSION, Pixel, over};
-use crate::productivity::matching_on_axes;
+use crate::productivity::{PaintInk, matching_on_axes};
 use crate::workflows::retouch::{Retouch, RetouchBrush, RetouchStroke};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -59,6 +59,7 @@ enum Ink {
     Simple,
     AlphaCompositing,
     CopyColor,
+    LockAlpha,
 }
 
 #[derive(Deserialize)]
@@ -227,6 +228,7 @@ fn stroke_color(tool: Tool, ink: &Ink, opacity: u8, previous: Pixel, source: Pix
             color
         }
         (_, Ink::Simple) if source[3] == 0 => CLEAR,
+        (_, Ink::LockAlpha) => PaintInk::LockAlpha.composite(previous, source, opacity),
         _ => over(previous, source, opacity),
     }
 }
@@ -316,6 +318,17 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
             continue;
         }
         let previous = doc.layers[stroke.layer].cels[stroke.frame][i];
+        if matches!(stroke.ink, Ink::LockAlpha) && !matches!(tool, Tool::Eraser) {
+            changed |= PaintInk::LockAlpha.draw_with_opacity(
+                doc,
+                (stroke.layer, stroke.frame),
+                i,
+                previous,
+                source,
+                stroke.opacity,
+            );
+            continue;
+        }
         let color = stroke_color(tool, &stroke.ink, stroke.opacity, previous, source);
         if color != previous {
             doc.set_pixel(stroke.layer, stroke.frame, i, color);

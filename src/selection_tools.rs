@@ -256,9 +256,11 @@ impl PixelCraft {
         let mut result = self.doc.clone();
         result.drawing_index = self.drawing_palette_index(color);
         let (layer, frame, width) = (self.layer, self.frame, result.width);
+        let ink = self.tool_ink();
         visit(&mut |index| {
             if self.selected((index % width) as i32, (index / width) as i32) {
-                result.set_pixel(layer, frame, index, color);
+                let original = self.doc.layers[layer].cels[frame][index];
+                ink.draw(&mut result, (layer, frame), index, original, color);
             }
         });
         result.drawing_index = None;

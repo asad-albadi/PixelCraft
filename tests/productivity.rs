@@ -1029,3 +1029,29 @@ fn canvas_skew_samples_pixel_centers_and_preserves_mask_holes() {
     assert!(transform(&mut doc, 0, 0, bounds, None, edge).is_ok());
     assert!(transform(&mut doc, 0, 0, bounds, None, Transform::SkewX(i32::MIN)).is_err());
 }
+
+#[test]
+fn lock_alpha_retains_indexed_coverage_and_copy_color_keeps_duplicate_slots() {
+    use pixelcraft::productivity::PaintInk;
+
+    let mut doc = Document::new(4, 1);
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let translucent_blue = [0, 0, 255, 128];
+    let translucent_red = [255, 0, 0, 128];
+    doc.palette = vec![CLEAR, red, red, blue, translucent_blue, translucent_red];
+    doc.set_color_mode(ColorMode::Indexed);
+    doc.set_pixel(0, 0, 1, blue);
+    doc.set_pixel(0, 0, 3, translucent_blue);
+    doc.drawing_index = Some(2);
+    PaintInk::LockAlpha.draw(&mut doc, (0, 0), 0, CLEAR, red);
+    PaintInk::LockAlpha.draw(&mut doc, (0, 0), 1, blue, red);
+    PaintInk::CopyColor.draw(&mut doc, (0, 0), 2, CLEAR, red);
+    PaintInk::LockAlpha.draw(&mut doc, (0, 0), 3, translucent_blue, red);
+    let cel = &doc.layers[0];
+    assert_eq!(cel.cels[0][0], CLEAR);
+    assert_eq!(cel.cels[0][1], red);
+    assert_eq!(cel.cels[0][2], red);
+    assert_eq!(cel.cels[0][3], translucent_red);
+    assert_eq!(&**cel.cel_meta[0].indices.as_ref().unwrap(), &[0, 2, 2, 5]);
+}

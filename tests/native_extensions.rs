@@ -2001,3 +2001,26 @@ fn lua_retouch_reads_from_the_stroke_start_and_clips_to_mask() {
     assert_eq!(cel[15], [231, 101, 24, 28]);
     assert_eq!(cel[13], CLEAR);
 }
+
+#[test]
+fn lua_lock_alpha_ink_preserves_rgb_coverage_and_unpainted_pixels() {
+    let mut doc = Document::new(4, 1);
+    doc.set_pixel(0, 0, 1, [0, 20, 245, 112]);
+    let result = run_source(
+        &doc,
+        r#"
+ assert(Ink.LOCK_ALPHA)
+ app.useTool{tool='line',points={Point(0,0),Point(3,0)},
+  color=Color('#ed5500'),ink=Ink.LOCK_ALPHA,opacity=128}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let cel = &result.layers[0].cels[0];
+    assert_eq!(cel[0], CLEAR);
+    assert_eq!(cel[1][3], 112);
+    assert!(cel[1][0] > 0 && cel[1][2] > 0);
+    assert_eq!(cel[2], CLEAR);
+}

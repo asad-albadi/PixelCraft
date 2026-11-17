@@ -182,6 +182,7 @@ struct Preferences {
     sample_references: bool,
     eyedropper: EyedropperOptions,
     gradient: GradientOptions,
+    tool_inks: std::collections::BTreeMap<String, PaintInk>,
     import_profile: pixelcraft::color::ImportProfile,
     pub(super) display_profile: crate::display_profiles::DisplayChoice,
     whole_pixel_wheel_zoom: bool,
@@ -205,6 +206,7 @@ impl Default for Preferences {
             sample_references: false,
             eyedropper: EyedropperOptions::default(),
             gradient: GradientOptions::default(),
+            tool_inks: Default::default(),
             import_profile: pixelcraft::color::ImportProfile::default(),
             display_profile: crate::display_profiles::DisplayChoice::default(),
             whole_pixel_wheel_zoom: false,
@@ -1341,15 +1343,94 @@ impl PixelCraft {
                 }
             }
         } else {
-            paint_brush_on_axes(
+            let ink = self.tool_ink();
+            let target = (self.layer, self.frame);
+            let original = self
+                .stroke_base
+                .as_ref()
+                .map(|doc| &doc.layers[target.0].cels[target.1]);
+            paint_brush_using(
                 &mut self.doc,
-                (self.layer, self.frame),
+                (target.0, target.1, axes),
                 p,
                 color,
                 size,
                 &o,
-                axes,
+                |doc, index, source| {
+                    let old = original.map_or(doc.layers[target.0].cels[target.1][index], |base| {
+                        base[index]
+                    });
+                    ink.draw(doc, target, index, old, source);
+                },
             );
+        }
+    }
+
+    fn tool_supports_ink(&self) -> bool {
+        matches!(
+            self.tool,
+            Tool::Pencil
+                | Tool::Fill
+                | Tool::Line
+                | Tool::Rect
+                | Tool::Ellipse
+                | Tool::Polygon
+                | Tool::Contour
+                | Tool::Curve
+        ) && !(self.tool == Tool::Pencil && self.power.mode == BrushMode::Shade)
+    }
+
+    pub(super) fn tool_ink(&self) -> PaintInk {
+        if self.tool_supports_ink() && self.doc.layers[self.layer].tileset.is_none() {
+            self.power
+                .preferences
+                .tool_inks
+                .get(self.tool.action())
+                .copied()
+                .unwrap_or_default()
+        } else {
+            PaintInk::Default
+        }
+    }
+
+    pub(super) fn set_tool_ink(&mut self, ink: PaintInk) {
+        let key = self.tool.action();
+        if ink == PaintInk::Default {
+            self.power.preferences.tool_inks.remove(key);
+        } else {
+            self.power.preferences.tool_inks.insert(key.into(), ink);
+        }
+        if self.shot.is_none() {
+            self.save_workflow_preferences();
+        }
+    }
+
+    pub(super) fn drawing_ink_ui(&mut self, ui: &mut egui::Ui) {
+        if !self.tool_supports_ink() || self.doc.layers[self.layer].tileset.is_some() {
+            return;
+        }
+        let original = self.tool_ink();
+        let mut ink = original;
+        let label = |option| match option {
+            PaintInk::Default => "Default",
+            PaintInk::CopyColor => "Copy Color",
+            PaintInk::AlphaCompositing => "Alpha Compositing",
+            PaintInk::LockAlpha => "Lock Alpha",
+        };
+        egui::ComboBox::from_id_salt("drawing-ink")
+            .selected_text(format!("Ink · {}", label(ink)))
+            .show_ui(ui, |ui| {
+                for value in [
+                    PaintInk::Default,
+                    PaintInk::CopyColor,
+                    PaintInk::AlphaCompositing,
+                    PaintInk::LockAlpha,
+                ] {
+                    ui.pc_selectable_value(&mut ink, value, label(value));
+                }
+            });
+        if ink != original {
+            self.set_tool_ink(ink);
         }
     }
     pub(super) fn fill_controls(&mut self, ui: &mut egui::Ui) {
@@ -1423,6 +1504,7 @@ impl PixelCraft {
             return;
         }
         let color = self.doc.snapped_color(self.frame, color);
+        let ink = self.tool_ink();
         let hits = matching_on_axes(
             &self.doc.layer_pixels(self.layer, self.frame),
             self.doc.width,
@@ -1434,7 +1516,8 @@ impl PixelCraft {
         );
         for (i, hit) in hits.into_iter().enumerate() {
             if hit && self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
-                self.doc.set_pixel(self.layer, self.frame, i, color);
+                let original = self.doc.layers[self.layer].cels[self.frame][i];
+                ink.draw(&mut self.doc, (self.layer, self.frame), i, original, color);
             }
         }
     }

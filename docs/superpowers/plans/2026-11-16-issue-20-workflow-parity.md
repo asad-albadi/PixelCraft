@@ -222,6 +222,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 5 complete. Text supports multiline placement, built-in regular, bold, and monospaced typefaces, pixel sizing and coordinates, and optional antialiasing for non-indexed sprites. It previews the glyph raster on the canvas without editing the cel. Placement respects selection clipping and commits in one undo step. Windows tests cover clipping, native pixel coverage, antialiasing, and undo. Formatting, strict Clippy, and 604 Windows all-target tests passed. Local font import and broader text workflows remain candidates for the parity audit.
 
+- Item 6 ink checkpoint. Pencil, raster fill, and raster shape tools can independently remember Default, Copy Color, Alpha Compositing, or Lock Alpha. Pencil blends from the start of the stroke so overlapping dabs do not build opacity. Lock Alpha retains pixel coverage and only chooses indexed swatches with the original alpha. Lua exposes the same Lock Alpha math and indexed behavior for raster strokes. Formatting, strict Clippy, and 607 Windows all-target tests passed. Saved brush and shading presets, image-brush alignment, and stabilization and dynamics remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

@@ -123,6 +123,110 @@ pub enum BrushMode {
     Dither,
     Selection,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PaintInk {
+    #[default]
+    Default,
+    CopyColor,
+    AlphaCompositing,
+    LockAlpha,
+}
+
+impl PaintInk {
+    pub fn composite(self, original: Pixel, color: Pixel, opacity: u8) -> Pixel {
+        match self {
+            Self::Default | Self::CopyColor => color,
+            Self::AlphaCompositing if color[3] == 0 || opacity == 0 => original,
+            Self::AlphaCompositing => over(original, color, opacity),
+            Self::LockAlpha if original[3] == 0 => original,
+            Self::LockAlpha => {
+                let [r, g, b, _] = over(original, color, opacity);
+                [r, g, b, original[3]]
+            }
+        }
+    }
+
+    pub fn blends(self) -> bool {
+        matches!(self, Self::AlphaCompositing | Self::LockAlpha)
+    }
+
+    /// Apply an ink to one covered pixel of an editable raster cel.
+    pub fn draw(
+        self,
+        doc: &mut Document,
+        (layer, frame): (usize, usize),
+        index: usize,
+        original: Pixel,
+        color: Pixel,
+    ) {
+        self.draw_with_opacity(doc, (layer, frame), index, original, color, 255);
+    }
+
+    pub(crate) fn draw_with_opacity(
+        self,
+        doc: &mut Document,
+        (layer, frame): (usize, usize),
+        index: usize,
+        original: Pixel,
+        color: Pixel,
+        opacity: u8,
+    ) -> bool {
+        if self == Self::LockAlpha && (original[3] == 0 || color[3] == 0) {
+            return false;
+        }
+        let result = self.composite(original, color, opacity);
+        if self == Self::LockAlpha && doc.color_mode == ColorMode::Indexed {
+            let transparent = (!doc.layers[layer].background).then_some(doc.transparent_index);
+            let palette = doc.palette_for(frame);
+            let valid =
+                |slot: usize, pixel: Pixel| Some(slot) != transparent && pixel[3] == original[3];
+            let exact = doc.drawing_index.filter(|&slot| {
+                palette
+                    .get(slot)
+                    .is_some_and(|&pixel| pixel == result && valid(slot, pixel))
+            });
+            let current_slot = doc.layers[layer].cel_meta[frame]
+                .indices
+                .as_ref()
+                .map(|slots| usize::from(slots[index]));
+            let same = current_slot.filter(|&slot| {
+                palette
+                    .get(slot)
+                    .is_some_and(|&pixel| pixel == result && valid(slot, pixel))
+            });
+            let resolved = exact.or(same).or_else(|| {
+                palette
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|&(slot, pixel)| valid(slot, pixel))
+                    .min_by_key(|&(_, pixel)| {
+                        pixel[..3]
+                            .iter()
+                            .zip(result)
+                            .map(|(&a, b)| i32::from(a.abs_diff(b)).pow(2))
+                            .sum::<i32>()
+                    })
+                    .map(|(slot, _)| slot)
+            });
+            if let Some(slot) = resolved
+                && (Some(slot) != current_slot
+                    || palette[slot] != doc.layers[layer].cels[frame][index])
+            {
+                doc.restore_pixel(layer, frame, index, palette[slot], Some(slot as u8));
+                return true;
+            }
+        } else if result != doc.layers[layer].cels[frame][index]
+            || doc.color_mode == ColorMode::Indexed
+        {
+            doc.set_pixel(layer, frame, index, result);
+            return true;
+        }
+        false
+    }
+}
 #[derive(Clone, Default)]
 pub struct BrushOptions {
     pub mode: BrushMode,
@@ -176,6 +280,24 @@ fn paint_brush_with_ink_on_axes(
     o: &BrushOptions,
     mut ink: impl FnMut(usize, Pixel, Pixel) -> Pixel,
 ) {
+    paint_brush_using(d, (l, f, axes), p, color, size, o, |doc, index, source| {
+        let previous = doc.layers[l].cels[f][index];
+        let next = ink(index, previous, source);
+        if next != previous || doc.color_mode == ColorMode::Indexed {
+            doc.set_pixel(l, f, index, next);
+        }
+    });
+}
+
+pub fn paint_brush_using(
+    d: &mut Document,
+    (l, f, axes): (usize, usize, WrapAxes),
+    p: (i32, i32),
+    color: Pixel,
+    size: i32,
+    o: &BrushOptions,
+    mut apply: impl FnMut(&mut Document, usize, Pixel),
+) {
     if !d.editable(l) || d.layers[l].tileset.is_some() {
         return;
     }
@@ -193,26 +315,11 @@ fn paint_brush_with_ink_on_axes(
             }
         }
     } else {
-        let size = size.clamp(1, MAX_BRUSH_SIZE);
-        let lo = -(size / 2);
-        for y in lo..lo + size {
-            for x in lo..lo + size {
-                let (a, b) = (
-                    2 * x + if size % 2 == 0 { 1 } else { 0 },
-                    2 * y + if size % 2 == 0 { 1 } else { 0 },
-                );
-                let hit = match d.brush_shape {
-                    BrushShape::Round => a * a + b * b <= size * size,
-                    BrushShape::Square => true,
-                    BrushShape::Diamond => a.abs() + b.abs() <= size,
-                    BrushShape::Horizontal => y == 0,
-                    BrushShape::Vertical => x == 0,
-                };
-                if hit {
-                    points.push((p.0 + x, p.1 + y, color));
-                }
-            }
-        }
+        points.extend(
+            d.brush_shape
+                .offsets(size)
+                .map(|(x, y)| (p.0 + x, p.1 + y, color)),
+        );
     }
     let mut shaded = std::collections::HashSet::new();
     for (x, y, mut c) in points {
@@ -270,11 +377,7 @@ fn paint_brush_with_ink_on_axes(
         if o.mode != BrushMode::Selection {
             c = d.snapped_color(f, c);
         }
-        let previous = d.layers[l].cels[f][i];
-        let next = ink(i, previous, c);
-        if next != previous || d.color_mode == ColorMode::Indexed {
-            d.set_pixel(l, f, i, next);
-        }
+        apply(d, i, c);
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

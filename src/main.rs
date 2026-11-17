@@ -6078,8 +6078,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn shape(&mut self, a: (i32, i32), b: (i32, i32), c: Pixel) {
+        let ink = self.tool_ink();
         let before = self
             .selection
+            .filter(|_| !ink.blends())
             .map(|_| self.doc.layers[self.layer].cels[self.frame].clone());
         let old_indices = self.doc.layers[self.layer].cel_meta[self.frame]
             .indices
@@ -6089,12 +6091,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let f = self.frame;
         let (x0, y0, x1, y1) = (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
         let axes = self.drawing_axes();
+        let mut coverage = ink.blends().then(|| {
+            let mut mask = Document::new(self.doc.width, self.doc.height);
+            mask.brush_shape = self.doc.brush_shape;
+            mask
+        });
+        let (target, cel, color) = if let Some(mask) = &mut coverage {
+            (mask, (0, 0), [255; 4])
+        } else {
+            (&mut self.doc, (l, f), c)
+        };
         match self.tool {
-            Tool::Line => self.doc.line_on_axes((l, f), a, b, c, self.brush, axes),
+            Tool::Line => target.line_on_axes(cel, a, b, color, self.brush, axes),
             Tool::Rect => {
                 if self.filled {
                     for y in y0..=y1 {
-                        self.doc.line_on_axes((l, f), (x0, y), (x1, y), c, 1, axes)
+                        target.line_on_axes(cel, (x0, y), (x1, y), color, 1, axes)
                     }
                 } else {
                     for (a, b) in [
@@ -6103,15 +6115,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ((x1, y1), (x0, y1)),
                         ((x0, y1), (x0, y0)),
                     ] {
-                        self.doc.line_on_axes((l, f), a, b, c, self.brush, axes)
+                        target.line_on_axes(cel, a, b, color, self.brush, axes)
                     }
                 }
             }
             Tool::Ellipse => {
-                self.doc
-                    .ellipse_on_axes((l, f), (a, b), c, self.filled, self.brush, axes)
+                target.ellipse_on_axes(cel, (a, b), color, self.filled, self.brush, axes)
             }
             _ => {}
+        }
+        if let Some(mask) = coverage {
+            let original = self.doc.layers[l].cels[f].clone();
+            let color = self.doc.snapped_color(f, c);
+            mask.layers[0].cels[0].visit_nonclear(|i, _| {
+                if self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
+                    ink.draw(&mut self.doc, (l, f), i, original[i], color);
+                }
+            });
         }
         if let Some(before) = before {
             let implicit_slot = (self.doc.color_mode == ColorMode::Indexed

@@ -1006,6 +1006,7 @@ impl PixelCraft {
         }
         if self.tool == Tool::Fill {
             self.fill_controls(ui);
+            self.drawing_ink_ui(ui);
             toggle(ui, &mut self.grid, "Pixel grid");
             return;
         }
@@ -1070,6 +1071,7 @@ impl PixelCraft {
             );
         } else {
             self.brush_mode_ui(ui);
+            self.drawing_ink_ui(ui);
         }
         ui.separator();
         toggle(ui, &mut self.studio.mirror_x, "Symmetry").on_hover_text(

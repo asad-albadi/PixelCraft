@@ -3569,3 +3569,53 @@ fn sprite_text_previews_and_places_multiline_pixels_as_one_undoable_edit() {
     app.undo();
     assert_eq!(app.doc, doc);
 }
+
+#[test]
+fn per_tool_inks_preserve_coverage_and_copy_translucent_color() {
+    use pixelcraft::productivity::PaintInk;
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-tool-ink.png")));
+    let mut doc = Document::new(8, 8);
+    doc.set_pixel(0, 0, 18, [0, 0, 255, 128]);
+    doc.set_pixel(0, 0, 19, [0, 0, 255, 255]);
+    doc.set_pixel(0, 0, 20, [0, 0, 255, 128]);
+    doc.set_pixel(0, 0, 27, [0, 0, 255, 72]);
+    app.replace(doc, None);
+    app.fg = [255, 0, 0, 192];
+    app.action("pencil");
+    app.set_tool_ink(PaintInk::LockAlpha);
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let point = |x: f32, y: f32| board.min + Vec2::new(x + 0.5, y + 0.5) * 20.;
+    drag_layout(&mut app, &ctx, size, point(1., 2.), point(3., 2.));
+    let cel = &app.doc.layers[0].cels[0];
+    assert_eq!(cel[17], CLEAR);
+    assert_eq!(cel[18][3], 128);
+    assert!(cel[18][0] > 0 && cel[18][2] > 0);
+    assert_eq!(cel[19][3], 255);
+
+    app.action("line");
+    assert_eq!(app.tool_ink(), PaintInk::Default);
+    app.set_tool_ink(PaintInk::CopyColor);
+    drag_layout(&mut app, &ctx, size, point(4., 2.), point(6., 2.));
+    assert_eq!(app.doc.layers[0].cels[0][20], app.fg);
+    assert_eq!(app.doc.layers[0].cels[0][22], app.fg);
+    app.set_tool_ink(PaintInk::LockAlpha);
+    drag_layout(&mut app, &ctx, size, point(2., 3.), point(4., 3.));
+    let cel = &app.doc.layers[0].cels[0];
+    assert_eq!(cel[26], CLEAR);
+    assert_eq!(cel[27][3], 72);
+    assert!(cel[27][0] > 0);
+    assert_eq!(cel[28], CLEAR);
+    app.action("pencil");
+    assert_eq!(app.tool_ink(), PaintInk::LockAlpha);
+    assert_eq!(app.undo.len(), 3);
+}
