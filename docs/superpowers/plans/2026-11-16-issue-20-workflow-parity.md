@@ -186,6 +186,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 17 complete. The eyedropper can sample visible artwork, the active layer, or reference images, and can pick full RGBA, color, alpha, individual RGB channels, grayscale, or a palette index. Primary and secondary clicks target separate swatches. The Windows UI test checks source selection, per-button channel updates, exact translucent RGB, duplicate indexed swatch identity, and an unchanged undo history. Formatting, strict Clippy, and 562 Windows all-target tests passed.
 
+- Item 18 complete. Each enabled brush symmetry axis has an on-canvas handle and can snap to a pixel center or edge. Positions are per tab, survive workspace recovery, and can be centered from Drawing & selection studio. The pointer regression moves both handles independently, checks reflected pixels and undo, and verifies tab isolation. Formatting, strict Clippy, and 563 Windows all-target tests passed. Revisit shape-tool symmetry and saved-file reopen behavior during the parity audit.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -208,7 +210,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.
 - [ ] **16. Extend ICC color management.** Assign and convert document profiles, choose import policies, and select a monitor, sRGB, or custom display profile.
 - [x] **17. Add eyedropper sampling controls.** Choose the sampling source and pick specific color or alpha channels.
-- [ ] **18. Make symmetry axes movable.** Position each axis independently on the canvas.
+- [x] **18. Make symmetry axes movable.** Position each axis independently on the canvas.
 
 ## Layers, timeline, and tilemaps
 

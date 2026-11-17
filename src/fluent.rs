@@ -1047,7 +1047,7 @@ impl PixelCraft {
         self.brush_mode_ui(ui);
         ui.separator();
         toggle(ui, &mut self.studio.mirror_x, "Symmetry").on_hover_text(
-            "Mirror drawing horizontally; vertical symmetry is in Sprite Properties.",
+            "Mirror brush strokes left to right. Drag the canvas handle to move the axis. Mirror Y is in Drawing & selection studio.",
         );
         ui.separator();
         toggle(ui, &mut self.grid, "Pixel grid");

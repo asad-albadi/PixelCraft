@@ -26,6 +26,8 @@ pub(super) struct Studio {
     pub seamless: WrapAxes,
     pub mirror_x: bool,
     pub mirror_y: bool,
+    // Twice the sprite coordinate, so both pixel centers and edges are exact.
+    pub(super) symmetry_axes: [Option<i32>; 2],
     pub pixel_perfect: bool,
     pub pressure: bool,
     pub force: f32,
@@ -151,6 +153,7 @@ impl Default for Studio {
             seamless: WrapAxes::NONE,
             mirror_x: false,
             mirror_y: false,
+            symmetry_axes: [None; 2],
             pixel_perfect: false,
             pressure: false,
             force: 1.,
@@ -216,6 +219,8 @@ struct StoredTab {
     polygon: Vec<(i32, i32)>,
     #[serde(default)]
     mask: Option<Vec<bool>>,
+    #[serde(default)]
+    symmetry_axes: [Option<i32>; 2],
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 struct Workspace {
@@ -258,6 +263,7 @@ impl PixelCraft {
                         selection: t.selection,
                         polygon: t.polygon.clone(),
                         mask: t.mask.clone(),
+                        symmetry_axes: t.symmetry_axes,
                     }
                 } else {
                     StoredTab {
@@ -274,6 +280,7 @@ impl PixelCraft {
                         selection: self.selection,
                         polygon: self.studio.polygon.clone(),
                         mask: self.studio.mask.clone(),
+                        symmetry_axes: self.studio.symmetry_axes,
                     }
                 }
             })
@@ -639,6 +646,7 @@ impl PixelCraft {
                 selection: t.selection,
                 polygon: t.polygon.clone(),
                 mask: t.mask.clone(),
+                symmetry_axes: t.symmetry_axes,
                 palette_index: 0,
                 secondary_palette_index: None,
                 active_tag: None,
@@ -1775,6 +1783,9 @@ impl PixelCraft {
                     ui.horizontal(|ui| {
                         ui.pc_checkbox(&mut self.studio.mirror_x, "Mirror X");
                         ui.pc_checkbox(&mut self.studio.mirror_y, "Mirror Y");
+                        if ui.pc_button("Center axes").clicked() {
+                            self.studio.symmetry_axes = [None; 2];
+                        }
                     });
                     ui.pc_checkbox(
                         &mut self.studio.pixel_perfect,
@@ -2787,6 +2798,7 @@ mod tests {
         a.named_colors.push(("Grass".into(), [1, 2, 3, 255]));
         a.zoom = 7.;
         a.pan = Vec2::new(10., 20.);
+        a.studio.symmetry_axes = [Some(2), Some(3)];
         a.autosave(true, &egui::Context::default());
         assert!(root.join("workspace.recovery").exists());
         let mut b = app();
@@ -2802,7 +2814,9 @@ mod tests {
         assert_eq!(b.doc.layers[0].cels[0][5], [99, 88, 77, 255]);
         assert_eq!(b.zoom, 7.);
         assert_eq!(b.pan, Vec2::new(10., 20.));
+        assert_eq!(b.studio.symmetry_axes, [Some(2), Some(3)]);
         b.switch_tab(0);
+        assert_eq!(b.studio.symmetry_axes, [None; 2]);
         assert_eq!(b.live_save_root.as_ref(), Some(&first_project));
         assert!(b.dirty());
         assert_eq!(b.doc.layers[1].cels[0][0], [11, 22, 33, 255]);

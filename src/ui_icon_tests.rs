@@ -2778,3 +2778,61 @@ fn eyedropper_source_and_channels_target_each_drawing_color() {
     assert_eq!(app.bg, duplicate);
     assert!(app.undo.is_empty());
 }
+
+#[test]
+fn symmetry_handles_move_independently_and_reflect_pencil_strokes() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-symmetry.png")));
+    app.replace(Document::new(12, 10), None);
+    app.studio.mirror_x = true;
+    app.studio.mirror_y = true;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let zoom = app.zoom;
+    let pixel = |x: f32, y: f32| board.min + Vec2::new(x, y) * zoom;
+    let x_handle = layout_rect(&ctx, "symmetry-x-handle").center();
+    drag_layout(
+        &mut app,
+        &ctx,
+        size,
+        x_handle,
+        Pos2::new(pixel(3., 0.).x, x_handle.y),
+    );
+    let y_handle = layout_rect(&ctx, "symmetry-y-handle").center();
+    drag_layout(
+        &mut app,
+        &ctx,
+        size,
+        y_handle,
+        Pos2::new(y_handle.x, pixel(0., 3.5).y),
+    );
+    assert!(app.undo.is_empty(), "moving guides must not paint");
+
+    discard_frame(&mut app, &ctx, size, 1., click(pixel(1.5, 1.5)));
+    let painted: Vec<_> = app.doc.layers[0].cels[0]
+        .iter()
+        .enumerate()
+        .filter_map(|(index, color)| (color[3] > 0).then_some(index))
+        .collect();
+    assert_eq!(painted, [13, 16, 61, 64]);
+    app.undo();
+    assert!(
+        app.doc.layers[0].cels[0]
+            .iter()
+            .all(|color| *color == CLEAR)
+    );
+    assert_eq!([app.symmetry_axis(0), app.symmetry_axis(1)], [6, 7]);
+    let original_tab = app.active_tab;
+    app.open_document(Document::new(12, 10), None);
+    assert_eq!([app.symmetry_axis(0), app.symmetry_axis(1)], [12, 10]);
+    app.switch_tab(original_tab);
+    assert_eq!([app.symmetry_axis(0), app.symmetry_axis(1)], [6, 7]);
+}

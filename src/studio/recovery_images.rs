@@ -225,6 +225,7 @@ fn salvage_tab_raster(raw: &str) -> Option<StoredTab> {
         selection: None,
         polygon: Vec::new(),
         mask: None,
+        symmetry_axes: [None; 2],
     })
 }
 

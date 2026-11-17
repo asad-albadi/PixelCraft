@@ -367,6 +367,7 @@ struct SpriteTab {
     timeline_layers: TimelineHeaders,
     polygon: Vec<(i32, i32)>,
     mask: Option<Vec<bool>>,
+    symmetry_axes: [Option<i32>; 2],
 }
 struct ScriptPreview {
     initial_tab: usize,
@@ -1387,19 +1388,16 @@ impl PixelCraft {
             } else {
                 self.brush
             };
-            let mut points = vec![p];
-            if self.studio.mirror_x {
-                points.push((self.doc.width as i32 - 1 - p.0, p.1));
-            }
-            if self.studio.mirror_y {
-                let mirrored: Vec<_> = points
-                    .iter()
-                    .map(|p| (p.0, self.doc.height as i32 - 1 - p.1))
-                    .collect();
-                points.extend(mirrored);
-            }
-            for p in points {
-                self.power_paint(p, color, size);
+            let mirror_x = self.symmetry_axis(0) - 1 - p.0;
+            let mirror_y = self.symmetry_axis(1) - 1 - p.1;
+            let xs = [p.0, mirror_x];
+            let ys = [p.1, mirror_y];
+            let nx = 1 + usize::from(self.studio.mirror_x && mirror_x != p.0);
+            let ny = 1 + usize::from(self.studio.mirror_y && mirror_y != p.1);
+            for &y in &ys[..ny] {
+                for &x in &xs[..nx] {
+                    self.power_paint((x, y), color, size);
+                }
             }
         }
         self.doc.drawing_index = None;
@@ -2340,6 +2338,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.redo.clear();
         self.selection = None;
         self.studio.mask = None;
+        self.studio.symmetry_axes = [None; 2];
         self.power.reference_edit = None;
         self.studio.polygon.clear();
         self.pan = Vec2::ZERO;
@@ -2383,6 +2382,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             timeline_layers: self.timeline_layers.clone(),
             polygon: self.studio.polygon.clone(),
             mask: self.studio.mask.clone(),
+            symmetry_axes: self.studio.symmetry_axes,
         };
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = self.tabs.len();
@@ -2423,6 +2423,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.selection, &mut tab.selection);
         std::mem::swap(&mut self.studio.polygon, &mut tab.polygon);
         std::mem::swap(&mut self.studio.mask, &mut tab.mask);
+        std::mem::swap(&mut self.studio.symmetry_axes, &mut tab.symmetry_axes);
         self.power.reference_edit = None;
         std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
         std::mem::swap(
@@ -6108,6 +6109,111 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.canvas_pane(ui, CanvasPane::Primary);
     }
 
+    fn symmetry_axis(&self, index: usize) -> i32 {
+        let extent = [self.doc.width, self.doc.height][index] as i32;
+        self.studio.symmetry_axes[index]
+            .unwrap_or(extent)
+            .clamp(0, 2 * extent)
+    }
+
+    fn draw_symmetry_guides(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        board: Rect,
+        pane: CanvasPane,
+        can_edit: bool,
+    ) -> bool {
+        let visible = board.intersect(painter.clip_rect());
+        if !visible.is_positive() {
+            return false;
+        }
+        let step = self.canvas_pixel_size();
+        let mut captured = false;
+        for (index, enabled) in [self.studio.mirror_x, self.studio.mirror_y]
+            .into_iter()
+            .enumerate()
+        {
+            if !enabled {
+                continue;
+            }
+            let x_axis = index == 0;
+            let screen_axis =
+                board.min[index] + self.symmetry_axis(index) as f32 * step[index] / 2.;
+            let (start, end, center, cursor, hint) = if x_axis {
+                (
+                    Pos2::new(screen_axis, visible.top()),
+                    Pos2::new(screen_axis, visible.bottom()),
+                    Pos2::new(screen_axis, visible.top() + 7.),
+                    egui::CursorIcon::ResizeHorizontal,
+                    "Drag to move the left-right mirror axis",
+                )
+            } else {
+                (
+                    Pos2::new(visible.left(), screen_axis),
+                    Pos2::new(visible.right(), screen_axis),
+                    Pos2::new(visible.left() + 7., screen_axis),
+                    egui::CursorIcon::ResizeVertical,
+                    "Drag to move the top-bottom mirror axis",
+                )
+            };
+            let handle = Rect::from_center_size(center, Vec2::splat(12.));
+            let interactive = can_edit && self.gesture_canvas.is_none() && self.tool != Tool::Hand;
+            let mut active = false;
+            if interactive && handle.intersects(painter.clip_rect()) {
+                let response = ui.interact(
+                    handle.intersect(painter.clip_rect()),
+                    ui.id().with(("symmetry-axis", pane, index)),
+                    Sense::drag(),
+                );
+                captured |= response.contains_pointer() || response.is_pointer_button_down_on();
+                active = response.hovered() || response.dragged();
+                if (response.dragged_by(egui::PointerButton::Primary)
+                    || response.drag_stopped_by(egui::PointerButton::Primary))
+                    && let Some(pointer) = response.interact_pointer_pos()
+                {
+                    let extent = [self.doc.width, self.doc.height][index] as i32;
+                    let offset = ((pointer[index] - board.min[index]) * 2. / step[index]).round();
+                    self.studio.symmetry_axes[index] = Some((offset as i32).clamp(0, 2 * extent));
+                    ui.ctx().request_repaint();
+                }
+                response.on_hover_cursor(cursor).on_hover_text(hint);
+                #[cfg(test)]
+                ui.ctx().data_mut(|data| {
+                    let name = if x_axis {
+                        "symmetry-x-handle"
+                    } else {
+                        "symmetry-y-handle"
+                    };
+                    if pane == CanvasPane::Primary {
+                        data.insert_temp(egui::Id::new(name), handle);
+                    }
+                });
+            }
+            let accent = self.colors().accent;
+            painter.line_segment(
+                [start, end],
+                Stroke::new(3., Color32::from_black_alpha(115)),
+            );
+            painter.line_segment(
+                [start, end],
+                Stroke::new(1., Color32::from_rgb(117, 222, 222)),
+            );
+            painter.rect_filled(
+                handle.shrink(1.),
+                2.,
+                if active { self.colors().ink } else { accent },
+            );
+            painter.rect_stroke(
+                handle.shrink(1.),
+                2.,
+                Stroke::new(1., Color32::from_rgb(117, 222, 222)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        captured
+    }
+
     fn canvas_pane(&mut self, ui: &mut egui::Ui, pane: CanvasPane) {
         let (r, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         #[cfg(test)]
@@ -6282,6 +6388,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 );
             }
         }
+        let over_symmetry_handle = self.draw_symmetry_guides(ui, &painter, board, pane, can_edit);
         let pos = pointer.filter(|p| r.contains(*p)).map(|p| {
             (
                 ((p.x - board.min.x) / pixel_size.x).floor() as i32,
@@ -6314,6 +6421,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && let Some(button) = pressed
             && self.gesture_canvas.is_none()
             && response.hovered()
+            && !over_symmetry_handle
             && let Some(raw) = on_canvas
             && (accepts_copies || self.doc.index(raw.0, raw.1).is_some())
             && self.tool != Tool::Hand
