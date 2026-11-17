@@ -154,6 +154,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 freehand checkpoint. Lua can invoke regular, pixel-perfect, and dots modes with the native pencil and eraser. The editor and script paths share the corner rule. Tests cover preservation of prior corner artwork, opacity at individual dots, erasing with dots, and mapped tile-cell corners. Typed properties and broader object identity remain open.
 
+- Item 45 sprite properties checkpoint. Lua exposes typed user and named extension maps on sprites, including field and map replacement and undo. PixelCraft patches the ASE user data chunk and retains untouched typed bytes, sprite text and color, and unrelated extension maps. Windows tests cover native and ASE round-trips and editing a named map from the upstream property fixture while adding a new namespace. Other object owners and broader identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

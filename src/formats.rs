@@ -409,11 +409,9 @@ fn append_cel_extra(chunks: &mut Vec<Vec<u8>>, meta: &CelMeta) {
 }
 
 fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &str) {
-    for m in d
-        .metadata
-        .iter()
-        .filter(|m| m.frame == f && m.owner == owner)
-    {
+    for m in d.metadata.iter().filter(|m| {
+        m.frame == f && m.owner == owner && !(f == 0 && owner.is_empty() && m.kind == 0x2008)
+    }) {
         chunks.push(chunk(m.kind, m.data.clone()));
     }
 }
@@ -578,6 +576,14 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         let mut chunks = vec![];
         let palette = d.palette_for(f);
         if f == 0 {
+            // Extension IDs and external tilesets are referenced by later chunks.
+            for metadata in d
+                .metadata
+                .iter()
+                .filter(|m| m.frame == 0 && m.owner.is_empty() && m.kind == 0x2008)
+            {
+                chunks.push(chunk(0x2008, metadata.data.clone()));
+            }
             if !d.color_profile.is_empty() {
                 chunks.push(chunk(0x2007, d.color_profile.clone()));
             }

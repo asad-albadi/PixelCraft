@@ -1333,3 +1333,154 @@ fn lua_freehand_tile_strokes_use_cell_corners_and_supplied_dots() {
         vec![1, 0, 0, 0, 1, 0, 1, 0, 1]
     );
 }
+
+#[test]
+fn lua_sprite_properties_roundtrip_without_rewriting_unedited_ase_values() {
+    fn property(name: &str, kind: u16, bytes: &[u8]) -> Vec<u8> {
+        let mut entry = (name.len() as u16).to_le_bytes().to_vec();
+        entry.extend_from_slice(name.as_bytes());
+        entry.extend_from_slice(&kind.to_le_bytes());
+        entry.extend_from_slice(bytes);
+        entry
+    }
+    let namespaced = property("u64", 9, &u64::MAX.to_le_bytes());
+    let untouched = property("small", 2, &[42]);
+    let mut maps = 2_u32.to_le_bytes().to_vec();
+    for (id, entries) in [
+        (7_u32, vec![namespaced.clone()]),
+        (0, vec![untouched.clone()]),
+    ] {
+        maps.extend_from_slice(&id.to_le_bytes());
+        maps.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for entry in entries {
+            maps.extend(entry);
+        }
+    }
+    let mut data = 7_u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&6_u16.to_le_bytes());
+    data.extend_from_slice(b"legacy");
+    data.extend_from_slice(&[10, 20, 30, 255]);
+    let prefix = data.clone();
+    data.extend_from_slice(&(maps.len() as u32 + 4).to_le_bytes());
+    data.extend(maps);
+    let mut doc = Document::new(2, 1);
+    doc.metadata.push(MetadataChunk {
+        frame: 0,
+        kind: 0x2020,
+        owner: "palette".into(),
+        data,
+    });
+    let readback = r#"
+ local p=app.activeSprite.properties
+ assert(p.small==42 and p.removed==nil)
+ assert(p.shared.name=='árbol' and p.shared.enabled==true)
+ assert(p.shared.offset==Point(-3,4) and p.shared.area==Rectangle(0,1,2,3))
+ assert(p.shared.size==Size(7,8))
+ assert(p.vector[1]==-3 and p.vector[2]==2.5 and p.vector[3]==false)
+ local found=false
+ for k,v in pairs(p) do if k=='small' then found=v==42 end end
+ assert(found)
+ "#;
+    let output = run_source(
+        &doc,
+        &format!(
+            r#"
+ local p=app.activeSprite.properties
+ assert(p.small==42)
+ p.shared={{name='árbol',enabled=true,offset=Point(-3,4),area=Rectangle(0,1,2,3),size=Size(7,8)}}
+ p.vector={{-3,2.5,false}}
+ p.removed='temporary'
+ app.command.Undo()
+ assert(p.removed==nil)
+ app.command.Redo()
+ assert(p.removed=='temporary')
+ p.removed=nil
+ p.small=42
+ {readback}
+ "#
+        ),
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let chunk = &output.metadata[0].data;
+    assert!(chunk.starts_with(&prefix));
+    assert!(
+        chunk
+            .windows(namespaced.len())
+            .any(|part| part == namespaced)
+    );
+    assert!(chunk.windows(untouched.len()).any(|part| part == untouched));
+    let directory =
+        std::env::temp_dir().join(format!("pixelcraft-lua-properties-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    for extension in ["pixel", "aseprite"] {
+        let path = directory.join("properties").with_extension(extension);
+        pixelcraft::formats::save(&path, &output).unwrap();
+        let reopened = pixelcraft::formats::load(&path).unwrap();
+        assert!(
+            reopened
+                .metadata
+                .iter()
+                .any(|m| m.kind == 0x2020 && m.data == *chunk)
+        );
+        run_source(&reopened, readback, 0, 0, None).unwrap();
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn lua_sprite_extension_properties_survive_ase_roundtrip() {
+    let input = pixelcraft::formats::load(std::path::Path::new(
+        "tests/fixtures/file-tests-props.aseprite",
+    ))
+    .unwrap();
+    let script = r#"
+ local sprite=app.activeSprite
+ assert(sprite.properties.b==1)
+ assert(sprite.properties('ext').a[2]=='two')
+ assert(sprite.properties('new/plugin').phase==nil)
+ sprite.properties('new/plugin').phase={steps={1,2,3},ready=true}
+ sprite.properties('ext').updated=Point(2,7)
+ sprite.properties={onlyDefault='replaced'}
+ sprite:newEmptyFrame(1)
+ "#;
+    let edited = run_source(&input, script, 0, 0, None).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "pixelcraft-property-namespaces-{}.aseprite",
+        std::process::id()
+    ));
+    pixelcraft::formats::save(&path, &edited).unwrap();
+    let file = fs::read(&path).unwrap();
+    let mut pos = 144;
+    let mut kinds = Vec::new();
+    for _ in 0..u16::from_le_bytes(file[134..136].try_into().unwrap()) {
+        let size = u32::from_le_bytes(file[pos..pos + 4].try_into().unwrap()) as usize;
+        kinds.push(u16::from_le_bytes(
+            file[pos + 4..pos + 6].try_into().unwrap(),
+        ));
+        pos += size;
+    }
+    assert!(
+        kinds.iter().position(|&kind| kind == 0x2008).unwrap()
+            < kinds.iter().position(|&kind| kind == 0x2020).unwrap()
+    );
+    let reopened = pixelcraft::formats::load(&path).unwrap();
+    run_source(
+        &reopened,
+        r#"
+ local sprite=app.activeSprite
+ assert(sprite.properties.b==nil and sprite.properties.onlyDefault=='replaced')
+ assert(sprite.properties('ext').a[3]=='three')
+ assert(sprite.properties('ext').updated==Point(2,7))
+ local phase=sprite.properties('new/plugin').phase
+ assert(phase.ready and phase.steps[3]==3)
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    fs::remove_file(path).unwrap();
+}

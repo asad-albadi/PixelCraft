@@ -466,6 +466,8 @@ impl ScriptRuntime {
         let runtime = Runtime::new(Some(Box::new(move |request| {
             if request["op"] == "useTool" {
                 crate::lua_tools::use_tool(request)
+            } else if request["op"] == "aseProperties" {
+                crate::lua_properties::request(request)
             } else if let Some(host) = host.as_mut() {
                 host(request)
             } else {
@@ -484,10 +486,11 @@ impl ScriptRuntime {
             ))
         ))?;
         runtime.eval(&format!(
-            "{}\n{}\n{}",
+            "{}\n{}\n{}\n{}",
             include_str!("lua_api.lua"),
             include_str!("lua_tilesets.lua"),
-            include_str!("lua_compat.lua")
+            include_str!("lua_compat.lua"),
+            include_str!("lua_properties.lua")
         ))?;
         let finish_reference = runtime.take_global_function(c"_pw_finish")?;
         let output_reference = if capture_output {

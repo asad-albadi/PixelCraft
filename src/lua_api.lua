@@ -712,7 +712,9 @@ local function insertFrameMetadata(index)
   end
  end
  for _,metadata in ipairs(doc.metadata)do
-  if metadata.frame>=index and not metadata.owner:match('^slice:') and not metadata.owner:match('^tileset:') then metadata.frame=metadata.frame+1 end
+  local spriteData=metadata.frame==0 and ((metadata.kind==0x2020 and metadata.owner=='palette') or metadata.kind==0x2008)
+  if metadata.frame>=index and not spriteData and not metadata.owner:match('^slice:')
+   and not metadata.owner:match('^tileset:') then metadata.frame=metadata.frame+1 end
  end
 end
 
