@@ -1,4 +1,4 @@
--- ASE user properties on an open sprite. The codec edits the original metadata
+-- ASE user properties on open document objects. The codec edits the original metadata
 -- chunk so unrelated namespaces and values retain their binary representation.
 do
  local proxies=setmetatable({},{__mode='k'})
@@ -75,14 +75,15 @@ do
   return value
  end
 
- local function spriteMetadata()
+ local function objectMetadata(owner,frame)
   for _,chunk in ipairs(doc.metadata)do
-   if chunk.frame==0 and chunk.kind==0x2020 and chunk.owner=='palette' then return chunk end
+   if chunk.frame==frame and chunk.kind==0x2020 and chunk.owner==owner then return chunk end
   end
  end
 
- local function call(action,key,value,namespace)
-  local previous=spriteMetadata()
+ local function call(resolve,action,key,value,namespace)
+  local owner,frame=resolve()
+  local previous=objectMetadata(owner,frame)
   local data=previous and previous.data or {0,0,0,0}
   local request={op='aseProperties',action=action,data=data,key=key,namespace=namespace}
   local firstExternal
@@ -111,7 +112,7 @@ do
   if identical and not response.external then return end
   app.transaction(function()
    if previous then previous.data=response.data
-   else table.insert(doc.metadata,{frame=0,kind=0x2020,owner='palette',data=response.data}) end
+   else table.insert(doc.metadata,{frame=frame,kind=0x2020,owner=owner,data=response.data}) end
    if response.external then
     if firstExternal then firstExternal.data=response.external
     else table.insert(doc.metadata,{frame=0,kind=0x2008,owner='',data=response.external}) end
@@ -119,51 +120,54 @@ do
   end)
  end
 
- local function properties(owner,namespace)
+ local function properties(handle,owner,resolve,namespace)
   namespace=namespace or ''
-  local scoped=proxies[owner]
-  if not scoped then scoped=setmetatable({},{__mode='v'});proxies[owner]=scoped end
+  local scoped=proxies[handle]
+  if not scoped then scoped=setmetatable({},{__mode='v'});proxies[handle]=scoped end
   if scoped[namespace] then return scoped[namespace] end
   local proxy=setmetatable({},{
    __index=function(_,key)
     assert(type(key)=='string','Property name must be a string')
-    return withSprite(owner,function()return decodeValue(call('read',key,nil,namespace).property)end)
+    return withSprite(owner,function()return decodeValue(call(resolve,'read',key,nil,namespace).property)end)
    end,
    __newindex=function(_,key,value)
     assert(type(key)=='string','Property name must be a string')
-    withSprite(owner,call,'set',key,value,namespace)
+    withSprite(owner,call,resolve,'set',key,value,namespace)
    end,
    __pairs=function()
-    local result=withSprite(owner,call,'read',nil,nil,namespace)
+    local result=withSprite(owner,call,resolve,'read',nil,nil,namespace)
     local values={}
     for _,entry in ipairs(result.properties)do values[entry.key]=decodeValue(entry.value) end
     return next,values,nil
    end,
    __call=function(_,name,value)
     assert(type(name)=='string','Expected an extension name')
-    if value~=nil then withSprite(owner,call,'replace',nil,value,name) end
-    return properties(owner,name)
+    if value~=nil then withSprite(owner,call,resolve,'replace',nil,value,name) end
+    return properties(handle,owner,resolve,name)
    end,
   })
   scoped[namespace]=proxy
   return proxy
  end
 
- local get,set=spriteMeta.__index,spriteMeta.__newindex
- -- The initial sprite already has the owner wrapper built by bindSpriteHandle.
- -- Keep that wrapper, and add the same properties field to the shared metatable
- -- that will be used when another sprite is opened.
- local function install(meta,get,set)
+ local function install(meta,resolve,owner)
+  local get,set=meta.__index,meta.__newindex
   meta.__index=function(handle,key)
-   if key=='properties' then return properties(handle) end
+   if key=='properties' then return properties(handle,owner or handle,resolve) end
    return get(handle,key)
   end
   meta.__newindex=function(handle,key,value)
-   if key=='properties' then return withSprite(handle,call,'replace',nil,value) end
+   if key=='properties' then return withSprite(owner or handle,call,resolve,'replace',nil,value) end
    return set(handle,key,value)
   end
  end
- install(spriteMeta,get,set)
- local current=getmetatable(sprite)
- install(current,current.__index,current.__newindex)
+ bindUserProperties=function(handle,owner,resolve)
+  install(getmetatable(handle),resolve,owner)
+  return handle
+ end
+ local function spriteSlot()return 'palette',0 end
+ -- The initial sprite already has its own owner wrapper. Later sprites use spriteMeta.
+ install(spriteMeta,spriteSlot)
+ bindUserProperties(sprite,sprite,spriteSlot)
+ rebuildHandles()
 end

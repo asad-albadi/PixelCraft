@@ -525,9 +525,16 @@ local function putCelImage(l,fi,im,pos)
   if px>=0 and py>=0 and px<doc.width and py<doc.height then pixels[py*doc.width+px+1]=color elseif color[4]~=0 then m.outside[#m.outside+1]={x=px,y=py,color=color} end
  end end
 end
+local bindUserProperties=function(handle)return handle end
+local function findObject(list,target,description)
+ for index,value in ipairs(list)do
+  if value==target then return index end
+ end
+ error(description..' is deleted or no longer belongs to this document state')
+end
 local function cel(li,fi)
  local l=assert(doc.layers[li],'Missing layer');assert(doc.durations[fi],'Missing frame');local m=l.cel_meta[fi]
- return bindSpriteHandle(setmetatable({},{__index=function(_,k)
+ local handle=bindSpriteHandle(setmetatable({},{__index=function(_,k)
   if k=='image' then return celImage(l,fi) elseif k=='opacity' then return m.opacity elseif k=='zIndex' then return m.z_index
   elseif k=='position' then return m.bounds and Point(m.bounds[1],m.bounds[2]) or Point()
   elseif k=='bounds' then local b=m.bounds or {0,0,doc.width,doc.height};return Rectangle(table.unpack(b))
@@ -537,12 +544,29 @@ local function cel(li,fi)
   elseif k=='image' then putCelImage(l,fi,v,m.bounds and Point(m.bounds[1],m.bounds[2]) or Point())
   elseif k=='position' then putCelImage(l,fi,celImage(l,fi),Point(v)) else error('Unsupported cel field: '..k) end
  end}),sprite)
+ return bindUserProperties(handle,sprite,function()
+  local layer=findObject(doc.layers,l,'Layer')
+  local frame=findObject(l.cel_meta,m,'Cel')
+  -- Linked cels share user data, stored with the first source cel in ASE.
+  if m.artwork_link then
+   for index,metadata in ipairs(l.cel_meta)do
+    if metadata.artwork_link==m.artwork_link then frame=index;break end
+   end
+  end
+  return 'cel:'..(layer-1),frame-1
+ end)
 end
 local tilesetHandle,spriteTilesets,assignLayerTileset,snapshotTileset,detachedTileset
 local function rebuildHandles()
  layerHandles={} for i,l in ipairs(doc.layers) do layerHandles[i]=setmetatable({_index=i},{__index=function(_,k)if k=='name' then return l.name elseif k=='opacity' then return l.opacity elseif k=='isVisible' then return l.visible elseif k=='isEditable' then return not l.locked elseif k=='isTransparent' then return not l.background elseif k=='isBackground' then return l.background elseif k=='isImage' then return not l.group and not l.tileset elseif k=='tileset' then return l.tileset and tilesetHandle(doc.tilesets[l.tileset+1]) elseif k=='isTilemap' then return l.tileset~=nil elseif k=='isGroup' then return l.group elseif k=='blendMode' then return l.blend elseif k=='sprite' then return sprite elseif k=='cels' then local c={} for f=1,#doc.durations do c[f]=cel(i,f) end return c elseif k=='cel' then return function(_,f)return cel(i,frameNumber(f))end elseif k=='parent' then return l.parent and layerHandles[l.parent+1] or sprite end end,__newindex=function(_,k,v)if k=='name' then l.name=tostring(v) elseif k=='opacity' then l.opacity=opacityByte(v) elseif k=='isVisible' then l.visible=not not v elseif k=='isEditable' then l.locked=not v elseif k=='blendMode' then l.blend=v elseif k=='tileset' then assignLayerTileset(l,v) elseif k=='parent' then if v==sprite then l.parent=nil else l.parent=layerNumber(v)-1 end else error('Unsupported layer field: '..k) end end}) end
  frameHandles={} for i in ipairs(doc.durations) do frameHandles[i]=setmetatable({frameNumber=i},{__index=function(_,k)if k=='duration' then return doc.durations[i]/1000 elseif k=='sprite' then return sprite end end,__newindex=function(_,k,v)if k=='duration' then doc.durations[i]=frameMilliseconds(v) else error('Unsupported frame field: '..k) end end}) end
- for _,layer in ipairs(layerHandles)do bindSpriteHandle(layer,sprite)end
+ for i,handle in ipairs(layerHandles)do
+  local layer=doc.layers[i]
+  bindSpriteHandle(handle,sprite)
+  bindUserProperties(handle,sprite,function()
+   return 'layer:'..(findObject(doc.layers,layer,'Layer')-1),0
+  end)
+ end
  for _,frame in ipairs(frameHandles)do bindSpriteHandle(frame,sprite)end
 end
 local palette={}
@@ -670,7 +694,9 @@ do
   }),sprite)
   handles[slice]=handle
   objects[handle]={document=doc,value=slice}
-  return handle
+  return bindUserProperties(handle,sprite,function()
+   return 'slice:'..(findObject(doc.slices,slice,'Slice')-1),0
+  end)
  end
 
  function spriteMethods:newSlice(x,y,w,h)
@@ -712,9 +738,12 @@ local function insertFrameMetadata(index)
   end
  end
  for _,metadata in ipairs(doc.metadata)do
-  local spriteData=metadata.frame==0 and ((metadata.kind==0x2020 and metadata.owner=='palette') or metadata.kind==0x2008)
-  if metadata.frame>=index and not spriteData and not metadata.owner:match('^slice:')
-   and not metadata.owner:match('^tileset:') then metadata.frame=metadata.frame+1 end
+  local owner,kind=metadata.owner,metadata.kind
+  local frameIndependent=metadata.frame==0 and (
+   owner:match('^layer:') or owner:match('^slice:') or owner:match('^tileset:') or
+   owner=='tags' or owner=='ase:header' or (owner=='palette' and kind==0x2020) or
+   (owner=='' and kind==0x2008))
+  if metadata.frame>=index and not frameIndependent then metadata.frame=metadata.frame+1 end
  end
 end
 

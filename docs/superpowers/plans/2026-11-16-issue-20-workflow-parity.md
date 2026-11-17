@@ -156,6 +156,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 sprite properties checkpoint. Lua exposes typed user and named extension maps on sprites, including field and map replacement and undo. PixelCraft patches the ASE user data chunk and retains untouched typed bytes, sprite text and color, and unrelated extension maps. Windows tests cover native and ASE round-trips and editing a named map from the upstream property fixture while adding a new namespace. Other object owners and broader identity remain open.
 
+- Item 45 layer, cel, and slice properties checkpoint. Typed Lua maps now resolve to the current layer, cel, or slice across frame insertion and unrelated layer and slice deletion. Linked cels share their source user data. Timeline reordering and frame removal preserve document-wide user data and transfer linked cel properties when the source changes. Windows tests cover namespaced layer properties, linked cel metadata, slice properties, and native and ASE round-trips. Tag, tileset, and tile properties and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

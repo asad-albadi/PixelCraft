@@ -813,6 +813,27 @@ pub struct MetadataChunk {
     pub data: Vec<u8>,
     pub owner: String,
 }
+impl MetadataChunk {
+    fn is_frame_independent(&self) -> bool {
+        self.frame == 0
+            && (self.owner.starts_with("layer:")
+                || self.owner.starts_with("slice:")
+                || self.owner.starts_with("tileset:")
+                || self.owner == "tags"
+                || self.owner == "ase:header"
+                || (self.owner == "palette" && self.kind == 0x2020)
+                || (self.owner.is_empty() && self.kind == 0x2008))
+    }
+
+    fn cel_user_data_layer<'a>(&self, layers: &'a [Layer]) -> Option<&'a Layer> {
+        if self.kind != 0x2020 {
+            return None;
+        }
+        let layer = self.owner.strip_prefix("cel:")?.parse::<usize>().ok()?;
+        layers.get(layer)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Adjustment {
@@ -3182,6 +3203,34 @@ impl Document {
     }
     pub fn remove_frame(&mut self, f: usize) {
         if self.durations.len() > 1 && f < self.durations.len() {
+            self.metadata.retain_mut(|chunk| {
+                if chunk.is_frame_independent() {
+                    return true;
+                }
+                if chunk.frame == f {
+                    let replacement = chunk.cel_user_data_layer(&self.layers).and_then(|layer| {
+                        let link = layer.cel_meta[f].artwork_link?;
+                        if layer.cel_meta[..f]
+                            .iter()
+                            .any(|cel| cel.artwork_link == Some(link))
+                        {
+                            return None;
+                        }
+                        let next = layer.cel_meta[f + 1..]
+                            .iter()
+                            .position(|cel| cel.artwork_link == Some(link))?;
+                        Some(f + 1 + next)
+                    });
+                    let Some(replacement) = replacement else {
+                        return false;
+                    };
+                    chunk.frame = replacement;
+                }
+                if chunk.frame > f {
+                    chunk.frame -= 1;
+                }
+                true
+            });
             self.explicit_frame_export_ids().frames.remove(f);
             self.durations.remove(f);
             if f < self.frame_names.len() {
@@ -3212,12 +3261,6 @@ impl Document {
                 }
                 if t.to >= f {
                     t.to = t.to.saturating_sub(1)
-                }
-            }
-            self.metadata.retain(|m| m.frame != f);
-            for m in &mut self.metadata {
-                if m.frame > f {
-                    m.frame -= 1
                 }
             }
         }

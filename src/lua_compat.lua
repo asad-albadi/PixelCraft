@@ -503,7 +503,7 @@ app.command.ReplaceColor=command(function(p)
  local a,b=Color(p.from),Color(p.to);local tolerance=math.max(0,math.min(255,p.tolerance or 0))
  selectedImagePixels(function(im,x,y)local c=Color(im:getPixel(x,y));if math.abs(c.red-a.red)<=tolerance and math.abs(c.green-a.green)<=tolerance and math.abs(c.blue-a.blue)<=tolerance and math.abs(c.alpha-a.alpha)<=tolerance then im:drawPixel(x,y,b)end end)
 end)
-app.command.RemoveLayer=command(function()assert(#doc.layers>1,'Cannot remove the final layer');table.remove(doc.layers,activeLayer);for _,l in ipairs(doc.layers)do if l.parent==activeLayer-1 then l.parent=nil elseif l.parent and l.parent>activeLayer-1 then l.parent=l.parent-1 end end;activeLayer=math.min(activeLayer,#doc.layers);rebuildHandles()end)
+app.command.RemoveLayer=command(function()assert(#doc.layers>1,'Cannot remove the final layer');table.remove(doc.layers,activeLayer);removeIndexedMetadata('layer',activeLayer);removeIndexedMetadata('cel',activeLayer);for _,l in ipairs(doc.layers)do if l.parent==activeLayer-1 then l.parent=nil elseif l.parent and l.parent>activeLayer-1 then l.parent=l.parent-1 end end;activeLayer=math.min(activeLayer,#doc.layers);rebuildHandles()end)
 app.command.GotoNextFrame=function()app.activeFrame=frameHandles[math.min(#doc.durations,activeFrame+1)]end
 app.command.GotoPreviousFrame=function()app.activeFrame=frameHandles[math.max(1,activeFrame-1)]end
 app.command.GotoFirstFrame=function()app.activeFrame=frameHandles[1]end

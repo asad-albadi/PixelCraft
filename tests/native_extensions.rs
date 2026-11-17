@@ -1484,3 +1484,102 @@ fn lua_sprite_extension_properties_survive_ase_roundtrip() {
     .unwrap();
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn lua_layer_cel_slice_properties_follow_their_metadata_owners() {
+    let mut input = Document::new(3, 2);
+    input.add_layer();
+    input.layers[1].name = "First".into();
+    input.layers[1].cels[0].set(0, [123, 45, 67, 255]);
+    input.add_frame(0, true);
+    input.link_cel(1, 1, 0).unwrap();
+    let readback = r#"
+ local sprite=app.activeSprite
+ local layer=sprite.layers[1]
+ assert(layer.name=='First' and layer.properties.label=='map')
+ assert(layer.properties('pc/test').weight==0.25)
+ assert(layer:cel(1).properties.payload==nil)
+ assert(layer:cel(2).properties.payload.x==7)
+ assert(layer:cel(3).properties.payload.x==7)
+ assert(sprite.slices[1].name=='Survivor')
+ assert(sprite.slices[1].properties.pivot==Point(1,0))
+ assert(sprite.properties.rank==42 and sprite.properties.label==nil)
+ "#;
+    let output = run_source(
+        &input,
+        &format!(
+            r#"
+ local sprite=app.activeSprite
+ sprite.properties.rank=42
+ sprite.layers[1].properties.label='Delete this'
+ local layer=sprite.layers[2]
+ local linked=layer:cel(2)
+ layer.properties.label='map'
+ layer.properties('pc/test').weight=0.25
+ linked.properties.payload={{x=7}}
+ assert(layer:cel(1).properties.payload.x==7)
+ local removed=sprite:newSlice(Rectangle(0,0,1,1))
+ removed.properties.pivot=Point(0,0)
+ local keep=sprite:newSlice(Rectangle(1,0,2,1))
+ keep.name='Survivor'
+ keep.properties.pivot=Point(1,0)
+ sprite:deleteSlice(removed)
+ sprite:newEmptyFrame(1)
+ sprite:deleteLayer(sprite.layers[1])
+ assert(layer.properties.label=='map')
+ assert(linked.properties.payload.x==7)
+ assert(keep.properties.pivot==Point(1,0))
+ {readback}
+ "#
+        ),
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "pixelcraft-object-properties-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    for ext in ["pixel", "aseprite"] {
+        let file = dir.join("properties").with_extension(ext);
+        pixelcraft::formats::save(&file, &output).unwrap();
+        let reopened = pixelcraft::formats::load(&file).unwrap();
+        run_source(&reopened, readback, 0, 0, None).unwrap();
+    }
+    let mut reordered = output;
+    reordered.reverse_frames(&[0, 2]).unwrap();
+    let reordered_readback = r#"
+ local sprite=app.activeSprite
+ local layer=sprite.layers[1]
+ assert(sprite.properties.rank==42)
+ assert(layer.properties('pc/test').weight==0.25)
+ assert(layer:cel(1).properties.payload.x==7)
+ assert(layer:cel(2).properties.payload.x==7)
+ assert(layer:cel(3).properties.payload==nil)
+ assert(sprite.slices[1].properties.pivot==Point(1,0))
+ "#;
+    run_source(&reordered, reordered_readback, 0, 0, None).unwrap();
+    reordered.remove_frame(0);
+    let file = dir.join("reordered.aseprite");
+    pixelcraft::formats::save(&file, &reordered).unwrap();
+    let reopened = pixelcraft::formats::load(&file).unwrap();
+    run_source(
+        &reopened,
+        r#"
+ local sprite=app.activeSprite
+ local layer=sprite.layers[1]
+ assert(sprite.properties.rank==42)
+ assert(layer.properties('pc/test').weight==0.25)
+ assert(layer:cel(1).properties.payload.x==7)
+ assert(layer:cel(2).properties.payload==nil)
+ assert(sprite.slices[1].properties.pivot==Point(1,0))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    fs::remove_dir_all(dir).unwrap();
+}

@@ -51,6 +51,34 @@ impl Document {
             return false;
         }
 
+        for chunk in &mut self.metadata {
+            if chunk.is_frame_independent() {
+                continue;
+            }
+            let Some(&destination) = positions.get(chunk.frame) else {
+                continue;
+            };
+            let source = chunk.frame;
+            chunk.frame = chunk
+                .cel_user_data_layer(&self.layers)
+                .and_then(|layer| {
+                    let link = layer.cel_meta[source].artwork_link?;
+                    if layer.cel_meta[..source]
+                        .iter()
+                        .any(|cel| cel.artwork_link == Some(link))
+                    {
+                        return None;
+                    }
+                    layer.cel_meta[source..]
+                        .iter()
+                        .zip(&positions[source..])
+                        .filter(|(cel, _)| cel.artwork_link == Some(link))
+                        .map(|(_, &slot)| slot)
+                        .min()
+                })
+                .unwrap_or(destination);
+        }
+
         // Use the same permutation on each dense frame array. Move the contents
         // in place so a long animation does not require copying its artwork.
         swap_frames(&mut self.explicit_frame_export_ids().frames, &swaps);
@@ -79,11 +107,6 @@ impl Document {
                 key.frame = positions[key.frame];
             }
             slice.keys.sort_unstable_by_key(|key| key.frame);
-        }
-        for chunk in &mut self.metadata {
-            if let Some(&frame) = positions.get(chunk.frame) {
-                chunk.frame = frame;
-            }
         }
         true
     }
