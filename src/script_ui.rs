@@ -39,10 +39,10 @@ impl ScriptUi {
         {
             let op = request.value["op"].as_str().unwrap_or("");
             self.modeless = op == "pump";
-            if op == "refresh" || op == "pump" {
+            if matches!(op, "activate" | "closePreview" | "refresh" | "pump") {
                 self.preview = Some(request.value.clone());
             }
-            if op == "refresh" || op == "preferences" {
+            if matches!(op, "activate" | "closePreview" | "refresh" | "preferences") {
                 let _ = request.reply.send(json!({}));
             } else {
                 self.pending = Some(request);
@@ -112,7 +112,9 @@ impl ScriptUi {
                 }
             });
         if let Some(mut value) = response {
-            if let Some(editor) = self.editor_update.take() {
+            if op == "pump"
+                && let Some(editor) = self.editor_update.take()
+            {
                 value["editor"] = editor;
             }
             value["time"] = json!(self.started.map_or(0., |t| t.elapsed().as_secs_f64()));

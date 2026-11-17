@@ -65,7 +65,6 @@ local oldSpriteAssign=getmetatable(sprite).__newindex
 getmetatable(sprite).__newindex=function(t,k,v) if k=='selection' then spriteSelection=bindSpriteHandle(Selection(v),t) elseif k=='filename' then filename=v elseif k=='transparentColor' then doc.transparent_index=v else oldSpriteAssign(t,k,v) end end
 local undo,redo={},{}
 local activeSprite=sprite
-local initialSprite=sprite
 local workspace={sprite}
 local contexts={[sprite]={id=1}}
 local editorTabs=(_pw_options or {}).editorTabs
@@ -175,6 +174,9 @@ local function activateSprite(handle)
  loadSpriteContext(handle)
  if activeSprite~=handle then
   activeSprite=handle
+  if editorTabs then
+   host{op='activate',sprite=contexts[handle].id,path=filename,document=doc,frame=activeFrame,layer=activeLayer}
+  end
   appEvents:_emit('sitechange')
  end
 end
@@ -423,6 +425,9 @@ function spriteMethods:close()
     if nextSprite then activateSprite(nextSprite)
     else activeSprite=nil;appEvents:_emit('sitechange') end
    end
+   if editorTabs and not entry.editorTab then
+    host{op='closePreview',sprite=entry.id}
+   end
    return
   end
  end
@@ -483,7 +488,13 @@ function Dialog(t)
  dialogs[#dialogs+1]=d;return d
 end
 rawset(app,'alert',function(t)if not nativeHost then print(type(t)=='table' and (t.text or t.title or '') or t);return 1 end;return host{op='alert',value=t}.button or 1 end)
-rawset(app,'refresh',function()if nativeHost then host{op='refresh',sprite=activeSprite and contexts[activeSprite].id,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}end end)
+rawset(app,'refresh',function()
+ if nativeHost and activeSprite then
+  withSprite(activeSprite,function()
+   host{op='refresh',sprite=contexts[activeSprite].id,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
+  end)
+ end
+end)
 _pw_loop=function()
  if not nativeHost then for _,timer in ipairs(timers)do assert(not timer.isRunning,'Timers require an interactive session')end;return end
  while true do
@@ -493,7 +504,13 @@ _pw_loop=function()
   local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
   if response.editor then
    local editor=response.editor
-   local target=(_pw_options or {}).editorWorkspace and initialSprite or sprite
+   local target=sprite
+   if editorTabs then
+    target=nil
+    for _,handle in ipairs(workspace)do
+     if contexts[handle].id==editor.sprite then target=handle;break end
+    end
+   end
    if contexts[target] then withSprite(target,function()
     doc=expandDocumentPixels(editor.document);activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer
     rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')

@@ -282,6 +282,22 @@ struct SpriteTab {
     polygon: Vec<(i32, i32)>,
     mask: Option<Vec<bool>>,
 }
+struct ScriptPreview {
+    initial_tab: usize,
+    tab_count: usize,
+    opened: std::collections::HashMap<u32, usize>,
+    visible: ScriptTabPreview,
+}
+
+struct ScriptTabPreview {
+    id: u32,
+    original: HistoryEntry,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    drawn: Document,
+    site: (usize, usize),
+}
+
 // Only compare inputs used by color extraction. Editing names, timing,
 // selections, drawing colors or other editor metadata leaves this cache intact.
 fn same_color_artwork(a: &Document, b: &Document) -> bool {
@@ -501,8 +517,7 @@ struct PixelCraft {
     #[cfg(test)]
     extension_session: Option<Session>,
     script_ui: script_ui::ScriptUi,
-    script_preview_doc: Option<Document>,
-    script_origin: Option<Document>,
+    script_preview: Option<ScriptPreview>,
     script_tab_closes: Vec<String>,
     script_close_destination: Option<String>,
     script_job: Option<std::sync::mpsc::Receiver<Result<extensions::ScriptWorkspace, String>>>,
@@ -687,8 +702,7 @@ impl PixelCraft {
             extension_session: None,
             script_job: None,
             script_ui: script_ui::ScriptUi::default(),
-            script_preview_doc: None,
-            script_origin: None,
+            script_preview: None,
             script_tab_closes: Vec::new(),
             script_close_destination: None,
             shot,
@@ -2063,6 +2077,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.status = "Wait for the current script before opening another tab".into();
             return;
         }
+        self.insert_document_tab(doc, path);
+    }
+
+    fn insert_document_tab(&mut self, doc: Document, path: Option<PathBuf>) {
         self.cancel_gesture();
         let tab = SpriteTab {
             doc: self.doc.clone(),
@@ -2096,7 +2114,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.replace(doc, path);
     }
     fn switch_tab(&mut self, index: usize) {
-        if index == self.active_tab || index >= self.tabs.len() || self.script_job.is_some() {
+        if self.script_job.is_none() {
+            self.select_document_tab(index);
+        }
+    }
+
+    fn select_document_tab(&mut self, index: usize) {
+        if index == self.active_tab || index >= self.tabs.len() {
             return;
         }
         self.cancel_gesture();
@@ -2234,6 +2258,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn save(&mut self, as_new: bool) -> bool {
+        if self.script_job.is_some() {
+            self.status = "Wait for the current script before saving the canvas".into();
+            return false;
+        }
         if self.save_job.is_some() {
             self.status = "A save is already running".into();
             return false;
@@ -2892,8 +2920,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let colors = [self.fg, self.bg];
         let (ui_tx, ui_rx) = std::sync::mpsc::channel::<script_ui::Request>();
         self.script_ui.connect(ui_rx);
-        self.script_preview_doc = Some(self.doc.clone());
-        self.script_origin = Some(self.doc.clone());
+        self.script_preview = Some(ScriptPreview {
+            initial_tab: self.active_tab,
+            tab_count: self.tabs.len(),
+            opened: Default::default(),
+            visible: self.begin_script_tab_preview(1),
+        });
         let preferences_path = extensions::config_directory().join("lua-preferences.json");
         let saved_preferences: serde_json::Value = std::fs::read(&preferences_path)
             .ok()
@@ -3027,11 +3059,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Some(Ok(result)) => {
                 self.script_job = None;
                 self.script_ui.disconnect();
-                if let Some(original) = self.script_origin.take() {
-                    self.doc = original;
-                }
-                self.script_preview_doc = None;
-                self.render_snapshot = None;
+                self.finish_script_preview();
                 let result = result.and_then(|workspace| self.apply_script_workspace(workspace));
                 if let Err(e) = result {
                     self.status = format!("Extension failed: {e}");
@@ -3040,16 +3068,157 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.script_job = None;
                 self.script_ui.disconnect();
-                if let Some(original) = self.script_origin.take() {
-                    self.doc = original;
-                }
-                self.script_preview_doc = None;
-                self.render_snapshot = None;
+                self.finish_script_preview();
                 self.status =
                     "Extension failed: the Lua worker stopped. Your sprite is unchanged.".into();
             }
             _ => {}
         }
+    }
+
+    fn begin_script_tab_preview(&mut self, id: u32) -> ScriptTabPreview {
+        ScriptTabPreview {
+            id,
+            original: self.history_entry(self.doc.clone(), "Run extension"),
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            drawn: self.doc.clone(),
+            site: (self.frame, self.layer),
+        }
+    }
+
+    fn restore_script_tab_preview(&mut self, preview: ScriptTabPreview) {
+        let original = preview.original.doc.clone();
+        self.restore_history(preview.original);
+        self.doc = original;
+        self.undo = preview.undo;
+        self.redo = preview.redo;
+        self.render_snapshot = None;
+    }
+
+    fn finish_script_preview(&mut self) {
+        if let Some(preview) = self.script_preview.take() {
+            self.restore_script_tab_preview(preview.visible);
+            self.select_document_tab(preview.initial_tab);
+            self.tabs.truncate(preview.tab_count);
+        }
+    }
+
+    fn script_existing_tab(id: u32, initial: usize, count: usize) -> Option<usize> {
+        if id == 1 {
+            Some(initial)
+        } else {
+            let index = id.checked_sub(2)? as usize;
+            (index < count && index != initial).then_some(index)
+        }
+    }
+
+    fn show_script_ui(&mut self, ctx: &egui::Context) {
+        if self.script_ui.modeless
+            && let Some(tab) = self.script_preview.as_mut().map(|p| &mut p.visible)
+            && (tab.drawn != self.doc || tab.site != (self.frame, self.layer))
+        {
+            self.script_ui.editor_update = Some(serde_json::json!({
+                "sprite":tab.id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1
+            }));
+            tab.drawn = self.doc.clone();
+            tab.site = (self.frame, self.layer);
+        }
+        let updated_sprite = self
+            .script_ui
+            .editor_update
+            .as_ref()
+            .and_then(|update| update["sprite"].as_u64());
+        self.script_ui.show(ctx);
+        let Some(request) = self.script_ui.preview.take() else {
+            return;
+        };
+        let Some(id) = request["sprite"]
+            .as_u64()
+            .and_then(|id| u32::try_from(id).ok())
+        else {
+            return;
+        };
+        if request["op"] == "closePreview" {
+            self.remove_script_preview_tab(id);
+        } else if updated_sprite != Some(u64::from(id))
+            && let Ok(document) = serde_json::from_value::<Document>(request["document"].clone())
+            && document.validate().is_ok()
+        {
+            self.show_script_tab(id, document, &request);
+        }
+    }
+
+    fn remove_script_preview_tab(&mut self, id: u32) {
+        let Some(mut preview) = self.script_preview.take() else {
+            return;
+        };
+        if let Some(index) = preview.opened.remove(&id) {
+            if index == self.active_tab {
+                self.restore_script_tab_preview(preview.visible);
+                self.select_document_tab(preview.initial_tab);
+                preview.visible = self.begin_script_tab_preview(1);
+            }
+            self.tabs.remove(index);
+            if self.active_tab > index {
+                self.active_tab -= 1;
+            }
+            for other in preview.opened.values_mut().filter(|other| **other > index) {
+                *other -= 1;
+            }
+        }
+        self.script_preview = Some(preview);
+    }
+
+    fn show_script_tab(&mut self, id: u32, mut document: Document, request: &serde_json::Value) {
+        let Some(mut preview) = self.script_preview.take() else {
+            return;
+        };
+        if preview.visible.id != id {
+            self.restore_script_tab_preview(preview.visible);
+            let existing = Self::script_existing_tab(id, preview.initial_tab, preview.tab_count);
+            if let Some(index) = existing.or_else(|| preview.opened.get(&id).copied()) {
+                self.select_document_tab(index);
+            } else {
+                let path = request["path"]
+                    .as_str()
+                    .and_then(|name| Self::script_native_path(Path::new(name)));
+                self.insert_document_tab(document.clone(), path);
+                preview.opened.insert(id, self.active_tab);
+            }
+            preview.visible = self.begin_script_tab_preview(id);
+        }
+        document.editor_id = self.doc.editor_id;
+        let changed_layout = document.width != self.doc.width
+            || document.height != self.doc.height
+            || document.layers.len() != self.doc.layers.len()
+            || document.durations.len() != self.doc.durations.len();
+        self.doc = document;
+        if changed_layout {
+            self.clamp();
+        }
+        self.frame =
+            Self::script_site_index(&request["frame"], self.frame, self.doc.durations.len());
+        self.layer = Self::script_site_index(&request["layer"], self.layer, self.doc.layers.len());
+        preview.visible.drawn = self.doc.clone();
+        preview.visible.site = (self.frame, self.layer);
+        self.script_preview = Some(preview);
+    }
+
+    fn script_site_index(value: &serde_json::Value, current: usize, count: usize) -> usize {
+        value
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .map_or(current, |index| index.saturating_sub(1))
+            .min(count - 1)
+    }
+
+    fn script_native_path(path: &Path) -> Option<PathBuf> {
+        let ext = path.extension()?.to_str()?;
+        ["pixel", "ase", "aseprite"]
+            .iter()
+            .any(|item| item.eq_ignore_ascii_case(ext))
+            .then(|| path.to_path_buf())
     }
 
     fn apply_script_workspace(
@@ -3059,25 +3228,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let initial_tab = self.active_tab;
         let mut active_tab = None;
         let existing_tabs = self.tabs.len();
-        let existing_index = |id: u32| {
-            if id == 1 {
-                Some(initial_tab)
-            } else {
-                let index = id.checked_sub(2)? as usize;
-                (index < existing_tabs && index != initial_tab).then_some(index)
-            }
-        };
+        let existing_index = |id| Self::script_existing_tab(id, initial_tab, existing_tabs);
         for sprite in workspace.sprites {
-            let path = sprite
-                .filename
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .filter(|ext| {
-                    ["pixel", "ase", "aseprite"]
-                        .iter()
-                        .any(|item| item.eq_ignore_ascii_case(ext))
-                })
-                .map(|_| sprite.filename.clone());
+            let path = Self::script_native_path(&sprite.filename);
             if let Some(index) = existing_index(sprite.id) {
                 self.switch_tab(index);
             } else {
@@ -6211,34 +6364,15 @@ impl PixelCraft {
         self.start_update_download(&ctx, true);
         self.about_dialog(&ctx);
         self.settings_dialog(&ctx);
-        if self.script_ui.modeless
-            && self
-                .script_preview_doc
-                .as_ref()
-                .is_some_and(|d| d != &self.doc)
-        {
-            self.script_ui.editor_update = Some(
-                serde_json::json!({"document":self.doc,"frame":self.frame+1,"layer":self.layer+1}),
-            );
-            self.script_preview_doc = Some(self.doc.clone());
-        }
-        self.script_ui.show(&ctx);
-        if let Some(request) = self.script_ui.preview.take()
-            && request["sprite"] == 1
-            && let Ok(mut document) =
-                serde_json::from_value::<Document>(request["document"].clone())
-            && document.validate().is_ok()
-            && self.script_ui.editor_update.is_none()
-        {
-            document.editor_id = self.doc.editor_id;
-            self.doc = document;
-            self.script_preview_doc = Some(self.doc.clone());
-        }
+        self.show_script_ui(&ctx);
         self.poll_script();
         if self.script_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
-        if self.save_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+        if self.script_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.status = "Finish the current extension before closing PixelCraft".into();
+        } else if self.save_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.status = "Wait for the current save before closing PixelCraft".into();
         } else if ctx.input(|i| i.viewport().close_requested())
@@ -7609,6 +7743,114 @@ mod tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc.drawing_grid(), DrawingGrid::default());
+    }
+
+    #[test]
+    fn lua_workspace_presents_tabs_before_completion_and_restores_failed_previews() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(3, 1), None);
+        app.open_document(Document::new(2, 1), None);
+        let original = app.doc.clone();
+        let background = app.tabs[0].as_ref().unwrap().doc.clone();
+        let directory =
+            std::env::temp_dir().join(format!("pixelcraft-lua-preview-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("preview.lua");
+        formats::save(&directory.join("new.pixel"), &Document::new(4, 1)).unwrap();
+        std::fs::write(
+            &path,
+            r#"
+ app.activeSprite=app.sprites[1]
+ app.activeImage:drawPixel(2,0,Color('#ff9966'))
+ app.refresh()
+ local transient=app.open('new.pixel')
+ app.activeImage:drawPixel(1,0,Color('#6699ff'))
+ app.refresh()
+ transient:close()
+ error('rollback visible preview')
+ "#,
+        )
+        .unwrap();
+        app.start_script(path.clone(), None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut showed_background = false;
+        let mut showed_new_tab = false;
+        let mut closed_new_tab = false;
+        while app.script_job.is_some() && Instant::now() < deadline {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| app.show_script_ui(&ctx));
+            output.textures_delta.clear();
+            if app.active_tab == 0 && app.doc.composite(0)[2] == [255, 153, 102, 255] {
+                showed_background = true;
+            }
+            if app.tabs.len() == 3
+                && app.active_tab == 2
+                && app.doc.composite(0)[1] == [102, 153, 255, 255]
+            {
+                showed_new_tab = true;
+            }
+            if showed_new_tab && app.tabs.len() == 2 && app.active_tab == 1 {
+                closed_new_tab = true;
+            }
+            app.poll_script();
+            std::thread::yield_now();
+        }
+        assert!(app.script_job.is_none(), "Lua script timed out");
+        assert!(showed_background, "background preview never appeared");
+        assert!(showed_new_tab, "new tab preview never appeared");
+        assert!(
+            closed_new_tab,
+            "closed preview stayed visible until completion"
+        );
+        assert!(
+            app.status.contains("rollback visible preview"),
+            "{}",
+            app.status
+        );
+        assert_eq!(app.tabs.len(), 2);
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.doc, original);
+        assert_eq!(app.tabs[0].as_ref().unwrap().doc, background);
+        std::fs::write(
+            &path,
+            r#"
+ local initial=app.activeSprite
+ local target=app.sprites[1]
+ app.activeSprite=target
+ local listener
+ listener=target.events:on('change',function()
+  assert(app.activeImage:getPixel(1,0)==app.pixelColor.rgba(41,66,91,255))
+  target.events:off(listener)
+  app.activeSprite=initial
+ end)
+ "#,
+        )
+        .unwrap();
+        app.start_script(path, None).unwrap();
+        let mut painted = false;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.script_job.is_some() && Instant::now() < deadline {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| app.show_script_ui(&ctx));
+            output.textures_delta.clear();
+            if !painted && app.script_ui.modeless && app.active_tab == 0 {
+                app.remember_action("Paint while extension is open");
+                app.doc.layers[0].cels[0].set(1, [41, 66, 91, 255]);
+                painted = true;
+            }
+            app.poll_script();
+            std::thread::yield_now();
+        }
+        assert!(app.script_job.is_none(), "Lua script timed out");
+        assert!(painted);
+        assert_eq!(app.status, "Applied extension changes");
+        assert_eq!(app.active_tab, 1);
+        assert_eq!(app.doc, original);
+        let edited = app.tabs[0].as_ref().unwrap();
+        assert_eq!(edited.doc.composite(0)[1], [41, 66, 91, 255]);
+        assert_eq!(edited.undo.len(), 1);
+        assert_eq!(edited.undo[0].doc, background);
+        assert_eq!(edited.undo[0].label, "Run extension");
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

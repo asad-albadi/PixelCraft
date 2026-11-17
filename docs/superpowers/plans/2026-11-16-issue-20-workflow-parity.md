@@ -132,6 +132,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 44 now includes existing editor tabs. The Lua workspace loads background documents on first access, maintains their frame, layer and selection, and applies changes to the matching editor tab on success. Closing a background tab can avoid loading its pixels. Multiple scripted closes use the normal save prompts in order, and cancelling a prompt preserves the edited tab. The Windows regression covers rollback across existing tabs, an oversized background tab and queued dirty closes. Formatting, strict Clippy and all 531 Windows tests passed. Live editor switching during script execution remains open.
 
+- Item 44 complete. The editor follows Lua activation while the worker runs. An opened sprite previews in its own tab, and closing that temporary sprite removes its preview immediately. A successful script commits separate documents and a failed one restores the prior tabs, document contents, and undo state. The Windows editor regression drives the real egui script request path, observes tab changes before reading the final result, and checks that a modeless user edit reaches the correct Lua sprite and becomes one undoable commit. Existing unsaved tabs still use normal save prompts at commit.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -189,7 +191,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 ## Lua and extensions
 
-- [ ] **44. Edit multiple independent documents from Lua.** Open, manage, and close sprites and switch the active editor document.
+- [x] **44. Edit multiple independent documents from Lua.** Open, manage, and close sprites and switch the active editor document.
 - [ ] **45. Expand Lua editor APIs.** Expose native tool invocation, clipboard access, editable slices and tilesets, typed properties, and consistent object identity.
 - [ ] **46. Expand extension panels and lifecycle.** Support custom drawing canvases, tabbed dialogs and bounds, more editor events, command menu registration and removal, and reload.
 - [ ] **47. Define permissioned system APIs for scripts.** Specify what file, process, and network access can be granted, and test that denied operations stay blocked.

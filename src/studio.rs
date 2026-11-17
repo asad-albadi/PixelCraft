@@ -299,7 +299,11 @@ impl PixelCraft {
                 }
             }
         }
-        if self.shot.is_some() || !self.studio.recovery_enabled || !self.power.autosave_enabled() {
+        if self.script_job.is_some()
+            || self.shot.is_some()
+            || !self.studio.recovery_enabled
+            || !self.power.autosave_enabled()
+        {
             return;
         }
         if self.studio.recovery_job.is_some()
