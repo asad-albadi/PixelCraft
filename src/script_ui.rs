@@ -63,7 +63,7 @@ impl ScriptUi {
         let mut response = None;
         if matches!(op.as_str(), "clipboardRead" | "clipboardWrite") {
             if crate::fluent::modal_dialog(ctx, "Extension clipboard access", |ui| {
-                ui.label("Allow this extension to read and write images on the system clipboard?");
+                ui.label("Allow this extension to read and write images and text on the system clipboard?");
                 ui.horizontal(|ui| {
                     if ui.pc_button("Allow for this run").clicked() {
                         self.use_system_clipboard = Some(true);

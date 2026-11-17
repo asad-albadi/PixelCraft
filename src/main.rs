@@ -441,6 +441,7 @@ struct PixelCraft {
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
     clipboard_target: Option<ClipboardTarget>,
+    script_clipboard_text: Option<String>,
     script_clipboard_reply: Option<std::sync::mpsc::Sender<serde_json::Value>>,
     native_paste_handled: bool,
     start: Option<(i32, i32)>,
@@ -620,6 +621,7 @@ impl PixelCraft {
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
             clipboard_target: None,
+            script_clipboard_text: None,
             script_clipboard_reply: None,
             native_paste_handled: false,
             start: None,
@@ -2511,6 +2513,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 });
             }
         }
+        self.script_clipboard_text = None;
         self.clipboard = Some(Clipboard {
             w,
             h,
@@ -2565,14 +2568,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                     system_clipboard::Completion::Paste(Ok((w, h, pixels))) => {
                         self.clipboard = Some(Clipboard { w, h, pixels });
-                        self.script_clipboard_read()
+                        self.read_script_clipboard(false)
                     }
                     system_clipboard::Completion::Paste(Err(error)) => {
-                        if error.contains("timed out") || error.contains("exceeds limits") {
-                            serde_json::json!({"error":error})
-                        } else {
-                            self.script_clipboard_read()
-                        }
+                        self.script_clipboard_fallback(error, false)
+                    }
+                    system_clipboard::Completion::Text(Ok(text)) => {
+                        self.script_clipboard_text = Some(text);
+                        self.read_script_clipboard(true)
+                    }
+                    system_clipboard::Completion::Text(Err(error)) => {
+                        self.script_clipboard_fallback(error, true)
                     }
                 };
                 let _ = reply.send(response);
@@ -2590,11 +2596,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             system_clipboard::Completion::Copy(Err(e)) => {
                 self.status = format!("Copied internally; {e}")
             }
-            system_clipboard::Completion::Copy(Ok(())) => {}
+            system_clipboard::Completion::Copy(Ok(())) | system_clipboard::Completion::Text(_) => {}
             system_clipboard::Completion::Paste(result) => {
                 if self.clipboard_target.take() == Some(self.clipboard_destination()) {
                     match result {
                         Ok((w, h, pixels)) => {
+                            self.script_clipboard_text = None;
                             self.clipboard = Some(Clipboard { w, h, pixels });
                             self.paste_internal();
                         }
@@ -2611,7 +2618,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
-    fn script_clipboard_read(&self) -> serde_json::Value {
+    fn script_clipboard_fallback(&self, error: String, text: bool) -> serde_json::Value {
+        if error.contains("timed out") || error.contains("exceeds limits") {
+            serde_json::json!({"error":error})
+        } else {
+            self.read_script_clipboard(text)
+        }
+    }
+
+    fn read_script_clipboard(&self, text: bool) -> serde_json::Value {
+        if text {
+            return serde_json::json!({"text":self.script_clipboard_text});
+        }
         match self.clipboard.as_ref() {
             Some(image) if image.w.saturating_mul(image.h) > 1_000_000 => {
                 serde_json::json!({"error":"Clipboard image exceeds the Lua pixel budget"})
@@ -2621,38 +2639,85 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn handle_script_clipboard(&mut self, request: script_ui::Request) {
-        let result = if request.value["op"] == "clipboardWrite" {
-            match Self::decode_script_clipboard(&request.value["image"]) {
-                Ok(clip) => {
-                    let native = self.script_ui.use_system_clipboard == Some(true);
-                    let started = native
-                        && self
-                            .system_clipboard
-                            .copy(clip.w, clip.h, clip.pixels.clone())
-                            .is_ok();
-                    self.clipboard = Some(clip);
-                    if started {
-                        self.clipboard_target = None;
-                        self.script_clipboard_reply = Some(request.reply);
-                        return;
-                    }
-                    if native {
-                        self.script_ui.use_system_clipboard = Some(false);
-                    }
-                    serde_json::json!({})
-                }
-                Err(error) => serde_json::json!({"error":error}),
-            }
-        } else if self.script_ui.use_system_clipboard == Some(true)
-            && self.system_clipboard.paste().is_ok()
-        {
-            self.clipboard_target = None;
-            self.script_clipboard_reply = Some(request.reply);
-            return;
+        let native = self.script_ui.use_system_clipboard == Some(true);
+        let format = request.value["format"].as_str().unwrap_or("image");
+        let write = request.value["op"] == "clipboardWrite";
+        let text = format == "text";
+        let result = if write {
+            self.write_script_clipboard(&request.value, format, native)
+        } else if native {
+            let job = if text {
+                self.system_clipboard.read_text()
+            } else {
+                self.system_clipboard.paste()
+            };
+            Ok(job.is_ok())
         } else {
-            self.script_clipboard_read()
+            Ok(false)
         };
-        let _ = request.reply.send(result);
+        if write && result.is_ok() {
+            self.clipboard_target = None;
+        }
+        match result {
+            Ok(true) => {
+                self.clipboard_target = None;
+                self.script_clipboard_reply = Some(request.reply);
+            }
+            Ok(false) => {
+                if write && native {
+                    self.script_ui.use_system_clipboard = Some(false);
+                }
+                let response = if write {
+                    serde_json::json!({})
+                } else {
+                    self.read_script_clipboard(text)
+                };
+                let _ = request.reply.send(response);
+            }
+            Err(error) => {
+                let _ = request.reply.send(serde_json::json!({"error":error}));
+            }
+        }
+    }
+
+    fn write_script_clipboard(
+        &mut self,
+        value: &serde_json::Value,
+        format: &str,
+        native: bool,
+    ) -> Result<bool, String> {
+        match format {
+            "image" => {
+                let image = Self::decode_script_clipboard(&value["image"])?;
+                let started = native
+                    && self
+                        .system_clipboard
+                        .copy(image.w, image.h, image.pixels.clone())
+                        .is_ok();
+                self.clipboard = Some(image);
+                self.script_clipboard_text = None;
+                Ok(started)
+            }
+            "text" => {
+                let text = value["text"].as_str().ok_or("Expected clipboard text")?;
+                if text.len() > system_clipboard::MAX_SCRIPT_TEXT_BYTES || text.contains('\0') {
+                    return Err(
+                        "Clipboard text contains a null byte or exceeds the Lua limit".into(),
+                    );
+                }
+                let started = native && self.system_clipboard.write_text(text.to_owned()).is_ok();
+                self.script_clipboard_text = Some(text.to_owned());
+                self.clipboard = None;
+                Ok(started)
+            }
+            "clear" => {
+                let started = native && self.system_clipboard.clear().is_ok();
+                self.clipboard = None;
+                self.script_clipboard_text = None;
+                Ok(started)
+            }
+            _ => Err("Unsupported clipboard format".into()),
+        }
     }
 
     fn decode_script_clipboard(value: &serde_json::Value) -> Result<Clipboard, String> {
@@ -7893,6 +7958,12 @@ mod tests {
  local sprite=app.activeSprite
  assert(app.clipboard.hasImage and app.clipboard.image.width==1)
  assert(app.clipboard.image:getPixel(0,0)==app.pixelColor.rgba(3,60,90,128))
+ local text='café 🌿'..string.char(10)..'second line'
+ app.clipboard.text=text
+ assert(app.clipboard.hasText and not app.clipboard.hasImage)
+ assert(app.clipboard.content.text==text)
+ app.clipboard:clear()
+ assert(not app.clipboard.hasImage and not app.clipboard.hasText)
  sprite.selection=Selection(Rectangle(1,0,2,1))
  sprite.selection:subtract(Rectangle(2,0,1,1))
  app.command.Copy()

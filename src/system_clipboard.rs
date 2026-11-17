@@ -1,23 +1,46 @@
-//! Native RGBA clipboard access. X11/Windows/macOS use arboard; Wayland
+//! Native image and text clipboard access. X11/Windows/macOS use arboard; Wayland
 //! uses the desktop's wl-clipboard helpers when available, with XWayland fallback.
 use pixelcraft::model::{MAX_DIMENSION, MAX_PIXELS, Pixel};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(2);
+pub const MAX_SCRIPT_TEXT_BYTES: usize = 1024 * 1024;
 type ClipboardImage = (usize, usize, Vec<Pixel>);
 pub enum Completion {
     Copy(Result<(), String>),
     Paste(Result<ClipboardImage, String>),
+    Text(Result<String, String>),
 }
 enum Operation {
     Copy(usize, usize, Vec<Pixel>),
     Paste,
+    ReadText,
+    WriteText(String),
+    Clear,
 }
+
+#[derive(Clone, Copy)]
+enum JobKind {
+    Write,
+    ReadImage,
+    ReadText,
+}
+impl JobKind {
+    fn error(self, reason: &str) -> Completion {
+        let reason = reason.to_owned();
+        match self {
+            Self::Write => Completion::Copy(Err(reason)),
+            Self::ReadImage => Completion::Paste(Err(reason)),
+            Self::ReadText => Completion::Text(Err(reason)),
+        }
+    }
+}
+
 struct Job {
     started: Instant,
     response: Receiver<Completion>,
-    paste: bool,
+    kind: JobKind,
     expired: bool,
 }
 /// One native owner and at most one in-flight request, even after a timeout.
@@ -46,6 +69,9 @@ impl SystemClipboard {
                                 Completion::Copy(native.set(w, h, &pixels))
                             }
                             Operation::Paste => Completion::Paste(native.get()),
+                            Operation::ReadText => Completion::Text(native.get_text()),
+                            Operation::WriteText(text) => Completion::Copy(native.set_text(text)),
+                            Operation::Clear => Completion::Copy(native.clear()),
                         };
                         let _ = response.send(result);
                     }
@@ -53,7 +79,11 @@ impl SystemClipboard {
                 .map_err(|e| e.to_string())?;
             self.worker = Some(tx);
         }
-        let paste = matches!(operation, Operation::Paste);
+        let kind = match operation {
+            Operation::Paste => JobKind::ReadImage,
+            Operation::ReadText => JobKind::ReadText,
+            _ => JobKind::Write,
+        };
         let (tx, rx) = mpsc::sync_channel(1);
         self.worker
             .as_ref()
@@ -63,7 +93,7 @@ impl SystemClipboard {
         self.job = Some(Job {
             started: Instant::now(),
             response: rx,
-            paste,
+            kind,
             expired: false,
         });
         Ok(())
@@ -74,6 +104,15 @@ impl SystemClipboard {
     pub fn paste(&mut self) -> Result<(), String> {
         self.start(Operation::Paste)
     }
+    pub fn read_text(&mut self) -> Result<(), String> {
+        self.start(Operation::ReadText)
+    }
+    pub fn write_text(&mut self, text: String) -> Result<(), String> {
+        self.start(Operation::WriteText(text))
+    }
+    pub fn clear(&mut self) -> Result<(), String> {
+        self.start(Operation::Clear)
+    }
     pub fn poll(&mut self) -> Option<Completion> {
         self.poll_at(Instant::now())
     }
@@ -82,12 +121,7 @@ impl SystemClipboard {
         // A result observed after the deadline is never applied to the document.
         if !job.expired && now.duration_since(job.started) >= CLIPBOARD_TIMEOUT {
             job.expired = true;
-            let error = Err("System clipboard timed out".into());
-            return Some(if job.paste {
-                Completion::Paste(error)
-            } else {
-                Completion::Copy(error.map(|_| ()))
-            });
+            return Some(job.kind.error("System clipboard timed out"));
         }
         match job.response.try_recv() {
             Ok(result) => {
@@ -98,16 +132,10 @@ impl SystemClipboard {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 let expired = job.expired;
-                let paste = job.paste;
+                let kind = job.kind;
                 self.job = None;
                 self.worker = None;
-                if expired {
-                    None
-                } else if paste {
-                    Some(Completion::Paste(Err("Clipboard worker stopped".into())))
-                } else {
-                    Some(Completion::Copy(Err("Clipboard worker stopped".into())))
-                }
+                (!expired).then(|| kind.error("Clipboard worker stopped"))
             }
         }
     }
@@ -117,6 +145,7 @@ impl SystemClipboard {
 fn run_helper(
     mut command: std::process::Command,
     input: Option<Vec<u8>>,
+    limit: usize,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Write};
     use std::process::Stdio;
@@ -145,16 +174,15 @@ fn run_helper(
                 if let (Some(mut stdin), Some(bytes)) = (stdin, input) {
                     stdin.write_all(&bytes).map_err(|e| e.to_string())?;
                 }
-                let limit = (MAX_PIXELS * 4 + 1024 * 1024) as u64;
                 let mut bytes = vec![];
                 if let Some(stdout) = stdout {
                     stdout
-                        .take(limit + 1)
+                        .take(limit as u64 + 1)
                         .read_to_end(&mut bytes)
                         .map_err(|e| e.to_string())?;
                 }
-                if bytes.len() as u64 > limit {
-                    return Err("Clipboard image exceeds limits".into());
+                if bytes.len() > limit {
+                    return Err("Clipboard data exceeds limits".into());
                 }
                 Ok(bytes)
             })();
@@ -251,7 +279,7 @@ impl NativeClipboard {
                 .map_err(|e| e.to_string())?;
             let mut command = std::process::Command::new("wl-copy");
             command.args(["--type", "image/png"]);
-            match run_helper(command, Some(bytes.into_inner())) {
+            match run_helper(command, Some(bytes.into_inner()), 0) {
                 Ok(_) => return Ok(()),
                 Err(e) if e.contains("timed out") => return Err(e),
                 Err(_) => {}
@@ -270,7 +298,7 @@ impl NativeClipboard {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             let mut command = std::process::Command::new("wl-paste");
             command.args(["--no-newline", "--type", "image/png"]);
-            match run_helper(command, None) {
+            match run_helper(command, None, MAX_PIXELS * 4 + 1024 * 1024) {
                 Ok(bytes) => return decode_png(&bytes),
                 Err(e) if e.contains("timed out") || e.contains("exceeds limits") => return Err(e),
                 Err(_) => {}
@@ -287,6 +315,49 @@ impl NativeClipboard {
             return Err("Clipboard image exceeds limits".into());
         }
         Ok((im.width, im.height, im.bytes.as_chunks::<4>().0.to_vec()))
+    }
+    fn set_text(&mut self, text: String) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            let mut command = std::process::Command::new("wl-copy");
+            command.args(["--type", "text/plain;charset=utf-8"]);
+            match run_helper(command, Some(text.as_bytes().to_vec()), 0) {
+                Ok(_) => return Ok(()),
+                Err(e) if e.contains("timed out") => return Err(e),
+                Err(_) => {}
+            }
+        }
+        self.native()?.set_text(text).map_err(|e| e.to_string())
+    }
+    fn get_text(&mut self) -> Result<String, String> {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            let mut command = std::process::Command::new("wl-paste");
+            command.args(["--no-newline", "--type", "text"]);
+            match run_helper(command, None, MAX_SCRIPT_TEXT_BYTES) {
+                Ok(bytes) => return String::from_utf8(bytes).map_err(|e| e.to_string()),
+                Err(e) if e.contains("timed out") || e.contains("exceeds limits") => return Err(e),
+                Err(_) => {}
+            }
+        }
+        let text = self.native()?.get_text().map_err(|e| e.to_string())?;
+        if text.len() > MAX_SCRIPT_TEXT_BYTES {
+            return Err("Clipboard text exceeds limits".into());
+        }
+        Ok(text)
+    }
+    fn clear(&mut self) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            let mut command = std::process::Command::new("wl-copy");
+            command.arg("--clear");
+            match run_helper(command, None, 0) {
+                Ok(_) => return Ok(()),
+                Err(e) if e.contains("timed out") => return Err(e),
+                Err(_) => {}
+            }
+        }
+        self.native()?.clear().map_err(|e| e.to_string())
     }
 }
 #[cfg(any(target_os = "linux", test))]
@@ -334,7 +405,7 @@ mod worker_regressions {
             job: Some(Job {
                 started: start,
                 response: rx,
-                paste: true,
+                kind: JobKind::ReadImage,
                 expired: false,
             }),
         };
@@ -349,6 +420,28 @@ mod worker_regressions {
         assert!(clipboard.poll_at(start + CLIPBOARD_TIMEOUT).is_none());
         assert!(!clipboard.busy());
     }
+    #[test]
+    fn native_text_request_has_a_text_timeout_and_ignores_late_data() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        let start = Instant::now();
+        let mut clipboard = SystemClipboard {
+            worker: None,
+            job: Some(Job {
+                started: start,
+                response: rx,
+                kind: JobKind::ReadText,
+                expired: false,
+            }),
+        };
+        let expired = start + CLIPBOARD_TIMEOUT;
+        assert!(
+            matches!(clipboard.poll_at(expired), Some(Completion::Text(Err(e))) if e.contains("timed out"))
+        );
+        assert!(clipboard.read_text().is_err());
+        tx.send(Completion::Text(Ok("late text".into()))).unwrap();
+        assert!(clipboard.poll_at(expired).is_none());
+        assert!(!clipboard.busy());
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn stalled_helper_is_killed_before_ui_deadline() {
@@ -357,7 +450,7 @@ mod worker_regressions {
             command.args(["-c", "exec sleep 30"]);
             let start = Instant::now();
             assert!(
-                run_helper(command, input)
+                run_helper(command, input, 16)
                     .unwrap_err()
                     .contains("timed out")
             );

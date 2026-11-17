@@ -957,3 +957,41 @@ fn headless_lua_clipboard_is_local_and_cut_preserves_selection_holes() {
     );
     run_source(&input, "assert(not app.clipboard.hasImage)", 0, 0, None).unwrap();
 }
+
+#[test]
+fn headless_lua_clipboard_text_and_clear_replace_previous_content() {
+    let doc = Document::new(2, 1);
+    run_source(
+        &doc,
+        r#"
+ local clipboard=app.clipboard
+ assert(not clipboard.hasText and clipboard.text==nil)
+ clipboard.text='UTF-8: café 🌿'..string.char(10)..'next line'
+ assert(clipboard.hasText and clipboard.content.text==clipboard.text)
+ assert(not clipboard.hasImage)
+ assert(not pcall(function() clipboard.content={text='ambiguous',image=Image(1,1)} end))
+ assert(not pcall(function() clipboard.text='one'..string.char(0)..'two' end))
+ assert(clipboard.hasText)
+ clipboard.image=Image(1,1)
+ assert(not clipboard.hasText and clipboard.hasImage)
+ clipboard:clear()
+ assert(not clipboard.hasText and not clipboard.hasImage)
+ clipboard.content={text='second'}
+ assert(clipboard.text=='second')
+ clipboard.content={}
+ assert(clipboard.text==nil)
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    run_source(
+        &doc,
+        "assert(not app.clipboard.hasImage and not app.clipboard.hasText)",
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+}

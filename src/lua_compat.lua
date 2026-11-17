@@ -245,27 +245,59 @@ app.command.Clear=command(function()
  end end
 end)
 do
- local localClipboard
+ local localClipboard={}
+ local function read(format)
+  if editorTabs then return host{op='clipboardRead',format=format}[format] end
+  return localClipboard[format]
+ end
  local function readImage()
-  local data=editorTabs and host{op='clipboardRead'}.image or (not editorTabs and localClipboard)
+  local data=read('image')
   if data then return image(copy(data.pixels),data.w,data.h,ColorMode.RGB,0) end
+ end
+ local function write(format,data)
+  if editorTabs then
+   host{op='clipboardWrite',format=format,[format]=data}
+  else
+   localClipboard={}
+   if format~='clear' then localClipboard[format]=copy(data) end
+  end
  end
  local function writeImage(im)
   assert(type(im)=='table' and im._pixels and im.width and im.height,'Expected a clipboard image')
   assert(im.width*im.height<=1000000,'Clipboard image exceeds the Lua pixel budget')
-  local data={w=im.width,h=im.height,pixels=im._pixels}
-  if editorTabs then host{op='clipboardWrite',image=data} else localClipboard=copy(data) end
+  write('image',{w=im.width,h=im.height,pixels=im._pixels})
  end
+ local function writeText(text)
+  assert(type(text)=='string','Expected clipboard text')
+  assert(#text<=1048576 and not text:find(string.char(0),1,true),
+   'Clipboard text contains a null byte or exceeds the Lua limit')
+  write('text',text)
+ end
+ local function clear() write('clear') end
  rawset(app,'clipboard',setmetatable({},{
   __index=function(_,key)
    if key=='image' then return readImage() end
-   if key=='hasImage' then return readImage()~=nil end
-   if key=='content' then return {image=readImage()} end
+   if key=='text' then return read('text') end
+   if key=='hasImage' then return read('image')~=nil end
+   if key=='hasText' then return read('text')~=nil end
+   if key=='clear' then return clear end
+   if key=='content' then
+    local im=readImage()
+    if im then return {image=im} end
+    return {text=read('text')}
+   end
    error('Unsupported clipboard field: '..key)
   end,
   __newindex=function(_,key,value)
    if key=='image' then writeImage(value)
-   elseif key=='content' and type(value)=='table' then writeImage(value.image)
+   elseif key=='text' then writeText(value)
+   elseif key=='content' and type(value)=='table' then
+    assert(value.selection==nil and value.palette==nil and value.tileset==nil,
+     'Clipboard selection, palette and tileset data are unsupported')
+    assert(value.image==nil or value.text==nil,'Choose image or text clipboard content')
+    if value.image~=nil then writeImage(value.image)
+    elseif value.text~=nil then writeText(value.text)
+    else clear() end
    else error('Unsupported clipboard assignment: '..key) end
   end,
  }))
