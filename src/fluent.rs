@@ -450,7 +450,7 @@ impl PixelCraft {
 
         let mut reorder = None;
         ui.collapsing("Document palette", |ui| {
-            ui.small("Drag a swatch onto another to move it.");
+            ui.small("Drag to reorder. Right-click to set the secondary color.");
             let palette = if self.doc.color_mode == ColorMode::Indexed {
                 self.doc.editing_palette(self.layer, self.frame)
             } else {
@@ -498,6 +498,12 @@ impl PixelCraft {
                                     self.fg = color;
                                     self.palette_index = slot;
                                 }
+                                let reorder_menu = ui.input(|i| i.modifiers.shift)
+                                    || response.context_menu_opened();
+                                if response.secondary_clicked() && !reorder_menu {
+                                    self.set_secondary_color(color, Some(slot));
+                                }
+                                let secondary = self.secondary_palette_index == Some(slot) && self.bg == color;
                                 let selected = self.palette_index == slot && self.fg == color;
                                 let name = self
                                     .doc
@@ -514,6 +520,7 @@ impl PixelCraft {
                                     },
                                     |name| format!("Swatch {} · {name}", slot + 1),
                                 );
+                                let label = if secondary { format!("{label} · Secondary color") } else { label };
                                 response.widget_info(|| {
                                     egui::WidgetInfo::selected(
                                         egui::WidgetType::SelectableLabel,
@@ -522,7 +529,7 @@ impl PixelCraft {
                                         &label,
                                     )
                                 });
-                                response.context_menu(|ui| {
+                                if reorder_menu { response.context_menu(|ui| {
                                     for (label, target) in [
                                         ("Move earlier", slot.checked_sub(1)),
                                         (
@@ -538,6 +545,7 @@ impl PixelCraft {
                                         }
                                     }
                                 });
+                                }
                                 let painter = ui.painter();
                                 if a < 255 {
                                     painter.rect_filled(rect, 3, Color32::GRAY);
@@ -556,6 +564,8 @@ impl PixelCraft {
                                     3,
                                     if selected || dragging {
                                         Stroke::new(2., self.colors().accent)
+                                    } else if secondary {
+                                        Stroke::new(2., self.colors().ink)
                                     } else {
                                         Stroke::new(
                                             1.,
@@ -565,7 +575,7 @@ impl PixelCraft {
                                     egui::StrokeKind::Inside,
                                 );
                                 paint_focus(ui, &response, 3);
-                                response.on_hover_text(label);
+                                response.on_hover_text(format!("{label}\nRight-click for secondary color. Shift+right-click for swatch actions."));
                                 if (slot + 1) % columns == 0 {
                                     ui.end_row();
                                 }
@@ -707,6 +717,9 @@ impl PixelCraft {
                                 if selection_changed {
                                     ui.ctx().request_repaint();
                                 }
+                            }
+                            if response.secondary_clicked() {
+                                self.set_secondary_color(*p, None);
                             }
                             let selected = *p == self.fg;
                             let mut name = format!("Use #{:02X}{:02X}{:02X}", p[0], p[1], p[2]);

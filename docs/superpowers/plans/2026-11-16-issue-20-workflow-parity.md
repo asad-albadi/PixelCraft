@@ -178,6 +178,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 52 complete. Rectangular marquee supports Shift to add, Ctrl or Command to subtract, and both modifiers to intersect with the existing mask. The drag preview keeps the current selection in place until release. The Windows pointer test checks mask holes, a release without a separate motion frame, undo and redo, cancellation, and plain marquee replacement. Formatting, strict Clippy, and 558 Windows all-target tests passed.
 
+- Item 53 complete. The primary and secondary buttons use their own paint colors and end their gestures on release of the initiating button. Right-click sets the secondary palette color, retaining the exact slot for indexed swatches with duplicate colors. Shift+right-click opens swatch actions. The Windows pointer regression covers pencil, line, fill, duplicate slots, palette reorder, overlapping button presses, and undo. Formatting, strict Clippy, and 559 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -247,7 +249,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
 - [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
 - [x] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
-- [ ] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
+- [x] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
 - [ ] **54. Allow typed file paths in the GUI.** Provide path entry alongside native file browsing.
 - [x] **55. Hide Preview independently.** Persist Preview visibility independently of the Inspector.
 

@@ -640,6 +640,7 @@ impl PixelCraft {
                 polygon: t.polygon.clone(),
                 mask: t.mask.clone(),
                 palette_index: 0,
+                secondary_palette_index: None,
                 active_tag: None,
                 timeline_anchor: None,
                 selected_cels: None,
@@ -1857,7 +1858,7 @@ impl PixelCraft {
                     ui.horizontal(|ui| {
                         let mut bg = self.bg;
                         if ui.color_edit_button_srgba_unmultiplied(&mut bg).changed() {
-                            self.bg = bg
+                            self.set_secondary_color(bg, None)
                         }
                         ui.label("Alternate color");
                     });
@@ -2193,6 +2194,12 @@ impl PixelCraft {
         if len == 0. {
             return;
         }
+        let start = if self.gesture_button.is_some() {
+            self.stroke_color
+        } else {
+            self.fg
+        };
+        let end = self.alternate_stroke_color();
         for i in 0..self.doc.width * self.doc.height {
             let (x, y) = ((i % self.doc.width) as i32, (i / self.doc.width) as i32);
             if !self.selected(x, y) {
@@ -2200,7 +2207,7 @@ impl PixelCraft {
             }
             let t = (((x - a.0) as f32 * dx + (y - a.1) as f32 * dy) / len).clamp(0., 1.);
             let p = std::array::from_fn(|c| {
-                (self.fg[c] as f32 * (1. - t) + self.bg[c] as f32 * t).round() as u8
+                (start[c] as f32 * (1. - t) + end[c] as f32 * t).round() as u8
             });
             self.doc.set_pixel(self.layer, self.frame, i, p);
         }

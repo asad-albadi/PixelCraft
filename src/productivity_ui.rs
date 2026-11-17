@@ -580,12 +580,16 @@ impl PixelCraft {
         }
         self.remember_action("Reorder palette");
         self.doc = next;
-        self.palette_index = match self.palette_index {
-            index if index == from => to,
-            index if from < index && index <= to => index - 1,
-            index if to <= index && index < from => index + 1,
-            index => index,
-        };
+        for slot in
+            std::iter::once(&mut self.palette_index).chain(self.secondary_palette_index.iter_mut())
+        {
+            *slot = match *slot {
+                index if index == from => to,
+                index if from < index && index <= to => index - 1,
+                index if to <= index && index < from => index + 1,
+                index => index,
+            };
+        }
     }
 
     fn palette_arrangement_ui(&mut self, ui: &mut egui::Ui) {
@@ -917,7 +921,7 @@ impl PixelCraft {
         };
         let mut o = BrushOptions {
             mode,
-            alternate: self.bg,
+            alternate: self.alternate_stroke_color(),
             reverse: self.power.reverse,
             stamp: self.power.stamp.clone(),
             mask,

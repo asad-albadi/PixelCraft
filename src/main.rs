@@ -355,6 +355,7 @@ struct SpriteTab {
     active_canvas: CanvasPane,
     selection: Option<(i32, i32, i32, i32)>,
     palette_index: usize,
+    secondary_palette_index: Option<usize>,
     active_tag: Option<usize>,
     timeline_anchor: Option<(usize, usize)>,
     selected_cels: Option<CelSelection>,
@@ -694,6 +695,7 @@ struct PixelCraft {
     split_canvas: Option<SplitCanvas>,
     active_canvas: CanvasPane,
     gesture_canvas: Option<CanvasPane>,
+    gesture_button: Option<egui::PointerButton>,
     preview_settings_path: Option<PathBuf>,
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
@@ -716,6 +718,7 @@ struct PixelCraft {
     onion_texture: Option<egui::TextureHandle>,
     properties_open: bool,
     palette_index: usize,
+    secondary_palette_index: Option<usize>,
     tile_size: usize,
     selected_tile: u32,
     tile_pixel_mode: Option<TilePixelEdit>,
@@ -874,6 +877,7 @@ impl PixelCraft {
             split_canvas: None,
             active_canvas: CanvasPane::Primary,
             gesture_canvas: None,
+            gesture_button: None,
             preview_settings_path: None,
             render_snapshot: None,
             frame_textures: vec![],
@@ -896,6 +900,7 @@ impl PixelCraft {
             onion_texture: None,
             properties_open: false,
             palette_index: 0,
+            secondary_palette_index: None,
             tile_size: 16,
             selected_tile: 1,
             tile_pixel_mode: None,
@@ -2116,6 +2121,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn cancel_gesture(&mut self) {
         self.studio.marquee_operation = None;
         self.gesture_canvas = None;
+        self.gesture_button = None;
         self.start = None;
         self.last = None;
         self.stroke_base = None;
@@ -2340,6 +2346,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             active_canvas: self.active_canvas,
             selection: self.selection,
             palette_index: self.palette_index,
+            secondary_palette_index: self.secondary_palette_index,
             active_tag: self.active_tag,
             timeline_anchor: self.timeline_anchor,
             selected_cels: self.selected_cels.clone(),
@@ -2389,6 +2396,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         std::mem::swap(&mut self.studio.mask, &mut tab.mask);
         self.power.reference_edit = None;
         std::mem::swap(&mut self.palette_index, &mut tab.palette_index);
+        std::mem::swap(
+            &mut self.secondary_palette_index,
+            &mut tab.secondary_palette_index,
+        );
         std::mem::swap(&mut self.active_tag, &mut tab.active_tag);
         std::mem::swap(&mut self.timeline_anchor, &mut tab.timeline_anchor);
         std::mem::swap(&mut self.selected_cels, &mut tab.selected_cels);
@@ -3317,7 +3328,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.set_active_color(self.fg);
             }
             "resetcolors" => {
-                self.bg = DEFAULT_BG;
+                self.set_secondary_color(DEFAULT_BG, None);
                 self.set_active_color(DEFAULT_FG);
             }
             "hand" => self.tool = Tool::Hand,
@@ -4386,6 +4397,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.palette_index = index;
         }
     }
+    fn set_secondary_color(&mut self, color: Pixel, slot: Option<usize>) {
+        self.bg = color;
+        self.secondary_palette_index = slot;
+    }
+
+    fn secondary_stroke(&self) -> bool {
+        self.gesture_button == Some(egui::PointerButton::Secondary)
+    }
+
+    fn alternate_stroke_color(&self) -> Pixel {
+        if self.secondary_stroke() {
+            self.fg
+        } else {
+            self.bg
+        }
+    }
+
     fn select_named_color(&mut self, index: usize) {
         self.active_color = index;
         self.set_active_color(self.named_colors[index].1);
@@ -4488,11 +4516,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     fn drawing_palette_index(&self, color: Pixel) -> Option<usize> {
         let palette = self.doc.palette_for(self.frame);
-        if palette.get(self.palette_index) == Some(&color) {
-            Some(self.palette_index)
+        let preferred = if self.secondary_stroke() {
+            self.secondary_palette_index
         } else {
-            palette.iter().position(|p| *p == color)
-        }
+            Some(self.palette_index)
+        };
+        preferred
+            .filter(|&index| palette.get(index) == Some(&color))
+            .or_else(|| palette.iter().position(|p| *p == color))
     }
     fn tools(&mut self, ui: &mut egui::Ui) {
         for t in [
@@ -6311,12 +6342,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || matches!(self.tool, Tool::Fill | Tool::Wand | Tool::Picker)
             || ctx.input(|i| i.modifiers.alt);
         let pressed = ctx.input(|i| {
-            i.pointer.button_pressed(egui::PointerButton::Primary)
-                || i.pointer.button_pressed(egui::PointerButton::Secondary)
+            [egui::PointerButton::Primary, egui::PointerButton::Secondary]
+                .into_iter()
+                .find(|&button| i.pointer.button_pressed(button))
         });
-        let down = ctx.input(|i| i.pointer.primary_down() || i.pointer.secondary_down());
         if can_edit
-            && pressed
+            && let Some(button) = pressed
             && self.gesture_canvas.is_none()
             && response.hovered()
             && let Some(raw) = on_canvas
@@ -6329,12 +6360,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             } else {
                 hover.unwrap()
             };
-            self.stroke_color = self.fg;
+            let secondary = button == egui::PointerButton::Secondary;
+            self.stroke_color = if secondary { self.bg } else { self.fg };
             let sample_color = ctx.input(|i| i.modifiers.alt);
             if sample_color || self.tool == Tool::Picker {
                 let p = hover.unwrap();
                 if sample_color || self.tile_pixel_mode.is_some() || !self.pick_tile(p) {
-                    self.set_active_color(self.sample_color(p.0, p.1));
+                    let color = self.sample_color(p.0, p.1);
+                    if secondary {
+                        self.set_secondary_color(color, None);
+                    } else {
+                        self.set_active_color(color);
+                    }
                 }
             } else if self.tool == Tool::Wand {
                 let op = ctx.input(|i| {
@@ -6358,11 +6395,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 };
                 self.studio.marquee_operation = Some(operation);
                 self.gesture_canvas = Some(pane);
+                self.gesture_button = Some(button);
                 self.start = Some(p);
                 self.last = Some(p);
             } else if self.tool == Tool::Lasso {
                 self.studio.mask = None;
                 self.gesture_canvas = Some(pane);
+                self.gesture_button = Some(button);
                 self.start = Some(p);
                 self.studio.polygon.clear();
                 self.studio.polygon.push(p);
@@ -6382,6 +6421,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     _ => "Paint",
                 });
                 self.gesture_canvas = Some(pane);
+                self.gesture_button = Some(button);
                 self.start = Some(p);
                 self.last = Some(p);
                 self.stroke_base = Some(self.doc.clone());
@@ -6418,6 +6458,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         let owns_gesture = self.gesture_canvas == Some(pane);
+        let down = self
+            .gesture_button
+            .is_some_and(|button| ctx.input(|i| i.pointer.button_down(button)));
         if owns_gesture && can_edit && down {
             if let (Some(a), Some(mut b)) = (self.start, pos) {
                 if draws && repeats != WrapAxes::NONE {
@@ -6509,7 +6552,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             if self.tool == Tool::Select
                 && can_edit
                 && let Some(operation) = self.studio.marquee_operation
-                && ctx.input(|input| input.pointer.any_released())
+                && self
+                    .gesture_button
+                    .is_some_and(|button| ctx.input(|i| i.pointer.button_released(button)))
                 && let Some(end) = pos
                     .map(|(x, y)| (x.clamp(0, w - 1), y.clamp(0, h - 1)))
                     .or(self.last)

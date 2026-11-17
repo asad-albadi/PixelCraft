@@ -2313,3 +2313,118 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
     assert_eq!(app.selection, Some((3, 1, 3, 1)));
     assert!(app.studio.mask.is_none());
 }
+
+#[test]
+fn secondary_palette_swatch_and_mouse_button_keep_their_own_indexed_stroke() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let red = [223, 31, 41, 255];
+    let blue = [27, 67, 190, 255];
+    let mut doc = Document::new(6, 2);
+    doc.import_palette(vec![CLEAR, red, blue, blue]).unwrap();
+    doc.set_color_mode(ColorMode::Indexed);
+    app.replace(doc, None);
+    app.tool = Tool::Pencil;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let heading = text_position(&mut output, "Document palette");
+    discard_frame(&mut app, &ctx, size, 1., click(heading));
+    for _ in 0..8 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let swatch = |slot: usize| {
+        ctx.data(|data| data.get_temp::<Rect>(egui::Id::new(("document-swatch", slot))))
+            .unwrap()
+            .center()
+    };
+    let button = |pos, button, pressed| egui::Event::PointerButton {
+        pos,
+        button,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let left = egui::PointerButton::Primary;
+    let right = egui::PointerButton::Secondary;
+    let mouse = |app: &mut PixelCraft, p, b, pressed| {
+        discard_frame(
+            app,
+            &ctx,
+            size,
+            1.,
+            vec![egui::Event::PointerMoved(p), button(p, b, pressed)],
+        );
+    };
+    let primary = swatch(1);
+    discard_frame(&mut app, &ctx, size, 1., click(primary));
+    let secondary = swatch(3);
+    mouse(&mut app, secondary, right, true);
+    mouse(&mut app, secondary, right, false);
+    assert_eq!((app.fg, app.bg), (red, blue));
+
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let pixel = |x: f32, y: f32| {
+        board.min
+            + Vec2::new(
+                (x + 0.5) * board.width() / 6.,
+                (y + 0.5) * board.height() / 2.,
+            )
+    };
+    mouse(&mut app, pixel(0., 0.), left, true);
+    mouse(&mut app, pixel(0., 0.), left, false);
+    mouse(&mut app, pixel(1., 0.), right, true);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(pixel(2., 0.))],
+    );
+    mouse(&mut app, pixel(2., 0.), right, false);
+    app.tool = Tool::Line;
+    mouse(&mut app, pixel(3., 0.), right, true);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(pixel(5., 0.))],
+    );
+    mouse(&mut app, pixel(5., 0.), right, false);
+
+    app.tool = Tool::Pencil;
+    let bottom = pixel(0., 1.);
+    mouse(&mut app, bottom, right, true);
+    mouse(&mut app, bottom, left, true);
+    mouse(&mut app, bottom, right, false);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(pixel(3., 1.))],
+    );
+    mouse(&mut app, pixel(3., 1.), left, false);
+    let indices = app.doc.layers[0].cel_meta[0].indices.as_deref().unwrap();
+    assert_eq!(indices.as_slice(), &[1, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0]);
+    app.undo();
+    assert_eq!(
+        app.doc.layers[0].cel_meta[0].indices.as_ref().unwrap()[6],
+        0
+    );
+    app.move_palette_swatch(3, 2);
+    assert_eq!(app.secondary_palette_index, Some(2));
+    app.tool = Tool::Fill;
+    mouse(&mut app, bottom, right, true);
+    mouse(&mut app, bottom, right, false);
+    let indices = app.doc.layers[0].cel_meta[0].indices.as_deref().unwrap();
+    assert_eq!(indices.as_slice(), &[1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]);
+    assert_eq!((app.fg, app.bg), (red, blue));
+}
