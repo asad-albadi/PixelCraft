@@ -232,6 +232,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 4 Linux packaging checkpoint. The release workflow builds a relocatable tarball from the AppDir and an amd64 Debian package using linked-library dependencies and explicit runtime libraries. Both include checksums. The Linux gate launches the relocated tarball and installs the Debian package, checks WebP timing and rendered pixels, runs the standalone check, captures graphical startup, verifies the desktop files, and removes the Debian package. Windows checks verified the tarball layout and launcher with a shell fixture, failure on missing runtime or an invalid version, the WebP render command, Bash syntax, and workflow wiring. Native Linux package execution and tagged publication remain pending.
 
+- Item 3 macOS packaging checkpoint. Native Apple Silicon and Intel runners build the vendored Lua source into a per-architecture dylib and statically link the existing WebP decoder. The reusable workflow runs from pull requests and desktop releases. It packages an ad-hoc signed application with its icon and notices and verifies checksum, architecture, system-only linked libraries, Lua, WebP, and a nonblank graphical startup after relocation. Bundle layout tests, workflow syntax and matrix checks, shell syntax, strict Clippy, and 611 Windows all-target tests passed. Native CI and release publication remain pending.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

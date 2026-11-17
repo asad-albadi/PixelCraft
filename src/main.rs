@@ -8119,7 +8119,7 @@ fn color_image(p: &[Pixel], w: usize, h: usize) -> egui::ColorImage {
 
 fn standalone_check(root: PathBuf) -> Result<(), String> {
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let webp = root.join("webp-animation-check.webp");
         std::fs::write(

@@ -1249,7 +1249,7 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
         frame_count: u32,
         pad: [u32; 4],
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     let load_runtime = || {
         ["libwebpdemux.so.2", "libwebpdemux.so", "libwebpdemux.dylib"]
             .into_iter()
@@ -1260,7 +1260,7 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
     };
     #[cfg(target_os = "linux")]
     let lib = crate::automation::mcp_linux::with_codec_runtime(load_runtime)??;
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     let lib = load_runtime()?;
     use std::ffi::c_void;
     type New = unsafe extern "C" fn(*const Data, *const c_void, i32) -> *mut c_void;
@@ -1268,7 +1268,7 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
     type Next = unsafe extern "C" fn(*mut c_void, *mut *mut u8, *mut i32) -> i32;
     type Delete = unsafe extern "C" fn(*mut c_void);
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     unsafe extern "C" {
         fn WebPAnimDecoderNewInternal(
             data: *const Data,
@@ -1285,14 +1285,14 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
     }
 
     unsafe {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         let (new, info, next, delete) = (
             WebPAnimDecoderNewInternal as New,
             WebPAnimDecoderGetInfo as ReadInfo,
             WebPAnimDecoderGetNext as Next,
             WebPAnimDecoderDelete as Delete,
         );
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let (new, info, next, delete) = (
             *lib.get::<New>(b"WebPAnimDecoderNewInternal")
                 .map_err(|e| e.to_string())?,

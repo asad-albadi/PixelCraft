@@ -11,6 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos:
+    uses: ./.github/workflows/macos-build.yml
+
   linux:
     name: Linux checks
     runs-on: ubuntu-22.04

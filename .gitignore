@@ -15,6 +15,7 @@
 .DS_Store
 Thumbs.db
 
-# Generated Windows Lua runtime (built from verified source).
+# Generated native runtimes (built from verified source).
 /runtime/lua54.dll
 /runtime/webp/
+/runtime/macos/

@@ -103,13 +103,19 @@ sudo apt install ./PixelCraft-vX.Y.Z-linux-amd64.deb
 
 Open PixelCraft from the application menu or run `pixelcraft` in a terminal. The package uses the distribution's graphics and WebP libraries. Apt handles the declared runtime dependencies.
 
-Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. **Actions → Desktop releases → Run workflow** creates downloadable artifacts without publishing a release. Tagged runs publish both platforms and their checksums together after both jobs pass. The version tag controls artifact filenames; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
+Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. **Actions → Desktop releases → Run workflow** creates downloadable artifacts without publishing a release. Tagged runs publish all platform assets and checksums after the Windows, Linux, and macOS jobs pass. The version tag controls artifact filenames; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
 
 The Linux job builds on Ubuntu 22.04, embeds that runner's Lua 5.4 library, packages using [linuxdeploy](https://docs.appimage.org/packaging-guide/from-source/native-binaries.html), and checks packaged save/export/Lua functionality. The Windows job uses Windows Server 2022, stable MSVC Rust and Inno Setup 6. It compiles a checksum-verified [official Lua 5.4.9 source archive](https://www.lua.org/ftp/) into an embedded x64 DLL with a static C runtime, links the decoder from checksum-verified libwebp 1.6.0 source, runs the Rust tests, and builds a per-user installer and a standalone executable. Before uploading, it silently installs to a path containing spaces, exercises animated WebP import, saving, exports and Lua plugins from the installed executable with build-tool directories removed from PATH, repeats installation for the upgrade path, checks uninstall, and verifies the portable executable in a separate directory containing only the app. Both executables get SHA-256 checksums. Windows release verification runs on the Windows runner; local Linux checks cannot execute that installer. No Windows installer is produced until the workflow runs.
 
 Before uploading a release, the workflow also opens the packaged AppImage on an Xvfb X11 display and a headless Weston Wayland display using Mesa software rendering. Each check must exit successfully and produce a nonblank editor screenshot within 60 seconds. Wayland runs without `DISPLAY` so it cannot fall back to X11. Screenshots and startup/compositor logs are saved in the `PixelCraft-startup-diagnostics` Actions artifact, including on failure. Packaging fails if any `libwayland-*.so*` files or symlinks enter the AppDir. These checks validate startup on the Ubuntu release runner; they do not cover every Linux distribution or graphics driver.
 
 The release job also relocates the extracted tarball to a path containing spaces and installs the Debian package using apt. Both package checks cover graphical startup on X11, animated WebP import, and the standalone Lua and export checks. The Debian check also verifies the desktop entry and removes the package afterward.
+
+### macOS
+
+The macOS build produces separate ZIP archives for Apple Silicon (`arm64`) and Intel (`x86_64`). Extract the matching archive and open `PixelCraft.app`. The bundle includes its Lua and WebP runtimes and targets macOS 12 and later. The release smoke tests run on macOS 15 with both architectures.
+
+The build applies an ad-hoc signature to the app bundle. Developer ID signing and Apple notarization require separate release credentials.
 
 ### Build from source
 
@@ -119,6 +125,8 @@ Build from the repository root with a Rust toolchain supporting edition 2024 and
 cargo build --release
 cargo run --release
 ```
+
+On macOS, install the Xcode command-line tools, CMake, and Rust. Run `bash packaging/build-macos-runtime.sh` before Cargo. The script builds Lua and WebP for the host architecture. Set `MACOSX_DEPLOYMENT_TARGET=12.0` for the Cargo build to match the release configuration.
 
 The first build downloads dependencies. After Cargo has cached them, add `--offline` to build or run without network access. The release executable is `target/release/pixelcraft` on Linux or `target/release/pixelcraft.exe` on Windows.
 
@@ -158,7 +166,7 @@ The **Unreal Engine** editor integration uses Paper2D sprite sheet imports to cr
 
 Open finite orthogonal Tiled `.tmj` maps or `.tsj` image tilesets, and export the active frame through **File → Export Tiled map**; the export writes the map, external tilesets and PNG atlases with tile flips. Tiled image collections, infinite maps, object/group layers and compressed tile arrays are rejected explicitly. JSON array tile layers, tilesheet margins/spacing, layer offsets and opacity are supported.
 
-Open animated GIF, APNG (including animated `.png`), WebP and layered OpenRaster `.ora` through **File → Open**. Animation timing and composited frame canvases are retained. OpenRaster keeps layers, groups, visibility, opacity, offsets and common source-over/multiply/screen/overlay/darken/lighten modes; other blend modes return an error. Its ZIP reader has a 32 MiB extraction budget. Windows links the WebP decoder into the executable. Linux AppImage packaging includes libwebpdemux. Other Unix builds use a compatible system libwebpdemux. No external image conversion program is invoked.
+Open animated GIF, APNG (including animated `.png`), WebP and layered OpenRaster `.ora` through **File → Open**. Animation timing and composited frame canvases are retained. OpenRaster keeps layers, groups, visibility, opacity, offsets and common source-over/multiply/screen/overlay/darken/lighten modes; other blend modes return an error. Its ZIP reader has a 32 MiB extraction budget. Windows and macOS link the WebP decoder into the executable. The Linux AppImage and tarball include libwebpdemux. Other Unix builds use a compatible system libwebpdemux. No external image conversion program is invoked.
 
 ## Editing
 

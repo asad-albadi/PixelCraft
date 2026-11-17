@@ -105,7 +105,12 @@ impl Runtime {
             "lua54.dll",
             include_bytes!("../runtime/lua54.dll").as_slice(),
         );
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
+        let (name, bytes) = (
+            "liblua5.4.dylib",
+            include_bytes!(env!("PIXELCRAFT_MACOS_LUA")).as_slice(),
+        );
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         let (name, bytes) = (
             "lua.so",
             include_bytes!("../runtime/liblua5.4.so").as_slice(),
