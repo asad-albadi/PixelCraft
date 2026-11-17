@@ -12,6 +12,8 @@ use ui_icons::UiIcons;
 mod productivity_ui;
 
 mod script_ui;
+mod shortcut_editor;
+use shortcut_editor::{ShortcutChord, ShortcutEdit};
 mod studio;
 mod subtag_playback;
 mod system_appearance;
@@ -729,6 +731,10 @@ struct PixelCraft {
     tag_name: String,
     playback_reverse: bool,
     custom_shortcuts: std::collections::BTreeMap<String, String>,
+    shortcut_action: String,
+    shortcut_edit: Option<ShortcutEdit>,
+    shortcut_settings_open: bool,
+    shortcuts_path: Option<PathBuf>,
     translations: std::collections::BTreeMap<String, String>,
     status: String,
     hover: Option<(i32, i32)>,
@@ -775,10 +781,12 @@ impl PixelCraft {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
         app.theme_path = theme_path();
         app.restore_preview_settings(extensions::config_directory().join("preview.json"));
-        if let Ok(bytes) = std::fs::read(extensions::config_directory().join("shortcuts.json")) {
+        let shortcuts_path = extensions::config_directory().join("shortcuts.json");
+        if let Ok(bytes) = std::fs::read(&shortcuts_path) {
             app.custom_shortcuts = pixelcraft::productivity::load_shortcuts(&bytes)
                 .unwrap_or_else(|_| pixelcraft::productivity::shortcut_preset("PixelCraft"));
         }
+        app.shortcuts_path = Some(shortcuts_path);
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
             app.translations = pixelcraft::contributions::language(&bytes).unwrap_or_default();
         }
@@ -912,6 +920,10 @@ impl PixelCraft {
             tag_name: "Animation".into(),
             playback_reverse: false,
             custom_shortcuts: pixelcraft::productivity::shortcut_preset("PixelCraft"),
+            shortcut_action: "wand".into(),
+            shortcut_edit: None,
+            shortcut_settings_open: false,
+            shortcuts_path: None,
             translations: std::collections::BTreeMap::new(),
             status: "Ready. Draw on the canvas, or create a new sprite.".into(),
             hover: None,
@@ -1728,12 +1740,22 @@ impl PixelCraft {
                     );
                 }
                 let shortcuts = parsed.bindings;
-                for binding in shortcuts.keys() {
-                    if Key::from_name(binding.split('+').next_back().unwrap_or("")).is_none() {
-                        return Err(format!("Unknown shortcut key: {binding}"));
-                    }
+                let validated = shortcuts
+                    .into_iter()
+                    .map(|(binding, action)| {
+                        let chord = ShortcutChord::parse(&binding)
+                            .ok_or_else(|| format!("Unknown shortcut key {binding}"))?;
+                        if !chord.allowed_for(&action) {
+                            return Err(format!("{binding} is reserved"));
+                        }
+                        Ok((chord, binding, action))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                for (chord, binding, action) in validated {
+                    self.custom_shortcuts
+                        .retain(|key, _| ShortcutChord::parse(key) != Some(chord));
+                    self.custom_shortcuts.insert(binding, action);
                 }
-                self.custom_shortcuts.extend(shortcuts);
                 std::fs::create_dir_all(extensions::config_directory())
                     .map_err(|e| e.to_string())?;
                 std::fs::write(
@@ -2115,6 +2137,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.grid_settings.is_some()
             || self.animation_export.is_some()
             || self.file_path.is_some()
+            || self.shortcut_edit.is_some()
+            || self.shortcut_settings_open
             || self.studio.open
             || self.studio.sheet_open
             || self.studio.tiles_open
@@ -3078,6 +3102,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         match s {
+            "shortcuts" => self.shortcut_settings_open = true,
             "new" => self.request(Pending::New),
             "closetab" => self.request(Pending::CloseTab),
             "open" => self.request(Pending::Open),
@@ -3976,20 +4001,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.action(action);
             return;
         }
-        let custom = self.custom_shortcuts.iter().find_map(|(binding, action)| {
-            let parts: Vec<_> = binding.split('+').collect();
-            let key = Key::from_name(parts.last().copied().unwrap_or(""))?;
-            let cmd = parts
-                .iter()
-                .any(|s| s.eq_ignore_ascii_case("Ctrl") || s.eq_ignore_ascii_case("Cmd"));
-            let shift = parts.iter().any(|s| s.eq_ignore_ascii_case("Shift"));
-            let alt = parts.iter().any(|s| s.eq_ignore_ascii_case("Alt"));
-            ctx.input(|i| {
-                (i.key_pressed(key)
-                    && i.modifiers.command == cmd
-                    && i.modifiers.shift == shift
-                    && i.modifiers.alt == alt)
-                    .then(|| action.clone())
+        let custom = ctx.input(|input| {
+            self.custom_shortcuts.iter().find_map(|(binding, action)| {
+                let chord = ShortcutChord::parse(binding)?;
+                (chord.allowed_for(action) && chord.matches(input)).then(|| action.clone())
             })
         });
         if let Some(custom) = custom {
@@ -4061,6 +4076,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Select all   Ctrl+A", "selectall"),
                         ("Deselect   Esc", "deselect"),
                         ("Settings…", "settings"),
+                        ("Keyboard shortcuts…", "shortcuts"),
                         ("Drawing & selection studio…", "studio"),
                         ("Magic Wand", "wand"),
                         ("Brushes, references & workflow tools…", "workflow"),
@@ -6704,6 +6720,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.shortcut_edit.is_some() {
+            self.shortcut_edit_dialog(ctx);
+            return;
+        }
+        if self.shortcut_settings_open {
+            self.shortcut_settings_dialog(ctx);
+            return;
+        }
         self.replace_color_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;

@@ -2567,3 +2567,105 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
     assert!(app.pending.is_none());
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn shortcut_capture_checks_conflicts_reserved_keys_escape_and_command_reset() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.tool = Tool::Eraser;
+    let directory = std::env::temp_dir().join(format!(
+        "pixelcraft-shortcut-capture-{}",
+        std::process::id()
+    ));
+    app.shortcuts_path = Some(directory.join("shortcuts.json"));
+    let key = |key, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    let click_button = |app: &mut PixelCraft, label| {
+        let mut output = frame(app, &ctx, size, 1., vec![]);
+        let center = text_position(&mut output, label);
+        discard_frame(app, &ctx, size, 1., click(center));
+    };
+    let no_mods = egui::Modifiers::NONE;
+    app.action("shortcuts");
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    click_button(&mut app, "Capture shortcut…");
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    discard_frame(&mut app, &ctx, size, 1., vec![key(Key::B, no_mods)]);
+    assert!(
+        app.tool == Tool::Eraser,
+        "Capture must not trigger the editor action"
+    );
+    assert_eq!(
+        app.custom_shortcuts.get("B").map(String::as_str),
+        Some("pencil")
+    );
+    click_button(&mut app, "Replace shortcut");
+    assert_eq!(
+        app.custom_shortcuts.get("B").map(String::as_str),
+        Some("wand")
+    );
+
+    let bindings = app.custom_shortcuts.clone();
+    app.begin_shortcut_capture(&ctx, "wand".into());
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![key(Key::V, egui::Modifiers::COMMAND)],
+    );
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let _ = text_position(&mut output, "Ctrl+V is reserved.");
+    discard_frame(&mut app, &ctx, size, 1., vec![egui::Event::Copy]);
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let _ = text_position(&mut output, "Clipboard shortcuts are reserved.");
+    discard_frame(&mut app, &ctx, size, 1., vec![key(Key::Escape, no_mods)]);
+    assert!(app.shortcut_edit.is_none());
+    assert_eq!(app.custom_shortcuts, bindings);
+
+    app.custom_shortcuts.insert("Cmd+F8".into(), "fill".into());
+    app.begin_shortcut_capture(&ctx, "wand".into());
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![key(Key::F8, egui::Modifiers::COMMAND)],
+    );
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let _ = text_position(&mut output, "Ctrl+F8 is assigned to Paint bucket");
+    click_button(&mut app, "Cancel");
+    assert_eq!(
+        app.custom_shortcuts.get("Cmd+F8").map(String::as_str),
+        Some("fill")
+    );
+
+    app.custom_shortcuts.insert("W".into(), "hand".into());
+    app.begin_shortcut_reset("wand".into());
+    assert_eq!(
+        app.custom_shortcuts.get("W").map(String::as_str),
+        Some("hand")
+    );
+    click_button(&mut app, "Replace and reset");
+    assert_eq!(
+        app.custom_shortcuts.get("W").map(String::as_str),
+        Some("wand")
+    );
+    assert!(!app.custom_shortcuts.contains_key("B"));
+    let saved = std::fs::read(app.shortcuts_path.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        pixelcraft::productivity::load_shortcuts(&saved).unwrap(),
+        app.custom_shortcuts
+    );
+    std::fs::remove_dir_all(directory).unwrap();
+}

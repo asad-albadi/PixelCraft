@@ -134,8 +134,6 @@ pub(super) struct PowerTools {
     ramp_from: usize,
     ramp_to: usize,
     ramp_steps: usize,
-    shortcut_key: String,
-    shortcut_action: String,
 }
 impl Default for PowerTools {
     fn default() -> Self {
@@ -176,8 +174,6 @@ impl Default for PowerTools {
             ramp_from: 0,
             ramp_to: 1,
             ramp_steps: 5,
-            shortcut_key: "W".into(),
-            shortcut_action: "wand".into(),
         }
     }
 }
@@ -236,6 +232,17 @@ struct PreparedLive {
     result: Result<LiveResult, String>,
 }
 impl PowerTools {
+    pub(super) fn shortcut_preset_name(&self) -> &str {
+        if self.preferences.preset.is_empty() {
+            "PixelCraft"
+        } else {
+            &self.preferences.preset
+        }
+    }
+    pub(super) fn set_shortcut_preset(&mut self, name: &str) {
+        self.preferences.preset = name.into();
+    }
+
     pub(super) fn comfortable(&self) -> bool {
         self.preferences.comfortable
     }
@@ -796,7 +803,7 @@ impl PixelCraft {
             }
         }
     }
-    fn save_workflow_preferences(&mut self) {
+    pub(super) fn save_workflow_preferences(&mut self) {
         let result = (|| {
             let dir = extensions::config_directory();
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1107,8 +1114,7 @@ if ui.pc_button("Finish moving references").clicked(){self.power.reference_edit=
  ui.collapsing("Multi-file atlas", |ui| self.atlas_export_ui(ui));
  ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label) in self.recent_file_entries(){if ui.add_enabled_ui(path.is_file(),|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
-if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();ui.horizontal(|ui|{for name in ["PixelCraft","Aseprite","Photoshop"]{if ui.pc_button(name).clicked(){self.custom_shortcuts=shortcut_preset(name);self.power.preferences.preset=name.into();self.save_shortcut_bindings();}}});ui.label(format!("Preset: {} (custom bindings stay editable)",if self.power.preferences.preset.is_empty(){"PixelCraft"}else{&self.power.preferences.preset}));ui.horizontal(|ui|{ui.label("Key");ui.text_edit_singleline(&mut self.power.shortcut_key);});ui.horizontal(|ui|{ui.label("Command");egui::ComboBox::from_id_salt("shortcut-command").selected_text(&self.power.shortcut_action).show_ui(ui,|ui|{let actions:std::collections::BTreeSet<_>=shortcut_preset("PixelCraft").into_values().collect();for action in actions{ui.pc_selectable_value(&mut self.power.shortcut_action,action.clone(),action);}});if ui.pc_button("Bind").clicked(){let parts:Vec<_>=self.power.shortcut_key.split('+').collect();if parts.last().and_then(|k|Key::from_name(k)).is_some()&&parts[..parts.len()-1].iter().all(|p|["Ctrl","Cmd","Shift","Alt"].contains(p)){self.custom_shortcuts.insert(self.power.shortcut_key.clone(),self.power.shortcut_action.clone());self.save_shortcut_bindings();}else{self.status="Use a key such as W, Ctrl+S or Ctrl+Shift+Z".into();}}});let mut remove=None;for(k,a)in &self.custom_shortcuts{ui.horizontal(|ui|{ui.monospace(k);ui.label(a);if ui.pc_small_button("Remove").clicked(){remove=Some(k.clone());}});}
-if let Some(k)=remove{self.custom_shortcuts.remove(&k);self.save_shortcut_bindings();}});
+if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();if ui.pc_button("Keyboard shortcuts…").clicked(){self.action("shortcuts");}});
  ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{if let Some(progress)=self.power.bridge_export.take(){progress.cancel();}self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
 if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
  });});
@@ -1580,20 +1586,6 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 Ok(()) => "Palette operation complete".into(),
                 Err(e) => format!("Could not process palette: {e}"),
             };
-        }
-    }
-    fn save_shortcut_bindings(&mut self) {
-        let result = (|| {
-            std::fs::create_dir_all(extensions::config_directory()).map_err(|e| e.to_string())?;
-            std::fs::write(
-                extensions::config_directory().join("shortcuts.json"),
-                pixelcraft::productivity::save_shortcuts(&self.custom_shortcuts)?,
-            )
-            .map_err(|e| e.to_string())
-        })();
-        self.save_workflow_preferences();
-        if let Err(e) = result {
-            self.status = format!("Could not save shortcuts: {e}");
         }
     }
     pub(super) fn brush_mode_ui(&mut self, ui: &mut egui::Ui) {

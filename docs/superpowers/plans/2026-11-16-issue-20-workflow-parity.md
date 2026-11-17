@@ -182,6 +182,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 54 complete. A shared path dialog offers text entry and native Browse for Open, Import as Layer, Save As, an unnamed Save, and file and sequence exports. It accepts quoted paths, resolves relative paths against the displayed folder, fills appropriate missing extensions, and confirms replacement for typed output files. The Windows UI test opens, imports, saves, exports PNG and a PNG sequence, rejects a cancelled overwrite, and completes a pending close after a typed save. It also verifies the animation dialog advances to destination selection. Formatting, strict Clippy, and 560 Windows all-target tests passed.
 
+- Item 48 complete. Edit opens the keyboard shortcut editor for capture, conflict review, individual removal, and per-command reset to the active preset. Capture blocks editor dispatch, recognizes Ctrl and Cmd aliases, and protects clipboard, navigation, and system shortcuts. Escape and Cancel leave bindings intact. The Windows UI test verifies conflict review and replacement, alias conflicts, clipboard input, cancellation, reset, and persistence. Formatting, strict Clippy, and 561 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -246,7 +248,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 ## Editor and MCP workflow controls
 
-- [ ] **48. Capture shortcuts from keypresses.** Show conflicts, protect reserved bindings, allow cancellation, and reset individual shortcuts.
+- [x] **48. Capture shortcuts from keypresses.** Show conflicts, protect reserved bindings, allow cancellation, and reset individual shortcuts.
 - [ ] **49. Expand per-reference controls.** Lock individual references, toggle sampling per image, set aspect-linked dimensions, and show a placeholder when a linked source is missing.
 - [ ] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
 - [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
