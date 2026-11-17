@@ -41,11 +41,10 @@ jobs:
             desktop-file-utils dpkg-dev binutils patchelf xvfb xauth weston \
             libgl1-mesa-dri libegl-mesa0 python3-pil
 
-      - name: Install stable Rust
+      - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup component add clippy rustfmt
-          rustup override set stable
+          rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
+          rustup override set 1.95.0
 
       # The checked-in development Lua binary requires a newer glibc.
       # Embed Ubuntu's Lua instead so the release supports Ubuntu 22.04+.
@@ -214,12 +213,11 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      - name: Install stable Rust
+      - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
           if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
-          rustup component add clippy rustfmt
-          rustup override set stable
+          rustup override set 1.95.0
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
       - name: Restore Windows build cache
         uses: actions/cache/restore@v4

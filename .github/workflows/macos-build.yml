@@ -30,17 +30,17 @@ jobs:
       - name: Verify native runner architecture
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Build native Lua and WebP
         run: bash packaging/build-macos-runtime.sh "${{ matrix.arch }}"
       - name: Format, lint, and test
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-macos-test-data
         run: |
-          cargo +stable fmt --check
-          cargo +stable clippy --locked --all-targets -- -D warnings
-          cargo +stable test --release --locked --all-targets
-          cargo +stable build --release --locked
+          cargo +1.95.0 fmt --check
+          cargo +1.95.0 clippy --locked --all-targets -- -D warnings
+          cargo +1.95.0 test --release --locked --all-targets
+          cargo +1.95.0 build --release --locked
       - name: Stage and archive the macOS application
         run: |
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
@@ -49,7 +49,7 @@ jobs:
             version="manual-${GITHUB_SHA:0:7}"
           fi
           version=$(printf '%s' "$version" | sed 's/[^A-Za-z0-9._-]/-/g')
-          cargo_version=$(cargo +stable metadata --locked --no-deps --format-version 1 |
+          cargo_version=$(cargo +1.95.0 metadata --locked --no-deps --format-version 1 |
             python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "pixelcraft"))')
           bash packaging/build-macos-bundle.sh target/release/pixelcraft dist "$version" "$cargo_version" "${{ matrix.arch }}"
           echo "MACOS_ARCHIVE=dist/PixelCraft-$version-macos-${{ matrix.arch }}.zip" >> "$GITHUB_ENV"

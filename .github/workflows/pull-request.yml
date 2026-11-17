@@ -32,8 +32,8 @@ jobs:
           cp -L /usr/lib/x86_64-linux-gnu/liblua5.4.so.0 runtime/liblua5.4.so
       - name: Install Rust checks
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup override set stable
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+          rustup override set 1.95.0
       - name: Format, lint, and test
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-pr-data
@@ -54,21 +54,21 @@ jobs:
         with:
           arch: x64
       - name: Install Rust checks
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Build embedded Lua
         run: ./packaging/build-windows-lua.ps1
       - name: Build static WebP
         run: ./packaging/build-windows-webp.ps1
       - name: Format
-        run: cargo +stable fmt --check
+        run: cargo +1.95.0 fmt --check
       - name: Lint
-        run: cargo +stable clippy --locked --all-targets -- -D warnings
+        run: cargo +1.95.0 clippy --locked --all-targets -- -D warnings
       - name: Test
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-pr-data
-        run: cargo +stable test --locked
+        run: cargo +1.95.0 test --locked
       - name: Build application
-        run: cargo +stable build --locked
+        run: cargo +1.95.0 build --locked
       - name: Smoke-test single-executable operation
         run: ./checks/windows-portable.ps1 -App target/debug/pixelcraft.exe
       - name: Open the Windows application
