@@ -2114,6 +2114,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.status.starts_with("Export failed")
     }
     fn cancel_gesture(&mut self) {
+        self.studio.marquee_operation = None;
         self.gesture_canvas = None;
         self.start = None;
         self.last = None;
@@ -5920,6 +5921,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
 
+    fn marquee_bounds(&self, end: (i32, i32)) -> Option<SelectionBounds> {
+        let (x, y) = self.start?;
+        Some((x.min(end.0), y.min(end.1), x.max(end.0), y.max(end.1)))
+    }
+
     fn paint_canvas_checker(&self, painter: &egui::Painter, board: Rect, r: Rect) {
         // Draw only visible checker squares, including at high zoom and while panning.
         let check = self.power.checker_size();
@@ -6341,14 +6347,25 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                 });
                 self.wand_at(p, op);
-            } else if matches!(self.tool, Tool::Select | Tool::Lasso) {
+            } else if self.tool == Tool::Select {
+                use pixelcraft::productivity::SelectionOp;
+                let modifiers = ctx.input(|i| i.modifiers);
+                let operation = match (modifiers.shift, modifiers.command || modifiers.ctrl) {
+                    (true, true) => SelectionOp::Intersect,
+                    (true, false) => SelectionOp::Add,
+                    (false, true) => SelectionOp::Subtract,
+                    (false, false) => SelectionOp::Replace,
+                };
+                self.studio.marquee_operation = Some(operation);
+                self.gesture_canvas = Some(pane);
+                self.start = Some(p);
+                self.last = Some(p);
+            } else if self.tool == Tool::Lasso {
                 self.studio.mask = None;
                 self.gesture_canvas = Some(pane);
                 self.start = Some(p);
                 self.studio.polygon.clear();
-                if self.tool == Tool::Lasso {
-                    self.studio.polygon.push(p);
-                }
+                self.studio.polygon.push(p);
                 self.selection = Some((p.0, p.1, p.0, p.1));
             } else if !self.doc.editable(self.layer) {
                 self.status = "This layer is locked. Unlock it in the timeline to draw.".into();
@@ -6463,10 +6480,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         }
                         self.gradient(a, b);
                     }
-                    Tool::Select => {
-                        self.selection =
-                            Some((a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1)))
-                    }
+                    Tool::Select => self.last = Some(b),
                     Tool::Pencil | Tool::Eraser => {
                         let color = if self.tool == Tool::Eraser {
                             CLEAR
@@ -6492,6 +6506,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         } else if owns_gesture {
+            if self.tool == Tool::Select
+                && can_edit
+                && let Some(operation) = self.studio.marquee_operation
+                && ctx.input(|input| input.pointer.any_released())
+                && let Some(end) = pos
+                    .map(|(x, y)| (x.clamp(0, w - 1), y.clamp(0, h - 1)))
+                    .or(self.last)
+                && let Some(bounds) = self.marquee_bounds(end)
+            {
+                self.apply_marquee(bounds, operation);
+            }
             if self.tool == Tool::Move
                 && let (Some(a), Some(b)) = (self.start, self.last)
             {
@@ -6513,7 +6538,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             painter.add(egui::Shape::line(points, Stroke::new(1., Color32::WHITE)));
         }
         self.draw_selection_mask(&painter, board, r);
-        if let Some((x0, y0, x1, y1)) = self.selection.filter(|_| self.studio.mask.is_none()) {
+        let candidate = if owns_gesture && self.studio.marquee_operation.is_some() {
+            self.last.and_then(|end| self.marquee_bounds(end))
+        } else {
+            None
+        };
+        let rectangular_selection = self.selection.filter(|_| self.studio.mask.is_none());
+        for (x0, y0, x1, y1) in [rectangular_selection, candidate].into_iter().flatten() {
             let sr = Rect::from_min_max(
                 board.min + Vec2::new(x0 as f32, y0 as f32) * pixel_size,
                 board.min + Vec2::new((x1 + 1) as f32, (y1 + 1) as f32) * pixel_size,

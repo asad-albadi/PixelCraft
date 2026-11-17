@@ -176,6 +176,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 55 complete. View can show or hide Preview separately from the Inspector. Preview stays docked if the Inspector is hidden and uses the existing sidebar width. Older preference files default to a visible Preview. The Windows UI test exercises both controls and reads saved visibility on restart. Formatting, strict Clippy, and 557 Windows all-target tests passed.
 
+- Item 52 complete. Rectangular marquee supports Shift to add, Ctrl or Command to subtract, and both modifiers to intersect with the existing mask. The drag preview keeps the current selection in place until release. The Windows pointer test checks mask holes, a release without a separate motion frame, undo and redo, cancellation, and plain marquee replacement. Formatting, strict Clippy, and 558 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -244,7 +246,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **49. Expand per-reference controls.** Lock individual references, toggle sampling per image, set aspect-linked dimensions, and show a placeholder when a linked source is missing.
 - [ ] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
 - [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
-- [ ] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
+- [x] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
 - [ ] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
 - [ ] **54. Allow typed file paths in the GUI.** Provide path entry alongside native file browsing.
 - [x] **55. Hide Preview independently.** Persist Preview visibility independently of the Inspector.

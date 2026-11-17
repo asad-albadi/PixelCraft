@@ -836,6 +836,54 @@ impl PixelCraft {
         self.studio.polygon.clear();
         self.set_selection_mask(mask);
     }
+    pub(super) fn apply_marquee(&mut self, bounds: SelectionBounds, op: SelectionOp) {
+        if op == SelectionOp::Replace || (op == SelectionOp::Add && self.selection.is_none()) {
+            if self.selection != Some(bounds)
+                || self.studio.mask.is_some()
+                || !self.studio.polygon.is_empty()
+            {
+                self.remember_action("Marquee selection");
+                self.studio.mask = None;
+                self.studio.polygon.clear();
+                self.selection = Some(bounds);
+            }
+            return;
+        }
+        if self.selection.is_none() {
+            return;
+        }
+
+        let mut mask = self.studio.mask.clone().unwrap_or_else(|| {
+            (0..self.doc.height as i32)
+                .flat_map(|y| (0..self.doc.width as i32).map(move |x| (x, y)))
+                .map(|(x, y)| self.selected(x, y))
+                .collect()
+        });
+        let (left, top, right, bottom) = bounds;
+        let width = self.doc.width;
+        let mut changed = false;
+        for (y, row) in mask.chunks_exact_mut(width).enumerate() {
+            if op == SelectionOp::Intersect {
+                for (x, selected) in row.iter_mut().enumerate() {
+                    let inside = (top..=bottom).contains(&(y as i32))
+                        && (left..=right).contains(&(x as i32));
+                    changed |= *selected && !inside;
+                    *selected &= inside;
+                }
+            } else if (top..=bottom).contains(&(y as i32)) {
+                let region = &mut row[left as usize..=right as usize];
+                let selected = op == SelectionOp::Add;
+                changed |= region.iter().any(|&current| current != selected);
+                region.fill(selected);
+            }
+        }
+        if changed {
+            self.remember_action("Marquee selection");
+            self.studio.polygon.clear();
+            self.set_selection_mask(mask);
+        }
+    }
+
     pub(super) fn set_selection_mask(&mut self, mask: Vec<bool>) {
         let (mut x0, mut y0, mut x1, mut y1) = (self.doc.width, self.doc.height, 0, 0);
         let mut any = false;

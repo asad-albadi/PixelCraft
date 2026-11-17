@@ -2172,3 +2172,144 @@ fn preview_visibility_is_independent_and_survives_restart() {
     assert!(app.inspector_open && preview_visible(&ctx));
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, None);
+    app.replace(Document::new(6, 3), None);
+    app.tool = Tool::Select;
+    let mut original = vec![false; 18];
+    for index in [0, 4, 12] {
+        original[index] = true;
+    }
+    app.set_selection_mask(original.clone());
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let pixel = |x: f32, y: f32| {
+        board.min
+            + Vec2::new(
+                (x + 0.5) * board.width() / 6.,
+                (y + 0.5) * board.height() / 3.,
+            )
+    };
+    let pointer = |pos, pressed, modifiers| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers,
+    };
+    let render = |app: &mut PixelCraft, modifiers, mut events: Vec<_>| {
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        let mut output = frame(app, &ctx, size, 1., events);
+        output.textures_delta.clear();
+    };
+
+    let shift = egui::Modifiers::SHIFT;
+    let from = pixel(2., 0.);
+    let to = pixel(4., 1.);
+    render(
+        &mut app,
+        shift,
+        vec![egui::Event::PointerMoved(from), pointer(from, true, shift)],
+    );
+    render(&mut app, shift, vec![egui::Event::PointerMoved(to)]);
+    assert_eq!(app.studio.mask.as_ref(), Some(&original));
+    render(
+        &mut app,
+        egui::Modifiers::NONE,
+        vec![pointer(to, false, egui::Modifiers::NONE)],
+    );
+    let mut added = original.clone();
+    for index in [2, 3, 8, 9, 10] {
+        added[index] = true;
+    }
+    assert_eq!(app.studio.mask.as_ref(), Some(&added));
+
+    let command = egui::Modifiers::COMMAND;
+    let from = pixel(3., 1.);
+    let to = pixel(5., 1.);
+    render(
+        &mut app,
+        command,
+        vec![
+            egui::Event::PointerMoved(from),
+            pointer(from, true, command),
+        ],
+    );
+    render(
+        &mut app,
+        command,
+        vec![egui::Event::PointerMoved(to), pointer(to, false, command)],
+    );
+    let mut subtracted = added.clone();
+    subtracted[9..=10].fill(false);
+    assert_eq!(app.studio.mask.as_ref(), Some(&subtracted));
+    assert_eq!(app.undo.len(), 2);
+    app.undo();
+    assert_eq!(app.studio.mask.as_ref(), Some(&added));
+    app.redo();
+    assert_eq!(app.studio.mask.as_ref(), Some(&subtracted));
+
+    let intersection = shift | command;
+    let from = pixel(1., 0.);
+    let to = pixel(3., 1.);
+    render(
+        &mut app,
+        intersection,
+        vec![
+            egui::Event::PointerMoved(from),
+            pointer(from, true, intersection),
+        ],
+    );
+    render(
+        &mut app,
+        intersection,
+        vec![
+            egui::Event::PointerMoved(to),
+            pointer(to, false, intersection),
+        ],
+    );
+    let mut intersected = vec![false; 18];
+    for index in [2, 3, 8] {
+        intersected[index] = true;
+    }
+    assert_eq!(app.studio.mask.as_ref(), Some(&intersected));
+    let history = app.undo.len();
+    render(
+        &mut app,
+        egui::Modifiers::NONE,
+        vec![
+            egui::Event::PointerMoved(from),
+            pointer(from, true, egui::Modifiers::NONE),
+        ],
+    );
+    app.cancel_gesture();
+    render(
+        &mut app,
+        egui::Modifiers::NONE,
+        vec![pointer(to, false, egui::Modifiers::NONE)],
+    );
+    assert_eq!(app.studio.mask.as_ref(), Some(&intersected));
+    assert_eq!(app.undo.len(), history);
+
+    render(
+        &mut app,
+        egui::Modifiers::NONE,
+        vec![
+            egui::Event::PointerMoved(to),
+            pointer(to, true, egui::Modifiers::NONE),
+            pointer(to, false, egui::Modifiers::NONE),
+        ],
+    );
+    assert_eq!(app.selection, Some((3, 1, 3, 1)));
+    assert!(app.studio.mask.is_none());
+}
