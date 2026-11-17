@@ -2398,6 +2398,7 @@ dependencies = [
  "libloading",
  "moxcms",
  "png",
+ "raw-window-handle",
  "rfd",
  "roxmltree",
  "semver",
@@ -2405,6 +2406,8 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+ "windows-sys 0.61.2",
+ "x11rb",
  "zbus",
 ]
 

@@ -100,6 +100,13 @@ impl PixelCraft {
         dialog.result.as_ref()?.as_ref().ok()?.texture.as_ref()
     }
 
+    pub(super) fn clear_filter_preview_cache(&mut self) {
+        if let Some(dialog) = &mut self.editor_filter {
+            dialog.worker = None;
+            dialog.result = None;
+        }
+    }
+
     fn filter_targets(&self, scope: Scope) -> Vec<(usize, usize)> {
         let frames = self.doc.durations.len();
         let layers = self.doc.layers.len();
@@ -170,6 +177,7 @@ impl PixelCraft {
         let settings = dialog.settings.clone();
         let submitted = settings.clone();
         let frame = self.frame;
+        let display = Arc::clone(&self.display_profile.bytes);
         let ctx = ctx.clone();
         let (tx, rx) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -190,7 +198,7 @@ impl PixelCraft {
             )
             .map(|(document, changed)| {
                 let image = (changed != 0 && !cancelled.load(Ordering::Relaxed))
-                    .then(|| Self::compose_frame_image(&document, frame).0);
+                    .then(|| Self::compose_frame_image(&document, frame, &display).0);
                 (document, changed, image)
             });
             let _ = tx.send(result);

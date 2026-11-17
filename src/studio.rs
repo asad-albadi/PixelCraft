@@ -1089,6 +1089,10 @@ impl PixelCraft {
         self.studio.open && self.studio.rotation_preview
     }
 
+    pub(super) fn clear_rotation_preview_cache(&mut self) {
+        self.studio.rotation_texture = None;
+    }
+
     pub(super) fn rotation_preview(
         &mut self,
         ui: &mut egui::Ui,
@@ -1163,7 +1167,7 @@ impl PixelCraft {
             )
             .ok()?;
         }
-        let pixels = preview.composite(self.frame);
+        let pixels = self.display_artwork(&preview.color_profile, preview.composite(self.frame));
         let texture = ui.ctx().load_texture(
             "rotation-preview",
             color_image(&pixels, preview.width, preview.height),

@@ -2070,7 +2070,7 @@ fn playback_waits_for_a_cache_miss_without_skipping_the_frame() {
         "Hold the last frame while its successor renders"
     );
 
-    let (image, error) = PixelCraft::compose_frame_image(&app.doc, 1);
+    let (image, error) = PixelCraft::compose_frame_image(&app.doc, 1, &[]);
     app.store_frame_texture(&ctx, 1, image, error);
     app.update_playback_clock(start + Duration::from_millis(80));
     assert_eq!(app.frame, 1, "Present the first ready successor");
@@ -2836,6 +2836,35 @@ fn symmetry_handles_move_independently_and_reflect_pencil_strokes() {
     assert_eq!([app.symmetry_axis(0), app.symmetry_axis(1)], [12, 10]);
     app.switch_tab(original_tab);
     assert_eq!([app.symmetry_axis(0), app.symmetry_axis(1)], [6, 7]);
+}
+
+#[test]
+fn display_profile_changes_canvas_preview_and_prefetch_without_editing_artwork() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let mut doc = Document::new(1, 1);
+    doc.layers[0].cels[0].set(0, [128, 128, 128, 255]);
+    doc.add_frame(0, true);
+    app.replace(doc.clone(), None);
+    let initial = app.frame_texture(&ctx, 0);
+    app.update_preview_texture(&ctx, 1);
+    app.preview_prefetch = Some(FramePrefetch::start(&ctx, &app.doc, 1, Arc::default()));
+    let mut linear = moxcms::ColorProfile::new_srgb();
+    linear.cicp = None;
+    linear.red_trc = Some(moxcms::ToneReprCurve::Parametric(vec![1.]));
+    linear.green_trc = linear.red_trc.clone();
+    linear.blue_trc = linear.red_trc.clone();
+    let target = pixelcraft::color::icc_profile(&linear.encode().unwrap()).unwrap();
+    app.set_display_profile_bytes(target.clone());
+    assert!(app.preview.is_none() && app.preview_prefetch.is_none());
+    let rendered = app.frame_texture(&ctx, 0);
+    assert_ne!(rendered.id(), initial.id());
+    app.update_preview_texture(&ctx, 1);
+    let (image, error) = PixelCraft::compose_frame_image(&app.doc, 1, &target);
+    assert!(error.is_none());
+    assert!((53..=57).contains(&image.pixels[0].r()));
+    assert_eq!(app.doc, doc);
+    assert!(app.undo.is_empty());
 }
 
 #[test]

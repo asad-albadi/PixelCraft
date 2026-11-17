@@ -5,6 +5,7 @@
 
 mod color_profiles;
 mod color_wheel;
+mod display_profiles;
 mod editor_filters;
 mod export_actions;
 mod file_path_dialog;
@@ -589,13 +590,13 @@ struct FramePrefetch {
 }
 
 impl FramePrefetch {
-    fn start(ctx: &egui::Context, doc: &Document, frame: usize) -> Self {
+    fn start(ctx: &egui::Context, doc: &Document, frame: usize, display: Arc<Vec<u8>>) -> Self {
         let snapshot = doc.clone();
         let worker_doc = snapshot.clone();
         let wake = ctx.clone();
         let (send, result) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
-            let image = PixelCraft::compose_frame_image(&worker_doc, frame);
+            let image = PixelCraft::compose_frame_image(&worker_doc, frame, &display);
             if send.send(image).is_ok() {
                 wake.request_repaint();
             }
@@ -695,6 +696,7 @@ struct PixelCraft {
     editor_filter: Option<editor_filters::FilterDialog>,
     palette_conversion: Option<palette_conversion::PaletteConversion>,
     profile_dialog: Option<color_profiles::ProfileDialog>,
+    display_profile: display_profiles::DisplayProfile,
     color_wheel: color_wheel::ColorWheel,
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
@@ -888,6 +890,7 @@ impl PixelCraft {
             editor_filter: None,
             palette_conversion: None,
             profile_dialog: None,
+            display_profile: display_profiles::DisplayProfile::default(),
             color_wheel: color_wheel::ColorWheel::default(),
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
@@ -1105,7 +1108,8 @@ impl PixelCraft {
     fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
         self.refresh_frame_cache(ctx);
         if self.frame_textures[f].is_none() {
-            let (image, error) = Self::compose_frame_image(&self.doc, f);
+            let (image, error) =
+                Self::compose_frame_image(&self.doc, f, &self.display_profile.bytes);
             self.store_frame_texture(ctx, f, image, error);
         }
         let texture = self.frame_textures[f].as_ref().unwrap().clone();
@@ -1114,7 +1118,12 @@ impl PixelCraft {
             && let Some((frame, _)) = self.next_playback_frame()
             && self.frame_textures[frame].is_none()
         {
-            self.frame_prefetch = Some(FramePrefetch::start(ctx, &self.doc, frame));
+            self.frame_prefetch = Some(FramePrefetch::start(
+                ctx,
+                &self.doc,
+                frame,
+                Arc::clone(&self.display_profile.bytes),
+            ));
         }
         texture
     }
@@ -1133,14 +1142,20 @@ impl PixelCraft {
             // compose large misses in a worker so repainting can continue.
             const ASYNC_PREVIEW_PIXELS: usize = 2_000_000;
             if self.doc.width * self.doc.height <= ASYNC_PREVIEW_PIXELS {
-                let (image, error) = Self::compose_frame_image(&self.doc, frame);
+                let (image, error) =
+                    Self::compose_frame_image(&self.doc, frame, &self.display_profile.bytes);
                 self.preview_frame = Some(frame);
                 self.preview = Some(self.load_frame_texture(ctx, frame, image, error));
                 return;
             }
             if self.preview_prefetch.is_none() && ready.as_ref().is_none_or(|(f, _, _)| *f != frame)
             {
-                self.preview_prefetch = Some(FramePrefetch::start(ctx, &self.doc, frame));
+                self.preview_prefetch = Some(FramePrefetch::start(
+                    ctx,
+                    &self.doc,
+                    frame,
+                    Arc::clone(&self.display_profile.bytes),
+                ));
             }
             if let Some((completed, image, error)) = ready {
                 self.preview_frame = Some(completed);
@@ -1214,14 +1229,22 @@ impl PixelCraft {
         self.poll_frame_prefetch(ctx);
     }
 
-    fn compose_frame_image(doc: &Document, frame: usize) -> (egui::ColorImage, Option<String>) {
+    fn compose_frame_image(
+        doc: &Document,
+        frame: usize,
+        display: &[u8],
+    ) -> (egui::ColorImage, Option<String>) {
         let pixels = doc.composite_view(frame);
-        let (pixels, error) = if doc.color_profile.is_empty() {
+        let (pixels, error) = if doc.color_profile == display {
             (pixels, None)
         } else {
-            match pixelcraft::color::to_srgb(&doc.color_profile, &pixels) {
+            match pixelcraft::color::transform_pixels(&doc.color_profile, display, &pixels) {
                 Ok(converted) => (converted, None),
-                Err(error) => (pixels, Some(error)),
+                Err(error) => {
+                    let fallback =
+                        pixelcraft::color::to_srgb(&doc.color_profile, &pixels).unwrap_or(pixels);
+                    (fallback, Some(error))
+                }
             }
         };
         (color_image(&pixels, doc.width, doc.height), error)
@@ -6543,8 +6566,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.frame,
                 &self.power.preferences_onion(),
             );
-            let pixels =
-                pixelcraft::color::to_srgb(&self.doc.color_profile, &pixels).unwrap_or(pixels);
+            let pixels = self.display_artwork(&self.doc.color_profile, pixels);
             let im = color_image(&pixels, self.doc.width, self.doc.height);
             if let Some(t) = &mut self.onion_texture {
                 t.set(im, egui::TextureOptions::NEAREST);
@@ -7722,7 +7744,8 @@ impl eframe::App for PixelCraft {
             input.system_theme = theme;
         }
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.poll_display_profile(ui.ctx(), display_profiles::Surface::from_frame(frame));
         self.render(ui)
     }
 }

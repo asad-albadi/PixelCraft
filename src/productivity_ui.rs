@@ -183,6 +183,7 @@ struct Preferences {
     eyedropper: EyedropperOptions,
     gradient: GradientOptions,
     import_profile: pixelcraft::color::ImportProfile,
+    pub(super) display_profile: crate::display_profiles::DisplayChoice,
     whole_pixel_wheel_zoom: bool,
 }
 impl Default for Preferences {
@@ -205,6 +206,7 @@ impl Default for Preferences {
             eyedropper: EyedropperOptions::default(),
             gradient: GradientOptions::default(),
             import_profile: pixelcraft::color::ImportProfile::default(),
+            display_profile: crate::display_profiles::DisplayChoice::default(),
             whole_pixel_wheel_zoom: false,
         }
     }
@@ -284,7 +286,7 @@ pub(super) struct PowerTools {
     atlas_path: String,
     atlas_preview: Option<Result<AtlasPreview, String>>,
     pub reference_edit: Option<usize>,
-    reference_textures: Vec<(Pixels, egui::TextureHandle)>,
+    pub(super) reference_textures: Vec<(Pixels, egui::TextureHandle)>,
     reference_drag: Option<(f32, f32, f32, Pos2)>,
     reference_availability: ReferenceAvailability,
     reference_check: Option<std::sync::mpsc::Receiver<ReferenceAvailability>>,
@@ -474,6 +476,9 @@ impl PowerTools {
     }
 }
 impl PixelCraft {
+    pub(super) fn display_choice(&self) -> &crate::display_profiles::DisplayChoice {
+        &self.power.preferences.display_profile
+    }
     pub(super) fn set_onion_range(&mut self, previous: bool, count: usize) -> bool {
         let onion = &mut self.power.preferences.onion;
         let setting = if previous {
@@ -646,6 +651,12 @@ impl PixelCraft {
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Color management", |ui| {
+            let mut display = self.power.preferences.display_profile.clone();
+            self.display_profile_ui(ui, &mut display);
+            if display != self.power.preferences.display_profile {
+                self.power.preferences.display_profile = display;
+                self.save_workflow_preferences();
+            }
             use pixelcraft::color::ImportProfile;
             let policy = &mut self.power.preferences.import_profile;
             let before = *policy;
@@ -2551,9 +2562,10 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 {
                     t.clone()
                 } else {
+                    let pixels = self.display_artwork(&[], r.pixels.to_vec());
                     let t = ui.ctx().load_texture(
                         format!("reference-{i}"),
-                        color_image(&r.pixels.to_vec(), r.width, r.height),
+                        color_image(&pixels, r.width, r.height),
                         egui::TextureOptions::LINEAR,
                     );
                     self.power

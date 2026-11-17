@@ -206,6 +206,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 16 document and import checkpoint. Sprite → Color Profile assigns or converts to sRGB or an ICC file in one undo edit. Conversion covers cels, off-canvas pixels, palettes, and tiles while preserving alpha and shared backing. Import settings preserve, convert, or assign sRGB for raster inputs. Import as Layer converts directly to the destination profile. Opening native projects retains the authored profile. Formatting, strict Clippy, and 587 Windows all-target tests passed. Monitor and custom display-profile selection remain open.
 
+- Item 16 display checkpoint complete. Settings → Color management selects sRGB, a custom RGB ICC file, or the editor monitor's profile. Monitor probes follow the window through Windows GDI or X11 RandR, with an sRGB fallback for unavailable profiles and unsupported display backends. The selected profile applies to artwork textures, previews, and reference overlays while preserving document data and exports. Windows formatting, strict Clippy, and 588 all-target tests passed, and the separate Windows desktop ICC lookup passed. The X11 probe compiled for Linux in isolation. A full Linux cross-build requires the GNU C cross-compiler, and X11 desktop playback and Wayland automatic discovery were not verified.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -226,7 +228,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [x] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.
 - [x] **14. Generate palettes and improve indexed conversion.** Build an editable palette from artwork and expose conversion dithering and transparent-index controls.
 - [x] **15. Expand palette and picker tools.** Add sorting, selected-entry reversal, hue interpolation, and RGB, RYB, and normal-map wheels.
-- [ ] **16. Extend ICC color management.** Assign and convert document profiles, choose import policies, and select a monitor, sRGB, or custom display profile.
+- [x] **16. Extend ICC color management.** Assign and convert document profiles, choose import policies, and select a monitor, sRGB, or custom display profile.
 - [x] **17. Add eyedropper sampling controls.** Choose the sampling source and pick specific color or alpha channels.
 - [x] **18. Make symmetry axes movable.** Position each axis independently on the canvas.
 
