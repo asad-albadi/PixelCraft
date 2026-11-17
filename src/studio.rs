@@ -2198,31 +2198,6 @@ impl PixelCraft {
             }
         }
     }
-    pub(super) fn gradient(&mut self, a: (i32, i32), b: (i32, i32)) {
-        let dx = (b.0 - a.0) as f32;
-        let dy = (b.1 - a.1) as f32;
-        let len = dx * dx + dy * dy;
-        if len == 0. {
-            return;
-        }
-        let start = if self.gesture_button.is_some() {
-            self.stroke_color
-        } else {
-            self.fg
-        };
-        let end = self.alternate_stroke_color();
-        for i in 0..self.doc.width * self.doc.height {
-            let (x, y) = ((i % self.doc.width) as i32, (i / self.doc.width) as i32);
-            if !self.selected(x, y) {
-                continue;
-            }
-            let t = (((x - a.0) as f32 * dx + (y - a.1) as f32 * dy) / len).clamp(0., 1.);
-            let p = std::array::from_fn(|c| {
-                (start[c] as f32 * (1. - t) + end[c] as f32 * t).round() as u8
-            });
-            self.doc.set_pixel(self.layer, self.frame, i, p);
-        }
-    }
 }
 
 const RECOVERY_FILES: [&str; 2] = ["workspace.recovery", "workspace.recovery.previous"];

@@ -6717,6 +6717,25 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let down = self
             .gesture_button
             .is_some_and(|button| ctx.input(|i| i.pointer.button_down(button)));
+        let gradient_release = self.tool == Tool::Gradient
+            && self
+                .gesture_button
+                .is_some_and(|button| ctx.input(|i| i.pointer.button_released(button)));
+        if owns_gesture
+            && can_edit
+            && self.tool == Tool::Gradient
+            && (down || gradient_release)
+            && let (Some(a), Some((x, y))) = (self.start, pos)
+        {
+            let b = (x.clamp(0, w - 1), y.clamp(0, h - 1));
+            if self.last != Some(b) {
+                if let Some(base) = &self.stroke_base {
+                    self.doc = base.clone();
+                }
+                self.gradient(a, b);
+                self.last = Some(b);
+            }
+        }
         if owns_gesture && can_edit && down {
             if let (Some(a), Some(mut b)) = (self.start, pos) {
                 if draws && repeats != WrapAxes::NONE {
@@ -6772,12 +6791,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             self.set_selection_mask(moved);
                             let _ = r;
                         }
-                    }
-                    Tool::Gradient => {
-                        if let Some(base) = &self.stroke_base {
-                            self.doc = base.clone();
-                        }
-                        self.gradient(a, b);
                     }
                     Tool::Select => self.last = Some(b),
                     Tool::Pencil | Tool::Eraser => {

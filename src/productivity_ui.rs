@@ -61,6 +61,97 @@ struct EyedropperOptions {
     channel: EyedropperChannel,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum GradientShape {
+    #[default]
+    Linear,
+    Radial,
+}
+
+impl GradientShape {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Linear => "Linear",
+            Self::Radial => "Radial",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum GradientPattern {
+    #[default]
+    Smooth,
+    Bayer2,
+    Bayer4,
+    Bayer8,
+    Installed,
+}
+
+impl GradientPattern {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Smooth => "Smooth",
+            Self::Bayer2 => "Bayer 2×2",
+            Self::Bayer4 => "Bayer 4×4",
+            Self::Bayer8 => "Bayer 8×8",
+            Self::Installed => "Installed matrix",
+        }
+    }
+
+    fn thresholds(self, doc: &Document) -> Option<(usize, usize, Vec<f32>)> {
+        use pixelcraft::contributions::DitheringMatrix;
+        let size = match self {
+            Self::Smooth => return None,
+            Self::Installed => {
+                let DitheringMatrix {
+                    width,
+                    height,
+                    values,
+                } = doc.dithering.as_ref().filter(|m| m.validate())?;
+                let range = f32::from(*values.iter().max()?) + 1.;
+                return Some((
+                    *width,
+                    *height,
+                    values
+                        .iter()
+                        .map(|&rank| (f32::from(rank) + 0.5) / range)
+                        .collect(),
+                ));
+            }
+            Self::Bayer2 => 2,
+            Self::Bayer4 => 4,
+            Self::Bayer8 => 8,
+        };
+        let mut ranks = vec![0];
+        let mut width = 1;
+        while width < size {
+            let next_width = width * 2;
+            let mut next = vec![0; next_width * next_width];
+            for (i, rank) in ranks.into_iter().enumerate() {
+                let offset = (i / width) * next_width + i % width;
+                next[offset] = 4 * rank;
+                next[offset + width] = 4 * rank + 2;
+                next[offset + width * next_width] = 4 * rank + 3;
+                next[offset + width * (next_width + 1)] = 4 * rank + 1;
+            }
+            ranks = next;
+            width = next_width;
+        }
+        let thresholds = ranks
+            .into_iter()
+            .map(|rank| (rank as f32 + 0.5) / (size * size) as f32)
+            .collect();
+        Some((size, size, thresholds))
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+struct GradientOptions {
+    shape: GradientShape,
+    pattern: GradientPattern,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Preferences {
@@ -79,6 +170,7 @@ struct Preferences {
     background_updates: bool,
     sample_references: bool,
     eyedropper: EyedropperOptions,
+    gradient: GradientOptions,
     whole_pixel_wheel_zoom: bool,
 }
 impl Default for Preferences {
@@ -99,6 +191,7 @@ impl Default for Preferences {
             background_updates: false,
             sample_references: false,
             eyedropper: EyedropperOptions::default(),
+            gradient: GradientOptions::default(),
             whole_pixel_wheel_zoom: false,
         }
     }
@@ -1660,6 +1753,120 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 }
             });
     }
+    pub(super) fn gradient_controls(&mut self, ui: &mut egui::Ui) {
+        let options = &mut self.power.preferences.gradient;
+        let before = *options;
+        egui::ComboBox::from_id_salt("gradient-shape")
+            .selected_text(options.shape.label())
+            .show_ui(ui, |ui| {
+                for shape in [GradientShape::Linear, GradientShape::Radial] {
+                    ui.pc_selectable_value(&mut options.shape, shape, shape.label());
+                }
+            });
+        let has_matrix = self.doc.dithering.is_some();
+        ui.label("Pattern");
+        let pattern = if options.pattern == GradientPattern::Installed && !has_matrix {
+            GradientPattern::Smooth
+        } else {
+            options.pattern
+        };
+        egui::ComboBox::from_id_salt("gradient-pattern")
+            .selected_text(pattern.label())
+            .show_ui(ui, |ui| {
+                use GradientPattern::*;
+                for pattern in [Smooth, Bayer2, Bayer4, Bayer8, Installed] {
+                    ui.add_enabled_ui(pattern != Installed || has_matrix, |ui| {
+                        ui.pc_selectable_value(&mut options.pattern, pattern, pattern.label())
+                            .on_disabled_hover_text(
+                                "Apply a dithering matrix from Extensions first.",
+                            );
+                    });
+                }
+            });
+        if before != *options && self.shot.is_none() {
+            self.save_workflow_preferences();
+        }
+    }
+
+    pub(super) fn gradient(&mut self, a: (i32, i32), b: (i32, i32)) {
+        let dx = (b.0 - a.0) as f32;
+        let dy = (b.1 - a.1) as f32;
+        let length_squared = dx * dx + dy * dy;
+        if length_squared == 0.
+            || !self.doc.editable(self.layer)
+            || self.doc.layers[self.layer].tileset.is_some()
+        {
+            return;
+        }
+        let options = self.power.preferences.gradient;
+        let thresholds = options.pattern.thresholds(&self.doc);
+        let mut start = if self.gesture_button.is_some() {
+            self.stroke_color
+        } else {
+            self.fg
+        };
+        let mut end = self.alternate_stroke_color();
+        if thresholds.is_none() && start[3] == 0 && end[3] != 0 {
+            start[..3].copy_from_slice(&end[..3]);
+        } else if thresholds.is_none() && end[3] == 0 && start[3] != 0 {
+            end[..3].copy_from_slice(&start[..3]);
+        }
+        let stops = [start, end];
+        let indexed_stops: Option<[(Pixel, u8); 2]> =
+            (thresholds.is_some() && self.doc.color_mode == ColorMode::Indexed).then(|| {
+                let palette = self.doc.editing_palette(self.layer, self.frame);
+                let mut preferred = [Some(self.palette_index), self.secondary_palette_index];
+                if self.secondary_stroke() {
+                    preferred.swap(0, 1);
+                }
+                std::array::from_fn(|stop| {
+                    let color = stops[stop];
+                    let slot = preferred[stop]
+                        .filter(|&index| palette.get(index) == Some(&color))
+                        .unwrap_or_else(|| {
+                            if color[3] == 0 && !self.doc.layers[self.layer].background {
+                                self.doc.transparent_index.min(palette.len() - 1)
+                            } else {
+                                nearest(color, &palette)
+                            }
+                        });
+                    (palette[slot], slot as u8)
+                })
+            });
+        let [left, top, width, height] = self.selection_bounds();
+        let stride = self.doc.width;
+        for y in top.max(0)..(top + height).min(self.doc.height as i32) {
+            for x in left.max(0)..(left + width).min(stride as i32) {
+                if !self.selected(x, y) {
+                    continue;
+                }
+                let (ox, oy) = ((x - a.0) as f32, (y - a.1) as f32);
+                let t = match options.shape {
+                    GradientShape::Linear => (ox * dx + oy * dy) / length_squared,
+                    GradientShape::Radial => ((ox * ox + oy * oy) / length_squared).sqrt(),
+                }
+                .clamp(0., 1.);
+                let index = y as usize * stride + x as usize;
+                let color = if let Some((width, height, pattern)) = &thresholds {
+                    let threshold = pattern[(y as usize % height) * width + x as usize % width];
+                    let selected_stop = usize::from(t >= threshold);
+                    if let Some(indexed) = &indexed_stops {
+                        let (color, slot) = indexed[selected_stop];
+                        self.doc
+                            .restore_pixel(self.layer, self.frame, index, color, Some(slot));
+                        continue;
+                    }
+                    stops[selected_stop]
+                } else {
+                    std::array::from_fn(|c| {
+                        (start[c] as f32 * (1. - t) + end[c] as f32 * t).round() as u8
+                    })
+                };
+                self.doc.set_pixel(self.layer, self.frame, index, color);
+            }
+        }
+    }
+
     pub(super) fn eyedropper_controls(&mut self, ui: &mut egui::Ui) {
         let options = &mut self.power.preferences.eyedropper;
         let before = *options;

@@ -190,6 +190,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 10 complete. Edit and the shortcut editor expose Copy Merged, all three Paste As destinations, and New Sprite from Selection. The current frame is the source. Copy Merged uses the visible artwork composite and selection holes stay transparent. New Sprite from Selection uses the active layer and retains indexed slots for ordinary indexed layers, the color profile, and pixel aspect. A pasted bitmap opens as RGBA. Tests verify exact translucent layer pixels, undo, reference placement, independent tabs, and async clipboard routing and fallback using simulated native completion. Formatting, strict Clippy, and 566 Windows all-target tests passed. Cross-application clipboard exchange remains to be exercised on a desktop.
 
+- Item 7 complete. The Gradient toolbar offers linear and circular radial shapes with smooth, Bayer 2×2, 4×4, and 8×8 patterns or the document's installed matrix. Ordered dithering uses sprite coordinates and preserves the chosen indexed palette entries. During a drag the preview updates when the endpoint changes and uses the last release position. The Windows pointer test covers pattern selection, revision-free idle preview, release, undo, radial distance, installed thresholds, selection holes, and duplicate indexed swatches. Formatting, strict Clippy, and 567 Windows all-target tests passed. Elliptical radial geometry remains a follow-up parity check.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -201,7 +203,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - [ ] **5. Add drawing tools.** Implement spray with size and rate controls, curves, filled freehand contours, polygons, text, blur, and jumble.
 - [ ] **6. Expand brush and ink controls.** Add per-tool inks such as lock alpha and copy color, saved brushes and shading ramps, image-brush alignment, and stroke stabilization and dynamics.
-- [ ] **7. Add dithered gradients.** Expose gradient patterns and dithering in the gradient tool.
+- [x] **7. Add dithered gradients.** Expose gradient patterns and dithering in the gradient tool.
 - [ ] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.
 - [ ] **9. Add on-canvas scale and skew handles.** Support interactive transforms on a selection and across the selected timeline cels.
 - [x] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.

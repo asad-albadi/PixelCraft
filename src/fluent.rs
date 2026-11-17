@@ -1019,6 +1019,11 @@ impl PixelCraft {
             toggle(ui, &mut self.grid, "Pixel grid");
             return;
         }
+        if self.tool == Tool::Gradient {
+            self.gradient_controls(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
         ui.add_sized(
             [if short { 50. } else { 90. }, if short { 28. } else { 32. }],
             egui::DragValue::new(&mut self.brush)

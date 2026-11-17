@@ -2836,3 +2836,112 @@ fn symmetry_handles_move_independently_and_reflect_pencil_strokes() {
     app.switch_tab(original_tab);
     assert_eq!([app.symmetry_axis(0), app.symmetry_axis(1)], [6, 7]);
 }
+
+#[test]
+fn gradient_controls_apply_patterns_to_preview_release_and_radial_strokes() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-gradient.png")));
+    app.replace(Document::new(7, 7), None);
+    app.tool = Tool::Gradient;
+    app.fg = [20, 30, 41, 255];
+    app.bg = [225, 180, 140, 255];
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    app.zoom = 20.;
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let dither = text_position(&mut out, "Smooth");
+    discard_frame(&mut app, &ctx, size, 1., click(dither));
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let bayer = text_position(&mut out, "Bayer 2×2");
+    discard_frame(&mut app, &ctx, size, 1., click(bayer));
+
+    let board = Rect::from_center_size(
+        layout_rect(&ctx, "canvas-bounds").center() + app.pan,
+        app.sprite_display_size() * app.zoom,
+    );
+    let pixel = |x, y| board.min + Vec2::new(x, y) * 20.;
+    let from = pixel(1.5, 3.5);
+    let to = pixel(5.5, 3.5);
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(from), button(from, true)],
+    );
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(to)],
+    );
+    let artwork = &app.doc.layers[0].cels[0];
+    assert_eq!([artwork[3], artwork[10]], [app.fg, app.bg]);
+    let preview = artwork.clone();
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
+    assert!(app.doc.layers[0].cels[0].shares_storage(&preview));
+    let end = pixel(3.5, 3.5);
+    discard_frame(
+        &mut app,
+        &ctx,
+        size,
+        1.,
+        vec![egui::Event::PointerMoved(end), button(end, false)],
+    );
+    assert_eq!(app.doc.layers[0].cels[0][3], app.bg);
+    app.undo();
+    assert!(app.doc.layers[0].cels[0].iter().all(|p| *p == CLEAR));
+
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let shape = text_position(&mut out, "Linear");
+    discard_frame(&mut app, &ctx, size, 1., click(shape));
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let radial = text_position(&mut out, "Radial");
+    discard_frame(&mut app, &ctx, size, 1., click(radial));
+    drag_layout(&mut app, &ctx, size, pixel(3.5, 3.5), pixel(5.5, 3.5));
+    let artwork = &app.doc.layers[0].cels[0];
+    assert_eq!(
+        [artwork[24], artwork[10], artwork[22], artwork[26]],
+        [app.fg, app.bg, app.bg, app.bg]
+    );
+
+    app.undo();
+    let duplicate = [72, 124, 189, 255];
+    app.doc
+        .import_palette(vec![CLEAR, duplicate, duplicate])
+        .unwrap();
+    app.doc.set_color_mode(ColorMode::Indexed);
+    app.fg = duplicate;
+    app.bg = duplicate;
+    app.palette_index = 2;
+    app.secondary_palette_index = Some(1);
+    app.doc.dithering = Some(pixelcraft::contributions::DitheringMatrix {
+        width: 1,
+        height: 2,
+        values: vec![1, 0],
+    });
+    let mut selection = vec![true; 49];
+    selection[25] = false;
+    app.set_selection_mask(selection);
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let dither = text_position(&mut out, "Bayer 2×2");
+    discard_frame(&mut app, &ctx, size, 1., click(dither));
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let installed = text_position(&mut out, "Installed matrix");
+    discard_frame(&mut app, &ctx, size, 1., click(installed));
+    drag_layout(&mut app, &ctx, size, pixel(3.5, 3.5), pixel(5.5, 3.5));
+    let indices = app.doc.layers[0].cel_meta[0].indices.as_ref().unwrap();
+    assert_eq!(
+        [indices[24], indices[25], indices[31], indices[23]],
+        [2, 0, 2, 1]
+    );
+}
