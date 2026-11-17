@@ -538,8 +538,9 @@ local function cel(li,fi)
   elseif k=='position' then putCelImage(l,fi,celImage(l,fi),Point(v)) else error('Unsupported cel field: '..k) end
  end}),sprite)
 end
+local tilesetHandle,spriteTilesets,assignLayerTileset
 local function rebuildHandles()
- layerHandles={} for i,l in ipairs(doc.layers) do layerHandles[i]=setmetatable({_index=i},{__index=function(_,k)if k=='name' then return l.name elseif k=='opacity' then return l.opacity elseif k=='isVisible' then return l.visible elseif k=='isEditable' then return not l.locked elseif k=='isTransparent' then return not l.background elseif k=='isBackground' then return l.background elseif k=='isImage' then return not l.group and not l.tileset elseif k=='isTilemap' then return l.tileset~=nil elseif k=='isGroup' then return l.group elseif k=='blendMode' then return l.blend elseif k=='sprite' then return sprite elseif k=='cels' then local c={} for f=1,#doc.durations do c[f]=cel(i,f) end return c elseif k=='cel' then return function(_,f)return cel(i,frameNumber(f))end elseif k=='parent' then return l.parent and layerHandles[l.parent+1] or sprite end end,__newindex=function(_,k,v)if k=='name' then l.name=tostring(v) elseif k=='opacity' then l.opacity=opacityByte(v) elseif k=='isVisible' then l.visible=not not v elseif k=='isEditable' then l.locked=not v elseif k=='blendMode' then l.blend=v elseif k=='parent' then if v==sprite then l.parent=nil else l.parent=layerNumber(v)-1 end else error('Unsupported layer field: '..k) end end}) end
+ layerHandles={} for i,l in ipairs(doc.layers) do layerHandles[i]=setmetatable({_index=i},{__index=function(_,k)if k=='name' then return l.name elseif k=='opacity' then return l.opacity elseif k=='isVisible' then return l.visible elseif k=='isEditable' then return not l.locked elseif k=='isTransparent' then return not l.background elseif k=='isBackground' then return l.background elseif k=='isImage' then return not l.group and not l.tileset elseif k=='tileset' then return l.tileset and tilesetHandle(doc.tilesets[l.tileset+1]) elseif k=='isTilemap' then return l.tileset~=nil elseif k=='isGroup' then return l.group elseif k=='blendMode' then return l.blend elseif k=='sprite' then return sprite elseif k=='cels' then local c={} for f=1,#doc.durations do c[f]=cel(i,f) end return c elseif k=='cel' then return function(_,f)return cel(i,frameNumber(f))end elseif k=='parent' then return l.parent and layerHandles[l.parent+1] or sprite end end,__newindex=function(_,k,v)if k=='name' then l.name=tostring(v) elseif k=='opacity' then l.opacity=opacityByte(v) elseif k=='isVisible' then l.visible=not not v elseif k=='isEditable' then l.locked=not v elseif k=='blendMode' then l.blend=v elseif k=='tileset' then assignLayerTileset(l,v) elseif k=='parent' then if v==sprite then l.parent=nil else l.parent=layerNumber(v)-1 end else error('Unsupported layer field: '..k) end end}) end
  frameHandles={} for i in ipairs(doc.durations) do frameHandles[i]=setmetatable({frameNumber=i},{__index=function(_,k)if k=='duration' then return doc.durations[i]/1000 elseif k=='sprite' then return sprite end end,__newindex=function(_,k,v)if k=='duration' then doc.durations[i]=frameMilliseconds(v) else error('Unsupported frame field: '..k) end end}) end
  for _,layer in ipairs(layerHandles)do bindSpriteHandle(layer,sprite)end
  for _,frame in ipairs(frameHandles)do bindSpriteHandle(frame,sprite)end
@@ -557,6 +558,15 @@ function spriteMethods:newCel(l,f,im,pos) local li,fi=layerNumber(l),frameNumber
 function spriteMethods:deleteCel(c) c.image:clear() end
 function spriteMethods:newLayer() assert((#doc.layers+1)*#doc.durations*doc.width*doc.height<=64000000,'Layer budget exceeded');local l={name='Layer '..(#doc.layers+1),visible=true,locked=false,opacity=255,cels={},cel_meta={},group=false,blend='Normal',tile_cels={}};for f=1,#doc.durations do l.cels[f]=Image(doc.width,doc.height)._pixels;l.cel_meta[f]={opacity=255,z_index=0,outside={}};l.tile_cels[f]={} end table.insert(doc.layers,l);rebuildHandles();return layerHandles[#doc.layers] end
 function spriteMethods:newGroup() local l=self:newLayer();doc.layers[l._index].group=true;return l end
+local function removeIndexedMetadata(kind,index)
+ for i=#doc.metadata,1,-1 do
+  local metadata=doc.metadata[i]
+  local owner=tonumber(metadata.owner:match('^'..kind..':(%d+)$'))
+  if owner==index-1 then table.remove(doc.metadata,i)
+  elseif owner and owner>=index then metadata.owner=kind..':'..(owner-1) end
+ end
+end
+
 local spriteSlices
 do
  local handles=setmetatable({},{__mode='kv'})
@@ -681,12 +691,7 @@ do
     if handle then objects[handle]=nil end
     handles[slice]=nil
     table.remove(doc.slices,index)
-    for i=#doc.metadata,1,-1 do
-     local metadata=doc.metadata[i]
-     local owner=tonumber(metadata.owner:match('^slice:(%d+)$'))
-     if owner==index-1 then table.remove(doc.metadata,i)
-     elseif owner and owner>=index then metadata.owner='slice:'..(owner-1) end
-    end
+    removeIndexedMetadata('slice',index)
     return
    end
   end
@@ -707,7 +712,7 @@ local function insertFrameMetadata(index)
   end
  end
  for _,metadata in ipairs(doc.metadata)do
-  if metadata.frame>=index and not metadata.owner:match('^slice:') then metadata.frame=metadata.frame+1 end
+  if metadata.frame>=index and not metadata.owner:match('^slice:') and not metadata.owner:match('^tileset:') then metadata.frame=metadata.frame+1 end
  end
 end
 
@@ -776,7 +781,7 @@ function spriteMethods:newEmptyFrame(f)
  return frameHandles[f]
 end
 function spriteMethods:newTag(a,b) a=frameNumber(a);b=frameNumber(b);assert(a and b and a>=1 and b>=a and b<=#doc.durations,'Invalid tag range');local t={name='Tag',from=a-1,to=b-1,direction=0,color={128,180,255}};table.insert(doc.tags,t);return setmetatable({},{__index=function(_,k)if k=='name' then return t.name elseif k=='fromFrame' then return frameHandles[t.from+1] elseif k=='toFrame' then return frameHandles[t.to+1] elseif k=='aniDir' then return t.direction end end,__newindex=function(_,k,v)if k=='name' then t.name=tostring(v) elseif k=='aniDir' then t.direction=v elseif k=='fromFrame' then t.from=frameNumber(v)-1 elseif k=='toFrame' then t.to=frameNumber(v)-1 else error('Unsupported tag field: '..k) end end}) end
-setmetatable(sprite,{__index=function(_,k)if k=='slices' then return spriteSlices() elseif spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
+setmetatable(sprite,{__index=function(_,k)if k=='slices' then return spriteSlices() elseif k=='tilesets' then return spriteTilesets() elseif spriteMethods[k] then return spriteMethods[k] elseif k=='width' or k=='height' then return doc[k] elseif k=='layers' then return layerHandles elseif k=='frames' then return frameHandles elseif k=='palettes' then return {palette} elseif k=='colorMode' then return doc.color_mode elseif k=='filename' then return '' elseif k=='cels' then local c={} for i,l in ipairs(doc.layers) do if not l.group then for f=1,#doc.durations do c[#c+1]=cel(i,f) end end end return c end end,__newindex=function(_,k,v)error('Unsupported sprite assignment: '..k)end})
 rebuildHandles()
 -- Detached scratch sprites let a script compose an image without changing the
 -- editor document. They are not tabs and do not participate in document undo.

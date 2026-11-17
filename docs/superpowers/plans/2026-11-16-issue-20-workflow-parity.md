@@ -136,6 +136,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 slice checkpoint. Lua can create, enumerate, rename, reshape and delete slices, including animated keys. Inserting frames moves later keys with their frames. Deleting a slice removes its metadata and reindexes metadata on surviving slices. The round-trip regression covers mixed optional center and pivot fields, explicitly distinguishing a zero pivot from a missing pivot. Editable tilesets, native tool invocation, clipboard, typed metadata, and broader object identity remain open.
 
+- Item 45 tileset checkpoint. Lua can create, clone, rename, and delete tilesets, inspect and edit tile images, insert and delete tiles, and create or reassign tilemap layers. Structural changes preserve tile flags, per-tile metadata, and surviving placements across frames and layers. Windows tests cover deleted handles, independent clone edits, and native and ASE save and reopen. Native tool invocation, clipboard integration, typed properties, and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

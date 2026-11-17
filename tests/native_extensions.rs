@@ -803,3 +803,128 @@ fn lua_edits_animated_slices_and_round_trips_their_keys() {
     }
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn lua_edits_tilesets_and_remaps_placements_in_every_frame() {
+    let mut input = Document::new(4, 2);
+    input.add_frame(0, false);
+    input.tilesets.push(Tileset {
+        name: "unused".into(),
+        width: 1,
+        height: 1,
+        tiles: vec![],
+    });
+    input.tilesets.push(Tileset {
+        name: "terrain".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![
+            vec![[255, 0, 0, 255]; 4].into(),
+            vec![[0, 20, 80, 255]; 4].into(),
+        ],
+    });
+    input.add_tile_layer(1).unwrap();
+    input.layers[1].tile_cels = vec![vec![0x8000_0001, 0x4000_0002], vec![2, 1]];
+    input.add_tile_layer(1).unwrap();
+    input.layers[2].tile_cels[1] = vec![0x2000_0002, 0];
+    for i in 0_u8..4 {
+        input.metadata.push(MetadataChunk {
+            frame: 0,
+            kind: 0x2020,
+            owner: "tileset:1".into(),
+            data: vec![2, 0, 0, 0, i, 30, 40, 255],
+        });
+    }
+    let output = run_source(
+        &input,
+        r#"
+ local sprite=app.activeSprite
+ local set=sprite.tilesets[2]
+ assert(set==sprite.layers[2].tileset and set==sprite.tilesets[2])
+ assert(#set==3 and set.grid.tileSize==Size(2,2))
+ assert(not pcall(function() sprite:deleteTileset(set) end))
+ assert(not pcall(function() sprite:deleteTile(set,0) end))
+ sprite:deleteTileset(sprite.tilesets[1])
+ set.name='Ground'
+ set.baseIndex=12
+ local old=set:tile(2)
+ assert(old==set:tile(2) and old.index==2)
+ local inserted=sprite:newTile(set,1)
+ inserted.image:drawPixel(0,0,Color('#115599'))
+ assert(set:getTile(1):getPixel(0,0)==app.pixelColor.rgba(17,85,153,255))
+ assert(old.index==3)
+ local removed=set:tile(2)
+ local heldImage=removed.image
+ sprite:deleteTile(removed)
+ assert(not pcall(function() return removed.index end))
+ assert(not pcall(function() heldImage:drawPixel(0,0,Color('#deadbe')) end))
+ assert(old.index==2)
+ old.image:drawPixel(1,0,Color('#aabbcc'))
+ local other=sprite:newTileset(Rectangle(0,0,2,2),2)
+ local layer=sprite:newTilemap(other)
+ assert(layer.tileset==other and layer.isTilemap and #other==2)
+ local clone=sprite:newTileset(set)
+ assert(clone~=set and #clone==#set and clone.baseIndex==12)
+ layer.tileset=clone
+ sprite:deleteTileset(other)
+ clone:tile(1).image:drawPixel(0,0,Color('#00ffaa'))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(output.tilesets[0].name, "Ground");
+    assert_eq!(output.layers[1].tileset, Some(0));
+    assert_eq!(
+        output.layers[1].tile_cels,
+        vec![vec![0, 0x4000_0002], vec![2, 0]]
+    );
+    assert_eq!(output.layers[2].tile_cels[1], vec![0x2000_0002, 0]);
+    assert_eq!(output.layers[3].tileset, Some(1));
+    assert_eq!(output.layers[3].tile_cels, vec![vec![0; 2]; 2]);
+    assert_eq!(output.tilesets[1].tiles[0][0], [0, 255, 170, 255]);
+    assert_eq!(output.tilesets[0].tiles[0][0], [17, 85, 153, 255]);
+    assert_eq!(output.tilesets[0].tiles[1][1], [170, 187, 204, 255]);
+    assert_eq!(output.ase_tilesets[0].base_index, 12);
+    assert_eq!(output.metadata.len(), 8);
+    assert_eq!(
+        output
+            .metadata
+            .iter()
+            .filter(|item| item.owner == "tileset:0")
+            .map(|item| item.data.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            input.metadata[0].data.clone(),
+            input.metadata[1].data.clone(),
+            vec![0; 4],
+            input.metadata[3].data.clone()
+        ]
+    );
+    assert_eq!(
+        output
+            .metadata
+            .iter()
+            .filter(|item| item.owner == "tileset:0")
+            .map(|item| &item.data)
+            .collect::<Vec<_>>(),
+        output
+            .metadata
+            .iter()
+            .filter(|item| item.owner == "tileset:1")
+            .map(|item| &item.data)
+            .collect::<Vec<_>>()
+    );
+    let dir = std::env::temp_dir().join(format!("pixelcraft-lua-tilesets-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    for ext in ["pixel", "aseprite"] {
+        let path = dir.join("tiles").with_extension(ext);
+        pixelcraft::formats::save(&path, &output).unwrap();
+        let reopened = pixelcraft::formats::load(&path).unwrap();
+        assert_eq!(reopened.tilesets, output.tilesets);
+        assert_eq!(reopened.layers[1].tile_cels, output.layers[1].tile_cels);
+        assert_eq!(reopened.metadata, output.metadata);
+    }
+    fs::remove_dir_all(dir).unwrap();
+}

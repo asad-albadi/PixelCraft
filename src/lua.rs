@@ -471,8 +471,9 @@ impl ScriptRuntime {
             ))
         ))?;
         runtime.eval(&format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             include_str!("lua_api.lua"),
+            include_str!("lua_tilesets.lua"),
             include_str!("lua_compat.lua")
         ))?;
         let finish_reference = runtime.take_global_function(c"_pw_finish")?;
