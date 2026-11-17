@@ -152,6 +152,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 native selection tool checkpoint. Lua can invoke rectangular marquee, elliptical marquee, polygon lasso, or magic wand with replace, add, subtract, or intersect. Editor and Lua selection snapshots retain holes through tabs, live previews, modeless edits, transaction rollback, and commit. Tests cover native geometry, scripted undo and redo, and the Windows editor request loop. Alternate freehand algorithms, typed properties, and broader object identity remain open.
 
+- Item 45 freehand checkpoint. Lua can invoke regular, pixel-perfect, and dots modes with the native pencil and eraser. The editor and script paths share the corner rule. Tests cover preservation of prior corner artwork, opacity at individual dots, erasing with dots, and mapped tile-cell corners. Typed properties and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

@@ -1,3 +1,4 @@
+mod freehand;
 mod selection;
 mod tiles;
 
@@ -58,6 +59,8 @@ struct Stroke {
     layer: usize,
     frame: usize,
     points: Vec<Point>,
+    #[serde(default)]
+    freehand_algorithm: freehand::Algorithm,
     selection: Option<Vec<Point>>,
     selection_mode: Option<u8>,
     brush_shape: Option<BrushShape>,
@@ -76,7 +79,12 @@ fn distance(a: Point, b: Point) -> u64 {
     u64::from(a.0.abs_diff(b.0).max(a.1.abs_diff(b.1))) + 1
 }
 
-fn check_work(tool: Tool, points: &[Point], size: i32) -> Result<(), String> {
+fn check_work(
+    tool: Tool,
+    points: &[Point],
+    size: i32,
+    algorithm: freehand::Algorithm,
+) -> Result<(), String> {
     if points.is_empty()
         || points.len() > 4096
         || points
@@ -93,6 +101,9 @@ fn check_work(tool: Tool, points: &[Point], size: i32) -> Result<(), String> {
         Tool::Rectangle(true) | Tool::Ellipse(true) => width * height,
         Tool::Rectangle(false) | Tool::Ellipse(false) => 4 * (width + height),
         Tool::Line => distance(a, b),
+        Tool::Pencil | Tool::Eraser if algorithm == freehand::Algorithm::Dots => {
+            points.len() as u64
+        }
         Tool::Pencil | Tool::Eraser => points
             .windows(2)
             .map(|segment| distance(segment[0], segment[1]))
@@ -134,10 +145,9 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Vec<bool> {
     let white = [255; 4];
     match tool {
         Tool::Pencil | Tool::Eraser => {
-            mask.stamp(0, 0, a.0, a.1, white, size);
-            for segment in stroke.points.windows(2) {
-                mask.line(0, 0, segment[0], segment[1], white, size);
-            }
+            freehand::visit(&stroke.points, stroke.freehand_algorithm, Some, |(x, y)| {
+                mask.stamp(0, 0, x, y, white, size);
+            });
         }
         Tool::Line => mask.line(0, 0, a, b, white, size),
         Tool::Rectangle(filled) => {
@@ -186,7 +196,7 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
     let mut stroke: Stroke = serde_json::from_value(value).map_err(|e| e.to_string())?;
     let tool = Tool::parse(&stroke.tool)?;
     let size = stroke.size.clamp(1, MAX_BRUSH_SIZE);
-    check_work(tool, &stroke.points, size)?;
+    check_work(tool, &stroke.points, size, stroke.freehand_algorithm)?;
     let doc = &stroke.document;
     if doc.logical_pixels() > MAX_SCRIPT_PIXELS {
         return Err("Tool document exceeds the Lua pixel budget".into());

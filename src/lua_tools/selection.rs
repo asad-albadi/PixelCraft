@@ -27,7 +27,7 @@ pub(super) fn apply(stroke: &Stroke, kind: Kind) -> Result<Value, String> {
                 Kind::Rectangle => Tool::Rectangle(true),
                 _ => Tool::Ellipse(true),
             };
-            check_work(tool, &stroke.points, 1)?;
+            check_work(tool, &stroke.points, 1, stroke.freehand_algorithm)?;
             coverage(stroke, tool, 1)
         }
         Kind::Lasso => lasso(stroke)?,

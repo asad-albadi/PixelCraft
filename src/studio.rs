@@ -2158,10 +2158,7 @@ impl PixelCraft {
                 if path.len() >= 2 {
                     let c: (i32, i32) = path[path.len() - 1];
                     let a: (i32, i32) = path[path.len() - 2];
-                    if (a.0 == c.0 && c.1 == p.1 || a.1 == c.1 && c.0 == p.0)
-                        && (a.0 - p.0).abs() == 1
-                        && (a.1 - p.1).abs() == 1
-                    {
+                    if pixelcraft::productivity::pixel_perfect_corner(a, c, p) {
                         path.pop();
                     }
                 }

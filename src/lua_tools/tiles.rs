@@ -1,4 +1,4 @@
-use super::{Point, Stroke, Tool, coverage, stroke_color};
+use super::{Point, Stroke, Tool, coverage, freehand, stroke_color};
 use crate::lua::MAX_SCRIPT_PIXELS;
 use crate::model::{CLEAR, Document, TILE_ID_MASK, TilePixelEdit, line_pixels};
 use crate::productivity::matching_by_on_axes;
@@ -64,21 +64,26 @@ fn paint_placements(stroke: &mut Stroke, tool: Tool) -> Result<Value, String> {
                 |a, b| a == b,
             );
         }
-        Tool::Pencil | Tool::Line | Tool::Eraser => {
-            let mut mark = |point| -> Result<(), Infallible> {
+        Tool::Line => {
+            _ = line_pixels(a, stroke.points[stroke.points.len() - 1], |point| {
                 if let Some((geometry, x, y)) = cell_at(point) {
                     hits[y * geometry.columns + x] = true;
                 }
-                Ok(())
-            };
-            _ = mark(a);
-            if matches!(tool, Tool::Line) {
-                _ = line_pixels(a, stroke.points[stroke.points.len() - 1], mark);
-            } else {
-                for segment in stroke.points.windows(2) {
-                    _ = line_pixels(segment[0], segment[1], &mut mark);
-                }
-            }
+                Ok::<(), Infallible>(())
+            });
+        }
+        Tool::Pencil | Tool::Eraser => {
+            let set = &doc.tilesets[layer_data.tileset.expect("validated tilemap layer")];
+            let columns = layer_data.cel_meta[frame]
+                .tilemap
+                .as_ref()
+                .map_or(doc.width.div_ceil(set.width), |geometry| geometry.columns);
+            freehand::visit(
+                &stroke.points,
+                stroke.freehand_algorithm,
+                |point| cell_at(point).map(|(_, x, y)| (x as i32, y as i32)),
+                |(x, y)| hits[y as usize * columns + x as usize] = true,
+            );
         }
         _ => return Err("This tool does not place tiles".into()),
     }

@@ -1263,3 +1263,73 @@ fn lua_native_selection_tools_combine_masks_and_undo_independently() {
     assert_eq!(output.layers[0].cels[0][8], CLEAR);
     assert_eq!(output.layers[0].cels[0][35], [12, 22, 33, 255]);
 }
+
+#[test]
+fn lua_freehand_modes_keep_distinct_paths_and_preserve_existing_corners() {
+    let mut doc = Document::new(7, 5);
+    doc.layers[0].cels[0].set(7 + 2, [10, 20, 30, 255]);
+    let output = run_source(
+        &doc,
+        r#"
+ local red=Color('#dd5500')
+ app.useTool{tool='pencil',points={Point(1,1),Point(2,1),Point(2,2)},
+  freehandAlgorithm=FreehandAlgorithm.PIXEL_PERFECT,color=red}
+ app.useTool{tool='pencil',points={Point(4,1),Point(5,1),Point(5,2)},
+  freehandAlgorithm=FreehandAlgorithm.REGULAR,color=red}
+ app.useTool{tool='pencil',points={Point(0,3),Point(6,3)},
+  freehandAlgorithm=FreehandAlgorithm.DOTS,color=red,opacity=128}
+ app.useTool{tool='pencil',points={Point(0,4),Point(6,4)},color=red}
+ app.useTool{tool='eraser',points={Point(0,4),Point(6,4)},
+  freehandAlgorithm=FreehandAlgorithm.DOTS}
+ assert(not pcall(function()
+  app.useTool{tool='pencil',points={Point(0,0)},freehandAlgorithm=99}
+ end))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    let pixels = &output.layers[0].cels[0];
+    let red = [221, 85, 0, 255];
+    assert_eq!(pixels[8], red);
+    assert_eq!(pixels[9], [10, 20, 30, 255]);
+    assert_eq!(pixels[16], red);
+    assert_eq!(pixels[12], red);
+    assert_eq!(pixels[21], [221, 85, 0, 128]);
+    assert_eq!(pixels[24], CLEAR);
+    assert_eq!(pixels[27], [221, 85, 0, 128]);
+    assert_eq!(pixels[28], CLEAR);
+    assert_eq!(pixels[31], red);
+    assert_eq!(pixels[34], CLEAR);
+}
+
+#[test]
+fn lua_freehand_tile_strokes_use_cell_corners_and_supplied_dots() {
+    let mut doc = Document::new(6, 6);
+    doc.tilesets.push(Tileset {
+        name: "Tiles".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![vec![[1, 2, 3, 255]; 4].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    let output = run_source(
+        &doc,
+        r#"
+ local layer=app.activeSprite.layers[2]
+ app.useTool{layer=layer,tool='pencil',points={Point(0,0),Point(2,0),Point(2,2)},
+  freehandAlgorithm=FreehandAlgorithm.PIXEL_PERFECT}
+ app.useTool{layer=layer,tool='pencil',points={Point(0,4),Point(4,4)},
+  freehandAlgorithm=FreehandAlgorithm.DOTS}
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        output.layers[1].tile_cels[0],
+        vec![1, 0, 0, 0, 1, 0, 1, 0, 1]
+    );
+}

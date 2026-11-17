@@ -25,6 +25,12 @@ pub fn combine_selection(current: &mut Vec<bool>, hits: &[bool], op: SelectionOp
         };
     }
 }
+pub fn pixel_perfect_corner(a: (i32, i32), b: (i32, i32), c: (i32, i32)) -> bool {
+    (a.0 == b.0 && b.1 == c.1 || a.1 == b.1 && b.0 == c.0)
+        && a.0.abs_diff(c.0) == 1
+        && a.1.abs_diff(c.1) == 1
+}
+
 pub fn matching(
     p: &[Pixel],
     w: usize,

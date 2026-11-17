@@ -541,6 +541,7 @@ preferences.toolSettings=preferences.toolSettings or {}
 preferences.tool=function(id)preferences.toolSettings[id]=preferences.toolSettings[id] or {opacity=255,tolerance=0,contiguous=true};return preferences.toolSettings[id]end
 local toolOptions=_pw_options or {}
 local tool={id=toolOptions.tool or 'pencil'}
+FreehandAlgorithm={DEFAULT=0,REGULAR=0,PIXEL_PERFECT=1,DOTS=2}
 SelectionMode={REPLACE=0,ADD=1,SUBTRACT=2,INTERSECT=3}
 TilemapMode={PIXELS=0,TILES=1}
 TilesetMode={MANUAL=0,AUTO=1,STACK=2}
@@ -558,7 +559,6 @@ rawset(app,'useTool',function(options)
  assert(type(options)=='table','Expected tool options')
  assert(type(options.points)=='table' and #options.points>=1 and #options.points<=4096,
   'Supply 1–4096 tool points')
- assert(options.freehandAlgorithm==nil,'Alternate freehand algorithms are unsupported')
  local target=options.cel or options.layer or options.frame
  local owner=(type(target)=='table' and spriteOwners[target]) or activeSprite
  assert(owner,'No active sprite for the tool')
@@ -602,9 +602,15 @@ rawset(app,'useTool',function(options)
   end
   local defaultTolerance,defaultContiguous=toolOptions.fillTolerance,toolOptions.fillContiguous
   if name=='magic_wand' then defaultTolerance,defaultContiguous=toolOptions.wandTolerance,toolOptions.wandContiguous end
+  local size=brush and brush.size or toolOptions.brushSize or 1
+  local algorithm=options.freehandAlgorithm
+  if algorithm==nil then
+   algorithm=(toolOptions.pixelPerfect and name=='pencil' and size==1) and FreehandAlgorithm.PIXEL_PERFECT
+    or FreehandAlgorithm.DEFAULT
+  end
   local result=host({op='useTool',document=doc,tool=name,layer=layer-1,frame=frame-1,
    tilemap_mode=tilemapMode,tileset_mode=options.tilesetMode or (isTilemap and toolOptions.tilesetMode or nil),tile=tile,
-   points=points,selection=selectionPoints,selection_mode=options.selection or toolOptions.selectionMode,brush_shape=brush and brush.type,size=brush and brush.size or toolOptions.brushSize or 1,
+   points=points,freehand_algorithm=algorithm,selection=selectionPoints,selection_mode=options.selection or toolOptions.selectionMode,brush_shape=brush and brush.type,size=size,
    ink=options.ink or Ink.SIMPLE,color=color,opacity=options.opacity==nil and 255 or byte(options.opacity),
    tolerance=byte(options.tolerance or defaultTolerance),
    contiguous=options.contiguous==true or (options.contiguous==nil and defaultContiguous~=false)},true)
