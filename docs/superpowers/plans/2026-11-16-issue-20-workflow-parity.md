@@ -228,6 +228,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 6 complete. Pencil and eraser can stabilize strokes by a configurable number of sprite pixels and finish at the release coordinate. Input pressure can control brush size and opacity independently. Opacity uses the strongest coverage applied to a pixel during a stroke. Dynamics are persisted in preferences and saved brushes. Windows GUI tests cover delayed motion, release followed by pointer loss, synthetic pressure and opacity, a mouse fallback, pressure erasing, and preset round-tripping. Formatting, strict Clippy, and 611 Windows all-target tests passed. Physical tablet input remains unverified.
 
+- Item 4 Windows portable checkpoint. Windows statically links libwebp while preserving the existing animation decoder and exact fixture pixels. The Windows release job stages a portable executable, checksum, and notices. The isolated smoke check copies only the executable, limits PATH to Windows system directories, and exercises WebP, native projects, exports, and Lua. The previous binary failed this check with a missing WebP runtime. The debug and optimized static-CRT executables both passed, along with formatting, strict Clippy, and 611 Windows all-target tests. Linux tarball and Debian packages remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

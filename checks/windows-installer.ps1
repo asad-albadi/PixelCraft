@@ -25,14 +25,10 @@ try {
     if ([BitConverter]::ToUInt32($image, $pe) -ne 0x4550) { throw 'Invalid PE signature' }
     $subsystem = [BitConverter]::ToUInt16($image, $pe + 24 + 68)
     if ($subsystem -ne 2) { throw "Expected Windows GUI subsystem (2), got $subsystem; this build would open a console" }
-    foreach ($dll in @('libwebpdemux.dll', 'libwebp.dll', 'libsharpyuv.dll')) {
-        if (!(Test-Path (Join-Path $installDir $dll))) { throw "Missing WebP runtime: $dll" }
-    }
     foreach ($notice in @('LICENSE', 'FONT-LICENSE.txt', 'LUA-LICENSE.txt', 'WEBP-COPYING.txt', 'WEBP-PATENTS.txt', 'WEBP-AUTHORS.txt')) {
         if (!(Test-Path (Join-Path $installDir $notice))) { throw "Missing license: $notice" }
     }
-    # Exclude build tools and their DLLs from PATH/current directory. WebP must
-    # load from the installation, as it would on a clean Windows machine.
+    # Exclude build tools and their DLLs from PATH/current directory.
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
     Set-Location $work
     # Exercises WebP import, saves, exports, embedded Lua and extension lifecycle.

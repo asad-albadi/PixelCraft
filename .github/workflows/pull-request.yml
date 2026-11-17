@@ -54,7 +54,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
       - name: Build embedded Lua
         run: ./packaging/build-windows-lua.ps1
-      - name: Build WebP runtime
+      - name: Build static WebP
         run: ./packaging/build-windows-webp.ps1
       - name: Format
         run: cargo +stable fmt --check
@@ -66,6 +66,8 @@ jobs:
         run: cargo +stable test --locked
       - name: Build application
         run: cargo +stable build --locked
+      - name: Smoke-test single-executable operation
+        run: ./checks/windows-portable.ps1 -App target/debug/pixelcraft.exe
       - name: Open the Windows application
         run: ./checks/graphics-fallback.ps1 -App target/debug/pixelcraft.exe
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

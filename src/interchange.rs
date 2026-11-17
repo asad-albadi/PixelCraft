@@ -1262,75 +1262,47 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
     let lib = crate::automation::mcp_linux::with_codec_runtime(load_runtime)??;
     #[cfg(not(any(target_os = "linux", windows)))]
     let lib = load_runtime()?;
+    use std::ffi::c_void;
+    type New = unsafe extern "C" fn(*const Data, *const c_void, i32) -> *mut c_void;
+    type ReadInfo = unsafe extern "C" fn(*const c_void, *mut Info) -> i32;
+    type Next = unsafe extern "C" fn(*mut c_void, *mut *mut u8, *mut i32) -> i32;
+    type Delete = unsafe extern "C" fn(*mut c_void);
+
     #[cfg(windows)]
-    let lib: libloading::Library = {
-        use libloading::os::windows::{
-            LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR, LOAD_LIBRARY_SEARCH_SYSTEM32, Library,
-        };
-        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        let installed = executable.with_file_name("libwebpdemux.dll");
-        // Cargo can run debug test binaries in hashed build directories. The
-        // build script also puts the matching runtime in this compile-time
-        // source location. Released executables only load the installed copy.
-        #[cfg(debug_assertions)]
-        let candidates = [
-            installed,
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("runtime")
-                .join("webp")
-                .join("libwebpdemux.dll"),
-        ];
-        #[cfg(not(debug_assertions))]
-        let candidates = [installed];
-        let mut error = String::new();
-        let library = candidates.iter().find_map(|path| {
-            // SAFETY: only fixed names at absolute trusted runtime locations
-            // are loaded. Dependency lookup is limited to that directory and
-            // the system directory.
-            match unsafe {
-                Library::load_with_flags(
-                    path,
-                    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32,
-                )
-            } {
-                Ok(library) => Some(library),
-                Err(cause) => {
-                    error = format!(
-                        "{} (file exists: {}, {cause:?})",
-                        path.display(),
-                        path.is_file()
-                    );
-                    None
-                }
-            }
-        });
-        library
-            .ok_or_else(|| format!("WebP import requires the installed runtime at {error}"))?
-            .into()
-    };
+    unsafe extern "C" {
+        fn WebPAnimDecoderNewInternal(
+            data: *const Data,
+            options: *const c_void,
+            version: i32,
+        ) -> *mut c_void;
+        fn WebPAnimDecoderGetInfo(decoder: *const c_void, info: *mut Info) -> i32;
+        fn WebPAnimDecoderGetNext(
+            decoder: *mut c_void,
+            frame: *mut *mut u8,
+            timestamp: *mut i32,
+        ) -> i32;
+        fn WebPAnimDecoderDelete(decoder: *mut c_void);
+    }
+
     unsafe {
-        let new: libloading::Symbol<
-            unsafe extern "C" fn(
-                *const Data,
-                *const std::ffi::c_void,
-                i32,
-            ) -> *mut std::ffi::c_void,
-        > = lib
-            .get(b"WebPAnimDecoderNewInternal")
-            .map_err(|e| e.to_string())?;
-        let info: libloading::Symbol<
-            unsafe extern "C" fn(*const std::ffi::c_void, *mut Info) -> i32,
-        > = lib
-            .get(b"WebPAnimDecoderGetInfo")
-            .map_err(|e| e.to_string())?;
-        let next: libloading::Symbol<
-            unsafe extern "C" fn(*mut std::ffi::c_void, *mut *mut u8, *mut i32) -> i32,
-        > = lib
-            .get(b"WebPAnimDecoderGetNext")
-            .map_err(|e| e.to_string())?;
-        let delete: libloading::Symbol<unsafe extern "C" fn(*mut std::ffi::c_void)> = lib
-            .get(b"WebPAnimDecoderDelete")
-            .map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        let (new, info, next, delete) = (
+            WebPAnimDecoderNewInternal as New,
+            WebPAnimDecoderGetInfo as ReadInfo,
+            WebPAnimDecoderGetNext as Next,
+            WebPAnimDecoderDelete as Delete,
+        );
+        #[cfg(not(windows))]
+        let (new, info, next, delete) = (
+            *lib.get::<New>(b"WebPAnimDecoderNewInternal")
+                .map_err(|e| e.to_string())?,
+            *lib.get::<ReadInfo>(b"WebPAnimDecoderGetInfo")
+                .map_err(|e| e.to_string())?,
+            *lib.get::<Next>(b"WebPAnimDecoderGetNext")
+                .map_err(|e| e.to_string())?,
+            *lib.get::<Delete>(b"WebPAnimDecoderDelete")
+                .map_err(|e| e.to_string())?,
+        );
         let bytes = mcp_io::read(path).map_err(|e| e.to_string())?;
         let dec = new(
             &Data {

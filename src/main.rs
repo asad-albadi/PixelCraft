@@ -8121,7 +8121,7 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
-        let webp = root.join("webp-runtime-check.webp");
+        let webp = root.join("webp-animation-check.webp");
         std::fs::write(
             &webp,
             include_bytes!("../tests/fixtures/workflows/animation.webp"),
@@ -8134,7 +8134,7 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
             || imported.composite(1)[5] != [0, 255, 0, 255]
             || imported.composite(1)[0] != CLEAR
         {
-            return Err("Installed WebP animation import mismatch".into());
+            return Err("WebP animation import mismatch".into());
         }
     }
     let ctx = egui::Context::default();

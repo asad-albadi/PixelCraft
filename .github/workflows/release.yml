@@ -212,7 +212,7 @@ jobs:
           key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
       - name: Build embedded Windows Lua
         run: ./packaging/build-windows-lua.ps1
-      - name: Build Windows WebP runtime
+      - name: Build static Windows WebP
         run: ./packaging/build-windows-webp.ps1
       - name: Test and build Windows release
         env:
@@ -269,12 +269,24 @@ jobs:
           $version = $version -replace '[^A-Za-z0-9._-]', '-'
           $output = "PixelCraft-$version-x86_64-Setup"
           "OUTPUT=$output.exe" >> $env:GITHUB_ENV
+          "PORTABLE=PixelCraft-$version-x86_64-Portable.exe" >> $env:GITHUB_ENV
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is missing from the Windows runner' }
           & $compiler "/DAppVersion=$appVersion" "/DOutputName=$output" packaging/windows.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
       - name: Verify installed app, uninstall and checksum
         run: ./checks/windows-installer.ps1 -Installer "dist/$env:OUTPUT"
+      - name: Package and smoke-test the portable executable
+        run: |
+          $portable = "dist/$env:PORTABLE"
+          Copy-Item -LiteralPath 'target/release/pixelcraft.exe' -Destination $portable
+          ./checks/windows-portable.ps1 -App $portable
+          $hash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:PORTABLE" | Set-Content "$portable.sha256" -Encoding ascii
+          $notices = @('LICENSE', 'assets/fonts/LICENSE', 'runtime/LUA-LICENSE.txt',
+              'runtime/webp/WEBP-COPYING.txt', 'runtime/webp/WEBP-PATENTS.txt', 'runtime/webp/WEBP-AUTHORS.txt')
+          $notices | ForEach-Object { "---- $_"; Get-Content -LiteralPath $_; "" } |
+              Set-Content "$portable-LICENSES.txt" -Encoding utf8
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
