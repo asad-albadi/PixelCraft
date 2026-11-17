@@ -299,6 +299,96 @@ fn ramps_append_without_recoloring_indexed_frames() {
     assert_eq!(d.layers[0], before);
 }
 #[test]
+fn replacing_palette_span_remaps_indexed_pixels_and_keeps_duplicate_outside_slots() {
+    let dark = [20, 40, 60, 255];
+    let duplicate = [150, 60, 20, 255];
+    let light = [220, 240, 200, 255];
+    let mut d = Document::new(6, 1);
+    d.set_color_mode(ColorMode::Indexed);
+    d.import_palette(vec![
+        dark,
+        duplicate,
+        [12, 32, 44, 255],
+        light,
+        CLEAR,
+        duplicate,
+    ])
+    .unwrap();
+    d.add_frame(0, false);
+    d.frame_palettes = vec![d.palette.clone(), d.palette.clone()];
+    d.frame_palettes[1][0] = [0, 0, 0, 255];
+    d.frame_palettes[1][3] = [200, 200, 200, 255];
+    d.set_color_mode(ColorMode::Indexed);
+    for frame in 0..2 {
+        for (pixel, slot) in [0, 1, 2, 3, 4, 5].into_iter().enumerate() {
+            d.drawing_index = Some(slot);
+            let color = d.palette_for(frame)[slot];
+            d.set_pixel(0, frame, pixel, color);
+        }
+    }
+    d.drawing_index = Some(5);
+    d.palette_names = ["Dark", "Old one", "Old two", "Light", "Clear", "Keep"]
+        .map(str::to_owned)
+        .to_vec();
+    let remap = d.replace_palette_span(0, 3, 3).unwrap();
+    assert_eq!(remap, [0, 1, 1, 2, 3, 4]);
+    assert_eq!(d.transparent_index, 3);
+    assert_eq!(d.drawing_index, Some(4));
+    assert_eq!(
+        d.palette,
+        [dark, [120, 140, 130, 255], light, CLEAR, duplicate]
+    );
+    assert_eq!(d.palette_names, ["Dark", "", "Light", "Clear", "Keep"]);
+    assert_eq!(d.frame_palettes[1][1], [100, 100, 100, 255]);
+    for frame in 0..2 {
+        assert_eq!(
+            d.layers[0].cel_meta[frame]
+                .indices
+                .as_ref()
+                .unwrap()
+                .as_slice(),
+            &[0, 1, 1, 2, 3, 4]
+        );
+        let expected: Vec<_> = remap
+            .iter()
+            .map(|&slot| d.palette_for(frame)[slot])
+            .collect();
+        assert_eq!(d.layers[0].cels[frame].to_vec(), expected);
+    }
+    d.validate().unwrap();
+}
+
+#[test]
+fn palette_span_keeps_linked_storage_and_rejects_invalid_transparency_atomically() {
+    let mut d = Document::new(3, 1);
+    d.set_color_mode(ColorMode::Indexed);
+    let mid = [140, 100, 60, 255];
+    let end = [200, 180, 160, 255];
+    d.import_palette(vec![[40, 20, 10, 255], CLEAR, mid, end])
+        .unwrap();
+    d.set_pixel(0, 0, 1, mid);
+    d.layers[0].link_duplicates = true;
+    d.add_frame(0, true);
+    assert!(d.layers[0].cels[0].shares_storage(&d.layers[0].cels[1]));
+    let before = d.clone();
+    assert!(d.replace_palette_span(0, 3, 2).is_err());
+    assert_eq!(d, before);
+    assert_eq!(d.replace_palette_span(1, 3, 2).unwrap(), [0, 1, 2, 2]);
+    assert_eq!(d.layers[0].cels[0][1], end);
+    assert_eq!(d.layers[0].cels[1][1], end);
+    assert_eq!(d.layers[0].cels[0][0], CLEAR);
+    assert!(d.layers[0].cels[0].shares_storage(&d.layers[0].cels[1]));
+    assert_eq!(d.layers[0].cel_meta[0].indices.as_ref().unwrap()[1], 2);
+    assert_eq!(d.layers[0].cel_meta[1].indices.as_ref().unwrap()[1], 2);
+    let mut d = before;
+    assert_eq!(d.replace_palette_span(0, 3, 3).unwrap(), [0, 1, 2, 2]);
+    assert_eq!(d.palette, [[40, 20, 10, 255], CLEAR, end]);
+    assert_eq!(d.transparent_index, 1);
+    assert_eq!(d.layers[0].cels[0][0], CLEAR);
+    assert_eq!(d.layers[0].cels[0][1], end);
+}
+
+#[test]
 fn varying_frame_palettes_reject_ramps_atomically() {
     for palette in [vec![CLEAR], vec![[10, 20, 30, 255]; 256]] {
         let mut d = Document::new(1, 1);

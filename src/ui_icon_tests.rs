@@ -2838,6 +2838,44 @@ fn symmetry_handles_move_independently_and_reflect_pencil_strokes() {
 }
 
 #[test]
+fn palette_ramp_controls_replace_span_and_undo_as_one_edit() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app = PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-palette-span.png")));
+    app.replace(Document::new(4, 4), None);
+    let red = [220, 30, 40, 255];
+    let blue = [40, 80, 200, 255];
+    app.doc.import_palette(vec![red, blue, CLEAR]).unwrap();
+    app.fg = blue;
+    app.palette_index = 1;
+    app.action("workflow");
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let heading = text_position(&mut out, "Palette order & ramps");
+    discard_frame(&mut app, &ctx, size, 1., click(heading));
+    let mut out = frame(&mut app, &ctx, size, 1., vec![]);
+    let button = text_position(&mut out, "Replace selected span");
+    discard_frame(&mut app, &ctx, size, 1., click(button));
+    assert_eq!(
+        app.doc.palette,
+        [
+            red,
+            [175, 43, 80, 255],
+            [130, 55, 120, 255],
+            [85, 68, 160, 255],
+            blue,
+            CLEAR
+        ]
+    );
+    assert_eq!(app.palette_index, 4);
+    assert_eq!(app.fg, blue);
+    app.undo();
+    assert_eq!(app.doc.palette, [red, blue, CLEAR]);
+}
+
+#[test]
 fn gradient_controls_apply_patterns_to_preview_release_and_radial_strokes() {
     let ctx = egui::Context::default();
     let size = Vec2::new(1180., 840.);

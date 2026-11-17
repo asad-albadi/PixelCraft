@@ -767,10 +767,12 @@ impl PixelCraft {
             }
             ui.add(
                 egui::DragValue::new(&mut self.power.ramp_steps)
-                    .range(3..=256)
+                    .range(2..=256)
                     .prefix("Ramp steps (including endpoints) "),
             );
-            if ui.pc_button("Add ramp between swatches").clicked() {
+            if ui.add_enabled_ui(self.power.ramp_steps >= 3, |ui| {
+                ui.pc_button("Add ramp between swatches").clicked()
+            }).inner {
                 let mut next = self.doc.clone();
                 match next.palette_ramp(
                     self.power.ramp_from,
@@ -784,8 +786,51 @@ impl PixelCraft {
                     Err(e) => self.status = e,
                 }
             }
-            ui.small("Swatch numbers start at 0. Existing indexed artwork keeps its colors.");
+            if ui.pc_button("Replace selected span").clicked() {
+                self.replace_palette_ramp();
+            }
+            ui.small("Swatch numbers start at 0. Replacing the span maps indexed pixels to the corresponding shade in the ramp.");
         });
+    }
+
+    fn replace_palette_ramp(&mut self) {
+        let mut next = self.doc.clone();
+        let remap = match next.replace_palette_span(
+            self.power.ramp_from,
+            self.power.ramp_to,
+            self.power.ramp_steps,
+        ) {
+            Ok(remap) => remap,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let swatches = |doc: &Document| {
+            if doc.color_mode == ColorMode::Indexed {
+                doc.editing_palette(self.layer, self.frame)
+            } else {
+                doc.palette_for(self.frame).to_vec()
+            }
+        };
+        let before = swatches(&self.doc);
+        let after = swatches(&next);
+        self.remember_action("Replace palette span with ramp");
+        self.doc = next;
+        let update = |slot: usize, color: &mut Pixel| {
+            let mapped = remap[slot.min(before.len() - 1)];
+            if before.get(slot) == Some(color) {
+                *color = after[mapped];
+            }
+            mapped
+        };
+        self.palette_index = update(self.palette_index, &mut self.fg);
+        if let Some(slot) = self.secondary_palette_index {
+            self.secondary_palette_index = Some(update(slot, &mut self.bg));
+        }
+        self.power.ramp_from = remap[self.power.ramp_from];
+        self.power.ramp_to = remap[self.power.ramp_to];
+        self.status = "Replaced palette span with ramp".into();
     }
     pub(super) fn recent_file_entries(&self) -> Vec<(PathBuf, String)> {
         let files = &self.power.preferences.recent;

@@ -6,6 +6,7 @@ mod frame_order;
 mod layer_conversion;
 mod layer_operations;
 mod layer_order;
+mod palette_span;
 mod tile_operations;
 pub use cel_selection::CelSelection;
 pub use layer_conversion::LayerConversion;

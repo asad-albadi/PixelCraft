@@ -192,6 +192,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 7 complete. The Gradient toolbar offers linear and circular radial shapes with smooth, Bayer 2×2, 4×4, and 8×8 patterns or the document's installed matrix. Ordered dithering uses sprite coordinates and preserves the chosen indexed palette entries. During a drag the preview updates when the endpoint changes and uses the last release position. The Windows pointer test covers pattern selection, revision-free idle preview, release, undo, radial distance, installed thresholds, selection holes, and duplicate indexed swatches. Formatting, strict Clippy, and 567 Windows all-target tests passed. Elliptical radial geometry remains a follow-up parity check.
 
+- Item 50 complete. Workflow tools can replace an inclusive palette span with a ramp of a different length. Indexed cels remap old slots by position, keeping entries outside the span and preserving transparency, linked backing, and frame-specific endpoints. An interior transparent slot is reserved when the requested length has room for it and both endpoints. Legacy color-only storage favors a surviving swatch when an exact slot is ambiguous. The model and Windows UI tests verify duplicate slots, linked frames, palette names, refusal without mutation, and single-step undo. Formatting, strict Clippy, and 570 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -258,7 +260,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - [x] **48. Capture shortcuts from keypresses.** Show conflicts, protect reserved bindings, allow cancellation, and reset individual shortcuts.
 - [ ] **49. Expand per-reference controls.** Lock individual references, toggle sampling per image, set aspect-linked dimensions, and show a placeholder when a linked source is missing.
-- [ ] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
+- [x] **50. Replace a selected palette span with a ramp.** Update the chosen range in place with explicit indexed-slot remapping.
 - [ ] **51. Extend MCP editor operations.** Expose contiguous fill with tolerance, automatic outlines and shadows, background color on create, and group, parent, and blend editing.
 - [x] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
 - [x] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
