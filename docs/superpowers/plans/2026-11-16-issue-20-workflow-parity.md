@@ -174,6 +174,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 metadata object history checkpoint. Retained tag, slice, tileset, tile, and tile image handles resolve through Lua undo and redo. The regression covers duplicate tag names, deletion, identity on restoration, reindexed tiles, and read and write access through a held image. Metadata object identity across native modeless updates and system clipboard verification remain open. A Windows clipboard isolation probe could not create a private window station with the current account token.
 
+- Item 55 complete. View can show or hide Preview separately from the Inspector. Preview stays docked if the Inspector is hidden and uses the existing sidebar width. Older preference files default to a visible Preview. The Windows UI test exercises both controls and reads saved visibility on restart. Formatting, strict Clippy, and 557 Windows all-target tests passed.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -245,7 +247,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **52. Combine marquee selections with masks.** Support adding and subtracting with modifier keys while preserving the existing selection.
 - [ ] **53. Paint with independent primary and secondary buttons.** Support direct secondary-color painting and palette assignment with the right mouse button.
 - [ ] **54. Allow typed file paths in the GUI.** Provide path entry alongside native file browsing.
-- [ ] **55. Hide Preview independently.** Persist Preview visibility independently of the Inspector.
+- [x] **55. Hide Preview independently.** Persist Preview visibility independently of the Inspector.
 
 ## Verification
 

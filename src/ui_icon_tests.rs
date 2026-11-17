@@ -1069,6 +1069,8 @@ fn panels_resize_in_both_directions_and_inspector_collapses() {
         taller.center_top() + Vec2::new(0., 110.),
     );
     assert!(layout_rect(&ctx, "timeline-bounds").height() < timeline.height() - 20.);
+    app.preview_settings.visible = false;
+    discard_frame(&mut app, &ctx, size, 1., vec![]);
     let old_canvas = layout_rect(&ctx, "canvas-bounds");
     let toggle = layout_rect(&ctx, "inspector-toggle");
     discard_frame(&mut app, &ctx, size, 1., click(toggle.center()));
@@ -2105,4 +2107,68 @@ fn cached_fast_playback_keeps_frame_order_across_repaint_jitter() {
             assert_eq!(app.frame, (redraw + 1) % 3, "redraw at {millis} ms");
         }
     }
+}
+
+#[test]
+fn preview_visibility_is_independent_and_survives_restart() {
+    let size = Vec2::new(1180., 840.);
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let directory = std::env::temp_dir().join(format!(
+        "pixelcraft-preview-visibility-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("preview.json");
+    std::fs::write(&path, br#"{"height":220,"zoom":3}"#).unwrap();
+    app.restore_preview_settings(path.clone());
+
+    let select = |app: &mut PixelCraft, label| {
+        let mut output = frame(app, &ctx, size, 1., vec![]);
+        let view = text_position(&mut output, "View");
+        discard_frame(app, &ctx, size, 1., click(view));
+        let mut output = frame(app, &ctx, size, 1., vec![]);
+        let item = text_position(&mut output, label);
+        discard_frame(app, &ctx, size, 1., click(item));
+        discard_frame(app, &ctx, size, 1., vec![]);
+    };
+    let preview_visible = |ctx: &egui::Context| {
+        ctx.data(|data| {
+            data.get_temp::<Rect>(egui::Id::new("pinned-preview-bounds"))
+                .is_some()
+        })
+    };
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    assert!(
+        preview_visible(&ctx),
+        "older preferences default to visible"
+    );
+    select(&mut app, "Hide Preview");
+    assert!(app.inspector_open);
+    assert!(!preview_visible(&ctx));
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["visible"], false);
+    assert_eq!(saved["height"], 220.0);
+    assert_eq!(saved["zoom"], 3);
+
+    let restarted = egui::Context::default();
+    let mut loaded = PixelCraft::with_context(&restarted, None);
+    loaded.restore_preview_settings(path);
+    discard_frame(&mut loaded, &restarted, size, 1., vec![]);
+    assert!(loaded.inspector_open);
+    assert!(!preview_visible(&restarted));
+
+    select(&mut app, "Hide inspector");
+    assert!(!app.inspector_open);
+    assert!(!preview_visible(&ctx));
+    let wide = layout_rect(&ctx, "canvas-bounds").width();
+    select(&mut app, "Show Preview");
+    assert!(!app.inspector_open);
+    assert!(preview_visible(&ctx));
+    assert!(layout_rect(&ctx, "canvas-bounds").width() < wide);
+    select(&mut app, "Show inspector");
+    assert!(app.inspector_open && preview_visible(&ctx));
+    std::fs::remove_dir_all(directory).unwrap();
 }

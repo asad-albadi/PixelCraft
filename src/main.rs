@@ -4233,6 +4233,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             self.inspector_open = !open;
                             ui.close();
                         }
+                        if ui
+                            .button(if self.preview_settings.visible {
+                                "Hide Preview"
+                            } else {
+                                "Show Preview"
+                            })
+                            .clicked()
+                        {
+                            self.toggle_preview_visibility();
+                            ui.close();
+                        }
                         ui.menu_button("Density", |ui| {
                             self.density_options(ui);
                         });
@@ -7184,17 +7195,32 @@ impl PixelCraft {
             });
         // All dimensions are logical points. The native pixels-per-point stays
         // under the window system's control; only available space drives reflow.
-        if self.inspector_open {
+        #[cfg(test)]
+        ctx.data_mut(|data| {
+            data.remove::<egui::Rect>(egui::Id::new("pinned-preview-bounds"));
+            data.remove::<egui::Rect>(egui::Id::new("inspector-bounds"));
+        });
+        if self.inspector_open || self.preview_settings.visible {
             let panel = egui::Panel::left("palette_panel")
                 .default_size(264.)
                 .size_range(180.0..=(ctx.content_rect().width() * 0.4).clamp(180., 420.))
                 .resizable(true)
-                .show(ui, |ui| self.inspector_contents(ui));
+                .show(ui, |ui| {
+                    if self.inspector_open {
+                        self.inspector_contents(ui);
+                    } else {
+                        self.inspector_toggle(ui);
+                        self.docked_preview(ui);
+                    }
+                });
             #[cfg(test)]
-            ctx.data_mut(|d| d.insert_temp(egui::Id::new("inspector-bounds"), panel.response.rect));
+            if self.inspector_open {
+                ctx.data_mut(|d| {
+                    d.insert_temp(egui::Id::new("inspector-bounds"), panel.response.rect)
+                });
+            }
             let _ = panel;
-        }
-        if !self.inspector_open {
+        } else {
             egui::Panel::left("inspector_restore")
                 .exact_size(32.)
                 .resizable(false)

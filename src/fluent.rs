@@ -237,6 +237,7 @@ pub(super) fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct PreviewSettings {
+    pub visible: bool,
     pub height: f32,
     // Zero is Fit; all other values are physical pixels per sprite pixel.
     pub zoom: u8,
@@ -244,6 +245,7 @@ pub(super) struct PreviewSettings {
 impl Default for PreviewSettings {
     fn default() -> Self {
         Self {
+            visible: true,
             height: 240.,
             zoom: 0,
         }
@@ -348,6 +350,11 @@ impl PixelCraft {
         }
     }
 
+    pub(super) fn toggle_preview_visibility(&mut self) {
+        self.preview_settings.visible = !self.preview_settings.visible;
+        self.save_preview_settings();
+    }
+
     pub(super) fn inspector_toggle(&mut self, ui: &mut egui::Ui) {
         let response = ui
             .small_button(if self.inspector_open { "‹" } else { "›" })
@@ -384,6 +391,19 @@ impl PixelCraft {
             });
         });
         ui.separator();
+        if self.preview_settings.visible {
+            self.docked_preview(ui);
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("inspector_scroll")
+            .show(ui, |ui| {
+                self.palette(ui);
+                ui.separator();
+                self.fluent_properties(ui);
+            });
+    }
+
+    pub(super) fn docked_preview(&mut self, ui: &mut egui::Ui) {
         // Keep the original bottom-left preview separate from scrolling controls.
         let max_height = (ui.available_height() - 36.).max(120.);
         let preview_height = self.preview_settings.height.clamp(120., max_height);
@@ -419,13 +439,6 @@ impl PixelCraft {
             );
         });
         let _ = preview;
-        egui::ScrollArea::vertical()
-            .id_salt("inspector_scroll")
-            .show(ui, |ui| {
-                self.palette(ui);
-                ui.separator();
-                self.fluent_properties(ui);
-            });
     }
 
     fn document_palette(&mut self, ui: &mut egui::Ui) {
