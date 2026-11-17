@@ -533,6 +533,7 @@ pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Val
 #[derive(serde::Deserialize)]
 pub struct ScriptWorkspace {
     pub active: Option<u32>,
+    pub closed: Vec<u32>,
     pub sprites: Vec<ScriptSprite>,
     pub colors: [[u8; 4]; 2],
 }
@@ -572,6 +573,13 @@ pub fn run_workspace_with_host(
     host: ScriptHost,
 ) -> Result<ScriptWorkspace, String> {
     options["editorWorkspace"] = serde_json::Value::Bool(true);
+    let mut existing = std::collections::HashSet::from([1]);
+    if let Some(tabs) = options["editorTabs"].as_array() {
+        existing.extend(
+            tabs.iter()
+                .filter_map(|id| id.as_u64().and_then(|id| u32::try_from(id).ok())),
+        );
+    }
     let json = crate::lua::execute_with_host(
         doc,
         source,
@@ -587,7 +595,9 @@ pub fn run_workspace_with_host(
     let mut ids = std::collections::HashSet::new();
     let mut pixels = 0usize;
     for sprite in &workspace.sprites {
-        if sprite.id == 0 || !ids.insert(sprite.id) || (sprite.id != 1 && sprite.baseline.is_none())
+        if sprite.id == 0
+            || !ids.insert(sprite.id)
+            || (!existing.contains(&sprite.id) && sprite.baseline.is_none())
         {
             return Err("Invalid sprite identity in extension result".into());
         }
@@ -597,9 +607,14 @@ pub fn run_workspace_with_host(
             snapshot.validate()?;
         }
     }
+    let closed: std::collections::HashSet<_> = workspace.closed.iter().copied().collect();
     if pixels > crate::lua::MAX_SCRIPT_PIXELS
-        || workspace.active.is_some_and(|id| !ids.contains(&id))
-        || (workspace.active.is_none() && !workspace.sprites.is_empty())
+        || closed.len() != workspace.closed.len()
+        || !closed.is_subset(&existing)
+        || workspace
+            .active
+            .is_some_and(|id| !ids.contains(&id) || closed.contains(&id))
+        || (workspace.active.is_none() && !ids.is_subset(&closed))
     {
         return Err("Invalid extension workspace result".into());
     }
@@ -634,6 +649,14 @@ pub fn run_source_with_host(
     decode_script_document(&json)
 }
 
+/// Keep editor and file-backed script documents under the same pixel limit.
+pub fn script_document_value(document: &Document) -> Result<serde_json::Value, String> {
+    if document.logical_pixels() > crate::lua::MAX_SCRIPT_PIXELS {
+        return Err("Native scripts are limited to one million pixels per invocation".into());
+    }
+    serde_json::to_value(document).map_err(|e| e.to_string())
+}
+
 /// Filesystem bridge used only by explicitly executed scripts. Relative filenames
 /// follow the script folder; it never searches Aseprite's installation or settings.
 pub fn script_file_request(
@@ -645,12 +668,7 @@ pub fn script_file_request(
     match request["op"].as_str().unwrap_or("") {
         "open" => {
             let document = formats::load(&path)?;
-            if document.logical_pixels() > crate::lua::MAX_SCRIPT_PIXELS {
-                return Err(
-                    "Native scripts are limited to one million pixels per invocation".into(),
-                );
-            }
-            Ok(json!({"document":document,"path":path}))
+            Ok(json!({"document":script_document_value(&document)?,"path":path}))
         }
         "readScript" => {
             let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;

@@ -503,6 +503,8 @@ struct PixelCraft {
     script_ui: script_ui::ScriptUi,
     script_preview_doc: Option<Document>,
     script_origin: Option<Document>,
+    script_tab_closes: Vec<String>,
+    script_close_destination: Option<String>,
     script_job: Option<std::sync::mpsc::Receiver<Result<extensions::ScriptWorkspace, String>>>,
     shot: Option<PathBuf>,
     shot_frames: u32,
@@ -687,6 +689,8 @@ impl PixelCraft {
             script_ui: script_ui::ScriptUi::default(),
             script_preview_doc: None,
             script_origin: None,
+            script_tab_closes: Vec::new(),
+            script_close_destination: None,
             shot,
             shot_frames: 0,
             shot_requested: false,
@@ -2055,6 +2059,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.stop_playback(false);
     }
     fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
+        if self.script_job.is_some() {
+            self.status = "Wait for the current script before opening another tab".into();
+            return;
+        }
         self.cancel_gesture();
         let tab = SpriteTab {
             doc: self.doc.clone(),
@@ -2136,6 +2144,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.status = "Switched sprite".into();
     }
     fn request(&mut self, p: Pending) {
+        if self.script_job.is_some() && matches!(p, Pending::CloseTab) {
+            self.status = "Wait for the current script before closing a tab".into();
+            return;
+        }
         if self.save_job.is_some() && matches!(p, Pending::CloseTab) {
             self.status = "Wait for the current save before closing a tab".into();
             return;
@@ -2833,7 +2845,47 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
+    fn script_selection(selection: Option<(i32, i32, i32, i32)>) -> Option<serde_json::Value> {
+        selection.map(|(x0, y0, x1, y1)| {
+            serde_json::json!({
+                "x": x0.min(x1), "y": y0.min(y1),
+                "width": (x1 - x0).abs() + 1, "height": (y1 - y0).abs() + 1,
+            })
+        })
+    }
+
     fn start_script(&mut self, script: PathBuf, command: Option<String>) -> Result<(), String> {
+        if self.script_job.is_some() || self.pending.is_some() || !self.script_tab_closes.is_empty()
+        {
+            return Err("Finish the current script or tab close first".into());
+        }
+        let tab_ids: Vec<_> = (0..self.tabs.len())
+            .map(|index| {
+                if index == self.active_tab {
+                    1
+                } else {
+                    index + 2
+                }
+            })
+            .collect();
+        // Document clones share cel pixel storage. Encode a background document only
+        // when Lua accesses its handle, so untouched tabs use none of the Lua budget.
+        let background_tabs: Vec<_> = self
+            .tabs
+            .iter()
+            .map(|tab| {
+                tab.as_ref().map(|tab| {
+                    let active = (tab.layer, tab.frame);
+                    let range = CelRange::between(tab.timeline_anchor.unwrap_or(active), active);
+                    let options = serde_json::json!({
+                        "path": tab.path, "frame": tab.frame + 1, "layer": tab.layer + 1,
+                        "selection": Self::script_selection(tab.selection), "zoom": tab.zoom,
+                        "timelineRange": range,
+                    });
+                    (tab.doc.clone(), options)
+                })
+            })
+            .collect();
         let (tx, rx) = std::sync::mpsc::channel();
         let doc = self.doc.clone();
         let (frame, layer) = (self.frame, self.layer);
@@ -2847,8 +2899,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(serde_json::json!({}));
-        let selection=self.selection.map(|(x0,y0,x1,y1)|serde_json::json!({"x":x0.min(x1),"y":y0.min(y1),"width":(x1-x0).abs()+1,"height":(y1-y0).abs()+1}));
-        let options = serde_json::json!({"selection":selection,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let selection = Self::script_selection(self.selection);
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -2880,6 +2932,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     | "readScript"
                             ) {
                                 return extensions::script_file_request(&base, &request);
+                            }
+                            if op == "editorDocument" {
+                                let index = request["sprite"]
+                                    .as_u64()
+                                    .and_then(|id| id.checked_sub(2))
+                                    .and_then(|index| usize::try_from(index).ok());
+                                let (doc, options) = index
+                                    .and_then(|index| background_tabs.get(index))
+                                    .and_then(Option::as_ref)
+                                    .ok_or("Unknown editor tab")?;
+                                let mut response = options.clone();
+                                response["document"] = extensions::script_document_value(doc)?;
+                                return Ok(response);
                             }
                             if op == "preferences" {
                                 preferences["preferences"] = request["preferences"].clone();
@@ -2993,7 +3058,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     ) -> Result<(), String> {
         let initial_tab = self.active_tab;
         let mut active_tab = None;
-        let initial_closed = workspace.sprites.iter().all(|sprite| sprite.id != 1);
+        let existing_tabs = self.tabs.len();
+        let existing_index = |id: u32| {
+            if id == 1 {
+                Some(initial_tab)
+            } else {
+                let index = id.checked_sub(2)? as usize;
+                (index < existing_tabs && index != initial_tab).then_some(index)
+            }
+        };
         for sprite in workspace.sprites {
             let path = sprite
                 .filename
@@ -3005,15 +3078,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         .any(|item| item.eq_ignore_ascii_case(ext))
                 })
                 .map(|_| sprite.filename.clone());
-            if sprite.id == 1 {
-                self.switch_tab(initial_tab);
+            if let Some(index) = existing_index(sprite.id) {
+                self.switch_tab(index);
             } else {
                 let baseline = sprite.baseline.ok_or("Missing opened sprite baseline")?;
                 self.open_document(baseline, path.clone());
             }
             let mut document = sprite.document;
             document.editor_id = self.doc.editor_id;
-            if self.doc != document {
+            let changed = self.doc != document;
+            if changed {
                 self.remember_action("Run extension");
                 self.doc = document;
             }
@@ -3023,11 +3097,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.saved = saved;
                 }
             }
-            self.frame = sprite.frame.saturating_sub(1);
-            self.layer = sprite.layer.saturating_sub(1);
-            self.clamp();
+            let frame = sprite.frame.saturating_sub(1);
+            let layer = sprite.layer.saturating_sub(1);
             let selection = sprite.selection;
-            self.selection = (selection.width > 0 && selection.height > 0).then(|| {
+            let selection = (selection.width > 0 && selection.height > 0).then(|| {
                 (
                     selection.x,
                     selection.y,
@@ -3035,19 +3108,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     selection.y.saturating_add(selection.height - 1),
                 )
             });
+            if changed || (frame, layer) != (self.frame, self.layer) || selection != self.selection
+            {
+                self.frame = frame;
+                self.layer = layer;
+                self.clamp();
+                self.selection = selection;
+            }
             if Some(sprite.id) == workspace.active {
                 active_tab = Some(self.active_tab);
-            }
-        }
-        if initial_closed {
-            self.switch_tab(initial_tab);
-            let count = self.tabs.len();
-            self.request(Pending::CloseTab);
-            if self.pending.is_some() {
-                return Ok(());
-            }
-            if self.tabs.len() < count {
-                active_tab = active_tab.map(|index| index - usize::from(index > initial_tab));
             }
         }
         if let Some(index) = active_tab {
@@ -3056,7 +3125,54 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         [self.fg, self.bg] = workspace.colors;
         self.set_active_color(self.fg);
         self.status = "Applied extension changes".into();
+        if !workspace.closed.is_empty() {
+            self.script_close_destination = active_tab.map(|_| self.doc.editor_id.to_string());
+            self.script_tab_closes = workspace
+                .closed
+                .into_iter()
+                .rev()
+                .filter_map(existing_index)
+                .map(|index| {
+                    self.tabs[index]
+                        .as_ref()
+                        .map_or(&self.doc, |tab| &tab.doc)
+                        .editor_id
+                        .to_string()
+                })
+                .collect();
+            self.continue_script_tab_closes();
+        }
         Ok(())
+    }
+
+    fn continue_script_tab_closes(&mut self) {
+        if self.save_job.is_some() || self.pending.is_some() {
+            return;
+        }
+        while let Some(id) = self.script_tab_closes.pop() {
+            if let Some(index) = self.script_tab_index(&id) {
+                self.switch_tab(index);
+                self.request(Pending::CloseTab);
+                if self.pending.is_some() {
+                    return;
+                }
+            }
+        }
+        if let Some(id) = self.script_close_destination.take()
+            && let Some(index) = self.script_tab_index(&id)
+        {
+            self.switch_tab(index);
+        }
+    }
+
+    fn script_tab_index(&self, id: &str) -> Option<usize> {
+        self.tabs.iter().position(|tab| {
+            tab.as_ref()
+                .map_or(&self.doc, |tab| &tab.doc)
+                .editor_id
+                .to_string()
+                == id
+        })
     }
     #[cfg(test)]
     fn action_tooltip(&self, action: &str, label: &str) -> String {
@@ -5798,6 +5914,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             return;
         }
+        self.continue_script_tab_closes();
         if self.pending.is_some() {
             if fluent::modal_dialog(ctx, "Save your changes?", |ui| {
                 ui_icons::feedback(ui, "warning", "Save the current sprite before continuing.");
@@ -7499,7 +7616,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut a = PixelCraft::with_context(&ctx, None);
         a.replace(Document::new(3, 1), None);
-        let original_id = a.doc.editor_id;
+        let original_id = a.doc.editor_id.to_string();
         let dir = std::env::temp_dir().join(format!("pixelcraft-lua-tabs-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let source = dir.join("second.pixel");
@@ -7535,7 +7652,10 @@ mod tests {
         assert!(a.dirty());
         assert_eq!(a.selection, Some((1, 0, 1, 1)));
         assert_eq!(a.tabs[0].as_ref().unwrap().selection, Some((1, 0, 2, 0)));
-        assert_eq!(a.tabs[0].as_ref().unwrap().doc.editor_id, original_id);
+        assert_eq!(
+            a.tabs[0].as_ref().unwrap().doc.editor_id.to_string(),
+            original_id
+        );
         assert_eq!(
             a.tabs[0].as_ref().unwrap().doc.composite(0)[2],
             [17, 0, 34, 255]
@@ -7556,6 +7676,44 @@ mod tests {
         assert_eq!(a.doc, prior);
         assert!(a.status.contains("test rollback"));
 
+        std::fs::write(
+            &script,
+            r#"
+ local tabs=app.sprites
+ assert(#tabs==2 and tabs[2]==app.activeSprite)
+ local other=tabs[1]
+ assert(other.width==3 and other.selection:contains(2,0))
+ other.cels[1].image:drawPixel(0,0,Color('#449922'))
+ assert(app.activeSprite==tabs[2])
+ app.activeSprite=other
+ assert(app.activeSprite==other)
+ "#,
+        )
+        .unwrap();
+        a.start_script(script.clone(), None).unwrap();
+        complete(&mut a);
+        assert_eq!(a.active_tab, 0, "{}", a.status);
+        assert_eq!(a.doc.editor_id.to_string(), original_id);
+        assert_eq!(a.doc.composite(0)[0], [68, 153, 34, 255]);
+        assert_eq!(a.tabs[1].as_ref().unwrap().doc, prior);
+        let other_before_failure = a.doc.clone();
+        a.switch_tab(1);
+        std::fs::write(
+            &script,
+            r#"
+ app.sprites[1].cels[1].image:drawPixel(0,0,Color('#ffffff'))
+ app.activeSprite=app.sprites[1]
+ error('inactive tab rollback')
+ "#,
+        )
+        .unwrap();
+        a.start_script(script.clone(), None).unwrap();
+        complete(&mut a);
+        assert_eq!(a.active_tab, 1);
+        assert_eq!(a.doc, prior);
+        assert_eq!(a.tabs[0].as_ref().unwrap().doc, other_before_failure);
+        assert!(a.status.contains("inactive tab rollback"));
+
         a.saved = a.doc.clone();
         std::fs::write(
             &script,
@@ -7567,11 +7725,56 @@ mod tests {
  "#,
         )
         .unwrap();
-        a.start_script(script, None).unwrap();
+        a.start_script(script.clone(), None).unwrap();
         complete(&mut a);
         assert_eq!(a.tabs.len(), 1, "{}", a.status);
-        assert_eq!(a.doc.editor_id, original_id);
+        assert_eq!(a.doc.editor_id.to_string(), original_id);
         assert_eq!(a.doc.composite(0)[2], [17, 0, 34, 255]);
+        a.saved = a.doc.clone();
+        a.open_document(Document::new(1024, 1024), None);
+        a.open_document(Document::new(3, 1), None);
+        a.doc.layers[0].cels[0].set(1, [4, 57, 6, 255]);
+        a.open_document(Document::new(3, 1), None);
+        std::fs::write(
+            &script,
+            r#"
+ local a,large,b,current=table.unpack(app.sprites)
+ assert(app.activeSprite==current and #app.sprites==4)
+ local ok,errorMessage=pcall(function() return large.width end)
+ assert(not ok and errorMessage:find('one million pixels',1,true))
+ assert(app.activeSprite==current)
+ large:close()
+ b:close()
+ current.cels[1].image:drawPixel(1,0,Color('#119944'))
+ current:close()
+ app.activeSprite=a
+ "#,
+        )
+        .unwrap();
+        a.start_script(script.clone(), None).unwrap();
+        a.request(Pending::CloseTab);
+        assert_eq!(a.tabs.len(), 4, "editor tabs must stay stable during Lua");
+        complete(&mut a);
+        assert_eq!(a.tabs.len(), 3, "{}", a.status);
+        assert_eq!(a.doc.composite(0)[1], [4, 57, 6, 255]);
+        assert!(matches!(a.pending, Some(Pending::CloseTab)));
+
+        // Cancelling a close leaves that tab intact and advances to the next.
+        a.pending = None;
+        a.continue_script_tab_closes();
+        assert_eq!(a.doc.composite(0)[1], [17, 153, 68, 255]);
+        assert!(matches!(a.pending, Some(Pending::CloseTab)));
+        let pending = a.pending.take().unwrap();
+        a.doc = a.saved.clone();
+        a.perform(pending);
+        a.continue_script_tab_closes();
+        assert_eq!(a.tabs.len(), 2);
+        assert_eq!(a.active_tab, 0);
+        assert_eq!(a.doc, other_before_failure);
+        assert_eq!(
+            a.tabs[1].as_ref().unwrap().doc.composite(0)[1],
+            [4, 57, 6, 255]
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

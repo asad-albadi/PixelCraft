@@ -68,7 +68,15 @@ local activeSprite=sprite
 local initialSprite=sprite
 local workspace={sprite}
 local contexts={[sprite]={id=1}}
+local editorTabs=(_pw_options or {}).editorTabs
+local initialTabOptions=_pw_options or {}
+local closedSprites,closedResults={},{}
+local closedPixels=0
 local nextSpriteId=2
+local loadWorkspaceSprite
+contexts[sprite].zoom=initialTabOptions.zoom
+contexts[sprite].timelineRange=initialTabOptions.timelineRange
+contexts[sprite].editorTab=true
 local spriteMeta=getmetatable(sprite)
 local documentIndex=spriteMeta.__index
 spriteMeta.__index=function(handle,key)
@@ -97,12 +105,14 @@ end
 local function loadSpriteContext(handle)
  local context=assert(contexts[handle],'Sprite is closed or belongs to another workspace')
  if handle==sprite then return end
+ if not context.document then loadWorkspaceSprite(handle,context) end
  saveSpriteContext()
  sprite,doc,filename=handle,context.document,context.filename
  frameHandles,layerHandles=context.frames,context.layers
  activeFrame,activeLayer=context.frame,context.layer
  spriteSelection,spriteEvents=context.selection,context.events
  undo,redo=context.undo,context.redo
+ if not frameHandles then rebuildHandles()end
 end
 withSprite=function(handle,fn,...)
  assert(contexts[handle],'Sprite is closed or belongs to another workspace')
@@ -115,6 +125,52 @@ withSprite=function(handle,fn,...)
  if not result[1] then error(result[2],2) end
  return table.unpack(result,2,result.n)
 end
+local function closeWorkspaceSprite(handle)
+ return spriteMethods.close(handle)
+end
+rawset(sprite,'close',closeWorkspaceSprite)
+local function appendSpriteHandle(id,position)
+ local handle=setmetatable({},spriteMeta)
+ bindSpriteHandle(handle,handle)
+ rawset(handle,'close',closeWorkspaceSprite)
+ contexts[handle]={id=id}
+ table.insert(workspace,position or #workspace+1,handle)
+ return handle,contexts[handle]
+end
+if editorTabs then
+ workspace={}
+ for position,id in ipairs(editorTabs)do
+  nextSpriteId=math.max(nextSpriteId,id+1)
+  if id==1 then table.insert(workspace,sprite)
+  else
+   local _,context=appendSpriteHandle(id,position)
+   context.editorTab=true
+  end
+ end
+end
+local function workspaceArea(document)
+ return document.width*document.height*#document.layers*#document.durations
+end
+local function setWorkspaceDocument(handle,context,loaded)
+ local total=closedPixels
+ saveSpriteContext()
+ for _,entry in pairs(contexts)do
+  if entry.document then total=total+workspaceArea(entry.document)end
+ end
+ assert(total+workspaceArea(loaded.document)<=1000000,'Lua workspace exceeds the script pixel budget')
+ if not context.editorTab and (_pw_options or {}).editorWorkspace then
+  context.baseline=copy(loaded.document)
+ end
+ context.document=expandDocumentPixels(loaded.document)
+ context.filename=loaded.path or ''
+ context.frame,context.layer=loaded.frame or 1,loaded.layer or 1
+ context.zoom,context.timelineRange=loaded.zoom,loaded.timelineRange
+ context.selection=bindSpriteHandle(Selection(loaded.selection),handle)
+ context.events,context.undo,context.redo=events(),{},{}
+end
+loadWorkspaceSprite=function(handle,context)
+ setWorkspaceDocument(handle,context,host{op='editorDocument',sprite=context.id})
+end
 local function activateSprite(handle)
  loadSpriteContext(handle)
  if activeSprite~=handle then
@@ -122,18 +178,22 @@ local function activateSprite(handle)
   appEvents:_emit('sitechange')
  end
 end
+local function spriteResult(entry)
+ local bounds=entry.selection.bounds
+ return {
+  id=entry.id,document=entry.document,baseline=entry.baseline,filename=entry.filename,
+  saved=entry.saved,frame=entry.frame,layer=entry.layer,
+  selection={x=bounds.x,y=bounds.y,width=bounds.width,height=bounds.height},
+ }
+end
 if (_pw_options or {}).editorWorkspace then
  _pw_workspace_snapshot=function()
   saveSpriteContext()
-  local result={sprites={},colors=scriptColors,active=activeSprite and contexts[activeSprite].id}
+  local result={sprites={table.unpack(closedResults)},closed=closedSprites,colors=scriptColors,
+   active=activeSprite and contexts[activeSprite].id}
   for _,handle in ipairs(workspace)do
    local entry=contexts[handle]
-   local bounds=entry.selection.bounds
-   result.sprites[#result.sprites+1]={
-    id=entry.id,document=entry.document,baseline=entry.baseline,filename=entry.filename,
-    saved=entry.saved,frame=entry.frame,layer=entry.layer,
-    selection={x=bounds.x,y=bounds.y,width=bounds.width,height=bounds.height},
-   }
+   if entry.document then result.sprites[#result.sprites+1]=spriteResult(entry) end
   end
   return result
  end
@@ -280,8 +340,8 @@ rawset(app,'apiVersion',24)
 getmetatable(app).__index=function(t,k)
  if k=='activeSprite' then return activeSprite end
  if k=='sprites' then return {table.unpack(workspace)} end
- if not activeSprite and (k=='activeLayer' or k=='activeFrame' or k=='activeCel' or k=='activeImage') then return nil end
- if k=='editor' then return {sprite=sprite,frame=frameHandles[activeFrame],zoom=(_pw_options or {}).zoom or 1,scroll=Point(),mousePos=Point()} elseif k=='site' then return {sprite=sprite,layer=layerHandles[activeLayer],frame=frameHandles[activeFrame],cel=cel(activeLayer,activeFrame)} elseif k=='range' then local range=(_pw_options or {}).timelineRange
+ if not activeSprite and (k=='activeLayer' or k=='activeFrame' or k=='activeCel' or k=='activeImage' or k=='editor' or k=='site' or k=='range') then return nil end
+ if k=='editor' then return {sprite=sprite,frame=frameHandles[activeFrame],zoom=contexts[sprite].zoom or 1,scroll=Point(),mousePos=Point()} elseif k=='site' then return {sprite=sprite,layer=layerHandles[activeLayer],frame=frameHandles[activeFrame],cel=cel(activeLayer,activeFrame)} elseif k=='range' then local range=contexts[sprite].timelineRange
  local result={sprite=sprite,layers={},frames={},cels={},isEmpty=false}
  local firstLayer,lastLayer,firstFrame,lastFrame=activeLayer,activeLayer,activeFrame,activeFrame
  if range then
@@ -344,10 +404,18 @@ function spriteMethods:saveAs(path)
 end
 function spriteMethods:saveCopyAs(path)host{op='save',path=type(path)=='table' and path.filename or path,document=doc};return true end
 function spriteMethods:close()
- assert(contexts[self],'Sprite is closed')
+ local entry=assert(contexts[self],'Sprite is closed')
  host{op='close'}
  for index,handle in ipairs(workspace)do
   if handle==self then
+   if entry.editorTab and (_pw_options or {}).editorWorkspace then
+    saveSpriteContext()
+    closedSprites[#closedSprites+1]=entry.id
+    if entry.document then
+     closedResults[#closedResults+1]=spriteResult(entry)
+     closedPixels=closedPixels+workspaceArea(entry.document)
+    end
+   end
    contexts[self]=nil
    table.remove(workspace,index)
    if activeSprite==self then
@@ -364,22 +432,15 @@ app.command.SaveFileAs=function(p)assert(p and p.filename,'SaveFileAs requires f
 app.command.SaveFileCopyAs=function(p)sprite:saveCopyAs(p.filename)end
 rawset(app,'open',function(path)
  local loaded=host{op='open',path=path}
- local total=0
- local function area(document)
-  return document.width*document.height*#document.layers*#document.durations
- end
- saveSpriteContext()
- for _,context in pairs(contexts)do total=total+area(context.document)end
- assert(total+area(loaded.document)<=1000000,'Lua workspace exceeds the script pixel budget')
- local handle=setmetatable({},spriteMeta)
- bindSpriteHandle(handle,handle)
- local baseline=(_pw_options or {}).editorWorkspace and copy(loaded.document) or nil
- contexts[handle]={id=nextSpriteId,document=expandDocumentPixels(loaded.document),filename=loaded.path or path,
-  baseline=baseline,frame=1,layer=1,selection=bindSpriteHandle(Selection(),handle),events=events(),undo={},redo={}}
+ loaded.path=loaded.path or path
+ local handle,context=appendSpriteHandle(nextSpriteId)
  nextSpriteId=nextSpriteId+1
- workspace[#workspace+1]=handle
- loadSpriteContext(handle)
- rebuildHandles()
+ local ok,err=raw_pcall(setWorkspaceDocument,handle,context,loaded)
+ if not ok then
+  contexts[handle]=nil
+  table.remove(workspace)
+  error(err)
+ end
  activateSprite(handle)
  return handle
 end)
