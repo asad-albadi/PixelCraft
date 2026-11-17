@@ -237,6 +237,67 @@ assert(table.concat(transitions,',')=='Edited,Allowed')
 }
 
 #[test]
+fn file_authorization_gates_writes_and_each_referenced_input() {
+    use pixelcraft::extensions::script_file_request_with_authorization;
+    let dir = std::env::temp_dir().join(format!("pixelcraft-file-permit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("art.pixel");
+    let write = json!({"op":"save","path":"art.pixel","document":Document::new(1,1)});
+    let rejected = script_file_request_with_authorization(&dir, &write, |purpose, path| {
+        assert_eq!(purpose, "Write artwork");
+        assert_eq!(path, target);
+        Err("Denied by fixture".into())
+    });
+    assert_eq!(rejected.unwrap_err(), "Denied by fixture");
+    assert!(!target.exists());
+    script_file_request_with_authorization(&dir, &write, |_, path| {
+        assert_eq!(path, target);
+        Ok(())
+    })
+    .unwrap();
+    assert!(target.is_file());
+
+    let manifest = dir.join("sheet.json");
+    let image = dir.join("dependent.png");
+    std::fs::write(&manifest, r#"{"meta":{"image":"dependent.png"}}"#).unwrap();
+    let requested = std::cell::RefCell::new(Vec::new());
+    let rejected = script_file_request_with_authorization(
+        &dir,
+        &json!({"op":"open","path":"sheet.json"}),
+        |_, path| {
+            requested.borrow_mut().push(path.to_path_buf());
+            if path == manifest {
+                Ok(())
+            } else {
+                Err("Companion denied".into())
+            }
+        },
+    );
+    assert_eq!(rejected.unwrap_err(), "Companion denied");
+    assert_eq!(requested.into_inner(), [manifest, image]);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_file_bridge_rejects_devices_remote_paths_and_alternate_streams() {
+    use pixelcraft::extensions::script_file_request_with_authorization;
+    for path in [
+        r"\\another-computer\share\art.pixel",
+        r"\\.\PhysicalDrive0",
+        r"C:\temp\NUL.png",
+        r"C:\temp\project.pixel:stream",
+    ] {
+        let result = script_file_request_with_authorization(
+            std::path::Path::new(r"C:\temp"),
+            &json!({"op":"open","path":path}),
+            |_, _| panic!("Unexpected permission request for an invalid file path"),
+        );
+        assert!(result.is_err(), "{path}");
+    }
+}
+
+#[test]
 fn actual_file_bridge_saves_and_reopens_a_project() {
     use pixelcraft::{extensions::script_file_request, formats};
     let dir = std::env::temp_dir().join(format!("pixelcraft-script-files-{}", std::process::id()));

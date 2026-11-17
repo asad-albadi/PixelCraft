@@ -43,6 +43,23 @@ impl ScriptUi {
         self.modeless = false;
         self.canvases = canvas::Canvases::default();
     }
+
+    #[cfg(test)]
+    pub fn approve_fixture_file_request(&mut self) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|request| request.value["op"] == "filePermission")
+        {
+            let _ = self
+                .pending
+                .take()
+                .unwrap()
+                .reply
+                .send(json!({"allowed":true}));
+        }
+    }
+
     pub fn show(&mut self, ctx: &egui::Context) {
         if self.pending.is_none()
             && let Some(Ok(request)) = self.receiver.as_ref().map(|rx| rx.try_recv())
@@ -69,8 +86,27 @@ impl ScriptUi {
         let op = request.value["op"].as_str().unwrap_or("").to_string();
         let mut response = None;
         let mut dialog_bounds = Vec::new();
-        if matches!(op.as_str(), "clipboardRead" | "clipboardWrite") {
-            if crate::fluent::modal_dialog(ctx, "Extension clipboard access", |ui| {
+        if op == "filePermission" {
+            let mut decision = None;
+            let dismissed = crate::fluent::modal_dialog(ctx, "Extension file access", |ui| {
+                ui.label(request.value["purpose"].as_str().unwrap_or("Access a file"));
+                ui.monospace(request.value["path"].as_str().unwrap_or(""));
+                ui.small(request.value["script"].as_str().unwrap_or(""));
+                ui.horizontal(|ui| {
+                    if ui.pc_button("Deny").clicked() {
+                        decision = Some(false);
+                    }
+                    if ui.pc_button("Allow this request").clicked() {
+                        decision = Some(true);
+                    }
+                });
+                decision.is_some()
+            });
+            if dismissed || decision.is_some() {
+                response = Some(json!({"allowed":decision.unwrap_or(false)}));
+            }
+        } else if matches!(op.as_str(), "clipboardRead" | "clipboardWrite") {
+            let dismissed = crate::fluent::modal_dialog(ctx, "Extension clipboard access", |ui| {
                 ui.label("Allow this extension to read and write images and text on the system clipboard?");
                 ui.horizontal(|ui| {
                     if ui.pc_button("Allow for this run").clicked() {
@@ -81,7 +117,8 @@ impl ScriptUi {
                     }
                 });
                 self.use_system_clipboard.is_some()
-            }) {
+            });
+            if dismissed || self.use_system_clipboard.is_some() {
                 self.use_system_clipboard.get_or_insert(false);
                 self.clipboard_request = self.pending.take();
                 return;
@@ -459,6 +496,90 @@ fn draw_tabs<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closing_file_permission_denies_the_operation() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
+        let (reply, response) = mpsc::channel();
+        let mut ui = ScriptUi::default();
+        ui.connect(rx, false);
+        tx.send(Request {
+            value: json!({"op":"filePermission","purpose":"Write artwork","path":"test.pixel"}),
+            reply,
+        })
+        .unwrap();
+        ctx.run_ui(egui::RawInput::default(), |_| ui.show(&ctx))
+            .textures_delta
+            .clear();
+        assert!(response.try_recv().is_err());
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        ctx.run_ui(input, |_| ui.show(&ctx)).textures_delta.clear();
+        assert_eq!(response.try_recv().unwrap()["allowed"], false);
+    }
+
+    #[test]
+    fn clipboard_permission_button_releases_the_pending_request() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = mpsc::channel();
+        let (reply, _response) = mpsc::channel();
+        let mut ui = ScriptUi::default();
+        ui.connect(rx, true);
+        tx.send(Request {
+            value: json!({"op":"clipboardRead"}),
+            reply,
+        })
+        .unwrap();
+        let mut frame = |events| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000., 700.),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |_| ui.show(&ctx));
+            output.textures_delta.clear();
+            output.shapes
+        };
+        frame(vec![]);
+        let pos = frame(vec![])
+            .iter()
+            .find_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text() == "Allow for this run"
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![
+            egui::Event::PointerMoved(pos),
+            button(true),
+            button(false),
+        ]);
+        assert_eq!(ui.use_system_clipboard, Some(true));
+        assert!(ui.pending.is_none());
+        assert_eq!(ui.clipboard_request.unwrap().value["op"], "clipboardRead");
+    }
+
     #[test]
     fn clicking_native_dialog_tabs_changes_the_visible_controls() {
         let ctx = egui::Context::default();

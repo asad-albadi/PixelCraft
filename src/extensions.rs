@@ -842,21 +842,62 @@ pub fn script_file_request(
     base: &Path,
     request: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    script_file_request_with_authorization(base, request, |_, _| Ok(()))
+}
+
+/// Dispatch a file operation after authorizing each input or output path.
+/// Image references in imported documents go through the same gate.
+pub fn script_file_request_with_authorization(
+    base: &Path,
+    request: &serde_json::Value,
+    authorize: impl Fn(&str, &Path) -> Result<(), String>,
+) -> Result<serde_json::Value, String> {
     use serde_json::json;
-    let path = base.join(request["path"].as_str().unwrap_or(""));
-    match request["op"].as_str().unwrap_or("") {
+    let op = request["op"].as_str().unwrap_or("");
+    let purpose = match op {
+        "open" => "Open artwork",
+        "readScript" => "Read and run a Lua module",
+        "save" => "Write artwork",
+        "isFile" | "isDirectory" => "Check whether a path exists",
+        "listFiles" => "List directory contents",
+        "makeDirectory" => "Create a directory",
+        "close" => return Ok(json!({})),
+        _ => return Err("Unknown file operation".into()),
+    };
+    let input = request["path"]
+        .as_str()
+        .ok_or("Expected a filesystem path")?;
+    let path = script_absolute_path(&base.join(input))?;
+    authorize(purpose, &path)?;
+    match op {
         "open" => {
-            let document = formats::load(&path)?;
+            require_script_file(&path, false)?;
+            let approved = std::cell::RefCell::new(std::collections::HashSet::from([path.clone()]));
+            let document = formats::load_with_path_check(&path, &|requested| {
+                let requested = script_absolute_path(requested)?;
+                if !approved.borrow().contains(&requested) {
+                    authorize("Read a resource referenced by the artwork", &requested)?;
+                    require_script_file(&requested, false)?;
+                    approved.borrow_mut().insert(requested);
+                }
+                Ok(())
+            })?;
             Ok(json!({"document":script_document_value(&document)?,"path":path}))
         }
         "readScript" => {
-            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            if bytes.len() > 2 * 1024 * 1024 {
+            require_script_file(&path, false)?;
+            const MAX_MODULE: usize = 2 * 1024 * 1024;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)
+                .and_then(|file| file.take((MAX_MODULE + 1) as u64).read_to_end(&mut bytes))
+                .map_err(|e| e.to_string())?;
+            if bytes.len() > MAX_MODULE {
                 return Err("Lua module exceeds 2 MiB".into());
             }
             Ok(json!({"source":String::from_utf8(bytes).map_err(|e|e.to_string())?}))
         }
         "save" => {
+            require_script_file(&path, true)?;
             let d: Document =
                 serde_json::from_value(request["document"].clone()).map_err(|e| e.to_string())?;
             d.validate()?;
@@ -882,7 +923,72 @@ pub fn script_file_request(
             std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
             Ok(json!({"value":true}))
         }
-        "close" => Ok(json!({})),
-        _ => Err("Unknown file operation".into()),
+        _ => unreachable!("File operation validated before authorization"),
     }
+}
+
+fn require_script_file(path: &Path, allow_missing: bool) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err("Lua artwork and module access requires a regular file".into()),
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn script_absolute_path(path: &Path) -> Result<PathBuf, String> {
+    if path.as_os_str().to_string_lossy().contains('\0') {
+        return Err("Invalid filesystem path".into());
+    }
+    let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
+    let mut path = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::ParentDir if path.parent().is_some() => {
+                path.pop();
+            }
+            Component::ParentDir | Component::CurDir => {}
+            #[cfg(windows)]
+            Component::Prefix(prefix)
+                if !matches!(
+                    prefix.kind(),
+                    std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+                ) =>
+            {
+                return Err("Lua file access requires a local drive path".into());
+            }
+            #[cfg(windows)]
+            Component::Normal(name) if !ordinary_windows_file_component(name) => {
+                return Err("Lua file access requires an ordinary file or directory path".into());
+            }
+            component => path.push(component.as_os_str()),
+        }
+    }
+    Ok(path)
+}
+
+#[cfg(windows)]
+fn ordinary_windows_file_component(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    if name.contains(':') || name.ends_with([' ', '.']) {
+        return false;
+    }
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
+    !matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) && !stem
+        .strip_prefix("COM")
+        .or_else(|| stem.strip_prefix("LPT"))
+        .is_some_and(|number| {
+            matches!(
+                number,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
 }

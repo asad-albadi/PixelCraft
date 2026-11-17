@@ -1324,6 +1324,51 @@ end
 }
 
 #[test]
+fn editor_file_permission_binds_one_write_to_the_user_choice() {
+    let ctx = egui::Context::default();
+    let mut app = PixelCraft::with_context(&ctx, None);
+    let size = Vec2::new(1180., 840.);
+    let root = std::env::temp_dir().join(format!("pixelcraft-file-prompt-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let script = root.join("writer.lua");
+    let file = root.join("new.pixel");
+    std::fs::write(&script, "app.activeSprite:saveAs('new.pixel')").unwrap();
+    for (label, allowed) in [("Deny", false), ("Allow this request", true)] {
+        app.start_script(script.clone(), None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+            output.textures_delta.clear();
+            if output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == label)
+            }) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "File permission never appeared");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+        let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+        let button = text_position(&mut output, label);
+        assert!(!file.exists());
+        discard_frame(&mut app, &ctx, size, 1., click(button));
+        while app.script_job.is_some() && Instant::now() < deadline {
+            discard_frame(&mut app, &ctx, size, 1., vec![]);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            app.script_job.is_none(),
+            "File permission did not finish after {label}"
+        );
+        assert_eq!(file.is_file(), allowed, "{}", app.status);
+        if !allowed {
+            assert!(app.status.contains("file access denied"));
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_close_dialog_cancel_preserves_edits_and_discard_checks_remaining_tabs() {
     let ctx = egui::Context::default();
     let mut app = PixelCraft::with_context(&ctx, None);

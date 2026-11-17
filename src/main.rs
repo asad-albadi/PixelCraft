@@ -4075,7 +4075,32 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     | "close"
                                     | "readScript"
                             ) {
-                                return extensions::script_file_request(&base, &request);
+                                return extensions::script_file_request_with_authorization(
+                                    &base,
+                                    &request,
+                                    |purpose, path| {
+                                        let (reply, decision) = std::sync::mpsc::channel();
+                                        ui_tx
+                                            .send(script_ui::Request {
+                                                value: serde_json::json!({
+                                                    "op":"filePermission",
+                                                    "purpose":purpose,
+                                                    "path":format!("{path:?}"),
+                                                    "script":format!("{script:?}"),
+                                                }),
+                                                reply,
+                                            })
+                                            .map_err(|_| "Editor closed".to_string())?;
+                                        if decision
+                                            .recv()
+                                            .is_ok_and(|response| response["allowed"] == true)
+                                        {
+                                            Ok(())
+                                        } else {
+                                            Err("Extension file access denied".into())
+                                        }
+                                    },
+                                );
                             }
                             if op == "clipboardApply" {
                                 return Self::apply_script_paste(&request);
@@ -9806,7 +9831,10 @@ mod tests {
         let mut showed_new_tab = false;
         let mut closed_new_tab = false;
         while app.script_job.is_some() && Instant::now() < deadline {
-            let mut output = ctx.run_ui(egui::RawInput::default(), |_| app.show_script_ui(&ctx));
+            let mut output = ctx.run_ui(egui::RawInput::default(), |_| {
+                app.show_script_ui(&ctx);
+                app.script_ui.approve_fixture_file_request();
+            });
             output.textures_delta.clear();
             if app.active_tab == 0 && app.doc.composite(0)[2] == [255, 153, 102, 255] {
                 showed_background = true;
@@ -10110,6 +10138,7 @@ mod tests {
             while app.script_job.is_some() && Instant::now() < deadline {
                 let mut output =
                     ctx.run_ui(egui::RawInput::default(), |_| app.script_ui.show(&ctx));
+                app.script_ui.approve_fixture_file_request();
                 output.textures_delta.clear();
                 app.poll_script();
                 std::thread::yield_now();

@@ -44,6 +44,8 @@ Installed scripts can register commands, nested groups, and separators in their 
 
 Sprite listeners receive `filenamechange`, `layername`, `layeropacity`, `layervisibility`, and `layerblendmode`. Modeless Lua receives native document, site, filename, and drawing-color changes. The sprite `change` event reports `fromUndo` for undo and redo in both the editor and Lua. Use `beforesitechange` to read the previous site from the script. Calls through `app.command` emit `beforecommand` and `aftercommand` with the command name and parameters. A `beforecommand` listener can cancel the call with `ev.stopPropagation()`. Remove listeners by their handle or their callback.
 
+The editor requests permission before a Lua file operation. The dialog shows the script, operation, and absolute path. **Allow this request** applies to that operation alone. Imported artwork can ask separately for referenced images and tilesets. A denial or closed prompt returns a Lua error before the requested access takes place. Artwork and module operations require a regular file, or a new filename for an approved save. Headless Lua has no interactive file grants.
+
 Custom canvas/graphics-context widgets, exact original dialog layouts/tab groups, radio exclusivity, dialog bounds positioning, full editor mouse/paint events, hot-reloading and extension command menu placement are not implemented. Concurrent editor/script edits use document snapshots rather than independent per-operation history. Prefer finishing/stopping an extension before unrelated structural editing.
 
 ## Contributions
