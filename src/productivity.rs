@@ -12,6 +12,7 @@ pub enum SelectionOp {
     Replace,
     Add,
     Subtract,
+    Intersect,
 }
 pub fn combine_selection(current: &mut Vec<bool>, hits: &[bool], op: SelectionOp) {
     current.resize(hits.len(), false);
@@ -20,6 +21,7 @@ pub fn combine_selection(current: &mut Vec<bool>, hits: &[bool], op: SelectionOp
             SelectionOp::Replace => *b,
             SelectionOp::Add => *a || *b,
             SelectionOp::Subtract => *a && !*b,
+            SelectionOp::Intersect => *a && *b,
         };
     }
 }

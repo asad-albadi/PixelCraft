@@ -1,3 +1,4 @@
+mod selection;
 mod tiles;
 
 use crate::lua::MAX_SCRIPT_PIXELS;
@@ -18,6 +19,7 @@ enum Tool {
     Ellipse(bool),
     Fill,
     Picker,
+    Selection(selection::Kind),
 }
 
 impl Tool {
@@ -32,6 +34,10 @@ impl Tool {
             "filled_ellipse" => Ok(Self::Ellipse(true)),
             "paint_bucket" | "fill" => Ok(Self::Fill),
             "eyedropper" => Ok(Self::Picker),
+            "rectangular_marquee" => Ok(Self::Selection(selection::Kind::Rectangle)),
+            "elliptical_marquee" => Ok(Self::Selection(selection::Kind::Ellipse)),
+            "lasso" | "polygonal_lasso" => Ok(Self::Selection(selection::Kind::Lasso)),
+            "magic_wand" => Ok(Self::Selection(selection::Kind::Wand)),
             _ => Err(format!("Unsupported raster tool: {name}")),
         }
     }
@@ -53,6 +59,7 @@ struct Stroke {
     frame: usize,
     points: Vec<Point>,
     selection: Option<Vec<Point>>,
+    selection_mode: Option<u8>,
     brush_shape: Option<BrushShape>,
     size: i32,
     color: Pixel,
@@ -91,7 +98,7 @@ fn check_work(tool: Tool, points: &[Point], size: i32) -> Result<(), String> {
             .map(|segment| distance(segment[0], segment[1]))
             .sum::<u64>()
             .max(1),
-        Tool::Fill | Tool::Picker => 1,
+        Tool::Fill | Tool::Picker | Tool::Selection(_) => 1,
     };
     let brush = match tool {
         Tool::Rectangle(true) | Tool::Ellipse(true) => 1,
@@ -148,7 +155,9 @@ fn coverage(stroke: &Stroke, tool: Tool, size: i32) -> Vec<bool> {
             }
         }
         Tool::Ellipse(filled) => mask.ellipse(0, 0, a, b, white, filled, size),
-        Tool::Fill | Tool::Picker => unreachable!("Handled outside brush coverage"),
+        Tool::Fill | Tool::Picker | Tool::Selection(_) => {
+            unreachable!("Handled outside brush coverage")
+        }
     }
     mask.layers[0].cels[0]
         .iter()
@@ -186,6 +195,9 @@ pub(crate) fn use_tool(value: Value) -> Result<Value, String> {
     let layer = doc.layers.get(stroke.layer).ok_or("Invalid tool layer")?;
     if stroke.frame >= doc.durations.len() {
         return Err("Invalid tool frame".into());
+    }
+    if let Tool::Selection(kind) = tool {
+        return selection::apply(&stroke, kind);
     }
     if stroke.tilemap_mode.is_some_and(|mode| mode > 1) {
         return Err("Invalid tilemap mode".into());

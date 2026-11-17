@@ -42,8 +42,16 @@ local function selection(mask)
   if k=='bounds' then local x,y,r,b=math.huge,math.huge,-math.huge,-math.huge;for _,p in pairs(t._mask)do x=math.min(x,p.x);y=math.min(y,p.y);r=math.max(r,p.x);b=math.max(b,p.y)end;return x==math.huge and Rectangle() or Rectangle(x,y,r-x+1,b-y+1) end
  end})
 end
+local function pointMask(values)
+ local mask={}
+ for _,value in ipairs(values)do
+  local p=Point(value);mask[p.x..','..p.y]=p
+ end
+ return mask
+end
 local function points(value)
  if value._mask then return copy(value._mask) end
+ if value.points then return pointMask(value.points) end
  local result={};for y=value.y,value.y+value.height-1 do for x=value.x,value.x+value.width-1 do result[x..','..y]=Point(x,y) end end;return result
 end
 function Selection(v) return selection(v and points(v) or nil) end
@@ -174,22 +182,33 @@ end
 loadWorkspaceSprite=function(handle,context)
  setWorkspaceDocument(handle,context,host{op='editorDocument',sprite=context.id})
 end
+local function selectionWire(mask)
+ local bounds=mask.bounds
+ local result={x=bounds.x,y=bounds.y,width=bounds.width,height=bounds.height}
+ local count=0
+ for _ in pairs(mask._mask)do count=count+1 end
+ if count~=bounds.width*bounds.height then
+  local points={}
+  for _,point in pairs(mask._mask)do points[#points+1]={point.x,point.y} end
+  result.points=points
+ end
+ return result
+end
 local function activateSprite(handle)
  loadSpriteContext(handle)
  if activeSprite~=handle then
   activeSprite=handle
   if editorTabs then
-   host{op='activate',sprite=contexts[handle].id,path=filename,document=doc,frame=activeFrame,layer=activeLayer}
+   host{op='activate',sprite=contexts[handle].id,path=filename,document=doc,frame=activeFrame,layer=activeLayer,selection=selectionWire(spriteSelection)}
   end
   appEvents:_emit('sitechange')
  end
 end
 local function spriteResult(entry)
- local bounds=entry.selection.bounds
  return {
   id=entry.id,document=entry.document,baseline=entry.baseline,filename=entry.filename,
   saved=entry.saved,frame=entry.frame,layer=entry.layer,
-  selection={x=bounds.x,y=bounds.y,width=bounds.width,height=bounds.height},
+  selection=selectionWire(entry.selection),
  }
 end
 if (_pw_options or {}).editorWorkspace then
@@ -522,6 +541,7 @@ preferences.toolSettings=preferences.toolSettings or {}
 preferences.tool=function(id)preferences.toolSettings[id]=preferences.toolSettings[id] or {opacity=255,tolerance=0,contiguous=true};return preferences.toolSettings[id]end
 local toolOptions=_pw_options or {}
 local tool={id=toolOptions.tool or 'pencil'}
+SelectionMode={REPLACE=0,ADD=1,SUBTRACT=2,INTERSECT=3}
 TilemapMode={PIXELS=0,TILES=1}
 TilesetMode={MANUAL=0,AUTO=1,STACK=2}
 rawset(app,'fgTile',toolOptions.fgTile or 1)
@@ -580,16 +600,20 @@ rawset(app,'useTool',function(options)
    color=options.color~=nil and unpackColor(Color(options.color))
     or (right and (options.bgColor and unpackColor(Color(options.bgColor)) or scriptColors[2]) or scriptColors[1])
   end
+  local defaultTolerance,defaultContiguous=toolOptions.fillTolerance,toolOptions.fillContiguous
+  if name=='magic_wand' then defaultTolerance,defaultContiguous=toolOptions.wandTolerance,toolOptions.wandContiguous end
   local result=host({op='useTool',document=doc,tool=name,layer=layer-1,frame=frame-1,
    tilemap_mode=tilemapMode,tileset_mode=options.tilesetMode or (isTilemap and toolOptions.tilesetMode or nil),tile=tile,
-   points=points,selection=selectionPoints,brush_shape=brush and brush.type,size=brush and brush.size or toolOptions.brushSize or 1,
+   points=points,selection=selectionPoints,selection_mode=options.selection or toolOptions.selectionMode,brush_shape=brush and brush.type,size=brush and brush.size or toolOptions.brushSize or 1,
    ink=options.ink or Ink.SIMPLE,color=color,opacity=options.opacity==nil and 255 or byte(options.opacity),
-   tolerance=byte(options.tolerance or toolOptions.fillTolerance),
-   contiguous=options.contiguous==true or (options.contiguous==nil and toolOptions.fillContiguous~=false)},true)
+   tolerance=byte(options.tolerance or defaultTolerance),
+   contiguous=options.contiguous==true or (options.contiguous==nil and defaultContiguous~=false)},true)
   if result.tile~=nil then
    if right then app.bgTile=result.tile else app.fgTile=result.tile end
   elseif result.color then
    if right then app.bgColor=Color(result.color) else app.fgColor=Color(result.color) end
+  elseif result.selection then
+   app.transaction(function()spriteSelection._mask=pointMask(result.selection)end)
   elseif result.layer then
    app.transaction(function()
     local edited=expandDocumentPixels({layers={result.layer}}).layers[1]
@@ -770,7 +794,7 @@ rawset(app,'alert',function(t)if not nativeHost then print(type(t)=='table' and 
 rawset(app,'refresh',function()
  if nativeHost and activeSprite then
   withSprite(activeSprite,function()
-   host{op='refresh',sprite=contexts[activeSprite].id,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
+   host{op='refresh',sprite=contexts[activeSprite].id,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=selectionWire(spriteSelection)}
   end)
  end
 end)
@@ -780,7 +804,7 @@ _pw_loop=function()
   local visible={};for _,d in ipairs(dialogs)do if d._visible then visible[#visible+1]=dialogSpec(d)end end
   local running=false;for _,t in ipairs(timers)do running=running or t.isRunning end
   if #visible==0 and not running and not appEvents:_hasHandlers() and not (activeSprite and spriteEvents:_hasHandlers()) then break end
-  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors}
+  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=activeSprite and selectionWire(spriteSelection)}
   if response.editor then
    local editor=response.editor
    local target=sprite
@@ -792,6 +816,7 @@ _pw_loop=function()
    end
    if contexts[target] then withSprite(target,function()
     doc=expandDocumentPixels(editor.document);activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer
+    if editor.selection then spriteSelection._mask=points(editor.selection) end
     rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')
    end)end
   end

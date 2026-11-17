@@ -1234,3 +1234,32 @@ fn lua_tilemap_auto_keeps_placement_edits_when_an_existing_tile_matches() {
     assert_eq!(output.layers[1].tile_cels[0], vec![2]);
     assert_eq!(output.tilesets, doc.tilesets);
 }
+
+#[test]
+fn lua_native_selection_tools_combine_masks_and_undo_independently() {
+    let mut doc = Document::new(6, 6);
+    doc.layers[0].cels[0].set(0, [11, 22, 33, 255]);
+    doc.layers[0].cels[0].set(35, [12, 22, 33, 255]);
+    let output = run_source(&doc, r#"
+ local sprite=app.activeSprite
+ app.useTool{tool='magic_wand',points={Point(0,0)},tolerance=1,contiguous=false}
+ assert(sprite.selection:contains(0,0) and sprite.selection:contains(5,5))
+ app.useTool{tool='rectangular_marquee',points={Point(1,1),Point(3,3)},selection=SelectionMode.ADD}
+ assert(sprite.selection:contains(2,2) and sprite.selection:contains(5,5))
+ app.useTool{tool='rectangular_marquee',points={Point(2,2)},selection=SelectionMode.SUBTRACT}
+ assert(not sprite.selection:contains(2,2))
+ app.command.Undo()
+ assert(sprite.selection:contains(2,2))
+ app.command.Redo()
+ assert(not sprite.selection:contains(2,2))
+ app.useTool{tool='elliptical_marquee',points={Point(0,0),Point(5,5)},selection=SelectionMode.INTERSECT}
+ assert(sprite.selection:contains(3,3) and not sprite.selection:contains(0,0))
+ app.useTool{tool='polygonal_lasso',points={Point(0,0),Point(4,0),Point(0,4)}}
+ assert(sprite.selection:contains(1,1) and not sprite.selection:contains(3,3))
+ app.useTool{tool='pencil',points={Point(0,1),Point(5,1)},color=Color('#ff4400')}
+ "#,0,0,None).unwrap();
+    assert_eq!(output.layers[0].cels[0][6], [255, 68, 0, 255]);
+    assert_eq!(output.layers[0].cels[0][7], [255, 68, 0, 255]);
+    assert_eq!(output.layers[0].cels[0][8], CLEAR);
+    assert_eq!(output.layers[0].cels[0][35], [12, 22, 33, 255]);
+}

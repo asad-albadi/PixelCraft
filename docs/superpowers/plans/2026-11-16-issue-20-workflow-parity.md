@@ -150,6 +150,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 native tilemap tool checkpoint. Lua can place or erase tiles, fill matching placements, pick packed tile IDs, and paint tile pixels through native shared, reused, or stacked artwork modes. The Windows regressions cover linked frames, flip-aware addressing, selection intersection, undo and redo of a variant, reuse without an artwork update, and desktop placement in a second tab. Selection tools, alternate freehand algorithms, typed properties, and broader identity remain open.
 
+- Item 45 native selection tool checkpoint. Lua can invoke rectangular marquee, elliptical marquee, polygon lasso, or magic wand with replace, add, subtract, or intersect. Editor and Lua selection snapshots retain holes through tabs, live previews, modeless edits, transaction rollback, and commit. Tests cover native geometry, scripted undo and redo, and the Windows editor request loop. Alternate freehand algorithms, typed properties, and broader object identity remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

@@ -121,6 +121,9 @@ impl Tool {
             Self::Eraser => "eraser",
             Self::Fill => "paint_bucket",
             Self::Picker => "eyedropper",
+            Self::Select => "rectangular_marquee",
+            Self::Lasso => "lasso",
+            Self::Wand => "magic_wand",
             Self::Line => "line",
             Self::Rect if filled => "filled_rectangle",
             Self::Rect => "rectangle",
@@ -363,6 +366,15 @@ struct ScriptPreview {
     visible: ScriptTabPreview,
 }
 
+type SelectionBounds = (i32, i32, i32, i32);
+
+#[derive(Default)]
+struct ScriptSelectionState {
+    bounds: Option<SelectionBounds>,
+    mask: Option<Vec<bool>>,
+    polygon: Vec<(i32, i32)>,
+}
+
 struct ScriptTabPreview {
     id: u32,
     original: HistoryEntry,
@@ -370,6 +382,7 @@ struct ScriptTabPreview {
     redo: Vec<HistoryEntry>,
     drawn: Document,
     site: (usize, usize),
+    selection: ScriptSelectionState,
 }
 
 // Only compare inputs used by color extraction. Editing names, timing,
@@ -3185,13 +3198,103 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
-    fn script_selection(selection: Option<(i32, i32, i32, i32)>) -> Option<serde_json::Value> {
-        selection.map(|(x0, y0, x1, y1)| {
-            serde_json::json!({
-                "x": x0.min(x1), "y": y0.min(y1),
-                "width": (x1 - x0).abs() + 1, "height": (y1 - y0).abs() + 1,
-            })
-        })
+    fn script_selection(
+        doc: &Document,
+        selection: Option<SelectionBounds>,
+        mask: Option<&[bool]>,
+        polygon: &[(i32, i32)],
+    ) -> extensions::ScriptSelection {
+        let [x, y, width, height] = selection.map_or([0; 4], |(x0, y0, x1, y1)| {
+            [
+                x0.min(x1),
+                y0.min(y1),
+                (x1 - x0).abs() + 1,
+                (y1 - y0).abs() + 1,
+            ]
+        });
+        let points =
+            if (mask.is_some() || !polygon.is_empty()) && doc.width * doc.height <= 1_000_000 {
+                Some(
+                    (0..doc.width * doc.height)
+                        .filter_map(|i| {
+                            let (px, py) = ((i % doc.width) as i32, (i / doc.width) as i32);
+                            mask.map_or_else(
+                                || pixelcraft::workflows::inside_polygon(polygon, px, py),
+                                |mask| mask.get(i).copied().unwrap_or(false),
+                            )
+                            .then_some((px, py))
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+        extensions::ScriptSelection {
+            x,
+            y,
+            width,
+            height,
+            points,
+        }
+    }
+
+    fn current_script_selection(&self) -> extensions::ScriptSelection {
+        Self::script_selection(
+            &self.doc,
+            self.selection,
+            self.studio.mask.as_deref(),
+            &self.studio.polygon,
+        )
+    }
+
+    fn script_selection_state(&self) -> ScriptSelectionState {
+        ScriptSelectionState {
+            bounds: self.selection,
+            mask: self.studio.mask.clone(),
+            polygon: self.studio.polygon.clone(),
+        }
+    }
+
+    fn decode_script_selection(
+        doc: &Document,
+        wire: extensions::ScriptSelection,
+    ) -> ScriptSelectionState {
+        if let Some(points) = wire.points {
+            let mut state = ScriptSelectionState::default();
+            let mut mask = vec![false; doc.width * doc.height];
+            for (x, y) in points {
+                if let Some(i) = doc.index(x, y) {
+                    mask[i] = true;
+                    state.bounds = Some(state.bounds.map_or(
+                        (x, y, x, y),
+                        |(left, top, right, bottom)| {
+                            (left.min(x), top.min(y), right.max(x), bottom.max(y))
+                        },
+                    ));
+                }
+            }
+            if state.bounds.is_some() {
+                state.mask = Some(mask);
+            }
+            return state;
+        }
+        ScriptSelectionState {
+            bounds: (wire.width > 0 && wire.height > 0).then(|| {
+                (
+                    wire.x,
+                    wire.y,
+                    wire.x.saturating_add(wire.width - 1),
+                    wire.y.saturating_add(wire.height - 1),
+                )
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn set_script_selection(&mut self, state: ScriptSelectionState) {
+        self.selection = state.bounds;
+        self.studio.mask = state.mask;
+        self.studio.polygon = state.polygon;
     }
 
     fn start_script(&mut self, script: PathBuf, command: Option<String>) -> Result<(), String> {
@@ -3219,7 +3322,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     let range = CelRange::between(tab.timeline_anchor.unwrap_or(active), active);
                     let options = serde_json::json!({
                         "path": tab.path, "frame": tab.frame + 1, "layer": tab.layer + 1,
-                        "selection": Self::script_selection(tab.selection), "zoom": tab.zoom,
+                        "selection": Self::script_selection(&tab.doc, tab.selection, tab.mask.as_deref(), &tab.polygon), "zoom": tab.zoom,
                         "timelineRange": range,
                     });
                     (tab.doc.clone(), options)
@@ -3244,14 +3347,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or(serde_json::json!({}));
-        let selection = Self::script_selection(self.selection);
+        let selection = self.current_script_selection();
         let tilemap_mode = u8::from(self.tile_pixel_mode.is_none());
         let tileset_mode = match self.tile_pixel_mode {
             Some(TilePixelEdit::ReuseVariant) => 1,
             Some(TilePixelEdit::CreateVariant) => 2,
             _ => 0,
         };
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let selection_mode = match self.power.selection_op {
+            pixelcraft::productivity::SelectionOp::Replace => 0,
+            pixelcraft::productivity::SelectionOp::Add => 1,
+            pixelcraft::productivity::SelectionOp::Subtract => 2,
+            pixelcraft::productivity::SelectionOp::Intersect => 3,
+        };
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -3406,6 +3515,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             redo: std::mem::take(&mut self.redo),
             drawn: self.doc.clone(),
             site: (self.frame, self.layer),
+            selection: self.script_selection_state(),
         }
     }
 
@@ -3437,14 +3547,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
     fn show_script_ui(&mut self, ctx: &egui::Context) {
         if self.script_ui.modeless
-            && let Some(tab) = self.script_preview.as_mut().map(|p| &mut p.visible)
-            && (tab.drawn != self.doc || tab.site != (self.frame, self.layer))
+            && let Some(tab) = self.script_preview.as_ref().map(|p| &p.visible)
+            && (tab.drawn != self.doc
+                || tab.site != (self.frame, self.layer)
+                || tab.selection.bounds != self.selection
+                || tab.selection.mask != self.studio.mask
+                || tab.selection.polygon != self.studio.polygon)
         {
             self.script_ui.editor_update = Some(serde_json::json!({
-                "sprite":tab.id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1
+                "sprite":tab.id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1,
+                "selection":self.current_script_selection(),
             }));
+            let selection = self.script_selection_state();
+            let tab = &mut self.script_preview.as_mut().unwrap().visible;
             tab.drawn = self.doc.clone();
             tab.site = (self.frame, self.layer);
+            tab.selection = selection;
         }
         let updated_sprite = self
             .script_ui
@@ -3527,6 +3645,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.layer = Self::script_site_index(&request["layer"], self.layer, self.doc.layers.len());
         preview.visible.drawn = self.doc.clone();
         preview.visible.site = (self.frame, self.layer);
+        if let Ok(wire) =
+            serde_json::from_value::<extensions::ScriptSelection>(request["selection"].clone())
+        {
+            self.set_script_selection(Self::decode_script_selection(&self.doc, wire));
+        }
+        preview.visible.selection = self.script_selection_state();
         self.script_preview = Some(preview);
     }
 
@@ -3565,8 +3689,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let mut document = sprite.document;
             document.editor_id = self.doc.editor_id;
             let changed = self.doc != document;
-            if changed {
+            let selection = Self::decode_script_selection(&document, sprite.selection);
+            let selection_changed = selection.bounds != self.selection
+                || selection.mask != self.studio.mask
+                || !self.studio.polygon.is_empty();
+            if changed || selection_changed {
                 self.remember_action("Run extension");
+            }
+            if changed {
                 self.doc = document;
             }
             if let Some(path) = path {
@@ -3577,21 +3707,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             let frame = sprite.frame.saturating_sub(1);
             let layer = sprite.layer.saturating_sub(1);
-            let selection = sprite.selection;
-            let selection = (selection.width > 0 && selection.height > 0).then(|| {
-                (
-                    selection.x,
-                    selection.y,
-                    selection.x.saturating_add(selection.width - 1),
-                    selection.y.saturating_add(selection.height - 1),
-                )
-            });
-            if changed || (frame, layer) != (self.frame, self.layer) || selection != self.selection
-            {
+            if changed || (frame, layer) != (self.frame, self.layer) {
                 self.frame = frame;
                 self.layer = layer;
                 self.clamp();
-                self.selection = selection;
+                self.set_script_selection(selection);
+            } else if selection_changed {
+                self.set_script_selection(selection);
             }
             if Some(sprite.id) == workspace.active {
                 active_tab = Some(self.active_tab);
@@ -8092,6 +8214,7 @@ mod tests {
             r#"
  local sprite=app.activeSprite
  local fromEditor=app.clipboard.content
+ assert(sprite.selection:contains(0,0) and not sprite.selection:contains(1,0))
  assert(app.clipboard.hasImage and fromEditor.image.width==3)
  assert(fromEditor.selection:contains(0,0) and fromEditor.selection:contains(2,0))
  assert(not fromEditor.selection:contains(1,0) and #fromEditor.palette>1)
@@ -8199,7 +8322,9 @@ mod tests {
             &path,
             r#"
  app.activeSprite=app.sprites[1]
- app.useTool{color=Color('#ff9966'),points={Point(2,0)}}
+ app.useTool{tool='rectangular_marquee',points={Point(0,0),Point(2,0)}}
+ app.useTool{tool='rectangular_marquee',points={Point(1,0)},selection=SelectionMode.SUBTRACT}
+ app.useTool{tool='pencil',color=Color('#ff9966'),points={Point(2,0)}}
  app.refresh()
  local transient=app.open('new.pixel')
  app.activeImage:drawPixel(1,0,Color('#6699ff'))
@@ -8212,6 +8337,7 @@ mod tests {
         app.start_script(path.clone(), None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut showed_background = false;
+        let mut showed_mask = false;
         let mut showed_new_tab = false;
         let mut closed_new_tab = false;
         while app.script_job.is_some() && Instant::now() < deadline {
@@ -8219,6 +8345,7 @@ mod tests {
             output.textures_delta.clear();
             if app.active_tab == 0 && app.doc.composite(0)[2] == [255, 153, 102, 255] {
                 showed_background = true;
+                showed_mask |= app.studio.mask.as_deref() == Some(&[true, false, true]);
             }
             if app.tabs.len() == 3
                 && app.active_tab == 2
@@ -8234,6 +8361,7 @@ mod tests {
         }
         assert!(app.script_job.is_none(), "Lua script timed out");
         assert!(showed_background, "background preview never appeared");
+        assert!(showed_mask, "script selection mask never appeared");
         assert!(showed_new_tab, "new tab preview never appeared");
         assert!(
             closed_new_tab,
@@ -8248,6 +8376,7 @@ mod tests {
         assert_eq!(app.active_tab, 1);
         assert_eq!(app.doc, original);
         assert_eq!(app.tabs[0].as_ref().unwrap().doc, background);
+        assert!(app.tabs[0].as_ref().unwrap().mask.is_none());
         std::fs::write(
             &path,
             r#"
@@ -8257,6 +8386,8 @@ mod tests {
  local listener
  listener=target.events:on('change',function()
   assert(app.activeImage:getPixel(1,0)==app.pixelColor.rgba(41,66,91,255))
+  assert(target.selection:contains(0,0) and target.selection:contains(2,0))
+  assert(not target.selection:contains(1,0))
   target.events:off(listener)
   app.activeSprite=initial
  end)
@@ -8272,6 +8403,7 @@ mod tests {
             if !painted && app.script_ui.modeless && app.active_tab == 0 {
                 app.remember_action("Paint while extension is open");
                 app.doc.layers[0].cels[0].set(1, [41, 66, 91, 255]);
+                app.set_selection_mask(vec![true, false, true]);
                 painted = true;
             }
             app.poll_script();
@@ -8285,6 +8417,7 @@ mod tests {
         let edited = app.tabs[0].as_ref().unwrap();
         assert_eq!(edited.doc.composite(0)[1], [41, 66, 91, 255]);
         assert_eq!(edited.undo.len(), 1);
+        assert_eq!(edited.mask.as_deref(), Some(&[true, false, true][..]));
         assert_eq!(edited.undo[0].doc, background);
         assert_eq!(edited.undo[0].label, "Run extension");
         std::fs::remove_dir_all(directory).unwrap();

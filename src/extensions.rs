@@ -550,12 +550,14 @@ pub struct ScriptSprite {
     pub selection: ScriptSelection,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct ScriptSelection {
     pub x: i32,
     pub y: i32,
     pub width: i32,
     pub height: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<Vec<(i32, i32)>>,
 }
 
 #[expect(
