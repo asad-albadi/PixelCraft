@@ -363,21 +363,22 @@ struct ScriptPreview {
     initial_tab: usize,
     tab_count: usize,
     opened: std::collections::HashMap<u32, usize>,
-    layer_keys: std::collections::HashMap<u32, ScriptLayerKeys>,
+    layer_keys: std::collections::HashMap<u32, ScriptTargets>,
     visible: ScriptTabPreview,
 }
 
 #[derive(Default)]
-struct ScriptLayerKeys {
+struct ScriptTargets {
     targets: std::collections::HashMap<String, EditorId>,
+    cel_targets: std::collections::HashMap<u64, EditorId>,
 }
 
-impl ScriptLayerKeys {
+impl ScriptTargets {
     fn native_key(target: EditorId) -> String {
         format!("editor:{target}")
     }
 
-    fn expose(&mut self, document: &Document) -> Vec<String> {
+    fn expose_layers(&mut self, document: &Document) -> Vec<String> {
         let known: std::collections::HashMap<_, _> = self
             .targets
             .iter()
@@ -398,7 +399,7 @@ impl ScriptLayerKeys {
             .collect()
     }
 
-    fn apply(&mut self, document: &mut Document, keys: &[String]) {
+    fn apply_layers(&mut self, document: &mut Document, keys: &[String]) {
         if keys.len() != document.layers.len() {
             return;
         }
@@ -417,6 +418,95 @@ impl ScriptLayerKeys {
             }
         }
     }
+    // Only publish identities requested by Lua, even for large timelines.
+    fn expose_cels(&self, document: &Document) -> Vec<extensions::ScriptCelTarget> {
+        if self.cel_targets.is_empty() {
+            return Vec::new();
+        }
+        let watched: std::collections::HashMap<_, _> = self
+            .cel_targets
+            .iter()
+            .map(|(&key, id)| (id.runtime_key(), key))
+            .collect();
+        document
+            .layers
+            .iter()
+            .enumerate()
+            .flat_map(|(layer, source)| {
+                let watched = &watched;
+                source
+                    .cel_meta
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(frame, meta)| {
+                        Some(extensions::ScriptCelTarget {
+                            key: *watched.get(&meta.editor_id.runtime_key())?,
+                            layer: layer + 1,
+                            frame: frame + 1,
+                        })
+                    })
+            })
+            .collect()
+    }
+
+    fn apply_cels(
+        &mut self,
+        previous: &Document,
+        document: &mut Document,
+        keys: &[extensions::ScriptCelTarget],
+    ) -> bool {
+        if keys.is_empty() {
+            return false;
+        }
+        let previous_layers: std::collections::HashMap<_, _> = previous
+            .layers
+            .iter()
+            .map(|layer| (layer.editor_id.runtime_key(), layer))
+            .collect();
+        let previous_frames: std::collections::HashMap<_, _> = (0..previous.durations.len())
+            .map(|frame| (previous.frame_export_id(frame), frame))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        let mut claimed = std::collections::HashSet::new();
+        let mut changed = false;
+        for target in keys {
+            let Some(layer) = target.layer.checked_sub(1) else {
+                continue;
+            };
+            let Some(frame) = target.frame.checked_sub(1) else {
+                continue;
+            };
+            if frame >= document.durations.len() {
+                continue;
+            }
+            let frame_id = document.frame_export_id(frame);
+            let Some(layer) = document.layers.get_mut(layer) else {
+                continue;
+            };
+            let Some(meta) = layer.cel_meta.get_mut(frame) else {
+                continue;
+            };
+            if !seen.insert(target.key) {
+                continue;
+            }
+            let prior = previous_layers
+                .get(&layer.editor_id.runtime_key())
+                .zip(previous_frames.get(&frame_id))
+                .map(|(layer, &frame)| layer.cel_meta[frame].editor_id);
+            let id = self
+                .cel_targets
+                .get(&target.key)
+                .copied()
+                .or(prior)
+                .unwrap_or(meta.editor_id);
+            if claimed.insert(id.runtime_key()) {
+                changed |= prior.is_some_and(|previous| previous.runtime_key() != id.runtime_key());
+                meta.editor_id = id;
+                self.cel_targets.insert(target.key, id);
+            }
+        }
+        changed
+    }
 }
 
 type SelectionBounds = (i32, i32, i32, i32);
@@ -434,6 +524,7 @@ struct ScriptTabPreview {
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     drawn: Document,
+    generation: u64,
     site: (usize, usize),
     selection: ScriptSelectionState,
 }
@@ -3377,7 +3468,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         "path": tab.path, "frame": tab.frame + 1, "layer": tab.layer + 1,
                         "selection": Self::script_selection(&tab.doc, tab.selection, tab.mask.as_deref(), &tab.polygon), "zoom": tab.zoom,
                         "timelineRange": range,
-                        "layerKeys": ScriptLayerKeys::default().expose(&tab.doc),
+                        "layerKeys": ScriptTargets::default().expose_layers(&tab.doc),
                     });
                     (tab.doc.clone(), options)
                 })
@@ -3415,7 +3506,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixelcraft::productivity::SelectionOp::Subtract => 2,
             pixelcraft::productivity::SelectionOp::Intersect => 3,
         };
-        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptLayerKeys::default().expose(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
+        let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
         std::thread::spawn(move || {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
@@ -3575,6 +3666,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             undo: std::mem::take(&mut self.undo),
             redo: std::mem::take(&mut self.redo),
             drawn: self.doc.clone(),
+            generation: self.power.bridge_generation,
             site: (self.frame, self.layer),
             selection: self.script_selection_state(),
         }
@@ -3611,27 +3703,31 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && let Some(tab) = self.script_preview.as_ref().map(|p| &p.visible)
             && (tab.drawn != self.doc
                 || !tab.drawn.same_editor_layer_targets(&self.doc)
+                || (tab.generation != self.power.bridge_generation
+                    && !tab.drawn.same_editor_targets(&self.doc))
                 || tab.site != (self.frame, self.layer)
                 || tab.selection.bounds != self.selection
                 || tab.selection.mask != self.studio.mask
                 || tab.selection.polygon != self.studio.polygon)
         {
             let id = tab.id;
-            let layer_keys = self
+            let targets = self
                 .script_preview
                 .as_mut()
                 .unwrap()
                 .layer_keys
                 .entry(id)
-                .or_default()
-                .expose(&self.doc);
+                .or_default();
+            let layer_keys = targets.expose_layers(&self.doc);
+            let cel_keys = targets.expose_cels(&self.doc);
             self.script_ui.editor_update = Some(serde_json::json!({
                 "sprite":id,"document":self.doc,"frame":self.frame+1,"layer":self.layer+1,
-                "selection":self.current_script_selection(),"layerKeys":layer_keys,
+                "selection":self.current_script_selection(),"layerKeys":layer_keys,"celKeys":cel_keys,
             }));
             let selection = self.script_selection_state();
             let tab = &mut self.script_preview.as_mut().unwrap().visible;
             tab.drawn = self.doc.clone();
+            tab.generation = self.power.bridge_generation;
             tab.site = (self.frame, self.layer);
             tab.selection = selection;
         }
@@ -3705,11 +3801,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         document.editor_id = self.doc.editor_id;
         if let Ok(keys) = serde_json::from_value::<Vec<String>>(request["layerKeys"].clone()) {
             let targets = preview.layer_keys.entry(id).or_insert_with(|| {
-                let mut targets = ScriptLayerKeys::default();
-                targets.expose(&self.doc);
+                let mut targets = ScriptTargets::default();
+                targets.expose_layers(&self.doc);
                 targets
             });
-            targets.apply(&mut document, &keys);
+            targets.apply_layers(&mut document, &keys);
+            if let Ok(cels) = serde_json::from_value::<Vec<extensions::ScriptCelTarget>>(
+                request["celKeys"].clone(),
+            ) {
+                targets.apply_cels(&self.doc, &mut document, &cels);
+            }
         }
         let changed_layout = document.width != self.doc.width
             || document.height != self.doc.height
@@ -3723,6 +3824,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Self::script_site_index(&request["frame"], self.frame, self.doc.durations.len());
         self.layer = Self::script_site_index(&request["layer"], self.layer, self.doc.layers.len());
         preview.visible.drawn = self.doc.clone();
+        preview.visible.generation = self.power.bridge_generation;
         preview.visible.site = (self.frame, self.layer);
         if let Ok(wire) =
             serde_json::from_value::<extensions::ScriptSelection>(request["selection"].clone())
@@ -3752,7 +3854,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn apply_script_workspace(
         &mut self,
         workspace: extensions::ScriptWorkspace,
-        mut layer_keys: std::collections::HashMap<u32, ScriptLayerKeys>,
+        mut layer_keys: std::collections::HashMap<u32, ScriptTargets>,
     ) -> Result<(), String> {
         let initial_tab = self.active_tab;
         let mut active_tab = None;
@@ -3770,13 +3872,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let mut document = sprite.document;
             document.editor_id = self.doc.editor_id;
             let targets = layer_keys.entry(sprite.id).or_insert_with(|| {
-                let mut targets = ScriptLayerKeys::default();
-                targets.expose(&self.doc);
+                let mut targets = ScriptTargets::default();
+                targets.expose_layers(&self.doc);
                 targets
             });
-            targets.apply(&mut document, &sprite.layer_keys);
+            targets.apply_layers(&mut document, &sprite.layer_keys);
+            let cel_targets_changed =
+                targets.apply_cels(&self.doc, &mut document, &sprite.cel_keys);
             let changed = self.doc != document
-                || (existing.is_some() && !self.doc.same_editor_layer_targets(&document));
+                || (existing.is_some()
+                    && (cel_targets_changed || !self.doc.same_editor_layer_targets(&document)));
             let selection = Self::decode_script_selection(&document, sprite.selection);
             let selection_changed = selection.bounds != self.selection
                 || selection.mask != self.studio.mask
@@ -8519,6 +8624,8 @@ mod tests {
         doc.add_layer();
         doc.layers[1].name = "Keep".into();
         doc.add_frame(0, false);
+        doc.layers[1].cels[1].set(0, [70, 80, 90, 255]);
+        let original_cel = doc.layers[1].cel_meta[1].editor_id.to_string();
         let original_layer = doc.layers[1].editor_id.to_string();
         app.replace(doc, None);
         let directory = std::env::temp_dir().join(format!(
@@ -8537,6 +8644,7 @@ mod tests {
  local image=cel.image
  local created=sprite:newLayer()
  created.name='Script layer'
+ local replaced=created:cel(1)
  local dialog=Dialog{title='Timeline identity'}
  dialog:show{wait=false}
  local listener
@@ -8544,7 +8652,9 @@ mod tests {
   assert(original==sprite.layers[1] and original.name=='Keep')
   assert(created==sprite.layers[2] and created.name=='Script layer')
   assert(frame==sprite.frames[3] and frame.frameNumber==3)
-  assert(cel==original:cel(frame) and cel.layer==original)
+  assert(cel==created:cel(1) and cel.layer==created and cel.frameNumber==1)
+  assert(original:cel(frame)~=cel)
+  assert(not pcall(function()return replaced.opacity end))
   image:drawPixel(2,0,Color('#0b2137'))
   sprite.events:off(listener)
   dialog:close()
@@ -8563,6 +8673,9 @@ mod tests {
                 app.doc.swap_layers(0, 1);
                 app.doc.swap_layers(1, 2);
                 app.doc.add_frame(0, false);
+                app.doc
+                    .move_cel_range(CelRange::between((0, 2), (0, 2)), 1, 0, false)
+                    .unwrap();
                 edited = true;
             }
             app.poll_script();
@@ -8574,8 +8687,14 @@ mod tests {
         assert_eq!(app.doc.layers[0].name, "Keep");
         assert_eq!(app.doc.layers[0].editor_id.to_string(), original_layer);
         assert_eq!(app.doc.layers[1].name, "Script layer");
-        assert_eq!(app.doc.layers[0].cels[2][2], [11, 33, 55, 255]);
-        assert_eq!(app.doc.layers[0].cels[1][2], CLEAR);
+        assert_eq!(
+            app.doc.layers[1].cel_meta[0].editor_id.to_string(),
+            original_cel
+        );
+        assert_eq!(app.doc.layers[1].cels[0][0], [70, 80, 90, 255]);
+        assert_eq!(app.doc.layers[1].cels[0][2], [11, 33, 55, 255]);
+        assert_eq!(app.doc.layers[0].cels[2][0], CLEAR);
+        assert_eq!(app.doc.layers[0].cels[2][2], CLEAR);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

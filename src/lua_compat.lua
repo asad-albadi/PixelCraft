@@ -201,7 +201,7 @@ local function activateSprite(handle)
  if activeSprite~=handle then
   activeSprite=handle
   if editorTabs then
-   host{op='activate',sprite=contexts[handle].id,path=filename,document=doc,layerKeys=layerIdentityWire(),frame=activeFrame,layer=activeLayer,selection=selectionWire(spriteSelection)}
+   host{op='activate',sprite=contexts[handle].id,path=filename,document=doc,layerKeys=layerIdentityWire(),celKeys=celIdentityWire(),frame=activeFrame,layer=activeLayer,selection=selectionWire(spriteSelection)}
   end
   appEvents:_emit('sitechange')
  end
@@ -209,7 +209,7 @@ end
 local function spriteResult(entry)
  return {
   id=entry.id,document=entry.document,baseline=entry.baseline,filename=entry.filename,
-  layerKeys=layerIdentityWire(entry.document),
+  layerKeys=layerIdentityWire(entry.document),celKeys=celIdentityWire(entry.document),
   saved=entry.saved,frame=entry.frame,layer=entry.layer,
   selection=selectionWire(entry.selection),
  }
@@ -802,7 +802,7 @@ rawset(app,'alert',function(t)if not nativeHost then print(type(t)=='table' and 
 rawset(app,'refresh',function()
  if nativeHost and activeSprite then
   withSprite(activeSprite,function()
-   host{op='refresh',sprite=contexts[activeSprite].id,document=doc,layerKeys=layerIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=selectionWire(spriteSelection)}
+   host{op='refresh',sprite=contexts[activeSprite].id,document=doc,layerKeys=layerIdentityWire(),celKeys=celIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=selectionWire(spriteSelection)}
   end)
  end
 end)
@@ -812,7 +812,7 @@ _pw_loop=function()
   local visible={};for _,d in ipairs(dialogs)do if d._visible then visible[#visible+1]=dialogSpec(d)end end
   local running=false;for _,t in ipairs(timers)do running=running or t.isRunning end
   if #visible==0 and not running and not appEvents:_hasHandlers() and not (activeSprite and spriteEvents:_hasHandlers()) then break end
-  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,layerKeys=layerIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=activeSprite and selectionWire(spriteSelection)}
+  local response=host{op='pump',sprite=activeSprite and contexts[activeSprite].id,dialogs=visible,document=doc,layerKeys=layerIdentityWire(),celKeys=celIdentityWire(),frame=activeFrame,layer=activeLayer,colors=scriptColors,selection=activeSprite and selectionWire(spriteSelection)}
   if response.editor then
    local editor=response.editor
    local target=sprite
@@ -824,7 +824,7 @@ _pw_loop=function()
    end
    if contexts[target] then withSprite(target,function()
     local updated=expandDocumentPixels(editor.document)
-    reconcileDocumentState(updated,editor.layerKeys)
+    reconcileDocumentState(updated,editor.layerKeys,editor.celKeys)
     doc=updated;activeFrame=editor.frame or activeFrame;activeLayer=editor.layer or activeLayer
     if editor.selection then spriteSelection._mask=points(editor.selection) end
     rebuildHandles();spriteEvents:_emit('change',{fromUndo=false});appEvents:_emit('sitechange')

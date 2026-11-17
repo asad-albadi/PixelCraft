@@ -166,6 +166,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 modeless timeline identity checkpoint. Existing editor layer IDs survive a modeless Lua preview and final commit. Layer keys and frame export IDs let Lua rebind retained layer, frame, and cel handles to surviving objects after a native timeline update. A Windows editor request-loop test reorders a native layer and a Lua-created layer, inserts a native frame, and writes through a retained cel image. Individual cel moves across otherwise surviving slots, other object types, and native clipboard verification remain open.
 
+- Item 45 cel move identity checkpoint. Modeless Lua binds accessed cel slots to native runtime IDs. Its editor request-loop regression moves a cel to a different layer and frame, then uses the original image handle to paint the destination, checks that the replaced cel handle is invalid, and confirms the moved native ID survives commit. Native editor undo of a replaced cel, other object types, detached clipboard tileset metadata, and system clipboard verification remain open.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

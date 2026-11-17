@@ -538,16 +538,16 @@ local function isTagUserData(chunk)
 end
 local tilesetHandle,spriteTilesets,assignLayerTileset,snapshotTileset,detachedTileset
 local cloneDocumentState,insertFrameIdentity,cel,rebuildHandles
-local setLayerIdentity,layerIdentityWire,reconcileDocumentState
+local setLayerIdentity,layerIdentityWire,celIdentityWire,reconcileDocumentState
 do
  -- Keep Lua handles and their identity tokens out of the serialized document.
  local states=setmetatable({},{__mode='k'})
  local layerKeys=setmetatable({},{__mode='k'})
  local layers=setmetatable({},{__mode='kv'})
  local frames=setmetatable({},{__mode='kv'})
- local cels=setmetatable({},{__mode='k'})
+ local cels=setmetatable({},{__mode='kv'})
  local keysByWire=setmetatable({},{__mode='v'})
- local nextLayerKey=0
+ local nextLayerKey,nextCelKey=0,0
  local state
 
  local function layerKey(wire)
@@ -571,7 +571,16 @@ do
   return keys
  end
 
- reconcileDocumentState=function(document,keys)
+ celIdentityWire=function(document)
+  local value=state(document or doc)
+  local keys={}
+  for key,slot in pairs(value.celSlots)do
+   keys[#keys+1]={key=key.wire,layer=value.layerSlots[slot.layer],frame=value.frameSlots[slot.frame]}
+  end
+  return keys
+ end
+
+ reconcileDocumentState=function(document,keys,celKeys)
   local current=state(doc)
   local oldIds=doc.frame_export_ids and doc.frame_export_ids.frames
   local newIds=document.frame_export_ids and document.frame_export_ids.frames
@@ -582,23 +591,46 @@ do
    next.frameKeys[i]=previous[newIds and newIds[i] or i-1] or next.frameKeys[i]
   end
   setLayerIdentity(document,keys)
+  if not celKeys then
+   next.celRows=current.celRows
+   return
+  end
+  local previousCels={}
+  for key in pairs(current.celSlots)do previousCels[key.wire]=key end
+  for _,entry in ipairs(celKeys)do
+   local key=previousCels[entry.key]
+   local layer=document.layers[entry.layer]
+   local owner=layer and layerKeys[layer]
+   local frame=next.frameKeys[entry.frame]
+   if key and owner and frame then
+    local row=next.celRows[owner] or {}
+    row[frame]=key
+    next.celRows[owner]=row
+   end
+  end
  end
-
 
  state=function(document)
   local value=states[document]
   if value then return value end
   local keys={}
   for i=1,#document.durations do keys[i]={} end
-  value={frameKeys=keys}
+  value={frameKeys=keys,celRows={},celSlots={}}
   states[document]=value
   return value
  end
 
  cloneDocumentState=function(source)
   local target=copy(source)
-  local keys=state(source).frameKeys
-  states[target]={frameKeys=table.move(keys,1,#keys,1,{})}
+  local previous=state(source)
+  local keys=previous.frameKeys
+  local rows={}
+  for layer,row in pairs(previous.celRows)do
+   local copied={}
+   for frame,key in pairs(row)do copied[frame]=key end
+   rows[layer]=copied
+  end
+  states[target]={frameKeys=table.move(keys,1,#keys,1,{}),celRows=rows,celSlots={}}
   for i,layer in ipairs(source.layers)do layerKeys[target.layers[i]]=layerKeys[layer] end
   return target
  end
@@ -617,14 +649,23 @@ do
 
  cel=function(li,fi)
   local l=assert(doc.layers[li],'Missing layer')
-  local key=assert(state(doc).frameKeys[fi],'Missing frame')
+  local value=state(doc)
+  local frame=assert(value.frameKeys[fi],'Missing frame')
   local owner=layerKeys[l]
-  local byFrame=cels[owner]
-  if not byFrame then byFrame=setmetatable({},{__mode='kv'});cels[owner]=byFrame end
-  if byFrame[key] then return byFrame[key] end
+  local row=value.celRows[owner]
+  if not row then row={};value.celRows[owner]=row end
+  local key=row[frame]
+  if not key then
+   nextCelKey=nextCelKey+1
+   key={wire=nextCelKey}
+   row[frame]=key
+   value.celSlots[key]={layer=owner,frame=frame}
+  end
+  if cels[key] then return cels[key] end
 
   local function resolve()
-   local layer,frame=layerIndex(owner),frameIndex(key)
+   local slot=assert(state(doc).celSlots[key],'Cel is deleted or no longer belongs to this document state')
+   local layer,frame=layerIndex(slot.layer),frameIndex(slot.frame)
    return doc.layers[layer],frame,layer
   end
   local handle=bindSpriteHandle(setmetatable({},{
@@ -655,7 +696,7 @@ do
     else error('Unsupported cel field: '..field) end
    end,
   }),sprite)
-  byFrame[key]=handle
+  cels[key]=handle
   return bindUserProperties(handle,sprite,function()
    local layer,frame,index=resolve()
    local link=layer.cel_meta[frame].artwork_link
@@ -749,6 +790,16 @@ do
   for i,key in ipairs(value.frameKeys)do
    value.frameSlots[key]=i
    frameHandles[i]=frameHandle(key)
+  end
+  value.celSlots={}
+  for owner,row in pairs(value.celRows)do
+   if value.layerSlots[owner] then
+    for frame,key in pairs(row)do
+     if value.frameSlots[frame] then
+      value.celSlots[key]={layer=owner,frame=frame}
+     else row[frame]=nil end
+    end
+   else value.celRows[owner]=nil end
   end
  end
 end

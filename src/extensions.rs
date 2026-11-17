@@ -544,12 +544,21 @@ pub struct ScriptSprite {
     pub document: Document,
     #[serde(default, rename = "layerKeys")]
     pub layer_keys: Vec<String>,
+    #[serde(default, rename = "celKeys")]
+    pub cel_keys: Vec<ScriptCelTarget>,
     pub baseline: Option<Document>,
     pub saved: Option<Document>,
     pub filename: PathBuf,
     pub frame: usize,
     pub layer: usize,
     pub selection: ScriptSelection,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct ScriptCelTarget {
+    pub key: u64,
+    pub layer: usize,
+    pub frame: usize,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]

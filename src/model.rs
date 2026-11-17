@@ -662,6 +662,13 @@ pub struct TilemapGeometry {
 #[derive(Clone, Copy, Debug)]
 pub struct EditorId(u64);
 
+impl EditorId {
+    /// Identifies a runtime target for in-process API bridges.
+    pub fn runtime_key(self) -> u64 {
+        self.0
+    }
+}
+
 impl Default for EditorId {
     fn default() -> Self {
         static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
