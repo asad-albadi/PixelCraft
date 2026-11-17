@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{borrow::Cow, ops::RangeInclusive};
 
+mod artwork_palette;
 mod canvas_resize;
+pub use artwork_palette::{generate_artwork_palette, generate_artwork_palette_until};
 pub mod filters;
 mod rotsprite;
 mod sheet_layout;

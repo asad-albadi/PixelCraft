@@ -10,6 +10,7 @@ mod fluent;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
 mod ui_icons;
 use ui_icons::UiIcons;
+mod palette_conversion;
 mod productivity_ui;
 
 mod script_ui;
@@ -690,6 +691,7 @@ struct PixelCraft {
     selection: Option<(i32, i32, i32, i32)>,
     replace_color: Option<ReplaceColor>,
     editor_filter: Option<editor_filters::FilterDialog>,
+    palette_conversion: Option<palette_conversion::PaletteConversion>,
     clipboard: Option<Clipboard>,
     system_clipboard: system_clipboard::SystemClipboard,
     clipboard_target: Option<ClipboardTarget>,
@@ -880,6 +882,7 @@ impl PixelCraft {
             selection: None,
             replace_color: None,
             editor_filter: None,
+            palette_conversion: None,
             clipboard: None,
             system_clipboard: system_clipboard::SystemClipboard::default(),
             clipboard_target: None,
@@ -1958,10 +1961,12 @@ impl PixelCraft {
         let mut capture = false;
         let mut add_group = false;
         let mut add_tile = false;
+        let mut indexed_options = false;
         let mut remove_tag = None;
         egui::Window::new("Sprite properties").open(&mut open).default_width(550.).max_height(660.).vscroll(true).show(ctx,|ui|{
             ui.heading("Color & project");let mut mode=edited.color_mode;
-            egui::ComboBox::from_label("Color mode").selected_text(format!("{:?}",mode)).show_ui(ui,|ui|{for value in [ColorMode::Rgba,ColorMode::Indexed,ColorMode::Grayscale]{ui.pc_selectable_value(&mut mode,value,format!("{:?}",value));}});if mode!=edited.color_mode{edited.set_color_mode(mode);}
+            egui::ComboBox::from_label("Color mode").selected_text(format!("{:?}",mode)).show_ui(ui,|ui|{for value in [ColorMode::Rgba,ColorMode::Indexed,ColorMode::Grayscale]{ui.pc_selectable_value(&mut mode,value,format!("{:?}",value));}});if mode!=edited.color_mode{if mode==ColorMode::Indexed{indexed_options=true;}else{edited.set_color_mode(mode);}}
+            if ui.pc_button("Palette and Indexed Color…").clicked(){indexed_options=true;}
             let mut palette_size=edited.palette.len();ui.add(egui::DragValue::new(&mut palette_size).range(1..=256).prefix("Palette entries "));if palette_size!=edited.palette.len(){edited.palette.resize(palette_size,[0,0,0,255]);edited.palette_names.resize(palette_size,String::new());for p in &mut edited.frame_palettes{p.resize(palette_size,[0,0,0,255]);}let mode=edited.color_mode;edited.set_color_mode(mode);self.palette_index=self.palette_index.min(palette_size-1);}
             ui.small(format!("Canvas: {} × {} · Limit: 16384 per side, 128 million pixels across layers and frames",edited.width,edited.height));
             let mut aspect = edited.pixel_aspect();
@@ -2027,6 +2032,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
                 Err(e) => self.status = e,
             }
+        }
+        if indexed_options {
+            self.properties_open = false;
+            self.open_palette_conversion();
         }
         if add_group {
             self.remember_action("New group");
@@ -2142,6 +2151,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.rename.is_some()
             || self.replace_color.is_some()
             || self.editor_filter.is_some()
+            || self.palette_conversion.is_some()
             || self.rename_frame.is_some()
             || self.help
             || self.properties_open
@@ -3329,6 +3339,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             "clear" => self.clear(),
             "filters" => self.open_filters(),
+            "palette-conversion" => self.open_palette_conversion(),
             "replace-color" => {
                 self.stop_playback(false);
                 self.replace_color = Some(ReplaceColor {
@@ -4285,6 +4296,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     "Sprite",
                     vec![
                         ("Properties, layers, tiles & ranges…", "properties"),
+                        ("Palette and Indexed Color…", "palette-conversion"),
                         ("Canvas size…", "resizecanvas"),
                         ("Sprite size…", "spritesize"),
                         ("Duplicate sprite", "duplicatesprite"),
@@ -7046,6 +7058,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         self.replace_color_dialog(ctx);
         self.filters_dialog(ctx);
+        self.palette_conversion_dialog(ctx);
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let mut cancel = false;

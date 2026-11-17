@@ -345,6 +345,66 @@ fn filter_curves_brightness_and_kernel_share_the_expected_channel_math() {
 }
 
 #[test]
+fn artwork_palette_and_indexed_conversion_keep_transparency_and_authored_slots() {
+    use pixelcraft::contributions::DitheringMatrix;
+    use pixelcraft::workflows::generate_artwork_palette;
+    let mut d = Document::new(4, 2);
+    let dark = [20, 30, 40, 255];
+    let light = [200, 210, 220, 255];
+    let translucent = [80, 90, 100, 180];
+    d.layers[0].cels[0] = vec![dark, dark, light, CLEAR, dark, translucent, CLEAR, CLEAR].into();
+    assert_eq!(
+        generate_artwork_palette(&d, 0..=0, 4).unwrap(),
+        [CLEAR, dark, translucent, light]
+    );
+    let reduced = generate_artwork_palette(&d, 0..=0, 3).unwrap();
+    assert_eq!(reduced.len(), 3);
+    assert_eq!(reduced[0], CLEAR);
+    let matrix = DitheringMatrix::bayer(2).unwrap();
+    let converted = d
+        .indexed_conversion(Some(vec![CLEAR, dark, light]), 2, Some(&matrix))
+        .unwrap();
+    assert_eq!(converted.color_mode, ColorMode::Indexed);
+    assert_eq!(converted.transparent_index, 2);
+    assert_eq!(converted.palette, [light, dark, CLEAR]);
+    let indices = converted.layers[0].cel_meta[0].indices.as_ref().unwrap();
+    assert_eq!([indices[0], indices[2], indices[3]], [1, 0, 2]);
+    let moved = converted.indexed_conversion(None, 1, None).unwrap();
+    assert_eq!(moved.layers[0].cels[0], converted.layers[0].cels[0]);
+    let indices = moved.layers[0].cel_meta[0].indices.as_ref().unwrap();
+    assert_eq!([indices[0], indices[2], indices[3]], [2, 0, 1]);
+    assert_eq!(d.color_mode, ColorMode::Rgba);
+}
+
+#[test]
+fn indexed_conversion_dithers_midtones_without_changing_endpoints_or_frame_palettes() {
+    use pixelcraft::contributions::DitheringMatrix;
+    let mut d = Document::new(4, 2);
+    let black = [0, 0, 0, 255];
+    let white = [255; 4];
+    let red = [255, 0, 0, 255];
+    d.palette = vec![CLEAR, black, white];
+    d.add_frame(0, false);
+    d.frame_palettes = vec![d.palette.clone(), vec![CLEAR, black, red]];
+    let gray = [125, 125, 125, 255];
+    d.layers[0].cels[0] = vec![gray, gray, gray, gray, gray, gray, black, CLEAR].into();
+    d.layers[0].cels[1].set(0, red);
+    let plain = d.indexed_conversion(None, 0, None).unwrap();
+    assert_eq!(
+        plain.layers[0].cels[0].to_vec(),
+        [black, black, black, black, black, black, black, CLEAR]
+    );
+    let matrix = DitheringMatrix::bayer(2).unwrap();
+    let ordered = d.indexed_conversion(None, 0, Some(&matrix)).unwrap();
+    assert_eq!(
+        ordered.layers[0].cels[0].to_vec(),
+        [white, black, white, black, black, white, black, CLEAR]
+    );
+    assert_eq!(ordered.layers[0].cels[1][0], red);
+    assert_eq!(ordered.frame_palettes, d.frame_palettes);
+}
+
+#[test]
 fn ramps_append_without_recoloring_indexed_frames() {
     let mut d = Document::new(1, 1);
     d.import_palette(vec![CLEAR, [255, 0, 0, 255], [0, 0, 255, 255]])

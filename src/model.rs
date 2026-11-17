@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 mod cel_selection;
 mod frame_order;
+mod indexed_conversion;
 mod layer_conversion;
 mod layer_operations;
 mod layer_order;

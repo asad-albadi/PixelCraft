@@ -170,6 +170,40 @@ pub struct DitheringMatrix {
     pub values: Vec<u8>,
 }
 impl DitheringMatrix {
+    pub fn bayer(size: usize) -> Option<Self> {
+        if !matches!(size, 2 | 4 | 8) {
+            return None;
+        }
+        let mut values = vec![0];
+        let mut width = 1;
+        while width < size {
+            let next_width = width * 2;
+            let mut next = vec![0; next_width * next_width];
+            for (i, rank) in values.into_iter().enumerate() {
+                let offset = (i / width) * next_width + i % width;
+                next[offset] = 4 * rank;
+                next[offset + width] = 4 * rank + 2;
+                next[offset + width * next_width] = 4 * rank + 3;
+                next[offset + width * (next_width + 1)] = 4 * rank + 1;
+            }
+            values = next;
+            width = next_width;
+        }
+        Some(Self {
+            width,
+            height: width,
+            values,
+        })
+    }
+
+    pub fn thresholds(&self) -> Vec<f32> {
+        let range = f32::from(self.values.iter().copied().max().unwrap_or(0)) + 1.;
+        self.values
+            .iter()
+            .map(|&rank| (f32::from(rank) + 0.5) / range)
+            .collect()
+    }
+
     pub fn load(path: &Path) -> Result<Self, String> {
         let im = image::open(path).map_err(|e| e.to_string())?.to_luma8();
         let (w, h) = im.dimensions();

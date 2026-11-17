@@ -78,7 +78,7 @@ impl GradientShape {
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-enum GradientPattern {
+pub(super) enum GradientPattern {
     #[default]
     Smooth,
     Bayer2,
@@ -88,7 +88,7 @@ enum GradientPattern {
 }
 
 impl GradientPattern {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Smooth => "Smooth",
             Self::Bayer2 => "Bayer 2×2",
@@ -98,50 +98,27 @@ impl GradientPattern {
         }
     }
 
-    fn thresholds(self, doc: &Document) -> Option<(usize, usize, Vec<f32>)> {
+    pub(super) fn matrix(
+        self,
+        doc: &Document,
+    ) -> Option<pixelcraft::contributions::DitheringMatrix> {
         use pixelcraft::contributions::DitheringMatrix;
-        let size = match self {
-            Self::Smooth => return None,
-            Self::Installed => {
-                let DitheringMatrix {
-                    width,
-                    height,
-                    values,
-                } = doc.dithering.as_ref().filter(|m| m.validate())?;
-                let range = f32::from(*values.iter().max()?) + 1.;
-                return Some((
-                    *width,
-                    *height,
-                    values
-                        .iter()
-                        .map(|&rank| (f32::from(rank) + 0.5) / range)
-                        .collect(),
-                ));
-            }
-            Self::Bayer2 => 2,
-            Self::Bayer4 => 4,
-            Self::Bayer8 => 8,
-        };
-        let mut ranks = vec![0];
-        let mut width = 1;
-        while width < size {
-            let next_width = width * 2;
-            let mut next = vec![0; next_width * next_width];
-            for (i, rank) in ranks.into_iter().enumerate() {
-                let offset = (i / width) * next_width + i % width;
-                next[offset] = 4 * rank;
-                next[offset + width] = 4 * rank + 2;
-                next[offset + width * next_width] = 4 * rank + 3;
-                next[offset + width * (next_width + 1)] = 4 * rank + 1;
-            }
-            ranks = next;
-            width = next_width;
+        match self {
+            Self::Smooth => None,
+            Self::Installed => doc
+                .dithering
+                .as_ref()
+                .filter(|matrix| matrix.validate())
+                .cloned(),
+            Self::Bayer2 => DitheringMatrix::bayer(2),
+            Self::Bayer4 => DitheringMatrix::bayer(4),
+            Self::Bayer8 => DitheringMatrix::bayer(8),
         }
-        let thresholds = ranks
-            .into_iter()
-            .map(|rank| (rank as f32 + 0.5) / (size * size) as f32)
-            .collect();
-        Some((size, size, thresholds))
+    }
+
+    fn thresholds(self, doc: &Document) -> Option<(usize, usize, Vec<f32>)> {
+        self.matrix(doc)
+            .map(|matrix| (matrix.width, matrix.height, matrix.thresholds()))
     }
 }
 
