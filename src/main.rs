@@ -172,8 +172,17 @@ struct FileOpenJob {
     target: OpenTarget,
     receiver: std::sync::mpsc::Receiver<(PathBuf, Result<Document, String>)>,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PasteMode {
+    InPlace,
+    Sprite,
+    Layer,
+    Reference,
+}
+
 #[derive(PartialEq)]
 struct ClipboardTarget {
+    mode: PasteMode,
     tab: usize,
     generation: u64,
     layer: usize,
@@ -2724,73 +2733,114 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.start_export_recipe(ExportRecipe { path, kind }, false);
     }
     fn copy(&mut self) {
-        self.clipboard_target = None;
+        self.copy_pixels(false);
+    }
+
+    fn selection_clipboard(&self, merged: bool) -> Option<Clipboard> {
         let (x0, y0, x1, y1) =
             self.selection
                 .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
-        let (x0, y0, x1, y1) = (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+        let (x0, y0, x1, y1) = (
+            x0.min(x1).max(0),
+            y0.min(y1).max(0),
+            x0.max(x1).min(self.doc.width as i32 - 1),
+            y0.max(y1).min(self.doc.height as i32 - 1),
+        );
+        if x0 > x1 || y0 > y1 {
+            return None;
+        }
+        let composite = merged.then(|| self.doc.composite(self.frame));
         let w = (x1 - x0 + 1) as usize;
         let h = (y1 - y0 + 1) as usize;
         let mut pixels = Vec::with_capacity(w * h);
-        let mut mask =
-            (self.selection.is_some() || self.studio.mask.is_some()).then(|| ClipboardMask {
-                origin: [x0, y0],
-                selected: Vec::with_capacity(w * h),
-            });
+        let mut selected_pixels =
+            Vec::with_capacity(if self.selection.is_some() { w * h } else { 0 });
         for y in y0..=y1 {
             for x in x0..=x1 {
                 let selected = self.selected(x, y);
-                pixels.push(if selected {
-                    self.doc
-                        .index(x, y)
-                        .map_or(CLEAR, |i| self.doc.layers[self.layer].cels[self.frame][i])
-                } else {
-                    CLEAR
-                });
-                if let Some(mask) = &mut mask {
-                    mask.selected.push(selected);
+                if self.selection.is_some() {
+                    selected_pixels.push(selected);
                 }
+                pixels.push(if !selected {
+                    CLEAR
+                } else if let Some(composite) = &composite {
+                    composite[y as usize * self.doc.width + x as usize]
+                } else {
+                    self.doc
+                        .sample_layer(self.layer, self.frame, x, y)
+                        .unwrap_or(CLEAR)
+                });
             }
         }
+        if self.selection.is_some() && !selected_pixels.contains(&true) {
+            return None;
+        }
+        Some(Clipboard {
+            w,
+            h,
+            pixels,
+            selection: self.selection.map(|_| ClipboardMask {
+                origin: [x0, y0],
+                selected: selected_pixels,
+            }),
+            palette: Some(self.doc.palette_for(self.frame).to_vec()),
+            tileset: None,
+        })
+    }
+
+    fn copy_pixels(&mut self, merged: bool) {
+        let Some(clip) = self.selection_clipboard(merged) else {
+            self.status = "No pixels selected".into();
+            return;
+        };
+        self.clipboard_target = None;
         self.script_clipboard_text = None;
-        self.status = "Copied pixels from the active layer".into();
+        self.status = if merged {
+            "Copied visible artwork"
+        } else {
+            "Copied pixels from the active layer"
+        }
+        .into();
         if self.shot.is_none() && !cfg!(test) {
-            let result = self.system_clipboard.copy(w, h, pixels.clone());
+            let result = self
+                .system_clipboard
+                .copy(clip.w, clip.h, clip.pixels.clone());
             if let Err(e) = result {
                 self.status = format!("Copied internally; system clipboard: {e}");
             }
         }
-        self.clipboard = Some(Clipboard {
-            w,
-            h,
-            pixels,
-            selection: mask,
-            palette: Some(self.doc.palette_for(self.frame).to_vec()),
-            tileset: None,
-        });
+        self.clipboard = Some(clip);
     }
 
     fn paste(&mut self) {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+        self.paste_as(PasteMode::InPlace);
+    }
+
+    fn paste_as(&mut self, mode: PasteMode) {
+        if mode == PasteMode::InPlace
+            && (!self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some())
+        {
             return;
         }
         if self.shot.is_none() && !cfg!(test) {
+            self.clipboard_target = None;
             match self.system_clipboard.paste() {
                 Ok(()) => {
-                    self.clipboard_target = Some(self.clipboard_destination());
+                    self.clipboard_target = Some(self.clipboard_destination(mode));
                     self.status = "Reading system clipboard…".into();
                 }
                 Err(e) => {
-                    self.paste_internal();
+                    self.paste_internal(mode);
                     self.status = format!("{e}; using internal clipboard");
                 }
             }
             return;
         }
-        self.paste_internal();
+        self.paste_internal(mode);
     }
-    fn clipboard_destination(&self) -> ClipboardTarget {
+    fn clipboard_destination(&self, mode: PasteMode) -> ClipboardTarget {
         ClipboardTarget {
+            mode,
             tab: self.active_tab,
             generation: self.power.bridge_generation,
             layer: self.layer,
@@ -2841,16 +2891,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             system_clipboard::Completion::Copy(Ok(())) | system_clipboard::Completion::Text(_) => {}
             system_clipboard::Completion::Paste(result) => {
-                if self.clipboard_target.take() == Some(self.clipboard_destination()) {
+                if let Some(target) = self.clipboard_target.take()
+                    && target == self.clipboard_destination(target.mode)
+                {
                     match result {
                         Ok((w, h, pixels)) => {
                             self.script_clipboard_text = None;
                             self.remember_native_image(w, h, pixels);
-                            self.paste_internal();
+                            self.paste_internal(target.mode);
                         }
                         Err(e) => {
                             if !e.contains("timed out") && !e.contains("exceeds limits") {
-                                self.paste_internal();
+                                self.paste_internal(target.mode);
                             }
                             self.status = format!("{e}; internal clipboard retained");
                         }
@@ -3068,16 +3120,139 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         Ok(serde_json::json!({"document":extensions::script_document_value(&doc)?}))
     }
 
-    fn paste_internal(&mut self) {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+    fn paste_internal(&mut self, mode: PasteMode) {
+        let Some(clip) = self.clipboard.take() else {
+            self.status = "No image in the clipboard".into();
+            return;
+        };
+        self.paste_image(mode, &clip);
+        self.clipboard = Some(clip);
+    }
+
+    fn paste_image(&mut self, mode: PasteMode, clip: &Clipboard) {
+        let (x, y, _, _) = self.selection.unwrap_or((0, 0, 0, 0));
+        match mode {
+            PasteMode::InPlace => {
+                if self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none() {
+                    self.remember_action("Paste");
+                    Self::paste_raster(&mut self.doc, self.layer, self.frame, (x, y), clip);
+                    self.status = "Pasted pixels".into();
+                }
+            }
+            PasteMode::Sprite => {
+                let mut doc = Document::new(clip.w, clip.h);
+                if let Some(palette) = &clip.palette {
+                    doc.palette.clone_from(palette);
+                }
+                doc.layers[0].cels[0] = clip.native_pixels().into();
+                self.open_derived_sprite(doc, "Pasted as a new sprite");
+            }
+            PasteMode::Layer => {
+                if !self.doc.can_add_layer() {
+                    self.status = "Layer limit reached for this canvas size".into();
+                    return;
+                }
+                let mut next = self.doc.clone();
+                next.add_layer();
+                let layer = next.layers.len() - 1;
+                next.layers[layer].name = "Pasted layer".into();
+                for index in 0..clip.pixels.len() {
+                    let pixel = clip.visible_pixel(index);
+                    if pixel[3] == 0 {
+                        continue;
+                    }
+                    let px = x.saturating_add((index % clip.w) as i32);
+                    let py = y.saturating_add((index / clip.w) as i32);
+                    if let Some(i) = next.index(px, py) {
+                        next.set_pixel(layer, self.frame, i, pixel);
+                    }
+                }
+                if let Err(error) = next.validate() {
+                    self.status = error;
+                    return;
+                }
+                self.remember_action("Paste as new layer");
+                self.doc = next;
+                self.layer = layer;
+                self.status = "Pasted as a new layer".into();
+            }
+            PasteMode::Reference => {
+                let mut next = self.doc.clone();
+                next.references
+                    .push(pixelcraft::productivity::ReferenceImage {
+                        behind: false,
+                        floating: false,
+                        name: "Pasted reference".into(),
+                        width: clip.w,
+                        height: clip.h,
+                        pixels: clip.native_pixels().into(),
+                        x: x as f32,
+                        y: y as f32,
+                        scale: 1.,
+                        opacity: 255,
+                        visible: true,
+                    });
+                match next.validate() {
+                    Ok(()) => {
+                        self.remember_action("Paste as reference");
+                        self.doc = next;
+                        self.status = "Pasted as a reference image".into();
+                    }
+                    Err(error) => self.status = error,
+                }
+            }
+        }
+    }
+
+    fn open_derived_sprite(&mut self, doc: Document, status: &str) {
+        if self.script_job.is_some() {
+            self.status = "Wait for the current script before opening another tab".into();
             return;
         }
-        if let Some(c) = self.clipboard.clone() {
-            self.remember_action("Paste");
-            let (x, y, _, _) = self.selection.unwrap_or((0, 0, 0, 0));
-            Self::paste_raster(&mut self.doc, self.layer, self.frame, (x, y), &c);
-            self.status = "Pasted pixels".into();
+        let blank = Document::new(doc.width, doc.height);
+        self.open_document(doc, None);
+        self.saved = blank;
+        self.status = status.into();
+    }
+
+    fn new_sprite_from_selection(&mut self) {
+        let Some(clip) = self.selection.and_then(|_| self.selection_clipboard(false)) else {
+            self.status = "Select pixels to create a sprite".into();
+            return;
+        };
+        let mut doc = Document::new(clip.w, clip.h);
+        doc.palette = clip.palette.unwrap_or_else(default_palette);
+        doc.layers[0].cels[0] = clip.pixels.into();
+        doc.color_profile.clone_from(&self.doc.color_profile);
+        doc.pixel_aspect = self.doc.pixel_aspect;
+        let source = &self.doc.layers[self.layer];
+        if self.doc.color_mode == ColorMode::Indexed && !source.background {
+            doc.transparent_index = self.doc.transparent_index;
+            if let Some(indices) = &source.cel_meta[self.frame].indices {
+                let mask = clip.selection.unwrap();
+                let [x, y] = mask.origin;
+                doc.layers[0].cel_meta[0].indices = Some(
+                    mask.selected
+                        .iter()
+                        .enumerate()
+                        .map(|(i, selected)| {
+                            if *selected {
+                                indices[(y as usize + i / clip.w) * self.doc.width
+                                    + x as usize
+                                    + i % clip.w]
+                            } else {
+                                doc.transparent_index as u8
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
+            }
+            doc.set_color_mode(ColorMode::Indexed);
+        } else if self.doc.color_mode == ColorMode::Grayscale {
+            doc.color_mode = ColorMode::Grayscale;
         }
+        self.open_derived_sprite(doc, "Created a sprite from the selection");
     }
     fn clear(&mut self) {
         if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
@@ -3137,7 +3312,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "undo-history" => self.history_open = !self.history_open,
             "redo" => self.redo(),
             "copy" => self.copy(),
+            "copy-merged" => self.copy_pixels(true),
             "paste" => self.paste(),
+            "paste-as-sprite" => self.paste_as(PasteMode::Sprite),
+            "paste-as-layer" => self.paste_as(PasteMode::Layer),
+            "paste-as-reference" => self.paste_as(PasteMode::Reference),
+            "new-sprite-from-selection" => self.new_sprite_from_selection(),
             "cut" => {
                 self.copy();
                 self.clear()
@@ -4070,8 +4250,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Redo   Ctrl+Y", "redo"),
                         ("Undo History…", "undo-history"),
                         ("Copy   Ctrl+C", "copy"),
+                        ("Copy Merged", "copy-merged"),
                         ("Cut   Ctrl+X", "cut"),
                         ("Paste   Ctrl+V", "paste"),
+                        ("Paste as New Sprite", "paste-as-sprite"),
+                        ("Paste as New Layer", "paste-as-layer"),
+                        ("Paste as Reference", "paste-as-reference"),
                         ("Clear   Delete", "clear"),
                         ("Replace Color…", "replace-color"),
                         ("Select all   Ctrl+A", "selectall"),
@@ -4087,6 +4271,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Flip selection horizontally", "selectionflipx"),
                         ("Flip selection vertically", "selectionflipy"),
                         ("Crop to selection", "crop"),
+                        ("New Sprite from Selection", "new-sprite-from-selection"),
                     ],
                 ),
                 (
@@ -8403,6 +8588,108 @@ mod tests {
         a.clear();
         assert_eq!(a.doc, before);
     }
+    #[test]
+    fn clipboard_commands_create_distinct_destinations_and_keep_selection_holes() {
+        let mut a = app();
+        a.replace(Document::new(3, 2), None);
+        let base = [160, 40, 30, 255];
+        let top = [31, 111, 201, 128];
+        a.doc.layers[0].cels[0] = vec![base; 6].into();
+        a.doc.add_layer();
+        a.layer = 1;
+        a.doc.layers[1].cels[0] = vec![top; 6].into();
+        a.set_selection_mask(vec![false, true, false, false, true, true]);
+
+        let merged = a.doc.composite(0)[1];
+        a.action("copy-merged");
+        assert_eq!(
+            a.clipboard.as_ref().unwrap().pixels,
+            [merged, CLEAR, merged, merged]
+        );
+        a.doc.layers[1].locked = true;
+        a.action("paste-as-layer");
+        assert_eq!(a.doc.layers.len(), 3);
+        assert_eq!(
+            &a.doc.layers[2].cels[0].to_vec(),
+            &[CLEAR, merged, CLEAR, CLEAR, merged, merged]
+        );
+        a.undo();
+        assert_eq!(a.doc.layers.len(), 2);
+
+        a.action("paste-as-reference");
+        let reference = &a.doc.references[0];
+        assert_eq!(
+            (reference.x, reference.y, reference.width, reference.height),
+            (1., 0., 2, 2)
+        );
+        assert_eq!(reference.pixels.to_vec(), [merged, CLEAR, merged, merged]);
+        assert_eq!(a.doc.composite(0)[1], merged);
+        a.undo();
+        assert!(a.doc.references.is_empty());
+
+        a.action("new-sprite-from-selection");
+        assert_eq!((a.doc.width, a.doc.height), (2, 2));
+        assert_eq!(a.doc.layers[0].cels[0].to_vec(), [top, CLEAR, top, top]);
+        assert!(a.dirty());
+        assert_eq!(a.clipboard.as_ref().unwrap().pixels[0], merged);
+        a.action("paste-as-sprite");
+        assert_eq!(a.tabs.len(), 3);
+        assert_eq!(
+            a.doc.layers[0].cels[0].to_vec(),
+            [merged, CLEAR, merged, merged]
+        );
+        assert!(a.dirty());
+    }
+
+    #[test]
+    fn clipboard_destinations_keep_native_requests_bound_to_their_original_site() {
+        let mut a = app();
+        let color = [31, 111, 201, 128];
+        a.selection = Some((2, 3, 2, 3));
+        a.clipboard_target = Some(a.clipboard_destination(PasteMode::Layer));
+        a.apply_native_clipboard(system_clipboard::Completion::Paste(Ok((1, 1, vec![color]))));
+        assert_eq!(a.doc.layers.len(), 2);
+        assert_eq!(a.doc.layers[1].cels[0][26], color);
+
+        a.clipboard_target = Some(a.clipboard_destination(PasteMode::Reference));
+        a.open_document(Document::new(8, 8), None);
+        a.apply_native_clipboard(system_clipboard::Completion::Paste(Ok((1, 1, vec![color]))));
+        assert!(a.doc.references.is_empty());
+        a.switch_tab(0);
+        assert!(a.doc.references.is_empty());
+
+        a.clipboard_target = Some(a.clipboard_destination(PasteMode::Reference));
+        a.apply_native_clipboard(system_clipboard::Completion::Paste(Err(
+            "No native bitmap".into()
+        )));
+        assert_eq!(a.doc.references[0].pixels[0], color);
+    }
+
+    #[test]
+    fn new_sprite_from_selection_preserves_duplicate_indexed_swatches() {
+        let mut a = app();
+        let color = [51, 91, 151, 255];
+        a.doc.import_palette(vec![CLEAR, color, color]).unwrap();
+        a.doc.set_color_mode(ColorMode::Indexed);
+        a.doc.drawing_index = Some(2);
+        a.doc.set_pixel(0, 0, 9, color);
+        a.doc.drawing_index = Some(1);
+        a.doc.set_pixel(0, 0, 10, color);
+        a.doc.drawing_index = None;
+        a.selection = Some((1, 1, 2, 1));
+        a.action("new-sprite-from-selection");
+        assert_eq!(a.doc.color_mode, ColorMode::Indexed);
+        assert_eq!(
+            a.doc.layers[0].cel_meta[0]
+                .indices
+                .as_deref()
+                .unwrap()
+                .as_slice(),
+            [2, 1]
+        );
+        a.doc.validate().unwrap();
+    }
+
     #[test]
     fn drawing_is_blocked_while_new_sprite_dialog_is_open() {
         let ctx = egui::Context::default();

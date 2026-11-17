@@ -292,6 +292,16 @@ impl PixelCraft {
         let actions: std::collections::BTreeSet<_> = ["PixelCraft", "Aseprite", "Photoshop"]
             .into_iter()
             .flat_map(|name| shortcut_preset(name).into_values())
+            .chain(
+                [
+                    "copy-merged",
+                    "paste-as-sprite",
+                    "paste-as-layer",
+                    "paste-as-reference",
+                    "new-sprite-from-selection",
+                ]
+                .map(str::to_owned),
+            )
             .chain(self.custom_shortcuts.values().cloned())
             .collect();
         ui.horizontal(|ui| {

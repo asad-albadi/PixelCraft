@@ -188,6 +188,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 18 complete. Each enabled brush symmetry axis has an on-canvas handle and can snap to a pixel center or edge. Positions are per tab, survive workspace recovery, and can be centered from Drawing & selection studio. The pointer regression moves both handles independently, checks reflected pixels and undo, and verifies tab isolation. Formatting, strict Clippy, and 563 Windows all-target tests passed. Revisit shape-tool symmetry and saved-file reopen behavior during the parity audit.
 
+- Item 10 complete. Edit and the shortcut editor expose Copy Merged, all three Paste As destinations, and New Sprite from Selection. The current frame is the source. Copy Merged uses the visible artwork composite and selection holes stay transparent. New Sprite from Selection uses the active layer and retains indexed slots for ordinary indexed layers, the color profile, and pixel aspect. A pasted bitmap opens as RGBA. Tests verify exact translucent layer pixels, undo, reference placement, independent tabs, and async clipboard routing and fallback using simulated native completion. Formatting, strict Clippy, and 566 Windows all-target tests passed. Cross-application clipboard exchange remains to be exercised on a desktop.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.
@@ -202,7 +204,7 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 - [ ] **7. Add dithered gradients.** Expose gradient patterns and dithering in the gradient tool.
 - [ ] **8. Add selection operations and reusable masks.** Include elliptical marquee, polygonal lasso, intersection, invert, reselect, Color Range, grow, shrink, border, and mask import and export.
 - [ ] **9. Add on-canvas scale and skew handles.** Support interactive transforms on a selection and across the selected timeline cels.
-- [ ] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.
+- [x] **10. Expand copy and paste.** Add Copy Merged, Paste as New Sprite, Layer or Reference, and New Sprite from Selection.
 - [x] **11. Resize the canvas with anchors and offsets.** Apply resizing across layers and frames, including tilemaps.
 - [x] **12. Add whole-sprite operations.** Resample, auto-trim, duplicate, rotate, and flip sprites across layers and frames.
 - [ ] **13. Expand filters.** Add brightness and contrast, curves, convolution, and despeckle with previews and selectable targets.

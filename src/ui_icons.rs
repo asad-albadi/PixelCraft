@@ -71,6 +71,11 @@ pub fn icon_name(action: &str) -> &str {
 }
 pub fn action_label(action: &str) -> &str {
     match action {
+        "copy-merged" => "Copy Merged",
+        "paste-as-sprite" => "Paste as New Sprite",
+        "paste-as-layer" => "Paste as New Layer",
+        "paste-as-reference" => "Paste as Reference",
+        "new-sprite-from-selection" => "New Sprite from Selection",
         "closetab" => "Close sprite",
         "prev" => "Previous frame",
         "next" => "Next frame",
