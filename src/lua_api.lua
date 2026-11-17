@@ -1251,6 +1251,7 @@ function _pw_plugin:newMenuSeparator(_) end
 local encodeJson
 do
  local kind, walk, length, at, stringify = type, next, rawlen, rawget, tostring
+ local numberKind = math.type
  local substitute, format, ascii, join = string.gsub, string.format, string.byte, table.concat
  local function escape(text)
   return '"' .. substitute(text, '[%z\1-\31\\"]', function(char)
@@ -1285,8 +1286,19 @@ do
      if kind(key) ~= 'number' then array = false; break end
     end
     if array then
+     local count = length(item)
+     if count == 4 then
+      local r, g, b, a = at(item, 1), at(item, 2), at(item, 3), at(item, 4)
+      if numberKind(r) == 'integer' and numberKind(g) == 'integer' and
+         numberKind(b) == 'integer' and numberKind(a) == 'integer' then
+       -- Serialize common raster tuples without recursing per channel.
+       append(r == 0 and g == 0 and b == 0 and a == 0 and '[0,0,0,0]' or
+        format('[%d,%d,%d,%d]', r, g, b, a))
+       return
+      end
+     end
      append('[')
-     for i = 1, length(item) do
+     for i = 1, count do
       if i > 1 then append(',') end
       write(at(item, i), depth + 1)
      end
