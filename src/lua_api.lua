@@ -76,6 +76,7 @@ local function expandDocumentPixels(document)
  return document
 end
 local doc=expandDocumentPixels(_pw_document)
+_pw_document=nil
 local colorChannels={r=1,red=1,g=2,green=2,b=3,blue=3,a=4,alpha=4}
 local function hsvToRgb(h,s,v)
  h=(h%360)/60;s=math.max(0,math.min(1,s));v=math.max(0,math.min(1,v))
@@ -1387,8 +1388,12 @@ function _pw_snapshot()
  installBudget(1000000000,5)
  return encodeJson(doc)
 end
+local initialized=false
 function _pw_finish(command,discover)
- if type(init)=='function' then init(_pw_plugin) end
+ if not initialized then
+  if type(init)=='function' then init(_pw_plugin) end
+  initialized=true
+ end
  if command and command~='' then
   local entry=assert(commands[command],'Plugin command was not registered: '..command)
   assert(not entry.onenabled or entry.onenabled(),'Plugin command is currently disabled: '..command)
@@ -1397,6 +1402,9 @@ function _pw_finish(command,discover)
  if not discover and _pw_loop then _pw_loop() end
  hook()
  local result=discover and pluginRegistration() or doc
- if not discover and _pw_workspace_snapshot then result=_pw_workspace_snapshot() end
+ if not discover and _pw_workspace_snapshot then
+  result=_pw_workspace_snapshot()
+  result.registration=pluginRegistration()
+ end
  _pw_result=encodeJson(result)
 end

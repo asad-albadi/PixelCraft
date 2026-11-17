@@ -137,6 +137,30 @@ pub struct PluginCommand {
 pub struct PluginMenu {
     pub title: String,
     pub items: Vec<PluginMenuItem>,
+    package: String,
+    scripts: Vec<(PathBuf, std::ops::Range<usize>)>,
+}
+
+impl PluginMenu {
+    pub fn update_script(&mut self, script: &Path, workspace: &mut ScriptWorkspace) -> bool {
+        let Some(index) = self.scripts.iter().position(|(path, _)| path == script) else {
+            return false;
+        };
+        let Some(registration) = workspace.registration.take() else {
+            return true;
+        };
+        let items = build_script_menu(registration.entries, &self.package, script);
+        let range = &mut self.scripts[index].1;
+        let old_length = range.len();
+        let new_length = items.len();
+        self.items.splice(range.clone(), items);
+        range.end = range.start + new_length;
+        for (_, following) in &mut self.scripts[index + 1..] {
+            following.start = following.start - old_length + new_length;
+            following.end = following.end - old_length + new_length;
+        }
+        true
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -453,8 +477,10 @@ impl Manager {
         let mut menus = Vec::new();
         for p in self.list()?.into_iter().filter(|p| p.enabled) {
             let mut items = Vec::new();
+            let mut scripts = Vec::new();
             for s in &p.manifest.contributes.scripts {
                 let script = p.directory.join(safe_path(&s.path)?);
+                let start = items.len();
                 let source = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
                 // Plain scripts can open dialogs immediately. A discovery-only
                 // failure must not hide them from the explicit Run action.
@@ -482,17 +508,23 @@ impl Manager {
                             .to_string_lossy()
                             .into_owned(),
                         package: p.id.clone(),
-                        script,
+                        script: script.clone(),
                     }));
                 }
+                scripts.push((script, start..items.len()));
             }
             let title = if p.manifest.display_name.is_empty() {
-                p.id
+                p.id.clone()
             } else {
                 p.manifest.display_name
             };
             if !items.is_empty() {
-                menus.push(PluginMenu { title, items });
+                menus.push(PluginMenu {
+                    title,
+                    items,
+                    package: p.id,
+                    scripts,
+                });
             }
         }
         Ok(menus)
@@ -696,6 +728,7 @@ pub struct ScriptWorkspace {
     pub closed: Vec<u32>,
     pub sprites: Vec<ScriptSprite>,
     pub colors: [[u8; 4]; 2],
+    registration: Option<ScriptRegistration>,
 }
 
 #[derive(serde::Deserialize)]
@@ -753,8 +786,52 @@ pub fn run_workspace_with_host(
     layer: usize,
     command: Option<&str>,
     colors: [[u8; 4]; 2],
-    mut options: serde_json::Value,
+    options: serde_json::Value,
     host: ScriptHost,
+) -> Result<ScriptWorkspace, String> {
+    script_workspace(options, |options| {
+        crate::lua::execute_with_host(
+            doc,
+            source,
+            frame,
+            layer,
+            command,
+            false,
+            Some(colors),
+            options,
+            Some(host),
+        )
+    })
+}
+
+/// Holds a Lua VM on the extension worker thread and binds a new workspace on each run.
+#[derive(Default)]
+pub struct WorkspaceScriptSession(crate::lua::PluginRuntime);
+
+impl WorkspaceScriptSession {
+    pub fn run(
+        &mut self,
+        doc: &Document,
+        context: (usize, usize),
+        source_command: (&str, &str),
+        colors: [[u8; 4]; 2],
+        options: serde_json::Value,
+        host: ScriptHost,
+    ) -> Result<ScriptWorkspace, String> {
+        let result = script_workspace(options, |options| {
+            self.0
+                .execute(doc, context, colors, options, source_command, host)
+        });
+        if result.is_err() {
+            self.0 = Default::default();
+        }
+        result
+    }
+}
+
+fn script_workspace(
+    mut options: serde_json::Value,
+    execute: impl FnOnce(serde_json::Value) -> Result<String, String>,
 ) -> Result<ScriptWorkspace, String> {
     options["editorWorkspace"] = serde_json::Value::Bool(true);
     let mut existing = std::collections::HashSet::from([1]);
@@ -764,17 +841,7 @@ pub fn run_workspace_with_host(
                 .filter_map(|id| id.as_u64().and_then(|id| u32::try_from(id).ok())),
         );
     }
-    let json = crate::lua::execute_with_host(
-        doc,
-        source,
-        frame,
-        layer,
-        command,
-        false,
-        Some(colors),
-        options,
-        Some(host),
-    )?;
+    let json = execute(options)?;
     let workspace: ScriptWorkspace = serde_json::from_str(&json).map_err(|e| e.to_string())?;
     let mut ids = std::collections::HashSet::new();
     let mut pixels = 0usize;

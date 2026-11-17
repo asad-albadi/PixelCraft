@@ -1286,9 +1286,16 @@ end
     assert_eq!(app.plugin_menus.len(), 1);
     let new = r#"
 function init(p)
+ local runs=0
  p:newMenuGroup{id='paint',title='Paint controls',group='extensions'}
  p:newCommand{id='paint-now',title='Paint current sprite',group='paint',onclick=function()
-  app.activeImage:drawPixel(1,0,Color('#0d3551'))
+  runs=runs+1
+  app.activeImage:drawPixel(1,0,Color{r=12+runs,g=53,b=81})
+  if runs==1 then
+   p:newCommand{id='clear-extra',title='Clear extra mark',group='paint',onclick=function()
+    p:deleteCommand('clear-extra')
+   end}
+  end
  end}
 end
 "#;
@@ -1309,16 +1316,43 @@ end
     } else {
         panic!("Reloaded extension did not contain the current registered command");
     }
+    let paint = |app: &mut PixelCraft| {
+        click_label(app, "Extensions");
+        click_label(app, "Reload fixture");
+        click_label(app, "Paint controls");
+        click_label(app, "Paint current sprite");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.script_job.is_some() && Instant::now() < deadline {
+            discard_frame(app, &ctx, size, 1., vec![]);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(app.status, "Applied extension changes");
+    };
+    paint(&mut app);
+    assert_eq!(app.doc.layers[0].cels[0][1], [13, 53, 81, 255]);
+    assert!(
+        matches!(&app.plugin_menus[0].items[0], PluginMenuItem::Group { items, .. } if items.len()==2)
+    );
     click_label(&mut app, "Extensions");
     click_label(&mut app, "Reload fixture");
     click_label(&mut app, "Paint controls");
-    click_label(&mut app, "Paint current sprite");
+    click_label(&mut app, "Clear extra mark");
     let deadline = Instant::now() + Duration::from_secs(5);
     while app.script_job.is_some() && Instant::now() < deadline {
         discard_frame(&mut app, &ctx, size, 1., vec![]);
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert_eq!(app.status, "Applied extension changes");
+    assert!(
+        matches!(&app.plugin_menus[0].items[0], PluginMenuItem::Group { items, .. } if items.len()==1)
+    );
+    app.open_document(Document::new(3, 1), None);
+    paint(&mut app);
+    assert_eq!(app.doc.width, 3);
+    assert_eq!(app.doc.layers[0].cels[0][1], [14, 53, 81, 255]);
+    click_label(&mut app, "Extensions");
+    click_label(&mut app, "Reload extensions");
+    await_reload(&mut app);
+    paint(&mut app);
     assert_eq!(app.doc.layers[0].cels[0][1], [13, 53, 81, 255]);
     std::fs::remove_dir_all(root).unwrap();
 }

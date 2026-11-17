@@ -445,6 +445,7 @@ impl Console {
 struct ScriptRuntime {
     runtime: Runtime,
     finish_reference: c_int,
+    rebind_reference: c_int,
     output_reference: Option<c_int>,
 }
 
@@ -499,6 +500,7 @@ impl ScriptRuntime {
             include_str!("lua_properties.lua")
         ))?;
         let finish_reference = runtime.take_global_function(c"_pw_finish")?;
+        let rebind_reference = runtime.take_global_function(c"_pw_rebind_workspace")?;
         let output_reference = if capture_output {
             runtime.eval(include_str!("lua_output.lua"))?;
             Some(runtime.take_global_function(c"_pw_take_output")?)
@@ -508,8 +510,40 @@ impl ScriptRuntime {
         Ok(Self {
             runtime,
             finish_reference,
+            rebind_reference,
             output_reference,
         })
+    }
+
+    fn rebind(
+        &self,
+        doc: &Document,
+        (frame, layer): (usize, usize),
+        colors: [[u8; 4]; 2],
+        options: serde_json::Value,
+    ) -> Result<(), String> {
+        doc.validate()?;
+        if doc.logical_pixels() > MAX_SCRIPT_PIXELS
+            || frame >= doc.durations.len()
+            || layer >= doc.layers.len()
+        {
+            return Err("Invalid document or site for the extension session".into());
+        }
+        let input = serde_json::json!({
+            "document":doc, "frame":frame+1, "layer":layer+1,
+            "colors":colors, "options":options
+        });
+        self.runtime.push_function(self.rebind_reference)?;
+        self.runtime
+            .load_chunk(&format!("return {}", literal(&input)))?;
+        self.runtime.call(0, 1)?;
+        self.runtime.call(1, 0)
+    }
+
+    fn release_workspace(&self) -> Result<(), String> {
+        self.runtime.push_function(self.rebind_reference)?;
+        self.runtime.call(0, 0)?;
+        self.runtime.hide_global(c"_pw_result")
     }
 
     fn hide_console_handlers(&self) -> Result<(), String> {
@@ -547,5 +581,74 @@ impl ScriptRuntime {
         self.runtime.push_function(reference)?;
         self.runtime.call(0, 1)?;
         self.runtime.take_string()
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct PluginRuntime {
+    state: Option<(String, ScriptRuntime)>,
+    host: std::sync::Arc<std::sync::Mutex<Option<HostCallback>>>,
+}
+
+impl PluginRuntime {
+    pub(crate) fn execute(
+        &mut self,
+        doc: &Document,
+        context: (usize, usize),
+        colors: [[u8; 4]; 2],
+        options: serde_json::Value,
+        (source, command): (&str, &str),
+        host: HostCallback,
+    ) -> Result<String, String> {
+        *self
+            .host
+            .lock()
+            .map_err(|_| "Extension host was interrupted")? = Some(host);
+        let result = self.execute_current(doc, context, colors, options, source, command);
+        *self
+            .host
+            .lock()
+            .map_err(|_| "Extension host was interrupted")? = None;
+        if result.is_err() {
+            self.state = None;
+        }
+        result
+    }
+
+    fn execute_current(
+        &mut self,
+        doc: &Document,
+        context: (usize, usize),
+        colors: [[u8; 4]; 2],
+        options: serde_json::Value,
+        source: &str,
+        command: &str,
+    ) -> Result<String, String> {
+        if let Some((_, runtime)) = self.state.as_ref().filter(|(loaded, _)| loaded == source) {
+            runtime.rebind(doc, context, colors, options)?;
+            let result = runtime.finish(Some(command), false)?;
+            runtime.release_workspace()?;
+            return Ok(result);
+        }
+        let slot = self.host.clone();
+        let runtime = ScriptRuntime::new(
+            doc,
+            context,
+            Some(colors),
+            options,
+            Some(Box::new(move |request| {
+                slot.lock()
+                    .map_err(|_| "Extension host was interrupted")?
+                    .as_mut()
+                    .ok_or("Extension host is unavailable")?(request)
+            })),
+            false,
+        )?;
+        runtime.hide_console_handlers()?;
+        runtime.runtime.eval(source)?;
+        let result = runtime.finish(Some(command), false)?;
+        runtime.release_workspace()?;
+        self.state = Some((source.to_owned(), runtime));
+        Ok(result)
     }
 }

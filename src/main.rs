@@ -451,6 +451,8 @@ struct ExtensionReload {
     rerun: bool,
 }
 
+type ExtensionTask = Box<dyn FnOnce(&mut extensions::WorkspaceScriptSession) + Send>;
+
 struct ScriptPreview {
     initial_tab: usize,
     tab_count: usize,
@@ -942,6 +944,8 @@ struct PixelCraft {
     extension_manager: Option<Manager>,
     plugin_menus: Vec<PluginMenu>,
     extension_reload: Option<ExtensionReload>,
+    extension_worker: Option<std::sync::mpsc::Sender<(PathBuf, ExtensionTask)>>,
+    script_menu_path: Option<PathBuf>,
     extension_error: String,
     #[cfg(test)]
     extension_session: Option<Session>,
@@ -1153,6 +1157,8 @@ impl PixelCraft {
             extension_manager: Manager::new().ok(),
             plugin_menus: vec![],
             extension_reload: None,
+            extension_worker: None,
+            script_menu_path: None,
             extension_error: String::new(),
             #[cfg(test)]
             extension_session: None,
@@ -3822,6 +3828,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         Ok(())
     }
     fn refresh_extensions(&mut self) {
+        self.extension_worker = None;
+        self.script_menu_path = None;
         if let Some(reload) = &mut self.extension_reload {
             reload.rerun = true;
             return;
@@ -3901,7 +3909,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         let mut command = None;
         let enabled = self.script_job.is_none() && self.extension_reload.is_none();
-        for (index, entry) in self.plugin_menus.iter().enumerate() {
+        for (index, entry) in self
+            .plugin_menus
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| !entry.items.is_empty())
+        {
             ui.push_id(index, |ui| {
                 ui.add_enabled_ui(enabled, |ui| {
                     ui.menu_button(&entry.title, |ui| items(ui, &entry.items, &mut command));
@@ -4021,6 +4034,26 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         {
             return Err("Finish the current script or tab close first".into());
         }
+        let worker = if command.is_some() {
+            if self.extension_worker.is_none() {
+                let (sender, receiver) = std::sync::mpsc::channel::<(PathBuf, ExtensionTask)>();
+                std::thread::Builder::new()
+                    .name("pixelcraft-extensions".into())
+                    .spawn(move || {
+                        let mut sessions = std::collections::HashMap::new();
+                        while let Ok((script, run)) = receiver.recv() {
+                            run(sessions.entry(script).or_default());
+                        }
+                    })
+                    .map_err(|error| error.to_string())?;
+                self.extension_worker = Some(sender);
+            }
+            self.extension_worker.clone()
+        } else {
+            None
+        };
+        let session_path = script.clone();
+        self.script_menu_path = command.as_ref().map(|_| script.clone());
         let tab_ids: Vec<_> = (0..self.tabs.len())
             .map(|index| {
                 if index == self.active_tab {
@@ -4082,7 +4115,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixelcraft::productivity::SelectionOp::Intersect => 3,
         };
         let options = serde_json::json!({"selection":selection,"editorTabs":tab_ids,"layerKeys":ScriptTargets::default().expose_layers(&doc),"tool":self.tool.script_name(self.filled),"brushSize":self.brush,"sprayRadius":self.spray_radius,"sprayRate":self.spray_rate,"pixelPerfect":self.studio.pixel_perfect,"fillTolerance":self.power.fill_tolerance,"fillContiguous":!self.power.fill_global,"wandTolerance":self.power.tolerance,"wandContiguous":self.power.contiguous,"selectionMode":selection_mode,"fgTile":self.selected_tile,"tilemapMode":tilemap_mode,"tilesetMode":tileset_mode,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
-        std::thread::spawn(move || {
+        let run = move |session: Option<&mut extensions::WorkspaceScriptSession>| {
             let result = std::fs::read_to_string(&script)
                 .map_err(|e| e.to_string())
                 .and_then(|source| {
@@ -4095,105 +4128,133 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     options["metadataKeys"] =
                         serde_json::to_value(ScriptTargets::default().expose_metadata(&doc))
                             .map_err(|e| e.to_string())?;
-                    extensions::run_workspace_with_host(
-                        &doc,
-                        &source,
-                        frame,
-                        layer,
-                        command.as_deref(),
-                        colors,
-                        options,
-                        Box::new(move |request| {
-                            let op = request["op"].as_str().unwrap_or("");
-                            if matches!(
-                                op,
-                                "open"
-                                    | "save"
-                                    | "isFile"
-                                    | "isDirectory"
-                                    | "listFiles"
-                                    | "makeDirectory"
-                                    | "close"
-                                    | "readScript"
-                            ) {
-                                return extensions::script_file_request_with_authorization(
-                                    &base,
-                                    &request,
-                                    |purpose, path| {
-                                        script_ui::authorize_extension_request(
-                                            &ui_tx,
-                                            &script,
-                                            "filePermission",
-                                            purpose,
-                                            &format!("{path:?}"),
-                                        )
-                                    },
-                                );
-                            }
-                            if op == "networkRequest" {
-                                return extensions::script_network_request(&request, |target| {
+                    let host: extensions::ScriptHost = Box::new(move |request| {
+                        let op = request["op"].as_str().unwrap_or("");
+                        if matches!(
+                            op,
+                            "open"
+                                | "save"
+                                | "isFile"
+                                | "isDirectory"
+                                | "listFiles"
+                                | "makeDirectory"
+                                | "close"
+                                | "readScript"
+                        ) {
+                            return extensions::script_file_request_with_authorization(
+                                &base,
+                                &request,
+                                |purpose, path| {
                                     script_ui::authorize_extension_request(
                                         &ui_tx,
                                         &script,
-                                        "networkPermission",
-                                        "Send an HTTP request",
-                                        target,
+                                        "filePermission",
+                                        purpose,
+                                        &format!("{path:?}"),
                                     )
-                                });
-                            }
-                            if op == "processRequest" {
-                                return extensions::script_process_request(&base, &request, |target| {
-                                    script_ui::authorize_extension_request(
-                                        &ui_tx, &script, "processPermission",
-                                        "Start a program with your operating-system permissions", target,
-                                    )
-                                });
-                            }
-                            if op == "clipboardApply" {
-                                return Self::apply_script_paste(&request);
-                            }
-                            if op == "editorDocument" {
-                                let index = request["sprite"]
-                                    .as_u64()
-                                    .and_then(|id| id.checked_sub(2))
-                                    .and_then(|index| usize::try_from(index).ok());
-                                let (doc, options) = index
-                                    .and_then(|index| background_tabs.get(index))
-                                    .and_then(Option::as_ref)
-                                    .ok_or("Unknown editor tab")?;
-                                let mut response = options.clone();
-                                response["document"] = extensions::script_document_value(doc)?;
-                                response["metadataKeys"] = serde_json::to_value(
-                                    ScriptTargets::default().expose_metadata(doc),
+                                },
+                            );
+                        }
+                        if op == "networkRequest" {
+                            return extensions::script_network_request(&request, |target| {
+                                script_ui::authorize_extension_request(
+                                    &ui_tx,
+                                    &script,
+                                    "networkPermission",
+                                    "Send an HTTP request",
+                                    target,
                                 )
-                                .map_err(|e| e.to_string())?;
-                                return Ok(response);
-                            }
-                            if op == "preferences" {
-                                preferences["preferences"] = request["preferences"].clone();
-                                preferences[script.to_string_lossy().as_ref()] =
-                                    request["pluginPreferences"].clone();
-                                std::fs::create_dir_all(preferences_path.parent().unwrap())
+                            });
+                        }
+                        if op == "processRequest" {
+                            return extensions::script_process_request(&base, &request, |target| {
+                                script_ui::authorize_extension_request(
+                                    &ui_tx,
+                                    &script,
+                                    "processPermission",
+                                    "Start a program with your operating-system permissions",
+                                    target,
+                                )
+                            });
+                        }
+                        if op == "clipboardApply" {
+                            return Self::apply_script_paste(&request);
+                        }
+                        if op == "editorDocument" {
+                            let index = request["sprite"]
+                                .as_u64()
+                                .and_then(|id| id.checked_sub(2))
+                                .and_then(|index| usize::try_from(index).ok());
+                            let (doc, options) = index
+                                .and_then(|index| background_tabs.get(index))
+                                .and_then(Option::as_ref)
+                                .ok_or("Unknown editor tab")?;
+                            let mut response = options.clone();
+                            response["document"] = extensions::script_document_value(doc)?;
+                            response["metadataKeys"] =
+                                serde_json::to_value(ScriptTargets::default().expose_metadata(doc))
                                     .map_err(|e| e.to_string())?;
-                                std::fs::write(
-                                    &preferences_path,
-                                    serde_json::to_vec(&preferences).map_err(|e| e.to_string())?,
-                                )
+                            return Ok(response);
+                        }
+                        if op == "preferences" {
+                            preferences["preferences"] = request["preferences"].clone();
+                            preferences[script.to_string_lossy().as_ref()] =
+                                request["pluginPreferences"].clone();
+                            std::fs::create_dir_all(preferences_path.parent().unwrap())
                                 .map_err(|e| e.to_string())?;
-                            }
-                            let (reply, rx) = std::sync::mpsc::channel();
-                            ui_tx
-                                .send(script_ui::Request {
-                                    value: request,
-                                    reply,
-                                })
-                                .map_err(|_| "Editor closed".to_string())?;
-                            rx.recv().map_err(|_| "Editor closed".to_string())
-                        }),
-                    )
+                            std::fs::write(
+                                &preferences_path,
+                                serde_json::to_vec(&preferences).map_err(|e| e.to_string())?,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                        let (reply, rx) = std::sync::mpsc::channel();
+                        ui_tx
+                            .send(script_ui::Request {
+                                value: request,
+                                reply,
+                            })
+                            .map_err(|_| "Editor closed".to_string())?;
+                        rx.recv().map_err(|_| "Editor closed".to_string())
+                    });
+                    if let (Some(session), Some(command)) = (session, command.as_deref()) {
+                        session.run(
+                            &doc,
+                            (frame, layer),
+                            (&source, command),
+                            colors,
+                            options,
+                            host,
+                        )
+                    } else {
+                        extensions::run_workspace_with_host(
+                            &doc,
+                            &source,
+                            frame,
+                            layer,
+                            command.as_deref(),
+                            colors,
+                            options,
+                            host,
+                        )
+                    }
                 });
             let _ = tx.send(result);
-        });
+        };
+        if let Some(worker) = worker {
+            if worker
+                .send((session_path, Box::new(move |session| run(Some(session)))))
+                .is_err()
+            {
+                self.extension_worker = None;
+                self.script_menu_path = None;
+                self.script_ui.disconnect();
+                self.finish_script_preview();
+                return Err("Extension worker stopped".into());
+            }
+        } else {
+            std::thread::spawn(move || run(None));
+        }
         self.script_job = Some(rx);
         self.stop_playback(false);
         self.status = "Running embedded Lua…".into();
@@ -4262,14 +4323,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .map(|preview| std::mem::take(&mut preview.layer_keys))
                     .unwrap_or_default();
                 self.finish_script_preview();
-                let result =
-                    result.and_then(|workspace| self.apply_script_workspace(workspace, layer_keys));
+                let script_menu_path = self.script_menu_path.take();
+                let result = result.and_then(|workspace| {
+                    self.apply_script_workspace(workspace, layer_keys, script_menu_path.as_deref())
+                });
                 if let Err(e) = result {
+                    if script_menu_path.is_some() {
+                        self.refresh_extensions();
+                    }
                     self.status = format!("Extension failed: {e}");
                 }
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.script_job = None;
+                self.script_menu_path = None;
                 self.script_ui.disconnect();
                 self.finish_script_preview();
                 self.status =
@@ -4544,14 +4611,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
     fn apply_script_workspace(
         &mut self,
-        workspace: extensions::ScriptWorkspace,
+        mut workspace: extensions::ScriptWorkspace,
         mut layer_keys: std::collections::HashMap<u32, ScriptTargets>,
+        script_menu_path: Option<&Path>,
     ) -> Result<(), String> {
         let initial_tab = self.active_tab;
         let mut active_tab = None;
         let existing_tabs = self.tabs.len();
         let existing_index = |id| Self::script_existing_tab(id, initial_tab, existing_tabs);
-        for sprite in workspace.sprites {
+        for sprite in workspace.sprites.drain(..) {
             let path = Self::script_native_path(&sprite.filename);
             let existing = existing_index(sprite.id);
             if let Some(index) = existing {
@@ -4619,7 +4687,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.script_close_destination = active_tab.map(|_| self.doc.editor_id.to_string());
             self.script_tab_closes = workspace
                 .closed
-                .into_iter()
+                .iter()
+                .copied()
                 .rev()
                 .filter_map(existing_index)
                 .map(|index| {
@@ -4631,6 +4700,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 })
                 .collect();
             self.continue_script_tab_closes();
+        }
+        if let Some(script) = script_menu_path {
+            self.plugin_menus
+                .iter_mut()
+                .any(|menu| menu.update_script(script, &mut workspace));
         }
         Ok(())
     }

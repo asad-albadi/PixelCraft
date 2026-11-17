@@ -1096,6 +1096,43 @@ _pw_loop=function()
 end
 _pw_plugin.preferences=copy((_pw_options or {}).pluginPreferences or {})
 
+function _pw_rebind_workspace(input)
+ workspace,contexts={},{}
+ closedSprites,closedResults,closedPixels={},{},0
+ if not input then
+  doc,sprite,activeSprite=nil,nil,nil
+  frameHandles,layerHandles=nil,nil
+  spriteSelection,spriteEvents,undo,redo=nil,nil,nil,nil
+  return
+ end
+ installBudget()
+ local options=input.options
+ _pw_options=options
+ editorTabs=options.editorTabs
+ nextSpriteId=2
+ for position,id in ipairs(editorTabs)do
+  local handle,context=appendSpriteHandle(id,position)
+  context.editorTab=true
+  nextSpriteId=math.max(nextSpriteId,id+1)
+  if id==1 then
+   setWorkspaceDocument(handle,context,{
+    document=input.document,path=options.filename,
+    frame=input.frame,layer=input.layer,selection=options.selection,
+    layerKeys=options.layerKeys,metadataKeys=options.metadataKeys,
+    zoom=options.zoom,timelineRange=options.timelineRange,
+   })
+   loadSpriteContext(handle)
+   activeSprite=handle
+  end
+ end
+ scriptColors[1],scriptColors[2]=input.colors[1],input.colors[2]
+ toolOptions=options
+ tool.id=options.tool or 'pencil'
+ rawset(app,'params',copy(options.params or {}))
+ rawset(app,'fgTile',options.fgTile or 1)
+ rawset(app,'bgTile',options.bgTile or 0)
+end
+
 -- Package-local Lua modules use the same bounded runtime and instruction hook.
 local modules={}
 function loadfile(path)
