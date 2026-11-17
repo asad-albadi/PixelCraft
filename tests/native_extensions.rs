@@ -1873,3 +1873,63 @@ fn lua_layer_frame_and_cel_handles_survive_edits_undo_and_redo() {
     assert_eq!(output.layers[0].cel_meta[3].opacity, 150);
     assert_eq!(output.layers[0].cels[3][4], [77, 13, 29, 255]);
 }
+
+#[test]
+fn lua_metadata_object_handles_survive_history_and_reject_absent_objects() {
+    let output = run_source(
+        &Document::new(3, 2),
+        r#"
+ local sprite=app.activeSprite
+ local tag=sprite:newTag(1,1)
+ tag.name='Idle'
+ tag.properties.motion='still'
+ local other=sprite:newTag(1,1)
+ other.name='Idle'
+ local slice=sprite:newSlice(Rectangle(0,0,1,1))
+ slice.name='Nine patch'
+ slice.properties.anchor=Point(1,0)
+ local set=sprite:newTileset(Rectangle(0,0,1,1),3)
+ set.name='Terrain'
+ set.properties.region='forest'
+ local removed=set:tile(1)
+ local retained=set:tile(2)
+ retained.properties.material='soil'
+ local image=retained.image
+ app.transaction(function()
+  sprite:deleteTag(tag)
+  sprite:deleteSlice(slice)
+  sprite:deleteTile(removed)
+ end)
+ assert(sprite.tags[1]==other and #sprite.slices==0)
+ assert(not pcall(function() return tag.name end))
+ assert(not pcall(function() return slice.bounds end))
+ assert(not pcall(function() return removed.index end))
+ assert(set:tile(1)==retained)
+ app.command.Undo()
+ assert(sprite.tags[1]==tag and sprite.tags[2]==other and tag.properties.motion=='still')
+ assert(sprite.slices[1]==slice and slice.properties.anchor==Point(1,0))
+ assert(sprite.tilesets[1]==set and set.properties.region=='forest')
+ assert(set:tile(1)==removed and set:tile(2)==retained and retained.properties.material=='soil')
+ app.command.Redo()
+ assert(sprite.tags[1]==other and set:tile(1)==retained)
+ assert(not pcall(function() return tag.name end))
+ assert(not pcall(function() return slice.bounds end))
+ assert(not pcall(function() return removed.index end))
+ image:drawPixel(0,0,Color('#123456'))
+ assert(retained.image:getPixel(0,0)==app.pixelColor.rgba(18,52,86,255))
+ app.transaction(function() sprite:deleteTileset(set) end)
+ assert(not pcall(function() return image:getPixel(0,0) end))
+ assert(not pcall(function() return set.properties.region end))
+ app.command.Undo()
+ assert(sprite.tilesets[1]==set and set:tile(1)==retained)
+ assert(image:getPixel(0,0)==app.pixelColor.rgba(18,52,86,255))
+ "#,
+        0,
+        0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(output.tags.len(), 1);
+    assert!(output.slices.is_empty());
+    assert_eq!(output.tilesets[0].tiles[0][0], [18, 52, 86, 255]);
+}

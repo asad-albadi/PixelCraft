@@ -172,6 +172,8 @@ Run focused red/green tests for each change, then project formatting, strict Cli
 
 - Item 45 detached tileset metadata checkpoint. Lua clipboard copies now carry typed tileset and tile user data. Detached objects keep independent property maps. Import remaps extension IDs by name and preserves original value bytes and destination metadata. Windows tests cover source deletion, independent edits, legacy user-data text and color bytes, cross-tab import with colliding IDs, and ASE save and reopen. The Windows system clipboard and remaining object identity cases still require verification.
 
+- Item 45 metadata object history checkpoint. Retained tag, slice, tileset, tile, and tile image handles resolve through Lua undo and redo. The regression covers duplicate tag names, deletion, identity on restoration, reindexed tiles, and read and write access through a held image. Metadata object identity across native modeless updates and system clipboard verification remain open. A Windows clipboard isolation probe could not create a private window station with the current account token.
+
 ## Recovery and distribution
 
 - [x] **1. Restore large workspaces in the background.** Show the editor promptly, report progress, and let users choose what to restore or discard.

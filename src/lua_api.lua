@@ -528,11 +528,26 @@ local function putCelImage(l,fi,im,pos)
 end
 local bindUserProperties,importUserData
 bindUserProperties=function(handle)return handle end
-local function findObject(list,target,description)
- for index,value in ipairs(list)do
-  if value==target then return index end
+local historyObjectKeys=setmetatable({},{__mode='k'})
+local function historyObjectKey(object)
+ local key=historyObjectKeys[object]
+ if key then return key end
+ key={}
+ historyObjectKeys[object]=key
+ return key
+end
+local function historyObjectIndex(list,key,description,hint)
+ local current=hint and list and list[hint]
+ if current and historyObjectKeys[current]==key then return hint,current end
+ for index,value in ipairs(list or {})do
+  if historyObjectKeys[value]==key then return index,value end
  end
  error(description..' is deleted or no longer belongs to this document state')
+end
+local function copyObjectKeys(source,target)
+ for index,object in ipairs(source or {})do
+  historyObjectKeys[target[index]]=historyObjectKeys[object]
+ end
 end
 local function isTagUserData(chunk)
  return chunk.frame==0 and chunk.kind==0x2020 and chunk.owner=='tags'
@@ -636,6 +651,10 @@ do
   states[target]={frameKeys=table.move(keys,1,#keys,1,{}),frameHistory=previous.frameHistory,
    celRows=rows,celSlots={}}
   for i,layer in ipairs(source.layers)do layerKeys[target.layers[i]]=layerKeys[layer] end
+  copyObjectKeys(source.tags,target.tags)
+  copyObjectKeys(source.slices,target.slices)
+  copyObjectKeys(source.tilesets,target.tilesets)
+  for i,set in ipairs(source.tilesets or {})do copyObjectKeys(set.tiles,target.tilesets[i].tiles) end
   return target
  end
 
@@ -837,9 +856,9 @@ do
  local methods={}
 
  local function sliceObject(handle)
-  local object=assert(objects[handle],'Slice is deleted or invalid')
-  assert(object.document==doc,'Slice no longer belongs to this document state')
-  return object.value
+  local key=assert(objects[handle],'Invalid slice')
+  local _,slice=historyObjectIndex(doc.slices,key,'Slice')
+  return slice
  end
 
  local function rectValues(rect)
@@ -900,7 +919,8 @@ do
  end
 
  local function sliceHandle(slice)
-  local handle=handles[slice]
+  local identity=historyObjectKey(slice)
+  local handle=handles[identity]
   if handle then return handle end
   handle=bindSpriteHandle(setmetatable({},{
    __index=function(self,key)
@@ -931,10 +951,11 @@ do
     setKey(slice,entry)
    end,
   }),sprite)
-  handles[slice]=handle
-  objects[handle]={document=doc,value=slice}
+  handles[identity]=handle
+  objects[handle]=identity
   return bindUserProperties(handle,sprite,function()
-   return 'slice:'..(findObject(doc.slices,slice,'Slice')-1),0
+   local index=historyObjectIndex(doc.slices,identity,'Slice')
+   return 'slice:'..(index-1),0
   end)
  end
 
@@ -952,9 +973,6 @@ do
   local target=type(value)=='table' and sliceObject(value)
   for index,slice in ipairs(doc.slices or {})do
    if slice==target or slice.name==value then
-    local handle=handles[slice]
-    if handle then objects[handle]=nil end
-    handles[slice]=nil
     table.remove(doc.slices,index)
     removeIndexedMetadata('slice',index)
     return
@@ -1070,13 +1088,14 @@ do
  local objects=setmetatable({},{__mode='k'})
 
  local function tagHandle(tag)
-  if handles[tag] then return handles[tag] end
-  local function index()
-   return findObject(doc.tags,tag,'Tag')
+  local identity=historyObjectKey(tag)
+  if handles[identity] then return handles[identity] end
+  local function resolve()
+   return historyObjectIndex(doc.tags,identity,'Tag')
   end
   local handle=bindSpriteHandle(setmetatable({},{
    __index=function(_,key)
-    index()
+    local _,tag=resolve()
     if key=='name' then return tag.name end
     if key=='fromFrame' then return frameHandles[tag.from+1] end
     if key=='toFrame' then return frameHandles[tag.to+1] end
@@ -1084,7 +1103,7 @@ do
     if key=='sprite' then return sprite end
    end,
    __newindex=function(_,key,value)
-    index()
+    local _,tag=resolve()
     if key=='name' then tag.name=tostring(value)
     elseif key=='aniDir' then tag.direction=value
     elseif key=='fromFrame' then tag.from=frameNumber(value)-1
@@ -1092,10 +1111,11 @@ do
     else error('Unsupported tag field: '..key) end
    end,
   }),sprite)
-  handles[tag]=handle
-  objects[handle]=tag
+  handles[identity]=handle
+  objects[handle]=identity
   return bindUserProperties(handle,sprite,function()
-   return 'tags',0,index()
+   local index=resolve()
+   return 'tags',0,index
   end)
  end
 
@@ -1108,10 +1128,10 @@ do
  end
 
  function spriteMethods:deleteTag(handle)
-  local tag=objects[handle]
+  local identity=objects[handle]
   local index
-  if tag then
-   index=findObject(doc.tags,tag,'Tag')
+  if identity then
+   index=historyObjectIndex(doc.tags,identity,'Tag')
   else
    for i,value in ipairs(doc.tags)do
     if value.name==handle.name then index=i;break end

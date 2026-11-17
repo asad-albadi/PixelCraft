@@ -6,12 +6,10 @@ do
  local tilesetObjects=setmetatable({},{__mode='k'})
  local tileHandles=setmetatable({},{__mode='kv'})
  local tileObjects=setmetatable({},{__mode='k'})
- local retired=setmetatable({},{__mode='k'})
  local methods={}
 
  local function setIndex(set)
-  for i,candidate in ipairs(doc.tilesets)do if candidate==set then return i end end
-  error('Tileset is deleted or belongs to another document state')
+  return historyObjectIndex(doc.tilesets,historyObjectKey(set),'Tileset')
  end
 
  local function propertySlot(set,ordinal)
@@ -54,9 +52,11 @@ do
  end
 
  local function tilesetObject(handle)
-  local set=assert(tilesetObjects[handle],'Invalid tileset')
-  if detached[set] then return set end
-  return set,setIndex(set)
+  local entry=assert(tilesetObjects[handle],'Invalid tileset')
+  if entry.detached then return entry.detached end
+  local index,set=historyObjectIndex(doc.tilesets,entry.key,'Tileset',entry.index)
+  entry.index=index
+  return set,index
  end
 
  local function documentTileset(handle)
@@ -67,12 +67,16 @@ do
 
  local function tileObject(handle)
   local entry=assert(tileObjects[handle],'Invalid tile')
-  if not detached[entry.set] then setIndex(entry.set) end
-  if not entry.pixels then return entry.set,0 end
-  for i,pixels in ipairs(entry.set.tiles)do
-   if pixels==entry.pixels then return entry.set,i,pixels end
+  local set=entry.detached
+  if not set then
+   local index,current=historyObjectIndex(doc.tilesets,entry.set,'Tileset',entry.setIndex)
+   entry.setIndex=index
+   set=current
   end
-  error('Tile is deleted')
+  if not entry.tile then return set,0 end
+  local index,pixels=historyObjectIndex(set.tiles,entry.tile,'Tile',entry.index)
+  entry.index=index
+  return set,index,pixels
  end
 
  local function infoAt(index)
@@ -120,10 +124,15 @@ do
    return image(pixels,set.width,set.height,ColorMode.RGB,0)
   end
   if not pixels then return Image(set.width,set.height) end
-  local document=doc
-  local im=image(pixels,set.width,set.height)
-  im._put=function()
-   assert(doc==document and not retired[set] and not retired[pixels],'Tile image is no longer editable')
+  local im=image(nil,set.width,set.height)
+  local meta=getmetatable(im)
+  local index=meta.__index
+  meta.__index=function(self,field)
+   if field=='_pixels' then
+    local _,_,current=tileObject(handle)
+    return current
+   end
+   return index(self,field)
   end
   return bindSpriteHandle(im,sprite)
  end
@@ -131,7 +140,9 @@ do
  local function tileHandle(set,index)
   local pixels=set.tiles[index]
   if index~=0 and not pixels then return nil end
-  local key=pixels or set
+  local setKey=historyObjectKey(set)
+  local tileKey=pixels and historyObjectKey(pixels)
+  local key=tileKey or setKey
   if tileHandles[key] then return tileHandles[key] end
   local handle=setmetatable({},{
    __index=function(self,k)
@@ -151,7 +162,7 @@ do
    end,
   })
   if not detached[set] then bindSpriteHandle(handle,sprite) end
-  tileObjects[handle]={set=set,pixels=pixels}
+  tileObjects[handle]={set=setKey,tile=tileKey,index=index,detached=detached[set] and set}
   tileHandles[key]=handle
   bindUserProperties(handle,not detached[set] and sprite or false,function()
    local current,tileIndex=tileObject(handle)
@@ -172,7 +183,8 @@ do
  end
 
  tilesetHandle=function(set)
-  if tilesetHandles[set] then return tilesetHandles[set] end
+  local key=historyObjectKey(set)
+  if tilesetHandles[key] then return tilesetHandles[key] end
   local handle=setmetatable({},{
    __index=function(self,k)
     local value,index=tilesetObject(self)
@@ -202,10 +214,10 @@ do
    __len=function(self) return #tilesetObject(self).tiles+1 end,
   })
   if not detached[set] then bindSpriteHandle(handle,sprite) end
-  tilesetObjects[handle]=set
-  tilesetHandles[set]=handle
+  tilesetObjects[handle]={key=key,detached=detached[set] and set}
+  tilesetHandles[key]=handle
   bindUserProperties(handle,not detached[set] and sprite or false,function()
-   return propertySlot(set,1)
+   return propertySlot(tilesetObject(handle),1)
   end)
   return handle
  end
@@ -337,13 +349,18 @@ do
  end
 
  function spriteMethods:deleteTileset(value)
-  local index=math.type(value)=='integer' and value+1 or setIndex(tilesetObjects[value])
+  local index
+  if math.type(value)=='integer' then index=value+1
+  else
+   local _,resolved=documentTileset(value)
+   index=resolved
+  end
   assert(doc.tilesets[index],'Tileset not found')
   for _,layer in ipairs(doc.layers)do
    assert(layer.tileset~=index-1,'Tileset is still used by a tilemap layer')
   end
   for i=index+1,#doc.tilesets do preserveInfo(i) end
-  retired[table.remove(doc.tilesets,index)]=true
+  table.remove(doc.tilesets,index)
   for _,layer in ipairs(doc.layers)do
    if layer.tileset and layer.tileset>=index then layer.tileset=layer.tileset-1 end
   end
@@ -374,7 +391,7 @@ do
    position=setIndex(set)
   end
   assert(math.type(index)=='integer' and index>0 and set.tiles[index],'Invalid or empty tile index')
-  retired[table.remove(set.tiles,index)]=true
+  table.remove(set.tiles,index)
   remapPlacements(position,index,false)
   remapTileMetadata(position,index,false)
  end
