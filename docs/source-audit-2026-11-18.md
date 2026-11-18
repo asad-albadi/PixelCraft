@@ -1,4 +1,4 @@
-> Historical audit: Lua implementation is deferred and preserved on `discarded-lua-updates`. See [native branch scope](branch-split-2026-11-18.md).
+> Historical audit at `8a8ccd0`. Lua implementation is deferred and preserved on `discarded-lua-updates`. Current native implementation and verification are recorded in the [acceptance report](native-workflow-acceptance-2026-11-18.md).
 
 # Source and Large-Project Audit: 2026-11-18
 
@@ -40,4 +40,4 @@ Acceptance: assigning a decimal widget through Dialog.data, reading it back and 
 
 ## Remaining scope
 
-Original55 implementation flags do not establish full parity. Keep the larger issue20 objective active. Retain clipboard snapshot clone/cancellation work, viewport conversion, complete repeated source/requirement evidence audit and actual-project regression testing. Physical tablet validation is still unverified; Linux execution was explicitly deferred by the user and is not an external blocker for Windows work.
+This checkpoint preceded the native closure work. Clipboard snapshots and cancellation, large-frame display workers, and original-project acceptance were subsequently implemented and verified in PR #21. Platform CI and distribution checks passed at `5f6ca78`; the local Linux baseline passed 771 tests. The acceptance report records current evidence and the follow-up review fixes. Physical tablet input and real Linux desktop playback remain unverified. Deferred Lua work and command discovery in #22 remain open.

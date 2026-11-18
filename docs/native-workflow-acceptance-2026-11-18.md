@@ -10,9 +10,9 @@ Each numbered entry below maps the original issue #20 requirement to current imp
 
 2. **Recover individual documents and raw images.** Implemented; Windows regression suite passed. Implementation: [src/studio/recovery_images.rs](../src/studio/recovery_images.rs); coverage: [src/studio.rs](../src/studio.rs), `recovery_salvages_healthy_rasters_when_other_backup_records_are_damaged`.
 
-3. **Ship macOS builds.** Implemented; native-platform CI pending. Implementation: [packaging/build-macos-bundle.sh](../packaging/build-macos-bundle.sh); coverage: [.github/workflows/macos-build.yml](../.github/workflows/macos-build.yml), `native architecture, bundle relocation, runtime and graphical startup CI`.
+3. **Ship macOS builds.** Implemented; platform CI and distribution package checks passed at `5f6ca78`. Implementation: [packaging/build-macos-bundle.sh](../packaging/build-macos-bundle.sh); coverage: [.github/workflows/macos-build.yml](../.github/workflows/macos-build.yml), `native architecture, bundle relocation, runtime and graphical startup CI`.
 
-4. **Expand Windows and Linux packaging.** Implemented; native-platform CI pending. Implementation: [packaging](../packaging); coverage: [checks/windows-portable.ps1](../checks/windows-portable.ps1), `Windows standalone/graphics checks and Linux tarball/Debian release packaging`.
+4. **Expand Windows and Linux packaging.** Implemented; platform CI and distribution package checks passed at `5f6ca78`. Implementation: [packaging](../packaging); coverage: [checks/windows-portable.ps1](../checks/windows-portable.ps1), `Windows standalone/graphics checks and Linux tarball/Debian release packaging`.
 
 5. **Add drawing tools.** Implemented; Windows regression suite passed. Implementation: [src/sprite_text.rs](../src/sprite_text.rs); coverage: [src/ui_icon_tests.rs](../src/ui_icon_tests.rs), `sprite_text_previews_and_places_multiline_pixels_as_one_undoable_edit`.
 
@@ -118,9 +118,10 @@ Each numbered entry below maps the original issue #20 requirement to current imp
 
 ## Verification and practical limits
 
-- Windows: formatting, strict locked offline all-target Clippy and **762 tests** passed at `6cad071`. Existing main Lua tests are included; archived new Lua tests are excluded. Five new viewport regressions and twelve cancellation regressions supplement the earlier snapshot tests.
+- Windows: formatting, strict locked offline all-target Clippy and **764 tests** passed at `5f6ca78`. Existing main Lua tests are included; archived new Lua tests are excluded. Five new viewport regressions and twelve cancellation regressions supplement the earlier snapshot tests.
 - Native day/night project acceptance: full document equality on disposable save/reopen, every one of24 frame composites preserved, PNG reimport equality, successful GIF/MP4 exports, unchanged original SHA256 hashes. Both exported images were visually inspected. Two ordered GUI/cache loops (48 presentations each) passed. The pumped-frame benchmark is not a wall-clock playback capture. See the closure plan for measured timings and source hashes.
-- Native CI on PR21: Windows standalone executable/startup, Linux compilation/tests and both macOS architecture bundles/startup. Results must be recorded from the actual run; this document does not predeclare them green.
+- [PR CI](https://github.com/asad-albadi/PixelCraft/actions/runs/44256502992) passed at `5f6ca78`. Windows passed 764 tests, Linux passed 771, and each macOS architecture passed 718. Windows standalone/startup and both macOS relocated bundle/runtime/startup checks passed.
+- [Distribution checks](https://github.com/asad-albadi/PixelCraft/actions/runs/44257993735) passed at the same revision for the Linux AppImage, relocated tarball and installed Debian package, Windows installer/portable packages, and both macOS architectures.
 - Linux desktop playback is user-deferred. Physical tablet input, monitor-specific ICC behavior and OS-specific clipboard interaction on other machines are unverified; synthetic pressure and profile conversion tests are covered.
 - PSD/PSB raster import preserves supported layers/masks/groups/high-depth samples and uses a merged preview for unsupported visual effects where available. This is not native editing of every Photoshop effect or color mode. Export/import formats retain their existing documented representational limits.
 - Recovery can salvage readable records, not recreate missing/corrupt pixel payloads. Workload limits remain intentionally bounded rather than removed to disguise performance costs.
@@ -130,10 +131,37 @@ Each numbered entry below maps the original issue #20 requirement to current imp
 
 Fetched both audit repositories again on2026-11-18. Remote heads remained `eccf4ec292f66c0b8a4f814954ce7db160a8eb43` and `a292c5685499cdf14a7d4e3d4e664bbd5ccc1fe7`; no newer changes since the last source scan. Inspected menu/command search implementation at the former head and native routing, shortcut editor, CLI/MCP surfaces here. Native editor command discovery is still a confirmed additional gap: routing/shortcuts are not a searchable command picker. Tracked as [#22](https://github.com/asad-albadi/PixelCraft/issues/22); it was not one of the original55 items. Decimal precision in newer Lua dialogs stays archived/deferred with Lua.
 
-The repeated audit closes neither universal feature parity nor device/platform coverage. The concrete remaining original scope is deferred Lua plus any native-platform CI failures discovered on PR21. Additional command discovery needs its own implementation and acceptance, rather than silently being counted as complete.
+The repeated audit closes neither universal feature parity nor device/platform coverage. The remaining original scope is the deferred Lua work. Platform CI at `5f6ca78` passed. Additional command discovery needs its own implementation and acceptance, rather than silently being counted as complete.
 
-## Final source/test review checkpoint
+## Earlier source/test review checkpoint
 
 Fresh risk-focused correctness/security review found one detached-preview playback defect; it was reproduced and fixed with delayed-worker clock/GUI regressions and a paused-preview assertion. The final Windows suite passed **764 tests**, strict Clippy and formatting. This review was not exhaustive inspection of all158 changed files; the final fix was verified by tests without a second reviewer. No additional actionable security defect was reported in the inspected native paths.
 
 Real-project ASE acceptance additionally passed all24 composites, durations and layer counts after save/reopen, with optimized save times505ms day/634ms night. Full native acceptance and source hashes remain unchanged. Final-head platform outcomes are recorded on [PR21 checks](https://github.com/asad-albadi/PixelCraft/pull/21/checks) and its final review comment; earlier CI is not substituted for the final revision.
+
+## Local Linux code and security review
+
+The local review began at `5f6ca78`. Its baseline passed formatting, strict all-target Clippy, the Linux build, and 771 tests with 16 ignored. Independent review passes inspected editor/model/recovery behavior, restricted MCP and untrusted file decoding, and import/export/packaging code. The review found three defects.
+
+- Background image import and palette/frame-name guards compared runtime document IDs using content equality, which deliberately ignores those IDs. The guards now compare runtime keys. Regression tests cover switching to another tab with the same frame ID, palette selection isolation, and stale frame renaming.
+- Indexed cel moves copied cached colors between frames with different palettes. The fix resolves colors from the destination palette while retaining valid stored indices and checks unsupported destinations before changing the document.
+- Photoshop channel decoding budgeted layer bounds even when mask channels had independent bounds. The fix counts the actual dimensions of every supported decoded channel, including repeated enabled masks. Small fixtures verify rejection before decompression and retain acceptance of ignored channels.
+
+Independent follow-up review inspected all three fixes and their regression tests and found no further correction. Review concentrated on higher-risk native paths and their callers.
+
+The current RustSec source at `233155b4025b854c68a4b199c0e32d7fd53291a2` also identified two inherited dependency safety advisories. `Cargo.lock` now selects rustix 1.1.6 for RUSTSEC-2026-0486 and Tokio 1.53.3 for RUSTSEC-2026-0386. A fresh version-applicability scan of all 430 locked packages using Cargo semver matching returned zero vulnerability-class advisories and three informational unmaintained-package notices for `zvariant`, `zvariant_derive`, and `zbus_names`. This scan used the current RustSec source, separate from the older checked-in snapshot. It does not establish reachability of affected functions or universal dependency safety.
+
+Local validation after all code and lockfile changes passed with Rust 1.95.0.
+
+- Formatting, whitespace checks, strict locked all-target Clippy, and the Linux debug build.
+- Full Linux suite with **778 passed, 0 failed, and 16 ignored**. Seven added tests cover the three findings.
+- Four explicitly enabled live-bridge tests covering authentication, opt-in access, deadlines/revocation, cancellation, and layered editing.
+- Two explicitly enabled native clipboard tests on an isolated X11 server, including cross-process packed tilemap transfer.
+- Headless CLI/MCP workflow checks and the restricted-filesystem standalone check, including embedded plugin execution.
+- Isolated 1920×1080 graphical startup. The rendered screenshot was visually inspected.
+- The original compressed-mask reproducer now returns the pixel-work-limit error before decoding its oversized masks.
+- Vendored TLS source verification matched all pinned upstream hashes.
+
+The standard suite retains its 16 ignored tests; six of those were additionally run explicitly as described above. Remaining manual checks include original-project Linux desktop playback, large-workload profiling, physical tablet input, and local native Wayland clipboard coverage. Earlier platform CI and distribution checks apply to `5f6ca78`. Windows and macOS need CI again after these code and lockfile changes are pushed.
+
+During targeted validation, the Rust linker intermittently crashed before tests could run. Retried builds succeeded; the complete final checks above passed using Cargo with one build job. No linker workaround was committed.

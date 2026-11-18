@@ -812,7 +812,7 @@ impl PixelCraft {
             .palette_picks
             .as_ref()
             .filter(|(document, slots)| {
-                *document == self.doc.editor_id
+                document.runtime_key() == self.doc.editor_id.runtime_key()
                     && slots.iter().all(|&slot| slot < self.doc.palette.len())
             })
             .map_or(&[], |(_, slots)| slots)
@@ -1080,7 +1080,7 @@ impl PixelCraft {
         let target = self.open_job.take().unwrap().target;
         if let OpenTarget::RasterLayer { document, frame_id } = target {
             let result = result.and_then(|source| {
-                let frame = (self.doc.editor_id == document)
+                let frame = (self.doc.editor_id.runtime_key() == document.runtime_key())
                     .then(|| {
                         (0..self.doc.durations.len())
                             .find(|&frame| self.doc.frame_export_id(frame) == frame_id)

@@ -20,17 +20,21 @@ Lua-specific workspace/console/listener APIs, dialogs/canvas extensions, new scr
 
 Mixed commits required preserving independent native fixes rather than dropping entire commits. These include authored indexed clipboard slots, tile/frame palettes, ASE user-data namespace remapping, native identity preservation in editor/MCP operations, timed native spray sampling, native eyedropper controls, and COW placement maps. The generic ASE metadata remapper is in `src/ase_properties.rs`, independent of the scripting host. Background transform selection snapshots use `NativeSelectionState`.
 
-## Verification
+## Verification at branch separation
+
+The results below describe the initial split. Subsequent platform verification at `5f6ca78` and the Linux review are recorded in the [acceptance report](native-workflow-acceptance-2026-11-18.md).
 
 - Windows formatting/check and strict offline locked all-target Clippy passed.
 - All 743 applicable Windows tests passed. The earlier 1,012 count included the newer Lua-specific coverage now preserved only in the archive; it is not this branch's test count.
 - Existing main scripting regression tests passed with the native model changes.
 - Standalone Windows verification passed drawing, native save/open, PNG/sheet/GIF exports, existing embedded plugin execution, theme/palette/shortcut application, disable and uninstall.
 - Windows screenshot startup succeeded and was visually inspected.
-- Fresh-context review found and fixed two platform leftovers: removed text-clipboard enum variants in a Linux-only match, and the macOS runtime selector. Both fixes were rechecked by the reviewer. Linux and macOS execution were not performed here; Linux execution remains user-deferred.
+- Fresh-context review found and fixed two platform leftovers: removed text-clipboard enum variants in a Linux-only match, and the macOS runtime selector. Both fixes were rechecked by the reviewer. Subsequent CI at `5f6ca78` passed on Linux, Windows, and both macOS architectures. The local Linux review also passed the initial 771-test suite.
 - The new clipboard snapshot regressions first failed on deep copies, then passed with shared immutable payloads and detach-on-edit behavior. Wire data remains compatible.
 - Optimized Windows 4,194,304-pixel reference-paste fixture: UI queue 1.8406 ms before sharing, 47.3 us after; completion 6.1662 ms before, 3.889 ms after. This is one fixture, excluding project loading, native clipboard serialization and rendering. Full tileset preparation remains worker work (~79ms in this fixture); this is not a universal responsiveness claim.
 
 ## Remaining work
 
-This split is not a declaration of complete issue #20 or editor parity. Continue non-Lua workflow/source audits, clipboard cancellation and selection snapshot costs, command discovery and viewport work. Physical tablet and non-Windows runtime validation remain unverified. New Lua development stays deferred unless explicitly resumed by the user. The earlier issue #20 tracker contains historical implementation checkpoints, including work now archived; use this scope document when assessing the native branch.
+The original issue #20 has 50 completed items. Item 31 has its native batch and dry-run portions complete, with its Lua portion deferred. Items 44–47 remain deferred. Command discovery is tracked separately in [#22](https://github.com/asad-albadi/PixelCraft/issues/22).
+
+[PR CI](https://github.com/asad-albadi/PixelCraft/actions/runs/44256502992) and [distribution package checks](https://github.com/asad-albadi/PixelCraft/actions/runs/44257993735) passed at `5f6ca78`. Physical tablet input, real Linux desktop playback, and monitor-specific behavior require further verification. New Lua development remains archived. The acceptance report records the additional code and security review and its regression coverage.

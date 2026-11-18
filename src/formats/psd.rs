@@ -555,13 +555,25 @@ fn read_layers(
         })
         .count();
     let channel_work = records.iter().fold(0usize, |total, record| {
-        total.saturating_add(
-            record
-                .bounds
-                .width
-                .saturating_mul(record.bounds.height)
-                .saturating_mul(record.channels.len().min(colors + 1)),
-        )
+        record.channels.iter().fold(total, |total, &(id, length)| {
+            if record.group == 3 || length <= 2 {
+                return total;
+            }
+            // Count every channel that will actually be decoded, including
+            // repeated IDs. Masks have bounds independent of their layer.
+            let bounds = match id {
+                -2 => match record.mask.as_ref() {
+                    Some(mask) if mask.flags & 2 == 0 => mask.bounds,
+                    _ => return total,
+                },
+                -1 if !matches!(record.group, 1 | 2) => record.bounds,
+                id if id >= 0 && (id as usize) < colors && !matches!(record.group, 1 | 2) => {
+                    record.bounds
+                }
+                _ => return total,
+            };
+            total.saturating_add(bounds.width.saturating_mul(bounds.height))
+        })
     });
     if retained == 0 {
         return Ok((ImportedLayers::None, signed_count < 0));

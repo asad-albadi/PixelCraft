@@ -1,4 +1,4 @@
-use super::{CelRange, Document, EditorId};
+use super::{CelRange, ColorMode, Document, EditorId};
 use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -200,6 +200,8 @@ impl Document {
         for (layer, frame) in selection.cells() {
             let (dest, target_frame) = translate(layer, frame);
             let source_layer = &self.layers[layer];
+            let palette = (self.color_mode == ColorMode::Indexed && source_layer.tileset.is_none())
+                .then(|| self.editing_palette(dest, target_frame));
             let dest_layer = &mut next.layers[dest];
             dest_layer.cels[target_frame] = source_layer.cels[frame].clone();
             dest_layer.tile_cels[target_frame] = source_layer.tile_cels[frame].clone();
@@ -212,6 +214,31 @@ impl Document {
                 meta.artwork_link = None;
             }
             dest_layer.cel_meta[target_frame] = meta;
+            if let Some(palette) = palette {
+                // Slots belong to the image; cached RGBA values belong to its
+                // placement's palette, just as for linked cels in link_cel.
+                let pixels = &mut dest_layer.cels[target_frame];
+                let meta = &mut dest_layer.cel_meta[target_frame];
+                let resolve = |slot: u8| {
+                    palette
+                        .get(usize::from(slot))
+                        .copied()
+                        .ok_or("The destination palette does not contain every source cel slot")
+                };
+                if let Some(indices) = &meta.indices {
+                    for (index, &slot) in indices.iter().enumerate() {
+                        let color = resolve(slot)?;
+                        if pixels[index] != color {
+                            pixels.set(index, color);
+                        }
+                    }
+                }
+                for pixel in &mut meta.outside {
+                    if let Some(slot) = pixel.palette_slot {
+                        pixel.color = resolve(slot)?;
+                    }
+                }
+            }
         }
         if duplicate {
             for (layer, frame) in selection.cells() {
@@ -296,7 +323,72 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::MetadataChunk;
+    use crate::model::{CLEAR, ColorMode, MetadataChunk, OutsidePixel};
+
+    #[test]
+    fn indexed_cel_moves_and_duplicates_resolve_destination_palette_slots() {
+        for duplicate in [false, true] {
+            for linked in [false, true] {
+                let mut doc = Document::new(1, 1);
+                doc.palette = vec![CLEAR, [255, 0, 0, 255]];
+                doc.set_color_mode(ColorMode::Indexed);
+                doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+                doc.add_frame(0, false);
+                doc.layers[0].link_duplicates = linked;
+                doc.frame_palettes = vec![doc.palette.clone(), vec![CLEAR, [0, 0, 255, 255]]];
+                doc.layers[0].cel_meta[0].outside.push(OutsidePixel {
+                    x: -1,
+                    y: 0,
+                    color: [255, 0, 0, 255],
+                    palette_slot: Some(1),
+                });
+                doc.move_cel_range(CelRange::between((0, 0), (0, 0)), 0, 1, duplicate)
+                    .unwrap();
+                assert_eq!(doc.composite(1), [[0, 0, 255, 255]]);
+                assert_eq!(doc.layers[0].cel_meta[1].indices.as_ref().unwrap()[0], 1);
+                assert_eq!(doc.layers[0].cel_meta[1].outside[0].color, [0, 0, 255, 255]);
+                assert_eq!(
+                    doc.rgba_conversion_until(|| false).unwrap().composite(1),
+                    [[0, 0, 255, 255]]
+                );
+                if duplicate {
+                    assert_eq!(doc.composite(0), [[255, 0, 0, 255]]);
+                    assert_eq!(doc.layers[0].cel_meta[0].artwork_link.is_some(), linked);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_cel_moves_apply_destination_transparent_slot_rules() {
+        let mut doc = Document::new(1, 1);
+        doc.palette = vec![[255, 0, 0, 255], [0, 0, 255, 255]];
+        doc.layers[0].background = true;
+        doc.set_color_mode(ColorMode::Indexed);
+        doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+        doc.add_layer();
+        doc.move_cel_range(CelRange::between((0, 0), (0, 0)), 1, 0, true)
+            .unwrap();
+        assert_eq!(doc.layers[1].cels[0][0], [255, 0, 0, 0]);
+        assert_eq!(doc.layers[1].cel_meta[0].indices.as_ref().unwrap()[0], 0);
+        assert_eq!(doc.layers[0].cels[0][0], [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn indexed_cel_moves_reject_missing_destination_slots_without_editing() {
+        let mut doc = Document::new(1, 1);
+        doc.palette = vec![CLEAR, [255, 0, 0, 255]];
+        doc.set_color_mode(ColorMode::Indexed);
+        doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+        doc.add_frame(0, false);
+        doc.frame_palettes = vec![doc.palette.clone(), vec![CLEAR]];
+        let before = doc.clone();
+        assert!(
+            doc.move_cel_range(CelRange::between((0, 0), (0, 0)), 0, 1, false)
+                .is_err()
+        );
+        assert_eq!(doc, before);
+    }
 
     #[test]
     fn individual_operations_skip_unselected_rows_frames_and_metadata() {

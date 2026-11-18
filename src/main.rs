@@ -7216,7 +7216,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         if let Some((document, frame_id, mut name)) = self.rename_frame.take() {
-            let Some(frame) = (self.doc.editor_id == document)
+            let Some(frame) = (self.doc.editor_id.runtime_key() == document.runtime_key())
                 .then(|| {
                     (0..self.doc.durations.len()).find(|&f| self.doc.frame_export_id(f) == frame_id)
                 })
@@ -10129,6 +10129,50 @@ mod tests {
                 .is_err()
         );
         assert_eq!(a.doc, after);
+    }
+
+    #[test]
+    fn deferred_layer_import_rejects_another_tab_with_the_same_frame_id() {
+        let mut a = app();
+        a.replace(Document::new(2, 1), None);
+        let document = a.doc.editor_id;
+        let frame_id = a.doc.frame_export_id(0);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        a.open_job = Some(FileOpenJob {
+            target: OpenTarget::RasterLayer { document, frame_id },
+            receiver,
+        });
+        a.open_document(Document::new(2, 1), None);
+        assert_eq!(a.doc.frame_export_id(0), frame_id);
+        let before = a.doc.clone();
+        let history_len = a.undo.len();
+        sender
+            .send((PathBuf::from("Stamp.png"), Ok(Document::new(1, 1))))
+            .unwrap();
+        a.poll_open_document();
+        assert!(a.status.contains("target is no longer active"));
+        assert_eq!(a.doc, before);
+        assert_eq!(a.undo.len(), history_len);
+        a.switch_tab(0);
+        assert_eq!(a.doc.layers.len(), 1);
+    }
+
+    #[test]
+    fn palette_picks_and_frame_rename_remain_scoped_to_the_original_tab() {
+        let mut a = app();
+        for slot in 0..2 {
+            a.select_palette_swatch(slot, a.doc.palette[slot], egui::Modifiers::CTRL);
+        }
+        assert_eq!(a.picked_swatches(), &[0, 1]);
+        a.start_rename_frame(0);
+        a.open_document(Document::new(2, 1), None);
+        assert!(a.picked_swatches().is_empty());
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| a.dialogs(&ctx));
+        output.textures_delta.clear();
+        assert!(a.rename_frame.is_none());
+        a.switch_tab(0);
+        assert_eq!(a.picked_swatches(), &[0, 1]);
     }
 
     #[test]
