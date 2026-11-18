@@ -30,8 +30,8 @@
 
 - [x] 1. Reproduce selection-mask snapshot copies; introduce transparent COW GUI mask storage and migrate capture/history/recovery consumers without changing wire arrays. Verify snapshot independence, stale-target rejection and serde recovery.
 - [x] 2. Reproduce non-cancellable clipboard traversal; implement bounded polling in validation/ID/hash/equality/merge paths and native document validation where used by workers. Test atomic cancellation at each expensive phase and run full Windows gates.
-- [ ] 3. Audit viewport/display conversion against current native source, add regression cases for confirmed defects, fix and test. Record verified behaviors instead of assuming the old tracker proves them.
-- [ ] 4. Run native acceptance on both day/night projects: load, playback/representative render, save/reopen disposable copies and export; record timing, content/metadata equality and source-file hashes.
+- [x] 3. Audit viewport/display conversion against current native source, add regression cases for confirmed defects, fix and test. Record verified behaviors instead of assuming the old tracker proves them.
+- [x] 4. Run native acceptance on both day/night projects: load, playback/representative render, save/reopen disposable copies and export; record timing, content/metadata equality and source-file hashes.
 - [ ] 5. Reconcile all active original issue20 items to native code/tests/GUI/CLI/MCP evidence, explicitly defer44-47 and Lua part31, record platform/tablet coverage limits, and repeat current source audit for confirmed extra native gaps. Command discovery can be tracked separately from the original55 closure scope.
 - [ ] 6. Fresh correctness/security review, required fixes, final Windows gates, native PR/CI including macOS packaging, accurate issue checklist and pushed evidence. Leave merge approval as the final reviewable step.
 
@@ -51,3 +51,17 @@
 - Removed completion-time whole-document equality from tile copy/paste: placement COW backing changes plus palette/tileset changes establish whether publication is necessary, including linked peers with different grids. True no-ops do not publish.
 - Reproduced and fixed integer overflow in polygon containment at extreme integer coordinates; polygon traversal is cancellable. Normal selection semantics are preserved.
 - Twelve regressions observed RED then GREEN. Formatting, strict offline locked all-target Clippy,757 Windows all-target tests and whitespace checks passed (EngineChecks/issue20-native-cancellation-final-tests.log). No Lua edits.
+
+### Task3 checkpoint
+
+- RED: a pending large current-frame request still rendered synchronously; a completed detached preview could publish the wrong requested frame. Both regressions now pass. Cold canvas misses above2M pixels share the existing bounded single in-flight frame worker. Pan/zoom remain available; painting waits for the requested texture. Small canvases and incremental texture patches retain the existing path.
+- Added actual worker output, loading-input and invalid-profile/source-integrity regressions. Existing ICC/profile, crop, patch upload, obsolete-snapshot, playback-clock, linked-frame cache and detached-preview tests passed. Display-profile changes discard outstanding requests and caches. No document sample/profile mutation occurs during display conversion.
+- Windows formatting, strict offline locked all-target Clippy,762 all-target tests and whitespace checks passed.
+
+### Task4 checkpoint
+
+- Opt-in native-project acceptance passed against both original files using disposable EngineChecks/native-closure-projects outputs. Every native field and all24 composites matched after save/reopen. PNG reimport matched source samples; GIF and MP4 exports succeeded. Both source SHA256 values were unchanged. Exported day/night PNGs were visually inspected.
+- Optimized day: load3.347s, compose24=59.16ms, save1.505s, reopen3.462s, exports1.561s;23layers. Night: load5.089s, compose24=93.62ms, save2.215s, reopen5.165s, exports1.841s;34layers. These measurements exclude GUI event scheduling.
+- Separate real-project GUI/cache acceptance passed48 ordered frame presentations (two loops) per document with background prefetch and unchanged authored documents. Work/polling elapsed176ms day/190ms night; this intentionally pumps frames and is not a wall-clock playback-duration or visual smoothness measurement. Existing clock/deadline tests separately cover authored timing.
+- ffprobe verified both MP4s480x270,3.6s,216 encoded frames. Acceptance exports use native1x for regression speed; scaled export coverage remains in regular tests.
+- Source hashes: day5bb6660d7440de4181de4ae0ba54f45ff047991a621b6dd276d9e2eef990d0ff; nighta21a70ec2cb5e1f7aa87118cf1fe4f5ef88e72d9ce6c51214a14d0fed3aa0689.

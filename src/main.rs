@@ -1131,8 +1131,21 @@ impl PixelCraft {
     fn dirty(&self) -> bool {
         self.doc.differs_from_saved(&self.saved)
     }
-    fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
+    fn try_frame_texture(&mut self, ctx: &egui::Context, f: usize) -> Option<egui::TextureHandle> {
         self.refresh_frame_cache(ctx);
+        if self.frame_textures[f].is_none() && self.doc.width * self.doc.height > 2_000_000 {
+            // One in-flight canvas job bounds work during rapid scrubbing. Never
+            // show another frame as the editable current frame while it runs.
+            if self.frame_prefetch.is_none() {
+                self.frame_prefetch = Some(FramePrefetch::start(
+                    ctx,
+                    &self.doc,
+                    f,
+                    Arc::clone(&self.display_profile.bytes),
+                ));
+            }
+            return None;
+        }
         if self.frame_textures[f].is_none() {
             let (image, error) =
                 Self::compose_frame_image(&self.doc, f, &self.display_profile.bytes);
@@ -1151,15 +1164,23 @@ impl PixelCraft {
                 Arc::clone(&self.display_profile.bytes),
             ));
         }
-        texture
+        Some(texture)
+    }
+
+    #[cfg(test)]
+    fn frame_texture(&mut self, ctx: &egui::Context, f: usize) -> egui::TextureHandle {
+        self.try_frame_texture(ctx, f)
+            .expect("test frame is small or already cached")
     }
 
     fn update_preview_texture(&mut self, ctx: &egui::Context, frame: usize) {
         self.refresh_frame_cache(ctx);
-        let ready = self.poll_preview_prefetch();
+        let ready = self
+            .poll_preview_prefetch()
+            .filter(|(completed, _, _)| *completed == frame);
         if frame == self.frame {
-            self.preview_frame = Some(frame);
-            self.preview = Some(self.frame_texture(ctx, frame));
+            self.preview = self.try_frame_texture(ctx, frame);
+            self.preview_frame = self.preview.as_ref().map(|_| frame);
         } else if let Some(texture) = &self.frame_textures[frame] {
             self.preview_frame = Some(frame);
             self.preview = Some(texture.clone());
@@ -1187,8 +1208,8 @@ impl PixelCraft {
                 self.preview_frame = Some(completed);
                 self.preview = Some(self.load_frame_texture(ctx, completed, image, error));
             } else if self.preview.is_none() {
-                self.preview_frame = Some(self.frame);
-                self.preview = Some(self.frame_texture(ctx, self.frame));
+                self.preview = self.try_frame_texture(ctx, self.frame);
+                self.preview_frame = self.preview.as_ref().map(|_| self.frame);
             }
         }
     }
@@ -1383,7 +1404,7 @@ impl PixelCraft {
         }
         let job = self.frame_prefetch.take().unwrap();
         if let Ok((image, error)) = result
-            && self.playing
+            && (self.playing || job.frame == self.frame)
             && self
                 .frame_textures
                 .get(job.frame)
@@ -4774,7 +4795,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .collect();
         // The timeline must not composite every frame when a single cel changes.
         // Show thumbnails for frames the canvas or playback has already rendered.
-        let _ = self.frame_texture(ui.ctx(), self.frame);
+        let _ = self.try_frame_texture(ui.ctx(), self.frame);
         let mut a = None;
         let wide = ui.available_width() > 1100.;
         let narrow = ui.available_width() < 700.;
@@ -6345,7 +6366,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             self.texture = self.onion_texture.clone();
         } else if !self.onion || self.playing {
-            self.texture = Some(self.frame_texture(&ctx, self.frame));
+            self.texture = self.try_frame_texture(&ctx, self.frame);
         }
         let rotation_preview = self.rotation_preview(ui, board);
         if let Some(t) = self
@@ -6385,6 +6406,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         );
         if self.grid {
             self.paint_pixel_grid(&painter, board);
+        }
+        // Pan/zoom remain available while a cold frame is loading, but edits
+        // must target artwork the user can actually see.
+        let can_edit = can_edit && self.texture.is_some();
+        if self.texture.is_none() {
+            painter.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                "Rendering frame…",
+                egui::FontId::proportional(14.),
+                self.colors().ink,
+            );
         }
         let transforming = self.canvas_transform.is_some();
         let over_symmetry_handle =
@@ -11338,6 +11371,204 @@ mod tests {
         assert_eq!(editor.doc.layers[0].cels[0][len - 1], original);
         editor.redo();
         assert_eq!(editor.doc.layers[0].cels[1][len - 1], replacement);
+    }
+
+    #[test]
+    fn large_cold_canvas_waits_for_worker_and_rejects_changed_source() {
+        let ctx = egui::Context::default();
+        let mut editor = app();
+        editor.replace(Document::new(2048, 1024), None);
+        editor.refresh_frame_cache(&ctx);
+        let (send, result) = std::sync::mpsc::channel();
+        editor.frame_prefetch = Some(FramePrefetch {
+            frame: 0,
+            snapshot: editor.doc.clone(),
+            result,
+        });
+        assert!(
+            editor.try_frame_texture(&ctx, 0).is_none(),
+            "a pending large frame must not be composed on the UI thread"
+        );
+        assert!(editor.frame_textures[0].is_none());
+        editor.doc.stamp(0, 0, 0, 0, [20, 30, 40, 255], 1);
+        send.send((egui::ColorImage::filled([1, 1], Color32::RED), None))
+            .unwrap();
+        editor.refresh_frame_cache(&ctx);
+        assert!(
+            editor.frame_textures[0].is_none(),
+            "stale worker samples cannot be published"
+        );
+        let (send, result) = std::sync::mpsc::channel();
+        editor.frame_prefetch = Some(FramePrefetch {
+            frame: 0,
+            snapshot: editor.doc.clone(),
+            result,
+        });
+        send.send((egui::ColorImage::filled([1, 1], Color32::GREEN), None))
+            .unwrap();
+        assert!(
+            editor.try_frame_texture(&ctx, 0).is_some(),
+            "stopped playback must accept the current frame worker"
+        );
+    }
+
+    #[test]
+    fn detached_preview_never_publishes_a_different_requested_frame() {
+        let ctx = egui::Context::default();
+        let mut editor = app();
+        editor.replace(Document::new(2048, 1024), None);
+        editor.doc.add_frame(0, false);
+        editor.doc.add_frame(0, false);
+        editor.refresh_frame_cache(&ctx);
+        editor.store_frame_texture(
+            &ctx,
+            0,
+            egui::ColorImage::filled([1, 1], Color32::WHITE),
+            None,
+        );
+        editor.update_preview_texture(&ctx, 0);
+        let (send, result) = std::sync::mpsc::channel();
+        editor.preview_prefetch = Some(FramePrefetch {
+            frame: 1,
+            snapshot: editor.doc.clone(),
+            result,
+        });
+        send.send((egui::ColorImage::filled([1, 1], Color32::RED), None))
+            .unwrap();
+        editor.update_preview_texture(&ctx, 2);
+        assert_ne!(
+            editor.preview_frame,
+            Some(1),
+            "a completed old preview request must not replace the requested frame"
+        );
+    }
+
+    #[test]
+    fn display_profile_change_discards_workers_without_changing_authored_samples() {
+        let ctx = egui::Context::default();
+        let mut editor = app();
+        editor.doc.set_pixel(0, 0, 0, [12, 34, 56, 170]);
+        let before = editor.doc.clone();
+        let _ = editor.frame_texture(&ctx, 0);
+        editor.update_preview_texture(&ctx, 0);
+        let (_send, result) = std::sync::mpsc::channel();
+        editor.frame_prefetch = Some(FramePrefetch {
+            frame: 0,
+            snapshot: editor.doc.clone(),
+            result,
+        });
+        editor.set_display_profile_bytes(vec![1, 2, 3]);
+        assert!(editor.frame_prefetch.is_none());
+        assert!(editor.preview.is_none());
+        assert!(editor.frame_textures.iter().all(Option::is_none));
+        let (_, error) =
+            PixelCraft::compose_frame_image(&editor.doc, 0, &editor.display_profile.bytes);
+        assert!(error.is_some());
+        assert_eq!(
+            editor.doc, before,
+            "display conversion must not rewrite document pixels or profile"
+        );
+    }
+
+    #[test]
+    fn cold_canvas_worker_produces_the_requested_color_managed_image() {
+        let ctx = egui::Context::default();
+        let mut editor = app();
+        editor.replace(Document::new(2048, 1024), None);
+        editor.doc.set_pixel(0, 0, 7, [40, 80, 120, 255]);
+        let authored = editor.doc.clone();
+        assert!(editor.try_frame_texture(&ctx, 0).is_none());
+        let job = editor
+            .frame_prefetch
+            .take()
+            .expect("cold misses enqueue a worker");
+        let (image, error) = job.result.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(error.is_none());
+        assert_eq!(image.size, [2048, 1024]);
+        assert_eq!(image.pixels[7], Color32::from_rgb(40, 80, 120));
+        assert_eq!(editor.doc, authored);
+    }
+
+    #[test]
+    fn loading_canvas_does_not_accept_paint_input() {
+        let ctx = egui::Context::default();
+        let mut editor = app();
+        editor.replace(Document::new(2048, 1024), None);
+        editor.refresh_frame_cache(&ctx);
+        let (_send, result) = std::sync::mpsc::channel();
+        editor.frame_prefetch = Some(FramePrefetch {
+            frame: 0,
+            snapshot: editor.doc.clone(),
+            result,
+        });
+        let before = editor.doc.clone();
+        let point = Pos2::new(300., 300.);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(600.))),
+                events: vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                editor.canvas(ui);
+            },
+        );
+        output.textures_delta.clear();
+        assert!(editor.texture.is_none());
+        assert!(editor.start.is_none());
+        assert_eq!(editor.doc, before);
+    }
+
+    #[test]
+    #[ignore = "requires local Autumn Breeze projects; native GUI playback acceptance"]
+    fn saved_day_and_night_projects_complete_two_gui_playback_loops() {
+        let paths: Vec<PathBuf> = serde_json::from_str(
+            &std::env::var("PIXELCRAFT_ACCEPT_PROJECTS").expect("JSON input paths"),
+        )
+        .unwrap();
+        for path in paths {
+            let ctx = egui::Context::default();
+            let mut editor = app();
+            editor.replace(formats::load(&path).unwrap(), None);
+            let authored = editor.doc.clone();
+            editor.start_playback(false, false);
+            let start = Instant::now();
+            let mut waits = 0;
+            for expected in (0..editor.doc.durations.len())
+                .cycle()
+                .take(editor.doc.durations.len() * 2)
+            {
+                assert_eq!(editor.frame, expected);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while editor.try_frame_texture(&ctx, editor.frame).is_none() {
+                    assert!(Instant::now() < deadline, "current frame worker stalled");
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                let next = editor.next_playback_frame().unwrap().0;
+                while editor.frame_textures[next].is_none() {
+                    editor.refresh_frame_cache(&ctx);
+                    assert!(Instant::now() < deadline, "playback prefetch stalled");
+                    waits += 1;
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                editor.advance_playback();
+            }
+            editor.stop_playback(false);
+            assert_eq!(editor.doc, authored);
+            eprintln!(
+                "GUI ACCEPT {}: two ordered loops / 48 frame presentations, elapsed={:?}, worker polling={waits}; authored document unchanged",
+                path.display(),
+                start.elapsed()
+            );
+        }
     }
 
     #[test]
