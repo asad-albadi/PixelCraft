@@ -71,6 +71,10 @@ pub(super) fn modal_dialog(
                 Vec2::splat(34.),
             );
             let close = ui.interact(close_rect, id.with("close"), Sense::click());
+            #[cfg(test)]
+            ctx.data_mut(|data| {
+                data.insert_temp(egui::Id::new(("dialog-close", title)), close_rect)
+            });
             close.widget_info(|| {
                 egui::WidgetInfo::labeled(egui::WidgetType::Button, close.enabled(), "Close dialog")
             });

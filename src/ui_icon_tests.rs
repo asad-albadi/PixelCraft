@@ -406,6 +406,9 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
         ("light", 1., "edit", 1180.),
         ("dark", 1., "frame", 1180.),
         ("light", 1., "frame", 1180.),
+        ("dark", 1., "commands", 1180.),
+        ("light", 1., "commands", 1180.),
+        ("light", 2., "commands", 683.),
         ("dark", 1., "dialog", 1180.),
         ("light", 1., "dialog", 1180.),
         ("custom", 1.5, "editor", 1180.),
@@ -420,6 +423,12 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
         ("light", 1.75, "matrix-1080", 1920.),
         ("light", 2., "matrix-1080", 1920.),
     ] {
+        if std::env::var("PIXELCRAFT_UI_REVIEW_SCENE")
+            .ok()
+            .is_some_and(|selected| selected != scene)
+        {
+            continue;
+        }
         let ctx = egui::Context::default();
         let mut a =
             PixelCraft::with_context(&ctx, Some(PathBuf::from("/tmp/unused-ui-review.png")));
@@ -461,11 +470,16 @@ fn rendered_editor_themes_scaling_and_menu_snapshots() {
         if scene == "dialog" {
             a.new_dialog = true;
         }
+        if scene == "commands" {
+            a.open_command_search();
+        }
         let mut textures: BTreeMap<u64, egui::ColorImage> = BTreeMap::new();
         let mut nearest = std::collections::BTreeSet::new();
         let mut last = None;
         for step in 0..6 {
-            let events = if step == 3 {
+            let events = if step == 3 && scene == "commands" {
+                vec![egui::Event::Text("export".into())]
+            } else if step == 3 {
                 let x = match scene {
                     "file" => 20.,
                     "edit" => 85.,

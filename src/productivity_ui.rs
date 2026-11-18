@@ -624,12 +624,16 @@ impl PixelCraft {
         });
         ui.small("Nearest-neighbor scaling for PNG, BMP, sprite sheets, GIF and MP4.");
     }
+    pub(super) fn set_editor_density(&mut self, comfortable: bool) {
+        self.power.preferences.comfortable = comfortable;
+        self.save_workflow_preferences();
+    }
     pub(super) fn density_options(&mut self, ui: &mut egui::Ui) {
         let before = self.power.preferences.comfortable;
         ui.selectable_value(&mut self.power.preferences.comfortable, false, "Compact");
         ui.selectable_value(&mut self.power.preferences.comfortable, true, "Comfortable");
         if before != self.power.preferences.comfortable {
-            self.save_workflow_preferences();
+            self.set_editor_density(self.power.preferences.comfortable);
         }
     }
     pub(super) fn settings_dialog(&mut self, ctx: &egui::Context) {

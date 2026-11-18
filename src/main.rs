@@ -7,6 +7,7 @@ mod canvas_transform;
 mod clipboard_validation;
 mod color_profiles;
 mod color_wheel;
+mod command_search;
 mod curve_tool;
 mod display_profiles;
 mod editor_filters;
@@ -792,6 +793,7 @@ struct PixelCraft {
     extensions_open: bool,
     extension_manager: Option<Manager>,
     extension_error: String,
+    command_search: command_search::CommandSearch,
     shot: Option<PathBuf>,
     shot_frames: u32,
     shot_requested: bool,
@@ -1004,6 +1006,7 @@ impl PixelCraft {
             extensions_open: false,
             extension_manager: Manager::new().ok(),
             extension_error: String::new(),
+            command_search: command_search::CommandSearch::default(),
             shot,
             shot_frames: 0,
             shot_requested: false,
@@ -2364,6 +2367,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.studio.sheet_open
             || self.studio.tiles_open
             || self.extensions_open
+            || self.command_search.open
             || self.status.starts_with("Could not")
             || self.status.starts_with("Export failed")
     }
@@ -3368,6 +3372,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         match s {
+            "command-search" => self.open_command_search(),
             "canvas-transform" => self.start_canvas_transform(),
             "shortcuts" => self.shortcut_settings_open = true,
             "new" => self.request(Pending::New),
@@ -3728,167 +3733,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ui.spacing_mut().item_spacing.x = 2.;
                 ui.spacing_mut().button_padding.x = 3.;
             }
-            for (title, items) in [
-                (
-                    "File",
-                    vec![
-                        ("New sprite…   Ctrl+N", "new"),
-                        ("Open…   Ctrl+O", "open"),
-                        ("Import as Layer…", "import-layer"),
-                        ("Close sprite   Ctrl+W", "closetab"),
-                        ("Import PNG sequence…", "sequence"),
-                        ("Grid import, tag batch & atlas…", "workflow"),
-                        ("Save   Ctrl+S", "save"),
-                        ("Save as…", "saveas"),
-                        ("Repeat Last Export", "repeat-export"),
-                        ("Export baked ASE copy…", "export-baked-ase"),
-                        ("Export PNG…", "png"),
-                        ("Export sprite sheet…", "sheet"),
-                        ("Export PNG sequence…", "png-sequence"),
-                        ("Export animation GIF…", "gif"),
-                        ("Export video MP4…", "mp4"),
-                        ("Export FLI…", "fli"),
-                        ("Export FLC…", "flc"),
-                        ("Export tileset atlas…", "tileset-atlas"),
-                        ("Export Tiled map…", "tiledexport"),
-                        ("Export BMP…", "bmp"),
-                        ("Export JPEG…", "jpeg"),
-                        ("Export WebP…", "webp"),
-                        ("Export icon…", "ico"),
-                        ("Export PCX…", "pcx"),
-                        ("Export QOI…", "qoi"),
-                        ("Export SVG…", "svg"),
-                        ("Export CSS…", "css"),
-                        ("Export TGA…", "tga"),
-                        ("Open sample garden", "demo"),
-                    ],
-                ),
-                (
-                    "Edit",
-                    vec![
-                        ("Undo   Ctrl+Z", "undo"),
-                        ("Redo   Ctrl+Y", "redo"),
-                        ("Undo History…", "undo-history"),
-                        ("Copy   Ctrl+C", "copy"),
-                        ("Copy Merged", "copy-merged"),
-                        ("Cut   Ctrl+X", "cut"),
-                        ("Paste   Ctrl+V", "paste"),
-                        ("Paste as New Sprite", "paste-as-sprite"),
-                        ("Paste as New Layer", "paste-as-layer"),
-                        ("Paste as Reference", "paste-as-reference"),
-                        ("Clear   Delete", "clear"),
-                        ("Replace Color…", "replace-color"),
-                        ("Filters…", "filters"),
-                        ("Select all   Ctrl+A", "selectall"),
-                        ("Deselect   Esc", "deselect"),
-                        ("Settings…", "settings"),
-                        ("Keyboard shortcuts…", "shortcuts"),
-                        ("Drawing & selection studio…", "studio"),
-                        ("Magic Wand", "wand"),
-                        ("Brushes, references & workflow tools…", "workflow"),
-                        ("Lasso selection", "lasso"),
-                        ("Move selection", "move"),
-                        ("Scale, skew, or rotate cels on canvas…", "canvas-transform"),
-                        ("Rotate selection 90°", "rotate"),
-                        ("Flip selection horizontally", "selectionflipx"),
-                        ("Flip selection vertically", "selectionflipy"),
-                        ("Crop to selection", "crop"),
-                        ("New Sprite from Selection", "new-sprite-from-selection"),
-                    ],
-                ),
-                (
-                    "Sprite",
-                    vec![
-                        ("Properties, layers, tiles & ranges…", "properties"),
-                        ("Palette and Color Conversion…", "palette-conversion"),
-                        ("Color Profile…", "color-profile"),
-                        ("Canvas size…", "resizecanvas"),
-                        ("Sprite size…", "spritesize"),
-                        ("Duplicate sprite", "duplicatesprite"),
-                        ("Auto-trim sprite", "trimsprite"),
-                        ("Rotate sprite 90° clockwise", "rotatespriteright"),
-                        ("Rotate sprite 90° counterclockwise", "rotatespriteleft"),
-                        ("Rotate sprite 180°", "rotatespritehalf"),
-                        ("Flip sprite horizontally", "flipspritex"),
-                        ("Flip sprite vertically", "flipspritey"),
-                        ("Tileset browser…", "tiles"),
-                        ("Flip active cel horizontally", "flipx"),
-                        ("Flip active cel vertically", "flipy"),
-                    ],
-                ),
-                (
-                    "Layer",
-                    vec![
-                        ("New layer", "layer"),
-                        ("Duplicate layer or group", "layer-duplicate"),
-                        ("Merge down", "layer-merge"),
-                        ("Flatten visible layers", "flatten-visible"),
-                        ("Flatten all layers", "flatten-layers"),
-                        ("Layer via copy", "layer-via-copy"),
-                        ("Layer via cut", "layer-via-cut"),
-                        ("Convert to raster layer", "convert-raster"),
-                        ("Convert to background", "convert-background"),
-                        ("Convert to tilemap…", "convert-tilemap"),
-                        ("Delete layer", "deletelayer"),
-                        ("Move layer up", "up"),
-                        ("Move layer down", "down"),
-                    ],
-                ),
-                (
-                    "Frame",
-                    vec![
-                        ("Duplicate frame", "frame"),
-                        ("New empty frame", "blank"),
-                        ("Delete frame", "deleteframe"),
-                        ("Reverse frames", "reverse-frames"),
-                        ("Play / stop   Space", "play"),
-                        ("Play once", "play-once"),
-                        ("Play selection", "play-selection"),
-                        ("Play selection once", "play-selection-once"),
-                        ("Play subtags", "play-subtags"),
-                        ("Play subtags once", "play-subtags-once"),
-                        ("Rewind on stop", "rewind-on-stop"),
-                        ("Previous frame   ,", "prev"),
-                        ("Next frame   .", "next"),
-                    ],
-                ),
-                (
-                    "View",
-                    vec![
-                        ("Toggle pixel grid", "grid"),
-                        ("Show drawing grid", "drawing-grid"),
-                        ("Snap to drawing grid", "snap-to-grid"),
-                        ("Drawing grid settings…", "drawing-grid-settings"),
-                        ("Set drawing grid from selection", "grid-from-selection"),
-                        ("Toggle onion skin", "onion"),
-                        ("Fit canvas", "fit"),
-                        ("Split canvas", "split-canvas"),
-                        ("Seamless canvas · both axes", "seamless"),
-                        ("Seamless canvas · horizontal", "seamless-horizontal"),
-                        ("Seamless canvas · vertical", "seamless-vertical"),
-                    ],
-                ),
-                (
-                    "Select",
-                    vec![
-                        ("Select all", "selectall"),
-                        ("Elliptical marquee", "elliptical-marquee"),
-                        ("Polygonal lasso", "polygonal-lasso"),
-                        ("Deselect", "deselect"),
-                        ("Reselect", "reselect"),
-                        ("Invert selection", "invert-selection"),
-                        ("Color Range…", "color-range"),
-                        ("Grow, Shrink & Border…", "modify-selection"),
-                        ("Import mask PNG…", "import-selection-mask"),
-                        ("Export mask PNG…", "export-selection-mask"),
-                    ],
-                ),
-                ("Extensions", vec![("Asset extensions…", "extensions")]),
-                (
-                    "Help",
-                    vec![("Tools and file support", "help"), ("About", "about")],
-                ),
-            ] {
+            for &(title, items) in command_search::MENU_GROUPS {
                 let translated = self
                     .translations
                     .get(&format!("menu.{}", title.to_lowercase()))
@@ -3971,7 +3816,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         });
                         ui.separator();
                     }
-                    for (label, a) in items {
+                    for &(label, a) in items {
                         if ["closetab", "deletelayer", "deleteframe", "clear"].contains(&a) {
                             ui.separator();
                         }
@@ -3994,12 +3839,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         } else {
                             a
                         };
-                        let enabled = match a {
-                            "repeat-export" => self.can_repeat_export(),
-                            "undo" => !self.undo.is_empty(),
-                            "redo" => !self.redo.is_empty(),
-                            _ => true,
-                        };
+                        let enabled = self.native_action_enabled(a);
                         let response = ui
                             .add_enabled_ui(enabled, |ui| {
                                 ui_icons::button_as(ui, icon, a, label, selected, true)
@@ -7535,6 +7375,7 @@ impl PixelCraft {
         self.workspace_recovery_dialog(&ctx);
         self.studio_dialogs(&ctx);
         self.power_dialogs(&ctx);
+        self.show_command_search(&ctx);
         self.poll_clipboard(&ctx);
         self.poll_bridge(&ctx);
         if let Some(path) = &self.shot {

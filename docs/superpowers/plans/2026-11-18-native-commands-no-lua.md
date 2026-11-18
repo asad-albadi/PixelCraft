@@ -26,8 +26,8 @@
 
 - [x] 1. Asset-only extension migration. Modify src/extensions.rs; add tests/lua_retirement.rs. Installed::script_warning reports unsupported script contributions, Manager install/list/set_enabled handle legacy/mixed packages without execution. Observe rejection/marker tests RED then GREEN; retain archive-safety and declarative-asset tests. Commit.
 - [x] 2. Remove Lua host/runtime, preserve native workflows. Remove Lua modules/script UI/jobs/payloads/tests solely about scripting. Port useful mixed tests to native CLI/MCP/model paths; add tests/native_automation_migration.rs for target edits, palette/tag/batch, obsolete-request atomic rejection. Update shared build/CI/standalone/package checks and migration/cookbook docs. Full Windows gates and zero active runtime references; commit.
-- [ ] 3. Native command catalog/search. Create src/command_search.rs; extract shared menu groups/availability; typed dynamic variants and execution. Add default binding and modal state/UI/input gating. Observe catalog and rendered modal/undo/disabled/stale tests RED then GREEN. Full Windows gates; commit.
-- [ ] 4. Real-project and installed/portable Windows acceptance. Run both day/night native save/reopen/frame/export/ASE and GUI/cache probes; protect originals by hashes. Check startup, clipboard, no-Lua package payloads and asset workflows. Record results.
+- [x] 3. Native command catalog/search. Create src/command_search.rs; extract shared menu groups/availability; typed dynamic variants and execution. Add default binding and modal state/UI/input gating. Observe catalog and rendered modal/undo/disabled/stale tests RED then GREEN. Full Windows gates; commit.
+- [x] 4. Real-project and installed/portable Windows acceptance. Run both day/night native save/reopen/frame/export/ASE and GUI/cache probes; protect originals by hashes. Check startup, clipboard, no-Lua package payloads and asset workflows. Record results.
 - [ ] 5. Independent code/security reviews, fixes with RED/GREEN regressions, full final Windows checks, push PR and native/package CI. Update issues/checklists with actual results and coverage limits; no merge.
 
 ## Execution ledger
@@ -49,3 +49,16 @@
 - CLI help retirement observed RED then GREEN. Obsolete script requests fail without writes. Asset install/list/enable marker tests never execute script content.
 - Windows fmt, strict all-target Clippy and694 all-target tests passed; no-Lua executable payload scan, native standalone smoke and runnable external Python CLI cookbook passed. Local generated Lua DLL was moved to an EngineChecks backup before building, so no build/runtime payload was available or required.
 - Active docs, migration guide, external CLI example and platform packaging checks updated. Historical scope/audit checkpoints explicitly marked superseded.
+
+### Task3 complete
+
+- Catalog/search regressions observed RED for missing unbound menu entries, parameter-distinct variants, normalized queries and refreshed state. Shared static menu groups now drive both menus and discovery; current bindings/enabled states are rebuilt. Typed theme/density/recent variants and native tools are included; duplicate IDs removed. No network-path probing in the per-frame catalog.
+- Ctrl+Shift+P is configurable. Eight catalog/rendered keyboard/pointer regressions pass, covering query input isolation, navigation, Escape, selected-cel history/save target, disabled/unknown entries, parameter activation, stale documents, pointer/backdrop isolation and cancellation precedence. A real close-button+Enter race was reproduced RED and fixed GREEN.
+- Full Windows gate702 tests passed, strict all-target Clippy and formatting passed. A semantic-icon test caught an invalid icon alias; switched to the existing keyboard icon and the regression passed. Dark/light/2x command-picker images were generated and inspected; unsupported arrow glyphs replaced with Up/Down. Existing complete theme/scaling/menu snapshot test passed; final targeted command scenes passed after text/presentation updates.
+
+### Task4 complete
+
+- Both original Autumn Breeze files passed opt-in optimized acceptance:480x270,24frames,23day/34night layers; full native equality after save/reopen; all24composites; PNG/GIF/MP4 exports; ASE round-trips with retained composites/timing/layer counts. Original source hashes unchanged (day5bb6660d7440de4181de4ae0ba54f45ff047991a621b6dd276d9e2eef990d0ff; nighta21a70ec2cb5e1f7aa87118cf1fe4f5ef88e72d9ce6c51214a14d0fed3aa0689). Exported day/night images inspected.
+- Day optimized load3.342s, render24=59.8ms, save1.516s, ASE516ms; night load6.362s, render24=94.2ms, save2.259s, ASE669ms. These are one local run, not universal performance guarantees.
+- Both actual documents passed48 ordered GUI/cache frame presentations each (199ms/186ms work/polling time); this pumps frames and is not a wall-clock playback capture. Authored documents unchanged.
+- Windows isolated portable executable check passed with system-only PATH; source DLL absent and executable scan found no Lua FFI/runtime payload. Native standalone smoke covers save/export/commands/assets without Lua. Native clipboard, platform installers and non-Windows distribution checks remain final CI gates.

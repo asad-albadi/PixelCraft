@@ -31,6 +31,7 @@ fn bindings(ctx: &egui::Context) -> Bindings {
 }
 pub fn icon_name(action: &str) -> &str {
     match action {
+        "command-search" => "keyboard",
         "new" => "file-new",
         "about" => "info",
         "transform-move" => "move",
@@ -80,6 +81,7 @@ pub fn icon_name(action: &str) -> &str {
 }
 pub fn action_label(action: &str) -> &str {
     match action {
+        "command-search" => "Search commands",
         "copy-merged" => "Copy Merged",
         "paste-as-sprite" => "Paste as New Sprite",
         "paste-as-layer" => "Paste as New Layer",

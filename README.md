@@ -234,6 +234,8 @@ ASE imports apply the stored pixel aspect ratio to the canvas and Preview and us
 
 ## Independent extensions and storage
 
+**Edit → Search commands** (`Ctrl+Shift+P`, configurable) searches native menu commands and tools, including commands without shortcuts. Type a label or action ID, use arrows and Enter, or click a result. Escape cancels without editing the canvas. Current shortcuts and disabled states are shown; theme, density and recent-file variants retain their parameters. Lua/plugin commands are not registered.
+
 **Extensions → Asset extensions** installs themes, palettes, shortcuts, languages and dithering matrices from ZIP/asset packages or folders. Archive validation rejects traversal, symlinks, encryption, invalid CRC and oversized contents. Lua scripting/plugins are no longer supported. Mixed packages retain independent assets and show a script-retirement warning. See [migration and CLI/MCP workflows](docs/native-automation-migration.md).
 
 
