@@ -1207,9 +1207,11 @@ impl PixelCraft {
             if let Some((completed, image, error)) = ready {
                 self.preview_frame = Some(completed);
                 self.preview = Some(self.load_frame_texture(ctx, completed, image, error));
-            } else if self.preview.is_none() {
-                self.preview = self.try_frame_texture(ctx, self.frame);
-                self.preview_frame = self.preview.as_ref().map(|_| self.frame);
+            } else {
+                // Do not label the main edit frame or a previous detached frame
+                // as the requested preview while its worker is pending.
+                self.preview = None;
+                self.preview_frame = None;
             }
         }
     }
@@ -11436,6 +11438,10 @@ mod tests {
         send.send((egui::ColorImage::filled([1, 1], Color32::RED), None))
             .unwrap();
         editor.update_preview_texture(&ctx, 2);
+        assert!(
+            editor.preview.is_none(),
+            "paused cold previews must not substitute the main canvas frame"
+        );
         assert_ne!(
             editor.preview_frame,
             Some(1),
@@ -11589,7 +11595,7 @@ mod tests {
             result,
         });
         app.update_preview_texture(&ctx, 1);
-        assert_eq!(app.preview.as_ref().unwrap().id(), canvas.id());
+        assert!(app.preview.is_none());
         send.send((small_image(), None)).unwrap();
         app.update_preview_texture(&ctx, 1);
         let detached = app.preview.as_ref().unwrap().id();

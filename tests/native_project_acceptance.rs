@@ -53,13 +53,27 @@ fn saved_day_and_night_projects_render_save_reopen_and_export() {
         formats::export_gif(&root.join(format!("project-{index}.gif")), &doc).unwrap();
         formats::export_mp4(&root.join(format!("project-{index}.mp4")), &doc, 1).unwrap();
         let export = start.elapsed();
+        let start = Instant::now();
+        let ase = root.join(format!("project-{index}.aseprite"));
+        formats::save(&ase, &doc).unwrap();
+        let ase_save = start.elapsed();
+        let ase_read = formats::load(&ase).unwrap();
+        assert_eq!(ase_read.durations, doc.durations);
+        assert_eq!(ase_read.layers.len(), doc.layers.len());
+        for frame in 0..doc.durations.len() {
+            assert_eq!(
+                ase_read.composite(frame),
+                doc.composite(frame),
+                "ASE frame {frame}"
+            );
+        }
         assert_eq!(
             hash,
             Sha256::digest(std::fs::read(path).unwrap()),
             "source file changed"
         );
         eprintln!(
-            "ACCEPT {}: {}x{}, {} layers, {} frames; load={load:?}, render24={render:?}, save={save:?}, reopen={reopen:?}, exports={export:?}; source_sha256={hash:x}",
+            "ACCEPT {}: {}x{}, {} layers, {} frames; load={load:?}, render24={render:?}, save={save:?}, reopen={reopen:?}, exports={export:?}, ase_save={ase_save:?}; source_sha256={hash:x}",
             path.display(),
             doc.width,
             doc.height,

@@ -261,6 +261,7 @@ pub(super) struct PreviewPlayback {
     frame: usize,
     time: PreviewTime,
     speed: u16,
+    waiting_for_frame: bool,
 }
 
 impl PreviewPlayback {
@@ -269,6 +270,7 @@ impl PreviewPlayback {
             frame,
             time: PreviewTime::Playing(now + playback_seconds(durations[frame], speed)),
             speed,
+            waiting_for_frame: false,
         }
     }
 
@@ -288,6 +290,29 @@ impl PreviewPlayback {
             PreviewTime::Playing(deadline) => PreviewTime::Paused(deadline - now),
             PreviewTime::Paused(remaining) => PreviewTime::Playing(now + remaining),
         };
+    }
+
+    fn update_presented(&mut self, now: f64, durations: &[u16], ready: bool) {
+        if self.frame >= durations.len() {
+            self.frame = durations.len() - 1;
+            self.waiting_for_frame = true;
+        }
+        if !ready {
+            self.waiting_for_frame = true;
+            return;
+        }
+        if let PreviewTime::Playing(deadline) = self.time {
+            if std::mem::take(&mut self.waiting_for_frame) {
+                // Start the authored hold only once the worker image is visible.
+                self.time =
+                    PreviewTime::Playing(now + playback_seconds(durations[self.frame], self.speed));
+            } else if now >= deadline {
+                // Never skip an unpresented cold successor during catch-up.
+                self.frame = (self.frame + 1) % durations.len();
+                self.time =
+                    PreviewTime::Playing(now + playback_seconds(durations[self.frame], self.speed));
+            }
+        }
     }
 
     fn update(&mut self, now: f64, durations: &[u16]) {
@@ -779,8 +804,20 @@ impl PixelCraft {
             if self.doc.durations.len() <= 1 {
                 self.preview_playback = None;
             }
+            let large = self.doc.width * self.doc.height > 2_000_000;
+            // Poll the outstanding request before advancing its clock. A slow
+            // detached render must get a presentation, even after its deadline.
+            if large && let Some(playback) = &self.preview_playback {
+                let frame = playback.frame.min(self.doc.durations.len() - 1);
+                self.update_preview_texture(ui.ctx(), frame);
+            }
             if let Some(playback) = &mut self.preview_playback {
-                playback.update(now, &self.doc.durations);
+                if large {
+                    let ready = self.preview_frame == Some(playback.frame) && self.preview.is_some();
+                    playback.update_presented(now, &self.doc.durations, ready);
+                } else {
+                    playback.update(now, &self.doc.durations);
+                }
             }
             let controls = ui.horizontal(|ui| {
                 ui.strong("Preview");
@@ -821,7 +858,7 @@ impl PixelCraft {
             }
             let frame = if let Some(playback) = &self.preview_playback {
                 if let PreviewTime::Playing(deadline) = playback.time {
-                    ui.ctx().request_repaint_after(Duration::from_secs_f64((deadline - now).max(0.)));
+                    ui.ctx().request_repaint_after(Duration::from_secs_f64(if playback.waiting_for_frame { 0.1 } else { (deadline - now).max(0.) }));
                 }
                 playback.frame
             } else {
@@ -1216,6 +1253,70 @@ mod workflow_option_tests {
             assert_eq!(&color[..3], &opaque[..3]);
             assert_eq!(color[3], alpha);
         }
+    }
+
+    #[test]
+    fn large_preview_clock_waits_for_presentation_and_advances_one_frame() {
+        let durations = [10, 10, 10];
+        let mut preview = PreviewPlayback::new(1, 0., &durations, 100);
+        preview.update_presented(0.2, &durations, false);
+        assert_eq!(preview.frame, 1, "never abandon an unpresented frame");
+        preview.update_presented(0.5, &durations, true);
+        assert_eq!(
+            preview.frame, 1,
+            "show a late completion for its authored duration"
+        );
+        preview.update_presented(0.9, &durations, true);
+        assert_eq!(
+            preview.frame, 2,
+            "do not skip cold successor frames after a delayed repaint"
+        );
+    }
+
+    #[test]
+    fn delayed_large_preview_gui_presents_the_requested_frame_before_advancing() {
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.replace(Document::new(2048, 1024), None);
+        editor.doc.add_frame(0, false);
+        editor.doc.add_frame(0, false);
+        editor.doc.durations = vec![10, 10, 10];
+        editor.refresh_frame_cache(&ctx);
+        editor.store_frame_texture(
+            &ctx,
+            0,
+            egui::ColorImage::filled([1, 1], Color32::WHITE),
+            None,
+        );
+        editor.preview_playback = Some(PreviewPlayback::new(1, 0., &editor.doc.durations, 100));
+        let (send, result) = std::sync::mpsc::channel();
+        editor.preview_prefetch = Some(FramePrefetch {
+            frame: 1,
+            snapshot: editor.doc.clone(),
+            result,
+        });
+        let draw = |editor: &mut PixelCraft, time| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::splat(300.))),
+                    ..Default::default()
+                },
+                |ui| editor.sprite_preview(ui),
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut editor, 0.2);
+        assert_eq!(editor.preview_playback.as_ref().unwrap().frame, 1);
+        assert!(
+            editor.preview.is_none(),
+            "never display the edit frame for an uncached detached request"
+        );
+        send.send((egui::ColorImage::filled([1, 1], Color32::RED), None))
+            .unwrap();
+        draw(&mut editor, 0.5);
+        assert_eq!(editor.preview_frame, Some(1));
+        assert_eq!(editor.preview_playback.as_ref().unwrap().frame, 1);
     }
 
     #[test]
