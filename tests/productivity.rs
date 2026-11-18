@@ -74,6 +74,7 @@ fn grid_import_spacing_layers_and_tag_direction() {
     let l = import_grid(&im, &GridImport { layers: true, ..g }).unwrap();
     assert_eq!(l.layers.len(), 2);
     let t = FrameTag {
+        editor_id: Default::default(),
         name: "x".into(),
         from: 1,
         to: 3,
@@ -135,6 +136,7 @@ fn references_survive_native_save_but_never_composite() {
         scale: 2.,
         opacity: 128,
         visible: true,
+        options: Default::default(),
     });
     let path =
         std::env::temp_dir().join(format!("pixelcraft-reference-{}.pixel", std::process::id()));
@@ -156,6 +158,7 @@ fn batch_tags_keeps_sheet_direction_and_gif_playback_timing() {
         d.durations[f] = [70, 130, 210][f];
     }
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "../walk".into(),
         from: 0,
         to: 2,
@@ -203,6 +206,7 @@ fn batch_tag_gifs_preserve_repeat_counts_and_direction() {
     ] {
         for repeat in [0, 1, 2, u16::MAX] {
             d.tags = vec![FrameTag {
+                editor_id: Default::default(),
                 name: "walk".into(),
                 from: 0,
                 to: 2,
@@ -584,6 +588,7 @@ fn regression_ase_save_rejects_reference_loss() {
         scale: 1.,
         opacity: 255,
         visible: true,
+        options: Default::default(),
     });
     for ext in ["ase", "aseprite"] {
         let path =
@@ -663,6 +668,7 @@ fn regression_large_ping_pong_gif_streams_repeated_frames() {
         d.add_frame(0, true);
     }
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "ping".into(),
         from: 0,
         to: 32,
@@ -858,6 +864,7 @@ fn reference_sampling_composites_transparency_and_stack_order() {
         scale: 1.,
         opacity: 255,
         visible: true,
+        options: Default::default(),
     };
     d.references.push(reference);
     assert_eq!(sample_canvas(&d, 0, 0, 0, true), art);
@@ -924,4 +931,131 @@ fn live_export_can_report_progress_and_cancel_on_a_second_connection() {
     let mut response = String::new();
     export.read_line(&mut response).unwrap();
     assert!(response.contains("Export cancelled"));
+}
+#[test]
+fn selection_morphology_clips_edges_and_mask_png_roundtrips_holes() {
+    use pixelcraft::workflows::selection::{
+        MaskEffect, change_mask, read_mask_png, write_mask_png,
+    };
+    let mut source = vec![false; 25];
+    source[12] = true;
+    let expanded = change_mask(&source, 5, 5, 1, MaskEffect::Grow).unwrap();
+    assert_eq!(expanded.iter().filter(|&&bit| bit).count(), 9);
+    assert!(expanded[6] && expanded[18] && !expanded[0]);
+    assert_eq!(
+        change_mask(&expanded, 5, 5, 1, MaskEffect::Shrink).unwrap(),
+        source
+    );
+    let border = change_mask(&expanded, 5, 5, 1, MaskEffect::InsideBorder).unwrap();
+    assert_eq!(border.iter().filter(|&&bit| bit).count(), 8);
+    assert!(!border[12]);
+    let full = [true; 9];
+    assert_eq!(
+        change_mask(&full, 3, 3, 1, MaskEffect::Shrink).unwrap(),
+        [false, false, false, false, true, false, false, false, false]
+    );
+    let path = std::env::temp_dir().join(format!("pixelcraft-mask-{}.png", std::process::id()));
+    write_mask_png(&path, &border, 5, 5).unwrap();
+    assert_eq!(read_mask_png(&path, 5, 5).unwrap(), border);
+    assert!(read_mask_png(&path, 4, 5).is_err());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn reference_controls_keep_native_aspect_and_skip_unsampleable_overlays() {
+    use pixelcraft::productivity::{ReferenceImage, ReferenceOptions, sample_reference_image};
+    let mut d = Document::new(8, 8);
+    let mut r = ReferenceImage {
+        name: "Guide".into(),
+        width: 2,
+        height: 1,
+        pixels: vec![[180, 70, 20, 255]; 2].into(),
+        x: 0.,
+        y: 0.,
+        scale: 1.,
+        opacity: 255,
+        visible: true,
+        behind: false,
+        floating: false,
+        options: ReferenceOptions::default(),
+    };
+    r.set_display_width(6.);
+    assert_eq!(r.display_dimensions(), [6., 3.]);
+    r.set_aspect_locked(false);
+    r.set_display_height(7.);
+    assert_eq!(r.display_dimensions(), [6., 7.]);
+    assert_eq!(r.coordinates(5, 6), Some((1, 0)));
+    r.options.sampleable = false;
+    d.references.push(r);
+    assert_eq!(sample_reference_image(&d, 5, 6), None);
+    d.references[0].options.sampleable = true;
+    assert_eq!(sample_reference_image(&d, 5, 6), Some([180, 70, 20, 255]));
+    d.references[0].set_aspect_locked(true);
+    assert_eq!(d.references[0].display_dimensions(), [6., 3.]);
+    d.validate().unwrap();
+}
+
+#[test]
+fn canvas_skew_samples_pixel_centers_and_preserves_mask_holes() {
+    use pixelcraft::workflows::{Transform, transform, transform_mask};
+
+    let mut doc = Document::new(8, 6);
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    doc.set_pixel(0, 0, 9, red);
+    doc.set_pixel(0, 0, 25, blue);
+    doc.set_pixel(0, 0, 11, blue);
+    let mut mask = vec![false; 48];
+    mask[9] = true;
+    mask[25] = true;
+    let bounds = [1, 1, 2, 3];
+    let skew = Transform::SkewX(3);
+    let result = transform_mask(&doc, bounds, &mask, skew);
+    assert_eq!(
+        transform(&mut doc, 0, 0, bounds, Some(&mask), skew),
+        Ok([1, 1, 5, 3])
+    );
+    assert_eq!(doc.layers[0].cels[0][9], red);
+    assert_eq!(doc.layers[0].cels[0][11], blue);
+    assert_eq!(doc.layers[0].cels[0][25], CLEAR);
+    assert_eq!(doc.layers[0].cels[0][27], blue);
+    assert_eq!(
+        result
+            .iter()
+            .enumerate()
+            .filter(|(_, hit)| **hit)
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>(),
+        [9, 27]
+    );
+
+    let edge = Transform::SkewX(-6);
+    assert!(transform(&mut doc, 0, 0, bounds, None, edge).is_ok());
+    assert!(transform(&mut doc, 0, 0, bounds, None, Transform::SkewX(i32::MIN)).is_err());
+}
+
+#[test]
+fn lock_alpha_retains_indexed_coverage_and_copy_color_keeps_duplicate_slots() {
+    use pixelcraft::productivity::PaintInk;
+
+    let mut doc = Document::new(4, 1);
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let translucent_blue = [0, 0, 255, 128];
+    let translucent_red = [255, 0, 0, 128];
+    doc.palette = vec![CLEAR, red, red, blue, translucent_blue, translucent_red];
+    doc.set_color_mode(ColorMode::Indexed);
+    doc.set_pixel(0, 0, 1, blue);
+    doc.set_pixel(0, 0, 3, translucent_blue);
+    doc.drawing_index = Some(2);
+    PaintInk::LockAlpha.draw(&mut doc, (0, 0), 0, CLEAR, red);
+    PaintInk::LockAlpha.draw(&mut doc, (0, 0), 1, blue, red);
+    PaintInk::CopyColor.draw(&mut doc, (0, 0), 2, CLEAR, red);
+    PaintInk::LockAlpha.draw(&mut doc, (0, 0), 3, translucent_blue, red);
+    let cel = &doc.layers[0];
+    assert_eq!(cel.cels[0][0], CLEAR);
+    assert_eq!(cel.cels[0][1], red);
+    assert_eq!(cel.cels[0][2], red);
+    assert_eq!(cel.cels[0][3], translucent_red);
+    assert_eq!(&**cel.cel_meta[0].indices.as_ref().unwrap(), &[0, 2, 2, 5]);
 }

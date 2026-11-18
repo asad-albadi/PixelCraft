@@ -1,4 +1,4 @@
-use crate::model::*;
+use crate::{model::*, workflows::sheet_frame_tag};
 use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -7,13 +7,22 @@ use std::{
     hash::{Hash, Hasher},
     path::Path,
 };
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AtlasLayout {
     Rows,
     #[default]
     MaxRects,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AtlasMetadata {
+    #[default]
+    Array,
+    Hash,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AtlasOptions {
     pub layout: AtlasLayout,
@@ -22,6 +31,7 @@ pub struct AtlasOptions {
     pub trim: bool,
     pub deduplicate: bool,
     pub power_of_two: bool,
+    pub metadata: AtlasMetadata,
 }
 impl Default for AtlasOptions {
     fn default() -> Self {
@@ -32,6 +42,7 @@ impl Default for AtlasOptions {
             trim: true,
             deduplicate: true,
             power_of_two: false,
+            metadata: AtlasMetadata::Array,
         }
     }
 }
@@ -58,6 +69,27 @@ fn maxrects(
     width: usize,
     height: usize,
     pad: usize,
+) -> Option<Vec<Rect>> {
+    let mut budget = usize::MAX;
+    maxrects_with_budget(sizes, width, height, pad, &mut budget)
+}
+
+pub(crate) fn pack_rect_positions(
+    sizes: &[(usize, usize)],
+    width: usize,
+    height: usize,
+    remaining: &mut usize,
+) -> Option<Vec<[usize; 2]>> {
+    maxrects_with_budget(sizes, width, height, 0, remaining)
+        .map(|rects| rects.into_iter().map(|rect| [rect.x, rect.y]).collect())
+}
+
+fn maxrects_with_budget(
+    sizes: &[(usize, usize)],
+    width: usize,
+    height: usize,
+    pad: usize,
+    remaining: &mut usize,
 ) -> Option<Vec<Rect>> {
     let mut free = vec![Rect {
         x: pad,
@@ -122,6 +154,12 @@ fn maxrects(
                 });
             }
         }
+        let comparisons = split.len().saturating_mul(split.len()).max(1);
+        if comparisons > *remaining {
+            *remaining = 0;
+            return None;
+        }
+        *remaining -= comparisons;
         free = split
             .iter()
             .enumerate()
@@ -144,11 +182,13 @@ pub fn pack_atlas(
         return Err("Choose input sprites, a width from 1–16384, and padding from 0–256".into());
     }
     let mut entries = vec![];
+    let mut frame_tags = Vec::new();
     let mut unique: Vec<(usize, usize, Vec<Pixel>)> = vec![];
     let mut hashes: HashMap<u64, Vec<usize>> = HashMap::new();
     let mut total = 0usize;
     for (si, (name, d)) in sources.iter().enumerate() {
         d.validate()?;
+        let first_frame = entries.len();
         for f in 0..d.durations.len() {
             let pixels = d.composite(f);
             let (mut x0, mut y0, mut x1, mut y1) = (d.width, d.height, 0, 0);
@@ -197,7 +237,7 @@ pub fn pack_atlas(
                 return Err("Atlas inputs exceed pixel or frame budget".into());
             }
             entries.push((
-                format!("{si}/{name}/{f}"),
+                format!("{si}/{name}/{}", d.frame_export_id(f)),
                 si,
                 f,
                 id,
@@ -207,6 +247,11 @@ pub fn pack_atlas(
                 d.durations[f],
             ));
         }
+        frame_tags.extend(d.tags.iter().map(|tag| {
+            let mut exported = sheet_frame_tag(tag, first_frame + tag.from, first_frame + tag.to);
+            exported["source"] = json!(si);
+            exported
+        }));
     }
     let pad = o.padding;
     let min_width = unique.iter().map(|s| s.0 + 2 * pad).max().unwrap_or(1);
@@ -282,24 +327,79 @@ pub fn pack_atlas(
             }
         }
     }
-    let frames:Vec<_>=entries.iter().map(|(name,si,f,id,b,sw,sh,duration)|{let r=placements[*id];json!({"filename":name,"source":si,"sourceFrame":f,"frame":{"x":r.x,"y":r.y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,"spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},"sourceSize":{"w":sw,"h":sh},"duration":duration})}).collect();
+    let frames: Vec<_> = entries
+        .iter()
+        .map(|(name, si, f, id, b, sw, sh, duration)| {
+            let r = placements[*id];
+            let document = &sources[*si].1;
+            let mut entry = json!({
+                "filename":name,"source":si,"sourceFrame":f,"frameId":document.frame_export_id(*f),
+                "frame":{"x":r.x,"y":r.y,"w":b[2],"h":b[3]},"rotated":false,"trimmed":o.trim,
+                "spriteSourceSize":{"x":b[0],"y":b[1],"w":b[2],"h":b[3]},
+                "sourceSize":{"w":sw,"h":sh},"duration":duration
+            });
+            if let Some(name) = document.frame_name(*f) {
+                entry["frameName"] = json!(name);
+            }
+            entry
+        })
+        .collect();
+    let next_frame_id = match sources {
+        [(_, document)] => Some(document.next_frame_export_id()),
+        _ => None,
+    };
     let sources: Vec<_> = sources
         .iter()
         .enumerate()
         .map(|(i, (name, d))| json!({"id":i,"name":name,"tags":d.tags}))
         .collect();
-    Ok((
-        im,
-        json!({"frames":frames,"meta":{"app":"PixelCraft","image":"atlas.png","size":{"w":w,"h":h},"padding":pad,"layout":o.layout,"sources":sources}}),
-    ))
+    let mut metadata = json!({"frames":frames,"meta":{"app":"PixelCraft","image":"atlas.png","size":{"w":w,"h":h},"padding":pad,"layout":o.layout,"sources":sources,"frameTags":frame_tags}});
+    if let Some(next_frame_id) = next_frame_id {
+        metadata["meta"]["nextFrameId"] = json!(next_frame_id);
+    }
+    Ok((im, metadata))
 }
 pub fn export_atlas(
     path: &Path,
     sources: &[(String, Document)],
     o: &AtlasOptions,
 ) -> Result<(), String> {
-    let (im, mut meta) = pack_atlas(sources, o)?;
+    save_packed_atlas_with_metadata(path, &pack_atlas(sources, o)?, o.metadata)
+}
+
+/// Write the same image and placement data produced by `pack_atlas`.
+pub fn save_packed_atlas(path: &Path, packed: &(RgbaImage, Value)) -> Result<(), String> {
+    save_packed_atlas_with_metadata(path, packed, AtlasMetadata::Array)
+}
+
+pub fn save_packed_atlas_with_metadata(
+    path: &Path,
+    packed: &(RgbaImage, Value),
+    metadata: AtlasMetadata,
+) -> Result<(), String> {
+    let (image, meta) = packed;
+    let write_image =
+        || crate::automation::mcp_io::write_image(path, image).map_err(|e| e.to_string());
+    if metadata == AtlasMetadata::None {
+        return write_image();
+    }
+    let mut meta = meta.clone();
     meta["meta"]["image"] = json!(path.file_name().unwrap_or_default().to_string_lossy());
-    im.save(path).map_err(|e| e.to_string())?;
+    if metadata == AtlasMetadata::Hash {
+        let mut frames = serde_json::Map::new();
+        for frame in meta["frames"]
+            .as_array()
+            .ok_or("Atlas has no frame array")?
+        {
+            let name = frame["filename"]
+                .as_str()
+                .ok_or("Atlas frame has no filename")?;
+            if frames.insert(name.to_owned(), frame.clone()).is_some() {
+                return Err(format!("Duplicate atlas frame filename: {name}"));
+            }
+        }
+        meta["frames"] = Value::Object(frames);
+    }
+    write_image()?;
     crate::interchange::write_json(&path.with_extension("json"), &meta)
 }

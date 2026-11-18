@@ -17,6 +17,7 @@ fn sheet_metadata_roundtrips_frames_tags_and_padding() {
     d.set_pixel(0, 1, 5, [0, 255, 0, 255]);
     d.durations = vec![70, 230];
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "walk".into(),
         from: 0,
         to: 1,
@@ -68,6 +69,7 @@ fn tiled_export_import_preserves_flips_and_empty_tiles() {
     std::fs::create_dir_all(&root).unwrap();
     let mut d = Document::new(4, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Ground".into(),
         width: 2,
         height: 2,
@@ -148,6 +150,31 @@ fn openraster_keeps_layers_opacity_and_stacking() {
     assert_eq!(d.composite(0)[5], [0, 255, 0, 128]);
 }
 #[test]
+fn openraster_import_without_a_writable_temp_directory() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/workflows/layers.ora");
+    // A regular file cannot be used as an extraction directory.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_pixelcraft"))
+        .env("TMPDIR", &path)
+        .env("TEMP", &path)
+        .env("TMP", &path)
+        .arg("--cli")
+        .arg("inspect")
+        .arg("--input")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["layers"][0]["name"], "Red");
+    assert_eq!(report["layers"][1]["name"], "Green");
+}
+
+#[test]
 fn engine_presets_write_resources_with_animation_timing() {
     let root = std::env::temp_dir().join(format!("pixelcraft-engines-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
@@ -155,6 +182,7 @@ fn engine_presets_write_resources_with_animation_timing() {
     d.add_frame(0, false);
     d.durations = vec![70, 230];
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "walk".into(),
         from: 0,
         to: 1,
@@ -237,6 +265,236 @@ fn cropping_offset_linked_cels_preserves_both_frames_in_ase() {
     assert_eq!(reopened.composite(0), doc.composite(0));
     assert_eq!(reopened.composite(1), doc.composite(1));
 }
+
+#[test]
+fn canvas_size_can_hide_and_recover_indexed_artwork_and_tiles() {
+    let red = [255, 0, 0, 255];
+    let mut doc = Document::new(6, 2);
+    doc.palette = vec![CLEAR, red, red];
+    doc.set_color_mode(ColorMode::Indexed);
+    doc.drawing_index = Some(2);
+    doc.set_pixel(0, 0, 0, red);
+    doc.set_pixel(0, 0, 5, red);
+    doc.add_frame(0, false);
+    doc.link_cel(0, 1, 0).unwrap();
+    doc.drawing_index = None;
+    doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
+        name: "Tiles".into(),
+        width: 2,
+        height: 1,
+        tiles: vec![vec![red, CLEAR].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0][0] = 0x8000_0001;
+    doc.layers[1].tile_cels[0][2] = 1;
+    let original = doc.clone();
+
+    resize_canvas_with_trim(&mut doc, [2, 2], [-2, 0], false).unwrap();
+    assert_eq!(doc.composite(0), [CLEAR; 4]);
+    assert_eq!(doc.layers[0].cel_meta[0].outside.len(), 2);
+    assert!(doc.layers[0].cel_meta[0].artwork_link.is_some());
+    assert!(doc.same_cel_image_ids(&original));
+    let mut native =
+        pixelcraft::formats::decode_project(&pixelcraft::formats::encode_project(&doc).unwrap())
+            .unwrap();
+    let mut ase =
+        pixelcraft::formats::decode_ase(&pixelcraft::formats::encode_ase(&doc).unwrap()).unwrap();
+    for restored in [&mut doc, &mut native, &mut ase] {
+        resize_canvas_with_trim(restored, [6, 2], [2, 0], false).unwrap();
+        assert_eq!(restored.composite(0), original.composite(0));
+        assert_eq!(restored.composite(1), original.composite(1));
+        assert_eq!(
+            restored.layers[1].tile_cels[0],
+            original.layers[1].tile_cels[0]
+        );
+        let slots = restored.layers[0].cel_meta[0].indices.as_ref().unwrap();
+        assert_eq!((slots[0], slots[5]), (2, 2));
+    }
+}
+
+#[test]
+fn untrimmed_canvas_retains_layer_mask_coverage_through_native_save() {
+    let ink = [210, 61, 35, 255];
+    let mut source = Document::new(6, 2);
+    source.set_pixel(0, 0, 0, ink);
+    source.set_pixel(0, 0, 5, ink);
+    let mut mask = Pixels::empty(12);
+    mask.set(0, [0, 0, 0, 127]);
+    mask.set(5, [0, 0, 0, 255]);
+    source.set_layer_mask(0, Some(mask)).unwrap();
+    let expected = source.composite(0);
+    let mut shrunk = source.clone();
+    resize_canvas_with_trim(&mut shrunk, [2, 2], [-2, 0], false).unwrap();
+    assert_eq!(shrunk.composite(0), [CLEAR; 4]);
+
+    let mut moved = shrunk.clone();
+    moved.layers[0].cel_meta[0].keyframe = Some(CelKeyframe {
+        x: 2,
+        ..CelKeyframe::default()
+    });
+    assert_eq!(moved.composite(0)[0], expected[0]);
+    assert_eq!(
+        moved.composite_view_region(0, [0, 0], [1, 1]).unwrap(),
+        [expected[0]]
+    );
+
+    let reopened =
+        pixelcraft::formats::decode_project(&pixelcraft::formats::encode_project(&shrunk).unwrap())
+            .unwrap();
+    for trim in [false, true] {
+        let mut expanded = reopened.clone();
+        resize_canvas_with_trim(&mut expanded, [6, 2], [2, 0], trim).unwrap();
+        assert_eq!(expanded.composite(0), expected);
+        assert_eq!(expanded.layers[0].mask, source.layers[0].mask);
+    }
+
+    let mut rotated = orient_sprite(&reopened, Orientation::TurnRight).unwrap();
+    resize_canvas_with_trim(&mut rotated, [2, 6], [0, 2], false).unwrap();
+    let expected_turn = orient_sprite(&source, Orientation::TurnRight).unwrap();
+    assert_eq!(rotated.composite(0), expected_turn.composite(0));
+    assert_eq!(rotated.layers[0].mask, expected_turn.layers[0].mask);
+
+    let mut resampled = resample_sprite(&reopened, [4, 4]).unwrap();
+    resize_canvas_with_trim(&mut resampled, [12, 4], [4, 0], false).unwrap();
+    let expected_scale = resample_sprite(&source, [12, 4]).unwrap();
+    assert_eq!(resampled.composite(0), expected_scale.composite(0));
+    assert_eq!(resampled.layers[0].mask, expected_scale.layers[0].mask);
+
+    let mut cleared = reopened;
+    cleared.set_layer_mask(0, Some(Pixels::empty(4))).unwrap();
+    resize_canvas_with_trim(&mut cleared, [6, 2], [2, 0], false).unwrap();
+    assert_eq!(cleared.composite(0), [CLEAR; 12]);
+}
+
+#[test]
+fn off_canvas_masks_follow_translated_tiles_in_full_and_cropped_renders() {
+    let mut doc = Document::new(4, 1);
+    let ink = [210, 61, 35, 255];
+    doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
+        name: "Tiles".into(),
+        width: 2,
+        height: 1,
+        tiles: vec![vec![ink; 2].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0][0] = 1;
+    let mut mask = Pixels::empty(4);
+    mask.set(0, [0, 0, 0, 127]);
+    doc.set_layer_mask(1, Some(mask)).unwrap();
+    let expected = doc.composite(0);
+    resize_canvas_with_trim(&mut doc, [2, 1], [-2, 0], false).unwrap();
+    assert_eq!(doc.composite(0), [CLEAR; 2]);
+    doc.layers[1].cel_meta[0].keyframe = Some(CelKeyframe {
+        x: 2,
+        ..CelKeyframe::default()
+    });
+    assert_eq!(doc.composite(0), expected[..2]);
+    assert_eq!(
+        doc.composite_view_region(0, [0, 0], [1, 1]).unwrap(),
+        expected[..1],
+    );
+}
+
+#[test]
+fn hidden_indexed_artwork_tracks_swatch_edits_reorders_and_ramps() {
+    let red = [255, 0, 0, 255];
+    let green = [0, 255, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let mut doc = Document::new(5, 1);
+    doc.palette = vec![CLEAR, red, red, blue];
+    doc.set_color_mode(ColorMode::Indexed);
+    for (index, slot) in [(0, 1), (4, 2)] {
+        doc.drawing_index = Some(slot);
+        doc.set_pixel(0, 0, index, red);
+    }
+    resize_canvas_with_trim(&mut doc, [3, 1], [-1, 0], false).unwrap();
+    let verify = |mut doc: Document, colors, slots| {
+        resize_canvas_with_trim(&mut doc, [5, 1], [1, 0], false).unwrap();
+        let pixels = &doc.layers[0].cels[0];
+        let indices = doc.layers[0].cel_meta[0].indices.as_ref().unwrap();
+        assert_eq!([pixels[0], pixels[4]], colors);
+        assert_eq!([indices[0], indices[4]], slots);
+    };
+
+    let mut edited = doc.clone();
+    edited.set_palette_color(1, green);
+    let hidden = &edited.layers[0].cel_meta[0].outside;
+    assert_eq!([hidden[0].color, hidden[1].color], [green, red]);
+    edited.reorder_palette(1, 3).unwrap();
+    for roundtrip in [
+        edited.clone(),
+        pixelcraft::formats::decode_ase(&pixelcraft::formats::encode_ase(&edited).unwrap())
+            .unwrap(),
+    ] {
+        verify(roundtrip, [green, red], [3, 1]);
+    }
+
+    let mut ramp = doc.clone();
+    let map = ramp.replace_palette_span(1, 3, 5).unwrap();
+    let colors = [ramp.palette[map[1]], ramp.palette[map[2]]];
+    assert_ne!(colors[0], colors[1]);
+    verify(ramp, colors, [map[1] as u8, map[2] as u8]);
+
+    let converted = doc.indexed_conversion(None, 2, None).unwrap();
+    verify(converted, [red, red], [1, 0]);
+    doc.set_color_mode(ColorMode::Rgba);
+    assert!(
+        doc.layers[0].cel_meta[0]
+            .outside
+            .iter()
+            .all(|pixel| pixel.palette_slot.is_none())
+    );
+    doc.set_color_mode(ColorMode::Indexed);
+    verify(doc, [red, red], [1, 1]);
+}
+
+#[test]
+fn clipping_linked_cels_splits_image_identity_only_for_detached_placements() {
+    let mut doc = Document::new(6, 1);
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    doc.set_pixel(0, 0, 1, red);
+    doc.set_pixel(0, 0, 2, blue);
+    doc.layers[0].cel_meta[0].bounds = Some([1, 0, 2, 1]);
+    for (frame, x) in [3, 3, 1].into_iter().enumerate() {
+        doc.add_frame(frame, false);
+        doc.layers[0].cel_meta[frame + 1].bounds = Some([x, 0, 2, 1]);
+        doc.link_cel(0, frame + 1, 0).unwrap();
+    }
+    let identity = doc.layers[0].cel_meta[0].image_id.runtime_key();
+    assert!(
+        doc.layers[0]
+            .cel_meta
+            .iter()
+            .all(|cel| cel.image_id.runtime_key() == identity)
+    );
+    for canvas_size in [false, true] {
+        let mut clipped = doc.clone();
+        if canvas_size {
+            resize_canvas(&mut clipped, [3, 1], [-2, 0]).unwrap();
+        } else {
+            crop(&mut clipped, [2, 0, 3, 1]).unwrap();
+        }
+        let frames = &clipped.layers[0].cel_meta;
+        let ids: Vec<_> = frames
+            .iter()
+            .map(|cel| cel.image_id.runtime_key())
+            .collect();
+        assert_eq!(ids[0], identity);
+        assert_eq!(ids[3], identity);
+        assert_ne!(ids[1], identity, "detached cels share the source handle");
+        assert_eq!(ids[1], ids[2]);
+        assert_eq!(frames[0].artwork_link, frames[3].artwork_link);
+        assert_eq!(frames[1].artwork_link, frames[2].artwork_link);
+        assert_ne!(frames[0].artwork_link, frames[1].artwork_link);
+        assert_eq!(clipped.composite(0), [blue, CLEAR, CLEAR]);
+        assert_eq!(clipped.composite(1), [CLEAR, red, blue]);
+        clipped.validate().unwrap();
+    }
+}
+
 #[test]
 fn cropping_shared_rasters_keeps_their_backing_shared() {
     let mut doc = Document::new(4, 2);
@@ -286,6 +544,7 @@ fn unity_reexport_keeps_sprite_ids_after_redraw_and_frame_insertion() {
     d.durations = vec![83, 120, 250];
     for (i, name) in ["idle", "walk", "jump"].into_iter().enumerate() {
         d.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: name.into(),
             from: i,
             to: i,
@@ -377,4 +636,152 @@ fn pixelcraft_sheet_reconstruction_preserves_frame_names_and_retired_ids() {
     );
     reconstructed.add_frame(3, false);
     assert_eq!(reconstructed.frame_export_id(4), 5);
+}
+
+#[test]
+fn crop_keeps_tile_grid_phase_and_splits_links_when_placements_clip_differently() {
+    use pixelcraft::formats::{decode_ase, encode_ase};
+    let mut doc = Document::new(6, 2);
+    let red = [200, 40, 30, 255];
+    let blue = [20, 40, 200, 255];
+    doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
+        name: "Road".into(),
+        width: 2,
+        height: 2,
+        tiles: vec![vec![red, blue, red, blue].into(), vec![blue; 4].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0].copy_from_slice(&[0x8000_0001, 2, 1]);
+    doc.add_frame(0, false);
+    doc.layers[1].cel_meta[1].tilemap = Some(TilemapGeometry {
+        x: 2,
+        y: 0,
+        columns: 3,
+        rows: 1,
+    });
+    doc.link_cel(1, 1, 0).unwrap();
+    doc.add_frame(1, false);
+    doc.layers[1].cel_meta[2].tilemap = None;
+    doc.link_cel(1, 2, 0).unwrap();
+    let expected: Vec<Vec<Pixel>> = (0..3)
+        .map(|frame| {
+            doc.composite(frame)
+                .chunks_exact(6)
+                .flat_map(|row| row[1..4].iter().copied())
+                .collect()
+        })
+        .collect();
+    crop(&mut doc, [1, 0, 3, 2]).unwrap();
+
+    assert_eq!([doc.width, doc.height], [3, 2]);
+    assert_eq!(doc.layers[1].tileset, Some(0));
+    assert_eq!(doc.layers[1].cel_meta[0].tilemap.as_ref().unwrap().x, -1);
+    assert_eq!(doc.layers[1].tile_cels[0], [0x8000_0001, 2]);
+    assert_eq!(doc.layers[1].tile_cels[1], [0, 0x8000_0001]);
+    let metadata = &doc.layers[1].cel_meta;
+    assert!(metadata[0].artwork_link.is_some());
+    assert_eq!(metadata[0].artwork_link, metadata[2].artwork_link);
+    assert!(metadata[1].artwork_link.is_none());
+    let reopened = decode_ase(&encode_ase(&doc).unwrap()).unwrap();
+    for (frame, pixels) in expected.into_iter().enumerate() {
+        assert_eq!(doc.composite(frame), pixels);
+        assert_eq!(reopened.composite(frame), pixels);
+    }
+}
+
+#[test]
+fn canvas_trim_at_current_size_discards_hidden_raster_masks_and_tiles() {
+    let mut doc = Document::new(6, 2);
+    let ink = [210, 55, 20, 255];
+    doc.set_pixel(0, 0, 0, ink);
+    let mut mask = Pixels::empty(12);
+    mask.set(0, [0, 0, 0, 255]);
+    doc.set_layer_mask(0, Some(mask)).unwrap();
+    doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
+        name: "Tile".into(),
+        width: 2,
+        height: 1,
+        tiles: vec![vec![ink; 2].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].tile_cels[0][0] = 1;
+    doc.layers[1].tile_cels[0][1] = 0x8000_0001;
+    resize_canvas_with_trim(&mut doc, [3, 2], [-2, 0], false).unwrap();
+    let before = doc.composite(0);
+    assert!(!doc.layers[0].cel_meta[0].outside.is_empty());
+    assert!(!doc.layers[0].mask_outside.is_empty());
+
+    resize_canvas_with_trim(&mut doc, [3, 2], [0, 0], true).unwrap();
+
+    assert_eq!(doc.composite(0), before);
+    assert!(doc.layers[0].cel_meta[0].outside.is_empty());
+    assert!(doc.layers[0].mask_outside.is_empty());
+    assert_eq!(doc.layers[1].tile_cels[0][0], 0x8000_0001);
+    let trimmed = doc.clone();
+    resize_canvas_with_trim(&mut doc, [3, 2], [0, 0], true).unwrap();
+    assert_eq!(doc, trimmed);
+    resize_canvas_with_trim(&mut doc, [6, 2], [2, 0], false).unwrap();
+    assert_eq!(doc.composite(0)[0], CLEAR);
+    assert_eq!(doc.composite(0)[2], ink);
+}
+
+#[test]
+fn bilinear_resize_filters_a_cel_across_the_canvas_boundary() {
+    let mut doc = Document::new(1, 1);
+    let red = [210, 40, 20, 255];
+    let blue = [30, 40, 200, 255];
+    doc.set_pixel(0, 0, 0, blue);
+    let cel = &mut doc.layers[0].cel_meta[0];
+    cel.bounds = Some([-1, 0, 2, 1]);
+    cel.outside.push(OutsidePixel {
+        x: -1,
+        y: 0,
+        color: red,
+        palette_slot: None,
+    });
+
+    let mut resized = resample_sprite_with(&doc, [2, 1], SpriteResampling::Bilinear).unwrap();
+    assert_eq!(resized.composite(0), [[90, 40, 140, 255], blue]);
+    resize_canvas_with_trim(&mut resized, [4, 1], [2, 0], false).unwrap();
+    assert_eq!(
+        resized.composite(0),
+        [red, [150, 40, 80, 255], [90, 40, 140, 255], blue]
+    );
+}
+
+#[test]
+fn rotsprite_resizes_hidden_indexed_corners_and_reopens_them_in_ase() {
+    use pixelcraft::formats::{decode_ase, encode_ase};
+    let mut doc = Document::new(1, 3);
+    let ink = [160, 50, 180, 255];
+    doc.palette = vec![CLEAR, ink, ink];
+    doc.set_color_mode(ColorMode::Indexed);
+    doc.drawing_index = Some(1);
+    doc.set_pixel(0, 0, 2, ink);
+    doc.drawing_index = None;
+    let cel = &mut doc.layers[0].cel_meta[0];
+    cel.bounds = Some([-2, 0, 3, 3]);
+    cel.outside = [(-1, 0), (-2, 1)]
+        .map(|(x, y)| OutsidePixel {
+            x,
+            y,
+            color: ink,
+            palette_slot: Some(2),
+        })
+        .into();
+
+    let scaled = resample_sprite_with(&doc, [2, 6], SpriteResampling::RotSprite).unwrap();
+    let mut reopened = decode_ase(&encode_ase(&scaled).unwrap()).unwrap();
+    assert!(
+        reopened.layers[0].cel_meta[0]
+            .outside
+            .iter()
+            .any(|p| { (p.x, p.y, p.palette_slot) == (-2, 2, Some(2)) })
+    );
+    resize_canvas_with_trim(&mut reopened, [6, 6], [4, 0], false).unwrap();
+    let indices = reopened.layers[0].cel_meta[0].indices.as_ref().unwrap();
+    assert_eq!(indices[14], 2);
+    assert_eq!(indices[35], 1);
 }

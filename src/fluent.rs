@@ -237,6 +237,7 @@ pub(super) fn toggle(ui: &mut egui::Ui, value: &mut bool, label: &str) -> egui::
 #[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub(super) struct PreviewSettings {
+    pub visible: bool,
     pub height: f32,
     // Zero is Fit; all other values are physical pixels per sprite pixel.
     pub zoom: u8,
@@ -244,10 +245,82 @@ pub(super) struct PreviewSettings {
 impl Default for PreviewSettings {
     fn default() -> Self {
         Self {
+            visible: true,
             height: 240.,
             zoom: 0,
         }
     }
+}
+
+enum PreviewTime {
+    Playing(f64),
+    Paused(f64),
+}
+
+pub(super) struct PreviewPlayback {
+    frame: usize,
+    time: PreviewTime,
+    speed: u16,
+}
+
+impl PreviewPlayback {
+    fn new(frame: usize, now: f64, durations: &[u16], speed: u16) -> Self {
+        Self {
+            frame,
+            time: PreviewTime::Playing(now + playback_seconds(durations[frame], speed)),
+            speed,
+        }
+    }
+
+    pub(super) fn set_speed(&mut self, now: f64, speed: u16) {
+        let ratio = f64::from(self.speed) / f64::from(speed);
+        self.time = match self.time {
+            PreviewTime::Playing(deadline) => {
+                PreviewTime::Playing(now + (deadline - now).max(0.) * ratio)
+            }
+            PreviewTime::Paused(remaining) => PreviewTime::Paused(remaining.max(0.) * ratio),
+        };
+        self.speed = speed;
+    }
+
+    fn toggle(&mut self, now: f64) {
+        self.time = match self.time {
+            PreviewTime::Playing(deadline) => PreviewTime::Paused(deadline - now),
+            PreviewTime::Paused(remaining) => PreviewTime::Playing(now + remaining),
+        };
+    }
+
+    fn update(&mut self, now: f64, durations: &[u16]) {
+        if self.frame >= durations.len() {
+            self.frame = durations.len() - 1;
+            let duration = playback_seconds(durations[self.frame], self.speed);
+            self.time = match self.time {
+                PreviewTime::Playing(_) => PreviewTime::Playing(now + duration),
+                PreviewTime::Paused(_) => PreviewTime::Paused(duration),
+            };
+        }
+        if let PreviewTime::Playing(deadline) = &mut self.time
+            && now >= *deadline
+        {
+            // Skip entire cycles after a delayed repaint, then find the current cel.
+            let cycle_ms: u64 = durations.iter().map(|d| u64::from((*d).max(1))).sum();
+            let cycle = cycle_ms as f64 / (10. * f64::from(self.speed));
+            *deadline += ((now - *deadline) / cycle).floor() * cycle;
+            while now >= *deadline {
+                self.frame = (self.frame + 1) % durations.len();
+                *deadline += playback_seconds(durations[self.frame], self.speed);
+            }
+        }
+    }
+}
+
+fn harmony_color([red, green, blue, alpha]: Pixel, degrees: f32) -> Pixel {
+    // Use straight sRGB channels for the hue wheel, independently of opacity.
+    let mut hsv =
+        egui::ecolor::Hsva::from_rgb([red, green, blue].map(|channel| f32::from(channel) / 255.));
+    hsv.h = (hsv.h + degrees / 360.).rem_euclid(1.);
+    let [red, green, blue] = hsv.to_rgb().map(|channel| (channel * 255.).round() as u8);
+    [red, green, blue, alpha]
 }
 
 impl PixelCraft {
@@ -275,6 +348,11 @@ impl PixelCraft {
                 self.status = format!("Preview preference could not be saved: {error}");
             }
         }
+    }
+
+    pub(super) fn toggle_preview_visibility(&mut self) {
+        self.preview_settings.visible = !self.preview_settings.visible;
+        self.save_preview_settings();
     }
 
     pub(super) fn inspector_toggle(&mut self, ui: &mut egui::Ui) {
@@ -313,6 +391,19 @@ impl PixelCraft {
             });
         });
         ui.separator();
+        if self.preview_settings.visible {
+            self.docked_preview(ui);
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("inspector_scroll")
+            .show(ui, |ui| {
+                self.palette(ui);
+                ui.separator();
+                self.fluent_properties(ui);
+            });
+    }
+
+    pub(super) fn docked_preview(&mut self, ui: &mut egui::Ui) {
         // Keep the original bottom-left preview separate from scrolling controls.
         let max_height = (ui.available_height() - 36.).max(120.);
         let preview_height = self.preview_settings.height.clamp(120., max_height);
@@ -348,13 +439,156 @@ impl PixelCraft {
             );
         });
         let _ = preview;
-        egui::ScrollArea::vertical()
-            .id_salt("inspector_scroll")
-            .show(ui, |ui| {
-                self.palette(ui);
-                ui.separator();
-                self.fluent_properties(ui);
-            });
+    }
+
+    fn document_palette(&mut self, ui: &mut egui::Ui) {
+        #[derive(Clone, Copy)]
+        struct Swatch {
+            tab: usize,
+            slot: usize,
+        }
+
+        let mut reorder = None;
+        ui.collapsing("Document palette", |ui| {
+            ui.small("Shift-click selects a range. Ctrl/Cmd-click toggles a swatch.");
+            let palette = if self.doc.color_mode == ColorMode::Indexed {
+                self.doc.editing_palette(self.layer, self.frame)
+            } else {
+                self.doc.palette_for(self.frame).to_vec()
+            };
+            let side = 22.;
+            let spacing = ui.spacing().item_spacing.x;
+            let columns = ((ui.available_width() + spacing) / (side + spacing))
+                .floor()
+                .max(1.) as usize;
+            egui::ScrollArea::vertical()
+                .id_salt("document-palette-scroll")
+                .max_height(174.)
+                .show(ui, |ui| {
+                    egui::Grid::new("document-palette-grid")
+                        .min_col_width(0.)
+                        .show(ui, |ui| {
+                            for (slot, &[r, g, b, a]) in palette.iter().enumerate() {
+                                let (rect, response) = ui.allocate_exact_size(
+                                    Vec2::splat(side),
+                                    Sense::click_and_drag(),
+                                );
+                                #[cfg(test)]
+                                ui.ctx().data_mut(|d| {
+                                    d.insert_temp(egui::Id::new(("document-swatch", slot)), rect)
+                                });
+                                response.dnd_set_drag_payload(Swatch {
+                                    tab: self.active_tab,
+                                    slot,
+                                });
+                                let dragging =
+                                    response
+                                        .dnd_hover_payload::<Swatch>()
+                                        .is_some_and(|swatch| {
+                                            swatch.tab == self.active_tab && swatch.slot != slot
+                                        });
+                                if let Some(swatch) = response.dnd_release_payload::<Swatch>()
+                                    && swatch.tab == self.active_tab
+                                    && swatch.slot != slot
+                                {
+                                    reorder = Some((swatch.slot, slot));
+                                }
+                                let color = [r, g, b, a];
+                                if response.clicked() {
+                                    self.select_palette_swatch(slot, color, ui.input(|i| i.modifiers));
+                                }
+                                let reorder_menu = ui.input(|i| i.modifiers.shift)
+                                    || response.context_menu_opened();
+                                if response.secondary_clicked() && !reorder_menu {
+                                    self.set_secondary_color(color, Some(slot));
+                                }
+                                let secondary = self.secondary_palette_index == Some(slot) && self.bg == color;
+                                let selected = self.picked_swatches().contains(&slot)
+                                    || (self.picked_swatches().is_empty() && self.palette_index == slot && self.fg == color);
+                                let name = self
+                                    .doc
+                                    .palette_names
+                                    .get(slot)
+                                    .filter(|name| !name.is_empty())
+                                    .map(String::as_str);
+                                let label = name.map_or_else(
+                                    || {
+                                        format!(
+                                            "Swatch {} · #{r:02X}{g:02X}{b:02X}{a:02X}",
+                                            slot + 1
+                                        )
+                                    },
+                                    |name| format!("Swatch {} · {name}", slot + 1),
+                                );
+                                let label = if secondary { format!("{label} · Secondary color") } else { label };
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::SelectableLabel,
+                                        response.enabled(),
+                                        selected,
+                                        &label,
+                                    )
+                                });
+                                if reorder_menu { response.context_menu(|ui| {
+                                    for (label, target) in [
+                                        ("Move earlier", slot.checked_sub(1)),
+                                        (
+                                            "Move later",
+                                            (slot + 1 < palette.len()).then_some(slot + 1),
+                                        ),
+                                    ] {
+                                        if let Some(target) = target
+                                            && ui.pc_button(label).clicked()
+                                        {
+                                            reorder = Some((slot, target));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                                }
+                                let painter = ui.painter();
+                                if a < 255 {
+                                    painter.rect_filled(rect, 3, Color32::GRAY);
+                                    painter.line_segment(
+                                        [rect.left_bottom(), rect.right_top()],
+                                        Stroke::new(1., Color32::WHITE),
+                                    );
+                                }
+                                painter.rect_filled(
+                                    rect,
+                                    3,
+                                    Color32::from_rgba_unmultiplied(r, g, b, a),
+                                );
+                                painter.rect_stroke(
+                                    rect,
+                                    3,
+                                    if selected || dragging {
+                                        Stroke::new(2., self.colors().accent)
+                                    } else if secondary {
+                                        Stroke::new(2., self.colors().ink)
+                                    } else {
+                                        Stroke::new(
+                                            1.,
+                                            ui.visuals().widgets.inactive.bg_stroke.color,
+                                        )
+                                    },
+                                    egui::StrokeKind::Inside,
+                                );
+                                paint_focus(ui, &response, 3);
+                                response.on_hover_text(format!("{label}\nRight-click for secondary color. Shift+right-click for swatch actions."));
+                                if (slot + 1) % columns == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                });
+            if ui.pc_small_button("Palette tools…").clicked() {
+                self.action("workflow");
+            }
+        });
+        if let Some((from, to)) = reorder {
+            self.move_palette_swatch(from, to);
+        }
     }
 
     pub(super) fn palette(&mut self, ui: &mut egui::Ui) {
@@ -380,11 +614,12 @@ impl PixelCraft {
                     }
                     ui.scope(|ui| {
                         ui.spacing_mut().interact_size = Vec2::new(32., 28.);
+                        let mut color = self.fg;
                         if ui
-                            .color_edit_button_srgba_unmultiplied(&mut self.fg)
+                            .color_edit_button_srgba_unmultiplied(&mut color)
                             .changed()
                         {
-                            self.set_active_color(self.fg);
+                            self.set_active_color(color);
                         }
                     });
                     if !narrow {
@@ -400,12 +635,45 @@ impl PixelCraft {
                         self.fg[0], self.fg[1], self.fg[2]
                     ));
                 }
+                self.color_wheel_ui(ui);
                 ui.add_space(8.);
                 ui.horizontal(|ui| {
                     if ui_icons::local_button(ui, "plus", "Add color").clicked() {
                         self.add_named_color();
                     }
                     ui.menu_button("…", |ui| {
+                        ui.menu_button("Color harmonies", |ui| {
+                            for (label, angles) in [
+                                ("Complementary", &[180.][..]),
+                                ("Analogous", &[-30., 30.]),
+                                ("Triadic", &[120., 240.]),
+                                ("Split complementary", &[150., 210.]),
+                            ] {
+                                ui.menu_button(label, |ui| {
+                                    for &angle in angles {
+                                        let color = harmony_color(self.fg, angle);
+                                        let hex = format!(
+                                            "#{:02X}{:02X}{:02X}",
+                                            color[0], color[1], color[2]
+                                        );
+                                        let swatch = Color32::from_rgba_unmultiplied(
+                                            color[0], color[1], color[2], color[3],
+                                        );
+                                        if ui
+                                            .horizontal(|ui| {
+                                                ui.colored_label(swatch, "■");
+                                                ui.pc_button(hex)
+                                            })
+                                            .inner
+                                            .clicked()
+                                        {
+                                            self.set_active_color(color);
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                        });
                         ui.label("Color name");
                         ui.text_edit_singleline(&mut self.named_colors[self.active_color].0);
                         if self.named_colors.len() > 1
@@ -433,6 +701,7 @@ impl PixelCraft {
                         }
                     });
                 });
+                self.document_palette(ui);
                 ui.add_space(6.);
                 ui.label("From artwork");
                 let colors = self.sprite_colors();
@@ -453,6 +722,9 @@ impl PixelCraft {
                                 if selection_changed {
                                     ui.ctx().request_repaint();
                                 }
+                            }
+                            if response.secondary_clicked() {
+                                self.set_secondary_color(*p, None);
                             }
                             let selected = *p == self.fg;
                             let mut name = format!("Use #{:02X}{:02X}{:02X}", p[0], p[1], p[2]);
@@ -503,6 +775,13 @@ impl PixelCraft {
     pub(super) fn sprite_preview(&mut self, ui: &mut egui::Ui) {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 0)).show(ui, |ui| {
             let old_zoom = self.preview_settings.zoom;
+            let now = ui.input(|input| input.time);
+            if self.doc.durations.len() <= 1 {
+                self.preview_playback = None;
+            }
+            if let Some(playback) = &mut self.preview_playback {
+                playback.update(now, &self.doc.durations);
+            }
             let controls = ui.horizontal(|ui| {
                 ui.strong("Preview");
                 egui::ComboBox::from_id_salt("preview_zoom")
@@ -516,31 +795,71 @@ impl PixelCraft {
                             ui.selectable_value(&mut self.preview_settings.zoom, zoom, label);
                         }
                     }).response.on_hover_text("Fit the whole sprite, or zoom in physical pixels. Drag artwork to pan.");
+                let playing = self.preview_playback.as_ref()
+                    .is_some_and(|playback| matches!(playback.time, PreviewTime::Playing(_)));
+                let play = ui.add_enabled_ui(self.doc.durations.len() > 1, |ui| {
+                    let (icon, label) = if playing {
+                        ("pause", "Pause preview animation")
+                    } else {
+                        ("play", "Play preview animation")
+                    };
+                    ui_icons::local_icon_button(ui, icon, label, playing)
+                }).inner;
+                #[cfg(test)]
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("preview-play"), play.rect));
+                if play.clicked() {
+                    if let Some(playback) = &mut self.preview_playback {
+                        playback.toggle(now);
+                    } else {
+                        self.preview_playback = Some(PreviewPlayback::new(self.frame, now, &self.doc.durations, self.playback_speed));
+                    }
+                }
             });
             if old_zoom != self.preview_settings.zoom {
                 self.preview_pan = Vec2::ZERO;
                 self.save_preview_settings();
             }
-            self.preview = Some(self.frame_texture(ui.ctx(), self.frame));
+            let frame = if let Some(playback) = &self.preview_playback {
+                if let PreviewTime::Playing(deadline) = playback.time {
+                    ui.ctx().request_repaint_after(Duration::from_secs_f64((deadline - now).max(0.)));
+                }
+                playback.frame
+            } else {
+                self.frame
+            };
+            self.update_preview_texture(ui.ctx(), frame);
             let (r, response) = ui.allocate_exact_size(
-                Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::drag());
-            let source = Vec2::new(self.doc.width as f32, self.doc.height as f32);
+                Vec2::new(ui.available_width(), ui.available_height().max(1.)), Sense::click_and_drag());
+            let source = self.sprite_display_size();
+            let ppp = ui.ctx().pixels_per_point();
+            let pixel_aligned = self.preview_settings.zoom != 0 || self.power.whole_pixel_wheel_zoom();
             let scale = if self.preview_settings.zoom == 0 {
-                (r.width() / source.x).min(r.height() / source.y)
-            } else { self.preview_settings.zoom as f32 / ui.ctx().pixels_per_point() };
+                if pixel_aligned { fit_physical_zoom(r.size() * ppp, source) / ppp }
+                else { (r.width() / source.x).min(r.height() / source.y) }
+            } else { self.preview_settings.zoom as f32 / ppp };
             let size = source * scale;
             let limit = ((size - r.size()) * 0.5).max(Vec2::ZERO);
             if response.dragged() && limit != Vec2::ZERO {
                 self.preview_pan += response.drag_delta();
             }
             self.preview_pan = self.preview_pan.clamp(-limit, limit);
-            if limit != Vec2::ZERO { response.on_hover_cursor(egui::CursorIcon::Grab); }
-            let ppp = ui.ctx().pixels_per_point();
             let origin = r.center() + self.preview_pan - size * 0.5;
-            let origin = if self.preview_settings.zoom == 0 { origin } else {
+            let origin = if pixel_aligned {
                 Pos2::new((origin.x * ppp).round() / ppp, (origin.y * ppp).round() / ppp)
-            };
+            } else { origin };
             let image = Rect::from_min_size(origin, size);
+            let response = response.on_hover_text("Click to center the canvas. Drag to pan the preview.");
+            if let Some(picked) = response.interact_pointer_pos()
+                && response.clicked()
+                && image.contains(picked)
+            {
+                self.set_active_canvas_pan((image.center() - picked) * (self.active_canvas_view().zoom / scale));
+                ui.ctx().request_repaint();
+            }
+            if limit != Vec2::ZERO {
+                response.on_hover_cursor(egui::CursorIcon::Grab);
+            }
+
             let painter = ui.painter().with_clip_rect(r.intersect(ui.clip_rect()));
             // Paint only visible checker cells, regardless of sprite size or zoom.
             let cell = 8.;
@@ -554,6 +873,21 @@ impl PixelCraft {
             }
             if let Some(t) = &self.preview {
                 painter.image(t.id(), image, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.,1.)), Color32::WHITE);
+            }
+            let camera = self.active_canvas_view();
+            if let Some(canvas_size) = camera.size {
+                let factor = scale / camera.zoom;
+                let view = Rect::from_center_size(image.center() - camera.pan * factor, canvas_size * factor);
+                let clip = r.intersect(image);
+                if view.intersects(clip) {
+                    // Clamp to the sprite so the navigator also shows an entirely visible sprite.
+                    let border = view.intersect(image).shrink(0.5);
+                    let painter = painter.with_clip_rect(clip);
+                    painter.rect_stroke(border, 1, Stroke::new(3., Color32::BLACK), egui::StrokeKind::Inside);
+                    painter.rect_stroke(border, 1, Stroke::new(1., Color32::WHITE), egui::StrokeKind::Inside);
+                    #[cfg(test)]
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("preview-canvas-view"), border));
+                }
             }
             #[cfg(test)]
             ui.ctx().data_mut(|d| {
@@ -587,7 +921,7 @@ impl PixelCraft {
                         .add(egui::Slider::new(&mut opacity, 0..=255).show_value(false))
                         .changed()
                     {
-                        self.remember();
+                        self.remember_action("Change layer opacity");
                         self.doc.layers[self.layer].opacity = opacity;
                     }
                 });
@@ -604,7 +938,7 @@ impl PixelCraft {
                             }
                         });
                     if blend != self.doc.layers[self.layer].blend {
-                        self.remember();
+                        self.remember_action("Change layer blend mode");
                         self.doc.layers[self.layer].blend = blend;
                     }
                 });
@@ -646,21 +980,7 @@ impl PixelCraft {
     }
     fn fluent_brush_controls(&mut self, ui: &mut egui::Ui) {
         let short = !self.power.comfortable();
-        let tool_icon = match self.tool {
-            Tool::Pencil => "pencil",
-            Tool::Eraser => "eraser",
-            Tool::Fill => "fill",
-            Tool::Picker => "eyedropper",
-            Tool::Line => "line",
-            Tool::Rect => "rectangle",
-            Tool::Ellipse => "ellipse",
-            Tool::Select => "select",
-            Tool::Hand => "hand",
-            Tool::Lasso => "lasso",
-            Tool::Move => "move",
-            Tool::Gradient => "gradient",
-            Tool::Wand => "wand",
-        };
+        let tool_icon = ui_icons::icon_name(self.tool.action());
         egui::containers::menu::MenuButton::from_button(
             egui::Button::new((
                 egui::Image::new((
@@ -681,6 +1001,49 @@ impl PixelCraft {
             )),
         )
         .ui(ui, |ui| self.tools(ui));
+        if self.tool == Tool::Picker {
+            self.eyedropper_controls(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
+        if self.tool == Tool::Fill {
+            self.fill_controls(ui);
+            self.drawing_ink_ui(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
+        if self.tool == Tool::Wand {
+            self.fill_controls(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
+        if self.tool == Tool::Gradient {
+            self.gradient_controls(ui);
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
+        if self.tool == Tool::Text {
+            ui.label("Click the canvas to place text");
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
+        if self.tool == Tool::Spray {
+            ui.label("Radius");
+            ui.add(
+                egui::DragValue::new(&mut self.spray_radius)
+                    .range(1..=pixelcraft::workflows::spray::MAX_RADIUS)
+                    .suffix(" px"),
+            );
+            ui.label("Rate");
+            ui.add(
+                egui::DragValue::new(&mut self.spray_rate)
+                    .range(1..=pixelcraft::workflows::spray::MAX_RATE)
+                    .suffix(" dots/s"),
+            );
+            toggle(ui, &mut self.studio.mirror_x, "Symmetry");
+            toggle(ui, &mut self.grid, "Pixel grid");
+            return;
+        }
         ui.add_sized(
             [if short { 50. } else { 90. }, if short { 28. } else { 32. }],
             egui::DragValue::new(&mut self.brush)
@@ -703,34 +1066,91 @@ impl PixelCraft {
                 }
             });
         if shape != self.doc.brush_shape {
-            self.remember();
+            self.remember_action("Change brush shape");
             self.doc.brush_shape = shape;
         }
-        self.brush_mode_ui(ui);
+        if matches!(self.tool, Tool::BlurBrush | Tool::JumbleBrush) {
+            ui.label("Strength");
+            ui.add(
+                egui::DragValue::new(&mut self.retouch_strength)
+                    .range(0..=100)
+                    .suffix("%"),
+            );
+        } else {
+            self.brush_mode_ui(ui);
+            self.drawing_ink_ui(ui);
+            if self.tool == Tool::Pencil {
+                self.brush_library_ui(ui);
+            }
+            if matches!(self.tool, Tool::Pencil | Tool::Eraser)
+                && self.doc.layers[self.layer].tileset.is_none()
+            {
+                ui.menu_button("Dynamics", |ui| self.brush_dynamics_controls(ui));
+            }
+        }
         ui.separator();
         toggle(ui, &mut self.studio.mirror_x, "Symmetry").on_hover_text(
-            "Mirror drawing horizontally; vertical symmetry is in Sprite Properties.",
+            "Mirror brush strokes left to right. Drag the canvas handle to move the axis. Mirror Y is in Drawing & selection studio.",
         );
         ui.separator();
         toggle(ui, &mut self.grid, "Pixel grid");
-        if matches!(self.tool, Tool::Rect | Tool::Ellipse) {
+        if matches!(self.tool, Tool::Rect | Tool::Ellipse | Tool::Polygon) {
             ui.pc_checkbox(&mut self.filled, "Filled");
         }
     }
+    fn shade_direction_controls(&mut self, ui: &mut egui::Ui) {
+        if self.power.mode != pixelcraft::productivity::BrushMode::Shade
+            || self.tool != Tool::Pencil
+        {
+            return;
+        }
+        for (reverse, icon, label, test_id) in [
+            (
+                true,
+                "prev",
+                "Shade toward previous palette color",
+                "shade-previous",
+            ),
+            (
+                false,
+                "next",
+                "Shade toward next palette color",
+                "shade-next",
+            ),
+        ] {
+            let response =
+                ui_icons::local_icon_button(ui, icon, label, self.power.reverse == reverse);
+            #[cfg(test)]
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(egui::Id::new(test_id), response.rect));
+            let _ = test_id;
+            if response.clicked() {
+                self.power.reverse = reverse;
+            }
+        }
+        ui.separator();
+    }
+
     fn fluent_view_controls(&mut self, ui: &mut egui::Ui) {
+        self.shade_direction_controls(ui);
+        let current_zoom = self.active_canvas_view().zoom;
+        let mut zoom = current_zoom;
         egui::ComboBox::from_id_salt("canvas_zoom")
             .width(90.)
-            .selected_text(format!("{:.0}%", self.zoom * 100.))
+            .selected_text(format!("{:.0}%", zoom * 100.))
             .show_ui(ui, |ui| {
-                for zoom in [0.25, 0.5, 1., 2., 4., 6., 8., 10., 12., 16., 24., 32.] {
-                    ui.pc_selectable_value(&mut self.zoom, zoom, format!("{:.0}%", zoom * 100.));
+                for scale in [0.25, 0.5, 1., 2., 4., 6., 8., 10., 12., 16., 24., 32.] {
+                    ui.pc_selectable_value(&mut zoom, scale, format!("{:.0}%", scale * 100.));
                 }
                 ui.add(
-                    egui::Slider::new(&mut self.zoom, 0.02..=32.)
+                    egui::Slider::new(&mut zoom, self.minimum_canvas_zoom()..=32.)
                         .logarithmic(true)
                         .show_value(false),
                 );
             });
+        if zoom != current_zoom {
+            self.set_active_canvas_zoom(zoom);
+        }
         if ui.pc_command_button("fit", "Fit").clicked() {
             self.action("fit");
         }
@@ -747,6 +1167,16 @@ impl PixelCraft {
                     RichText::new("Export").color(Color32::WHITE),
                 ),
                 |ui| {
+                    if ui
+                        .add_enabled_ui(self.can_repeat_export(), |ui| {
+                            ui.pc_command_button("repeat-export", "Repeat Last Export")
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        self.action("repeat-export");
+                        ui.close();
+                    }
                     for (command, label) in [
                         ("png", "Export PNG…"),
                         ("sheet", "Sprite sheet…"),
@@ -769,5 +1199,42 @@ impl PixelCraft {
         {
             self.power.open = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod workflow_option_tests {
+    use super::*;
+
+    #[test]
+    fn complementary_hue_preserves_alpha() {
+        assert_eq!(harmony_color([255, 0, 0, 42], 180.), [0, 255, 255, 42]);
+        assert_eq!(harmony_color([0, 0, 255, 255], 120.), [255, 0, 0, 255]);
+        let opaque = harmony_color([255, 128, 0, 255], 180.);
+        for alpha in [0, 1, 42] {
+            let color = harmony_color([255, 128, 0, alpha], 180.);
+            assert_eq!(&color[..3], &opaque[..3]);
+            assert_eq!(color[3], alpha);
+        }
+    }
+
+    #[test]
+    fn changing_speed_rescales_both_live_and_paused_preview_timing() {
+        let durations = [100, 100];
+        let mut preview = PreviewPlayback::new(0, 0., &durations, 100);
+        preview.set_speed(0.02, 200);
+        preview.update(0.05, &durations);
+        assert_eq!(preview.frame, 0);
+        preview.update(0.061, &durations);
+        assert_eq!(preview.frame, 1);
+        preview.toggle(0.08);
+        preview.set_speed(0.09, 50);
+        preview.toggle(0.10);
+        preview.update(0.218, &durations);
+        assert_eq!(preview.frame, 1);
+        preview.update(0.222, &durations);
+        assert_eq!(preview.frame, 0);
+        assert_eq!(durations, [100, 100]);
+        assert_eq!(playback_seconds(100, 200), 0.05);
     }
 }

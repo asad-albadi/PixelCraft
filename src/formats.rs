@@ -1,9 +1,18 @@
+use crate::automation::mcp_io;
 use crate::model::*;
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
+pub(crate) mod flic;
+mod pcx;
+mod png_raster;
+mod psd;
+mod raster;
+mod vector;
+pub(crate) use raster::{RasterFormat, raster_format, validate_raster_size, write_raster_image};
+
 const PROJECT_MAGIC_V1: &[u8] = b"PIXEL-WORKSHOP\0\x01";
 const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x02";
 // Four 3-digit channels, commas and brackets can use 18 JSON bytes per pixel.
@@ -54,8 +63,13 @@ fn chunk(kind: u16, data: Vec<u8>) -> Vec<u8> {
     out
 }
 fn compress(b: &[u8]) -> Result<Vec<u8>, String> {
+    compress_slices(std::iter::once(b))
+}
+fn compress_slices<'a>(parts: impl IntoIterator<Item = &'a [u8]>) -> Result<Vec<u8>, String> {
     let mut z = ZlibEncoder::new(vec![], Compression::default());
-    z.write_all(b).map_err(|e| e.to_string())?;
+    for part in parts {
+        z.write_all(part).map_err(|e| e.to_string())?;
+    }
     z.finish().map_err(|e| e.to_string())
 }
 fn decompress(b: &[u8], expected: usize) -> Result<Vec<u8>, String> {
@@ -351,20 +365,65 @@ fn decode_project_payload(input: impl Read, legacy: bool) -> Result<Document, St
             }
         }
     };
+    restore_reference_bounds(&mut d);
     d.share_linked_rasters();
     d.validate()?;
     Ok(d)
 }
 
+fn restore_reference_bounds(doc: &mut Document) {
+    let layers = &mut doc.layers;
+    doc.metadata.retain(|chunk| {
+        if chunk.kind != 0x2006 || !u32at(&chunk.data, 0).is_ok_and(|flags| flags & 1 != 0) {
+            return true;
+        }
+        let Some(layer) = chunk
+            .owner
+            .strip_prefix("cel:")
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| layers.get_mut(index))
+            .filter(|layer| layer.is_ase_reference())
+        else {
+            return true;
+        };
+        let Some(meta) = layer.cel_meta.get_mut(chunk.frame) else {
+            return true;
+        };
+        let Some(data) = chunk.data.get(4..20) else {
+            return true;
+        };
+        let bounds =
+            std::array::from_fn(|i| i32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()));
+        if bounds[2] <= 0 || bounds[3] <= 0 {
+            return true;
+        }
+        meta.reference_bounds.get_or_insert(bounds);
+        false
+    });
+}
+
+fn append_cel_extra(chunks: &mut Vec<Vec<u8>>, meta: &CelMeta) {
+    if let Some(bounds) = meta.reference_bounds {
+        let mut data = 1u32.to_le_bytes().to_vec();
+        for value in bounds {
+            data.extend(value.to_le_bytes());
+        }
+        data.extend([0; 16]);
+        chunks.push(chunk(0x2006, data));
+    }
+}
+
 fn append_metadata(chunks: &mut Vec<Vec<u8>>, d: &Document, f: usize, owner: &str) {
-    for m in d
-        .metadata
-        .iter()
-        .filter(|m| m.frame == f && m.owner == owner)
-    {
+    for m in d.metadata.iter().filter(|m| {
+        m.frame == f && m.owner == owner && !(f == 0 && owner.is_empty() && m.kind == 0x2008)
+    }) {
         chunks.push(chunk(m.kind, m.data.clone()));
     }
 }
+// The ASE slice flag is shared by all keys. The sentinel leaves a single key
+// without a pivot while retaining a real pivot at the origin in another key.
+const NO_SLICE_PIVOT: [i32; 2] = [i32::MIN; 2];
+
 fn encode_slice(slice: &SpriteSlice) -> Result<Vec<u8>, String> {
     let center = slice.keys.iter().any(|key| key.center.is_some());
     let pivot = slice.keys.iter().any(|key| key.pivot.is_some());
@@ -384,7 +443,7 @@ fn encode_slice(slice: &SpriteSlice) -> Result<Vec<u8>, String> {
             }
         }
         if pivot {
-            for value in key.pivot.unwrap_or([0; 2]) {
+            for value in key.pivot.unwrap_or(NO_SLICE_PIVOT) {
                 dword(&mut data, value as u32);
             }
         }
@@ -415,17 +474,19 @@ fn decode_slice(data: &[u8]) -> Result<SpriteSlice, String> {
             next()? as i32,
         ];
         let center = if flags & 1 != 0 {
-            Some([
+            let rect = [
                 next()? as i32,
                 next()? as i32,
                 next()? as i32,
                 next()? as i32,
-            ])
+            ];
+            (rect[2] != 0 && rect[3] != 0).then_some(rect)
         } else {
             None
         };
         let pivot = if flags & 2 != 0 {
-            Some([next()? as i32, next()? as i32])
+            let point = [next()? as i32, next()? as i32];
+            (point != NO_SLICE_PIVOT).then_some(point)
         } else {
             None
         };
@@ -437,7 +498,11 @@ fn decode_slice(data: &[u8]) -> Result<SpriteSlice, String> {
         });
     }
     keys.sort_by_key(|key| key.frame);
-    Ok(SpriteSlice { name, keys })
+    Ok(SpriteSlice {
+        editor_id: Default::default(),
+        name,
+        keys,
+    })
 }
 
 pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
@@ -447,10 +512,21 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         baked.layers[0].name = "Baked artwork".into();
         baked.durations = d.durations.clone();
         baked.tags = d.tags.clone();
+        baked.metadata.extend(
+            d.metadata
+                .iter()
+                .filter(|chunk| {
+                    chunk.is_tag_user_data()
+                        || (chunk.frame == 0 && chunk.kind == 0x2008 && chunk.owner.is_empty())
+                })
+                .cloned(),
+        );
         baked.slices = d.slices.clone();
+        baked.drawing_grid = d.stored_drawing_grid();
+        baked.pixel_aspect = Some(d.pixel_aspect());
         baked.color_profile = d.color_profile.clone();
         baked.layers[0].cel_meta = vec![CelMeta::default(); d.durations.len()];
-        baked.layers[0].tile_cels = vec![vec![]; d.durations.len()];
+        baked.layers[0].tile_cels = vec![vec![].into(); d.durations.len()];
         if d.width
             .saturating_mul(d.height)
             .saturating_mul(d.durations.len())
@@ -490,11 +566,12 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
     out[18..20].copy_from_slice(&100u16.to_le_bytes());
     out[28] = d.transparent_index as u8;
     out[32..34].copy_from_slice(&(d.palette.len() as u16).to_le_bytes());
-    if out[34] == 0 {
-        out[34] = 1;
-    }
-    if out[35] == 0 {
-        out[35] = 1;
+    out[34..36].copy_from_slice(&d.pixel_aspect());
+    if let Some(grid) = d.drawing_grid {
+        out[36..38].copy_from_slice(&(grid.origin[0] as i16).to_le_bytes());
+        out[38..40].copy_from_slice(&(grid.origin[1] as i16).to_le_bytes());
+        out[40..42].copy_from_slice(&(grid.size[0] as u16).to_le_bytes());
+        out[42..44].copy_from_slice(&(grid.size[1] as u16).to_le_bytes());
     }
     fn visit(d: &Document, p: Option<usize>, depth: u16, out: &mut Vec<(usize, u16)>) {
         for (i, l) in d.layers.iter().enumerate() {
@@ -517,6 +594,14 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
         let mut chunks = vec![];
         let palette = d.palette_for(f);
         if f == 0 {
+            // Extension IDs and external tilesets are referenced by later chunks.
+            for metadata in d
+                .metadata
+                .iter()
+                .filter(|m| m.frame == 0 && m.owner.is_empty() && m.kind == 0x2008)
+            {
+                chunks.push(chunk(0x2008, metadata.data.clone()));
+            }
             if !d.color_profile.is_empty() {
                 chunks.push(chunk(0x2007, d.color_profile.clone()));
             }
@@ -551,15 +636,53 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                     dword(&mut c, link[0]);
                     dword(&mut c, link[1]);
                 }
-                let mut p = vec![CLEAR; t.width * t.height];
-                for tile in &t.tiles {
-                    p.extend(tile.iter().copied());
-                }
-                let z = compress(&pixels_bytes(&p, d.color_mode, palette))?;
+                let bytes = if d.color_mode == ColorMode::Indexed {
+                    let mut effective = palette.to_vec();
+                    effective.get_mut(d.transparent_index).ok_or(
+                        "Indexed tile transparent slot is missing from the exported palette",
+                    )?[3] = 0;
+                    let mut bytes = vec![d.transparent_index as u8; t.width * t.height];
+                    for tile in &t.tiles {
+                        for index in 0..tile.len() {
+                            let color = tile[index];
+                            bytes.push(
+                                tile.matching_slot(index, palette, d.transparent_index)
+                                    .unwrap_or_else(|| {
+                                        if color[3] == 0 {
+                                            d.transparent_index as u8
+                                        } else {
+                                            nearest(color, &effective) as u8
+                                        }
+                                    }),
+                            );
+                        }
+                    }
+                    bytes
+                } else {
+                    let mut p = vec![CLEAR; t.width * t.height];
+                    for tile in &t.tiles {
+                        p.extend(tile.iter().copied());
+                    }
+                    pixels_bytes(&p, d.color_mode, palette)
+                };
+                let z = compress(&bytes)?;
                 dword(&mut c, z.len() as u32);
                 c.extend(z);
                 chunks.push(chunk(0x2023, c));
-                append_metadata(&mut chunks, d, f, &format!("tileset:{i}"));
+                let owner = format!("tileset:{i}");
+                let (user_data, other): (Vec<_>, Vec<_>) = d
+                    .metadata
+                    .iter()
+                    .filter(|m| m.frame == f && m.owner == owner)
+                    .partition(|m| m.kind == 0x2020);
+                if !user_data.is_empty() {
+                    // A tileset user-data chunk is followed by a chunk for every
+                    // tile including the empty tile, in tile ID order.
+                    let padding = (t.tiles.len() + 2).saturating_sub(user_data.len());
+                    chunks.extend(user_data.into_iter().map(|m| chunk(m.kind, m.data.clone())));
+                    chunks.extend((0..padding).map(|_| chunk(0x2020, vec![0; 4])));
+                }
+                chunks.extend(other.into_iter().map(|m| chunk(m.kind, m.data.clone())));
             }
             for &(li, level) in &order {
                 let l = &d.layers[li];
@@ -651,6 +774,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
             if l.tileset.is_none()
                 && m.artwork_link.is_none()
                 && m.bounds.is_none()
+                && m.reference_bounds.is_none()
                 && m.indices.is_none()
                 && m.outside.is_empty()
                 && l.cels[f].allocation_pixels() == 0
@@ -757,10 +881,11 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                 if d.color_mode == ColorMode::Rgba
                     && (x, y, w, h) == (0, 0, d.width, d.height)
                     && m.outside.is_empty()
-                    && let Pixels::Dense(pixels) = &l.cels[f]
+                    && let Some(slices) = l.cels[f].dense_slices()
                 {
-                    c.extend(compress(pixels.as_slice().as_flattened())?);
+                    c.extend(compress_slices(slices.map(|pixels| pixels.as_flattened()))?);
                     chunks.push(chunk(0x2005, c));
+                    append_cel_extra(&mut chunks, m);
                     append_metadata(&mut chunks, d, f, &format!("cel:{li}"));
                     continue;
                 }
@@ -810,6 +935,13 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                             }
                         }
                     }
+                    for outside in &m.outside {
+                        if let Some(slot) = outside.palette_slot
+                            && (slot as usize) < palette.len()
+                        {
+                            indices[(outside.y - y) as usize * w + (outside.x - x) as usize] = slot;
+                        }
+                    }
                     indices
                 } else {
                     pixels_bytes(&p, d.color_mode, &[])
@@ -817,6 +949,7 @@ pub fn encode_ase(d: &Document) -> Result<Vec<u8>, String> {
                 c.extend(compress(&encoded)?);
             }
             chunks.push(chunk(0x2005, c));
+            append_cel_extra(&mut chunks, m);
             append_metadata(&mut chunks, d, f, &format!("cel:{li}"));
         }
         append_metadata(&mut chunks, d, f, "");
@@ -868,6 +1001,8 @@ pub fn decode_ase_with_resolver(
     }
     let mut d = Document::new(w, h);
     d.compose_groups = u32at(b, 14)? & 2 != 0;
+    d.drawing_grid = DrawingGrid::from_ase_header(b);
+    d.pixel_aspect = Document::pixel_aspect_from_ase_header(b);
     d.layers.clear();
     d.durations = vec![100; frames];
     d.color_mode = match depth {
@@ -1204,18 +1339,26 @@ pub fn decode_ase_with_resolver(
                                 {
                                     std::sync::Arc::make_mut(target)[i] = source[cy * cw + cx];
                                 }
-                            } else if color != CLEAR {
+                            } else if color != CLEAR
+                                || indices
+                                    .as_ref()
+                                    .is_some_and(|slots| slots[i] != transparent as u8)
+                            {
                                 d.layers[li].cel_meta[f].outside.push(OutsidePixel {
                                     x: px,
                                     y: py,
                                     color,
+                                    palette_slot: indices.as_ref().map(|slots| slots[i]),
                                 });
                             }
                         }
                     }
                     projected_pixels = projected_pixels.saturating_add(
                         d.layers[li].cels[f].allocation_pixels()
-                            + d.layers[li].cel_meta[f].outside.len().saturating_mul(3),
+                            + d.layers[li].cel_meta[f]
+                                .outside
+                                .len()
+                                .saturating_mul(OutsidePixel::MEMORY_PIXELS),
                     );
                     if projected_pixels > MAX_DOCUMENT_PIXELS {
                         return Err("Sprite cel placements exceed the project pixel budget".into());
@@ -1247,6 +1390,7 @@ pub fn decode_ase_with_resolver(
                         q += 17;
                         let name = read_string(data, &mut q)?;
                         d.tags.push(FrameTag {
+                            editor_id: Default::default(),
                             name,
                             from,
                             to,
@@ -1299,8 +1443,19 @@ pub fn decode_ase_with_resolver(
                             tw * th * n * (depth / 8),
                         )?;
                         let pixels = read_pixels(&bytes, depth, &d.palette, transparent, false)?;
-                        let mut tiles: Vec<Pixels> =
-                            pixels.chunks(tw * th).map(|p| p.to_vec().into()).collect();
+                        let mut tiles: Vec<TileRaster> = pixels
+                            .chunks(tw * th)
+                            .enumerate()
+                            .map(|(index, pixels)| {
+                                let mut tile: TileRaster = pixels.to_vec().into();
+                                if depth == 8 {
+                                    tile.indices = Some(std::sync::Arc::new(
+                                        bytes[index * tw * th..(index + 1) * tw * th].to_vec(),
+                                    ));
+                                }
+                                tile
+                            })
+                            .collect();
                         if fl & 4 != 0 {
                             tiles.remove(0);
                         }
@@ -1315,7 +1470,14 @@ pub fn decode_ase_with_resolver(
                         if resolved.width != tw || resolved.height != th {
                             return Err("External tileset dimensions differ".into());
                         }
-                        resolved.tiles
+                        resolved
+                            .tiles
+                            .into_iter()
+                            .map(|mut tile| {
+                                tile.editor_id = Default::default();
+                                tile
+                            })
+                            .collect()
                     };
                     let index = d.tilesets.len();
                     legacy_tilesets.push(fl & 4 == 0);
@@ -1329,6 +1491,7 @@ pub fn decode_ase_with_resolver(
                         });
                     }
                     d.tilesets.push(Tileset {
+                        editor_id: Default::default(),
                         name,
                         width: tw,
                         height: th,
@@ -1414,7 +1577,7 @@ pub fn decode_ase_with_resolver(
                 rows: ch,
             });
         }
-        d.layers[li].tile_cels[f] = tiles;
+        d.layers[li].tile_cels[f] = tiles.into();
     }
     for l in &mut d.layers {
         if let Some(ti) = l.tileset {
@@ -1426,7 +1589,7 @@ pub fn decode_ase_with_resolver(
                     if decoded_tile_bytes / 4 > MAX_DOCUMENT_PIXELS {
                         return Err("Tilemaps exceed the project pixel budget".into());
                     }
-                    *c = vec![0; count];
+                    *c = vec![0; count].into();
                 }
             }
         }
@@ -1435,21 +1598,34 @@ pub fn decode_ase_with_resolver(
         d.frame_palettes = palettes.clone();
     }
     d.palette = palettes[0].clone();
+    restore_reference_bounds(&mut d);
     d.share_linked_rasters();
     d.validate()?;
     Ok(d)
 }
-fn load_ase_path(path: &Path, stack: &mut Vec<std::path::PathBuf>) -> Result<Document, String> {
-    let path = path
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+fn load_ase_path(
+    path: &Path,
+    stack: &mut Vec<std::path::PathBuf>,
+    check_path: &impl Fn(&Path) -> Result<(), String>,
+) -> Result<Document, String> {
+    check_path(path)?;
+    let path = if crate::automation::mcp_access::restricted() {
+        path.to_path_buf()
+    } else {
+        path.canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?
+    };
     if stack.len() >= 16 || stack.contains(&path) {
         return Err("External tileset reference cycle or depth limit".into());
     }
     stack.push(path.clone());
-    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let bytes = mcp_io::read(&path).map_err(|e| e.to_string())?;
     let result = decode_ase_with_resolver(&bytes, &mut |file, id| {
-        let external = load_ase_path(&path.parent().unwrap().join(file.replace('\\', "/")), stack)?;
+        let external = load_ase_path(
+            &path.parent().unwrap().join(file.replace('\\', "/")),
+            stack,
+            check_path,
+        )?;
         let index = external
             .ase_tilesets
             .iter()
@@ -1471,66 +1647,75 @@ fn load_ase_path(path: &Path, stack: &mut Vec<std::path::PathBuf>) -> Result<Doc
     result
 }
 pub fn load(path: &Path) -> Result<Document, String> {
+    load_with_path_check(path, &|_| Ok(()))
+}
+
+pub(crate) fn load_with_path_check(
+    path: &Path,
+    check_path: &impl Fn(&Path) -> Result<(), String>,
+) -> Result<Document, String> {
+    check_path(path)?;
     let ext = path
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
     if ext == "pixel" {
-        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        let file = mcp_io::open(path).map_err(|error| error.to_string())?;
         return decode_project_reader(file);
     }
     if ext == "ase" || ext == "aseprite" {
-        return load_ase_path(path, &mut Vec::new());
+        return load_ase_path(path, &mut Vec::new(), check_path);
     }
-    if matches!(ext.as_str(), "gif" | "webp" | "apng") {
+    if ext == "gif" {
         return crate::interchange::load_animation(path);
+    }
+    if matches!(ext.as_str(), "fli" | "flc") {
+        return flic::load(path);
+    }
+    if matches!(ext.as_str(), "psd" | "psb") {
+        return psd::load(path);
     }
     if ext == "ora" {
         return crate::interchange::load_ora(path);
     }
     if matches!(ext.as_str(), "tmj" | "tsj") {
-        return crate::interchange::load_tiled(path);
+        return crate::interchange::load_tiled_with_path_check(path, check_path);
     }
     if ext == "json" {
         let meta: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            serde_json::from_slice(&mcp_io::read(path).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
         let name = meta["meta"]["image"]
             .as_str()
             .ok_or("Sheet JSON must name its image")?;
-        let im = image::open(path.parent().unwrap_or(Path::new(".")).join(name))
+        let image_path = path.parent().unwrap_or(Path::new(".")).join(name);
+        check_path(&image_path)?;
+        if image_path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+        {
+            let png = load_with_path_check(&image_path, check_path)?;
+            if png.durations.len() == 1 {
+                return crate::workflows::unpack_png_sheet(&png, &meta);
+            }
+        }
+        let im = mcp_io::open_image(image_path)
             .map_err(|e| e.to_string())?
             .to_rgba8();
         return crate::workflows::unpack_sheet(&im, &meta);
     }
-    if ext == "png" {
-        let dec = image::codecs::png::PngDecoder::new(std::io::BufReader::new(
-            std::fs::File::open(path).map_err(|e| e.to_string())?,
-        ))
-        .map_err(|e| e.to_string())?;
-        if dec.is_apng().map_err(|e| e.to_string())? {
-            return crate::interchange::load_animation(path);
-        }
+    if matches!(ext.as_str(), "png" | "apng") {
+        let mut doc = png_raster::load(path, ext == "apng")?;
+        read_png_metadata(path, &mut doc)?;
+        return Ok(doc);
     }
-    let im = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
-    let (w, h) = im.dimensions();
-    if w == 0
-        || h == 0
-        || w as usize > MAX_DIMENSION
-        || h as usize > MAX_DIMENSION
-        || w as usize * h as usize > MAX_PIXELS
-    {
-        return Err("Image exceeds canvas or memory limits".into());
-    }
-    let mut d = Document::new(w as usize, h as usize);
-    d.layers[0].cels[0] = im.pixels().map(|p| p.0).collect();
-    if ext == "png" {
-        read_png_metadata(path, &mut d)?;
-    }
-    Ok(d)
+    raster::load_static(path, &ext)
 }
 pub fn save(path: &Path, d: &Document) -> Result<(), String> {
+    if path.extension().and_then(|s| s.to_str()) != Some("pixel") && d.has_frame_names() {
+        return Err("Save As .pixel to keep frame names. Use Export baked ASE copy to export artwork for ASE interchange.".into());
+    }
     if path.extension().and_then(|s| s.to_str()) != Some("pixel") && !d.references.is_empty() {
         return Err("Reference images require .pixel. Save as .pixel or explicitly discard references before saving ASE.".into());
     }
@@ -1557,12 +1742,72 @@ fn write_project_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
         path.file_name().unwrap_or_default().to_string_lossy(),
         std::process::id()
     ));
-    std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&temp, path).map_err(|e| e.to_string())
+    mcp_io::write(&temp, bytes).map_err(|e| e.to_string())?;
+    mcp_io::rename(&temp, path).map_err(|e| e.to_string())
 }
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
     export_raster_scaled(path, d, f, sheet, 1)
 }
+pub(crate) fn export_png_region(
+    path: &Path,
+    doc: &Document,
+    frame: usize,
+    [x, y, width, height]: [usize; 4],
+    scale: usize,
+) -> Result<(), String> {
+    let pixels = doc.composite(frame);
+    let cropped = (y..y + height)
+        .flat_map(|row| {
+            let start = row * doc.width + x;
+            pixels[start..start + width].as_flattened().iter().copied()
+        })
+        .collect();
+    let image = image::RgbaImage::from_raw(width as u32, height as u32, cropped)
+        .ok_or("Invalid PNG region")?;
+    write_document_png(path, doc, &[frame], [x, y], &image, scale)
+}
+
+fn write_document_png(
+    path: &Path,
+    doc: &Document,
+    frames: &[usize],
+    origin: [usize; 2],
+    image: &image::RgbaImage,
+    scale: usize,
+) -> Result<(), String> {
+    if !png_raster::write(path, doc, frames, origin, image, scale)? {
+        write_raster_image(
+            path,
+            image,
+            raster::RasterFormat::Standard(image::ImageFormat::Png),
+            scale,
+        )?;
+    }
+    write_png_metadata(path, doc)
+}
+
+pub(crate) fn write_packed_png(
+    path: &Path,
+    doc: &Document,
+    options: &crate::workflows::SheetOptions,
+    metadata: &mut serde_json::Value,
+    image: &image::RgbaImage,
+    extrude: usize,
+) -> Result<(), String> {
+    let color_type = png_raster::write_sheet(path, doc, options, metadata, image, extrude)?;
+    let format = match color_type {
+        Some(png::ColorType::Indexed) => "INDEXED8",
+        Some(png::ColorType::Grayscale) => "GRAY8",
+        Some(png::ColorType::GrayscaleAlpha) => "GRAYALPHA88",
+        _ => "RGBA8888",
+    };
+    if color_type.is_none() {
+        mcp_io::write_image_as(path, image, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    }
+    metadata["meta"]["format"] = serde_json::json!(format);
+    write_png_metadata(path, doc)
+}
+
 pub fn export_raster_scaled(
     path: &Path,
     d: &Document,
@@ -1580,13 +1825,19 @@ pub fn export_raster_scaled(
     {
         return Err("Export exceeds image limits".into());
     }
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let format = raster_format(extension).ok_or("Unsupported raster export extension")?;
+    validate_raster_size(format, d.width * count, d.height, scale)?;
+    if format == raster::RasterFormat::Pcx && !sheet && pcx::write_indexed(path, d, f, scale)? {
+        return Ok(());
+    }
     let mut im = image::RgbaImage::new((d.width * count) as u32, d.height as u32);
-    for n in 0..count {
-        for (i, p) in d
-            .composite(if sheet { n } else { f })
-            .into_iter()
-            .enumerate()
-        {
+    let frames: Vec<_> = if sheet { (0..count).collect() } else { vec![f] };
+    for (n, &frame) in frames.iter().enumerate() {
+        for (i, p) in d.composite(frame).into_iter().enumerate() {
             im.put_pixel(
                 (n * d.width + i % d.width) as u32,
                 (i / d.width) as u32,
@@ -1594,15 +1845,10 @@ pub fn export_raster_scaled(
             );
         }
     }
-    let im = crate::workflows::scale_image(&im, scale)?;
-    im.save(path).map_err(|e| e.to_string())?;
-    if path
-        .extension()
-        .is_some_and(|s| s.eq_ignore_ascii_case("png"))
-    {
-        write_png_metadata(path, d)?;
+    if format == raster::RasterFormat::Standard(image::ImageFormat::Png) {
+        return write_document_png(path, d, &frames, [0, 0], &im, scale);
     }
-    Ok(())
+    write_raster_image(path, &im, format, scale)
 }
 pub fn export_gif(path: &Path, d: &Document) -> Result<(), String> {
     export_gif_scaled(path, d, 1)
@@ -1642,7 +1888,7 @@ fn encode_gif(
 ) -> Result<(), String> {
     d.validate()?;
     animation_dimensions(d, scale)?;
-    let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+    let file = mcp_io::create(path).map_err(|e| e.to_string())?;
     let mut enc = image::codecs::gif::GifEncoder::new(file);
     enc.set_repeat(if repeat == 0 {
         image::codecs::gif::Repeat::Infinite
@@ -1694,13 +1940,29 @@ pub(crate) fn export_mp4_progress(
     d.validate()?;
     let (width, height) = animation_dimensions(d, scale)?;
     let size = format!("{width}x{height}");
-    let mut command = Command::new("ffmpeg");
+    let restricted_root = crate::automation::mcp_access::active_root();
+    let resolve = move || -> std::io::Result<Command> {
+        if let Some(root) = restricted_root {
+            let executable = crate::automation::mcp_access::find_ffmpeg(&root)?;
+            let mut command = Command::new(&executable);
+            command.current_dir(executable.parent().unwrap());
+            Ok(command)
+        } else {
+            Ok(Command::new("ffmpeg"))
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let command = crate::automation::mcp_linux::with_codec_runtime(resolve)?;
+    #[cfg(not(target_os = "linux"))]
+    let command = resolve();
+    let mut command = command.map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let mut child = command
+    let restricted = crate::automation::mcp_access::restricted();
+    command
         .args([
             "-hide_banner",
             "-loglevel",
@@ -1729,16 +1991,28 @@ pub(crate) fn export_mp4_progress(
             "-pix_fmt",
             "yuv420p",
             "-movflags",
-            "+faststart",
+            if restricted {
+                "+frag_keyframe+empty_moov+default_base_moof"
+            } else {
+                "+faststart"
+            },
             "-f",
             "mp4",
         ])
-        .arg(path)
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("MP4 export requires FFmpeg on PATH with libx264: {e}"))?;
+        .stderr(Stdio::piped());
+    if restricted {
+        let output = mcp_io::create_new(path).map_err(|e| e.to_string())?;
+        command.arg("pipe:1").stdout(Stdio::from(output));
+    } else {
+        command.arg(path).stdout(Stdio::null());
+    }
+    #[cfg(target_os = "linux")]
+    let launch = crate::automation::mcp_linux::with_codec_runtime(move || command.spawn())?;
+    #[cfg(not(target_os = "linux"))]
+    let launch = command.spawn();
+    let mut child =
+        launch.map_err(|e| format!("MP4 export requires FFmpeg on PATH with libx264: {e}"))?;
     let errors = child.stderr.take().unwrap();
     let drain = std::thread::spawn(move || {
         let mut errors = BufReader::new(errors);
@@ -1830,9 +2104,29 @@ fn png_records(bytes: &[u8]) -> Result<Vec<PngRecord>, String> {
     Ok(out)
 }
 fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
-    for (kind, data) in png_records(&std::fs::read(path).map_err(|e| e.to_string())?)? {
+    let file = mcp_io::open(path).map_err(|e| e.to_string())?;
+    let end = file.metadata().map_err(|e| e.to_string())?.len();
+    let mut reader = BufReader::new(file);
+    let mut signature = [0; 8];
+    reader
+        .read_exact(&mut signature)
+        .map_err(|e| e.to_string())?;
+    if &signature != b"\x89PNG\r\n\x1a\n" {
+        return Err("Invalid PNG signature".into());
+    }
+    let mut offset = 8u64;
+    let mut copied = 0u64;
+    while offset < end {
+        let mut header = [0; 8];
+        reader.read_exact(&mut header).map_err(|e| e.to_string())?;
+        let length = u32::from_be_bytes(header[..4].try_into().unwrap());
+        let kind = &header[4..];
+        offset += u64::from(length) + 12;
+        if offset > end {
+            return Err("Invalid PNG chunk".into());
+        }
         if matches!(
-            &kind,
+            kind,
             b"gAMA"
                 | b"cHRM"
                 | b"sRGB"
@@ -1844,7 +2138,16 @@ fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
                 | b"pHYs"
                 | b"tIME"
         ) {
-            if &kind == b"iCCP" {
+            copied += u64::from(length) + 12;
+            if copied > 32 * 1024 * 1024 {
+                return Err("PNG metadata exceeds budget".into());
+            }
+            let mut data = header.to_vec();
+            data.resize(length as usize + 12, 0);
+            reader
+                .read_exact(&mut data[8..])
+                .map_err(|e| e.to_string())?;
+            if kind == b"iCCP" {
                 let raw = &data[8..data.len() - 4];
                 if let Some(n) = raw.iter().position(|v| *v == 0)
                     && raw.get(n + 1) == Some(&0)
@@ -1870,6 +2173,13 @@ fn read_png_metadata(path: &Path, d: &mut Document) -> Result<(), String> {
                 data,
                 owner: "png".into(),
             });
+        } else {
+            reader
+                .seek_relative(i64::from(length) + 4)
+                .map_err(|e| e.to_string())?;
+        }
+        if kind == b"IEND" {
+            break;
         }
     }
     Ok(())
@@ -1894,7 +2204,7 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
     if stored.is_empty() && d.color_profile.is_empty() {
         return Ok(());
     }
-    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = mcp_io::read(path).map_err(|e| e.to_string())?;
     let records = png_records(&bytes)?;
     let mut out = bytes[..8].to_vec();
     for (kind, data) in records {
@@ -1925,7 +2235,13 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
             }
         }
     }
-    std::fs::write(path, out).map_err(|e| e.to_string())
+    if crate::automation::mcp_access::restricted() {
+        // The staged PNG is already present. Replace it with a newly created
+        // file so even a swapped hardlink cannot be opened for truncation.
+        write_project_bytes(path, out)
+    } else {
+        mcp_io::write(path, out).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -1982,6 +2298,7 @@ mod project_budget_tests {
 
         let mut tilemap = Document::new(2, 2);
         tilemap.tilesets.push(Tileset {
+            editor_id: Default::default(),
             name: "Empty".into(),
             width: 1,
             height: 1,

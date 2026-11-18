@@ -1,23 +1,63 @@
-//! Native RGBA clipboard access. X11/Windows/macOS use arboard; Wayland
-//! uses the desktop's wl-clipboard helpers when available, with XWayland fallback.
+//! Native image and text clipboard access. X11/Windows/macOS use arboard; Wayland
+//! uses native data control for tilemaps and has desktop-helper and XWayland fallbacks.
+#[cfg(target_os = "macos")]
+mod macos_tilemap;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+mod tilemap_wire;
+#[cfg(target_os = "linux")]
+mod wayland_offer;
+#[cfg(target_os = "linux")]
+mod wayland_tilemap;
+#[cfg(windows)]
+mod windows_tilemap;
+#[cfg(target_os = "linux")]
+mod x11_tilemap;
+
+#[cfg(target_os = "macos")]
+use macos_tilemap as native_tilemap;
+#[cfg(windows)]
+use windows_tilemap as native_tilemap;
+
+use super::Clipboard;
 use pixelcraft::model::{MAX_DIMENSION, MAX_PIXELS, Pixel};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 const CLIPBOARD_TIMEOUT: Duration = Duration::from_secs(2);
+
 type ClipboardImage = (usize, usize, Vec<Pixel>);
 pub enum Completion {
     Copy(Result<(), String>),
     Paste(Result<ClipboardImage, String>),
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    Packed(Box<Clipboard>),
 }
 enum Operation {
     Copy(usize, usize, Vec<Pixel>),
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    CopyPacked(Box<Clipboard>),
     Paste,
 }
+
+#[derive(Clone, Copy)]
+enum JobKind {
+    Write,
+    ReadImage,
+}
+impl JobKind {
+    fn error(self, reason: &str) -> Completion {
+        let reason = reason.to_owned();
+        match self {
+            Self::Write => Completion::Copy(Err(reason)),
+            Self::ReadImage => Completion::Paste(Err(reason)),
+        }
+    }
+}
+
 struct Job {
     started: Instant,
     response: Receiver<Completion>,
-    paste: bool,
+    kind: JobKind,
     expired: bool,
 }
 /// One native owner and at most one in-flight request, even after a timeout.
@@ -27,6 +67,18 @@ pub struct SystemClipboard {
     job: Option<Job>,
 }
 impl SystemClipboard {
+    #[cfg(test)]
+    pub(super) fn inject_completion_for_test(&mut self, completion: Completion) {
+        let (tx, response) = mpsc::channel();
+        tx.send(completion).unwrap();
+        self.job = Some(Job {
+            started: Instant::now(),
+            response,
+            kind: JobKind::ReadImage,
+            expired: false,
+        });
+    }
+
     pub fn busy(&self) -> bool {
         self.job.is_some()
     }
@@ -41,19 +93,34 @@ impl SystemClipboard {
                 .spawn(move || {
                     let mut native = NativeClipboard::default();
                     while let Ok((operation, response)) = rx.recv() {
+                        #[cfg(target_os = "linux")]
+                        let replaces_packed_offer = matches!(operation, Operation::Copy(..));
                         let result = match operation {
                             Operation::Copy(w, h, pixels) => {
                                 Completion::Copy(native.set(w, h, &pixels))
                             }
-                            Operation::Paste => Completion::Paste(native.get()),
+                            #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+                            Operation::CopyPacked(clip) => {
+                                Completion::Copy(native.copy_packed(&clip))
+                            }
+                            Operation::Paste => native.read_content(),
                         };
+                        #[cfg(target_os = "linux")]
+                        if replaces_packed_offer && matches!(result, Completion::Copy(Ok(()))) {
+                            native.x11_offer = None;
+                            native.wayland_offer = None;
+                        }
                         let _ = response.send(result);
                     }
                 })
                 .map_err(|e| e.to_string())?;
             self.worker = Some(tx);
         }
-        let paste = matches!(operation, Operation::Paste);
+        let kind = match operation {
+            Operation::Paste => JobKind::ReadImage,
+
+            _ => JobKind::Write,
+        };
         let (tx, rx) = mpsc::sync_channel(1);
         self.worker
             .as_ref()
@@ -63,7 +130,7 @@ impl SystemClipboard {
         self.job = Some(Job {
             started: Instant::now(),
             response: rx,
-            paste,
+            kind,
             expired: false,
         });
         Ok(())
@@ -71,9 +138,18 @@ impl SystemClipboard {
     pub fn copy(&mut self, w: usize, h: usize, pixels: Vec<Pixel>) -> Result<(), String> {
         self.start(Operation::Copy(w, h, pixels))
     }
+    pub(super) fn copy_content(&mut self, clip: &Clipboard) -> Result<(), String> {
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        if tilemap_wire::Flavor::of(clip).is_some() {
+            return self.start(Operation::CopyPacked(Box::new(clip.clone())));
+        }
+        let (w, h, pixels) = clip.native_bitmap()?;
+        self.copy(w, h, pixels)
+    }
     pub fn paste(&mut self) -> Result<(), String> {
         self.start(Operation::Paste)
     }
+
     pub fn poll(&mut self) -> Option<Completion> {
         self.poll_at(Instant::now())
     }
@@ -82,12 +158,7 @@ impl SystemClipboard {
         // A result observed after the deadline is never applied to the document.
         if !job.expired && now.duration_since(job.started) >= CLIPBOARD_TIMEOUT {
             job.expired = true;
-            let error = Err("System clipboard timed out".into());
-            return Some(if job.paste {
-                Completion::Paste(error)
-            } else {
-                Completion::Copy(error.map(|_| ()))
-            });
+            return Some(job.kind.error("System clipboard timed out"));
         }
         match job.response.try_recv() {
             Ok(result) => {
@@ -98,16 +169,10 @@ impl SystemClipboard {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 let expired = job.expired;
-                let paste = job.paste;
+                let kind = job.kind;
                 self.job = None;
                 self.worker = None;
-                if expired {
-                    None
-                } else if paste {
-                    Some(Completion::Paste(Err("Clipboard worker stopped".into())))
-                } else {
-                    Some(Completion::Copy(Err("Clipboard worker stopped".into())))
-                }
+                (!expired).then(|| kind.error("Clipboard worker stopped"))
             }
         }
     }
@@ -117,6 +182,7 @@ impl SystemClipboard {
 fn run_helper(
     mut command: std::process::Command,
     input: Option<Vec<u8>>,
+    limit: usize,
 ) -> Result<Vec<u8>, String> {
     use std::io::{Read, Write};
     use std::process::Stdio;
@@ -145,16 +211,15 @@ fn run_helper(
                 if let (Some(mut stdin), Some(bytes)) = (stdin, input) {
                     stdin.write_all(&bytes).map_err(|e| e.to_string())?;
                 }
-                let limit = (MAX_PIXELS * 4 + 1024 * 1024) as u64;
                 let mut bytes = vec![];
                 if let Some(stdout) = stdout {
                     stdout
-                        .take(limit + 1)
+                        .take(limit as u64 + 1)
                         .read_to_end(&mut bytes)
                         .map_err(|e| e.to_string())?;
                 }
-                if bytes.len() as u64 > limit {
-                    return Err("Clipboard image exceeds limits".into());
+                if bytes.len() > limit {
+                    return Err("Clipboard data exceeds limits".into());
                 }
                 Ok(bytes)
             })();
@@ -220,8 +285,62 @@ fn run_helper(
 #[derive(Default)]
 struct NativeClipboard {
     native: Option<arboard::Clipboard>,
+    #[cfg(target_os = "linux")]
+    x11_offer: Option<x11_tilemap::Owner>,
+    #[cfg(target_os = "linux")]
+    wayland_offer: Option<wayland_offer::Owner>,
 }
 impl NativeClipboard {
+    fn read_content(&mut self) -> Completion {
+        #[cfg(any(windows, target_os = "macos"))]
+        let packed = native_tilemap::read();
+        #[cfg(target_os = "linux")]
+        let packed = if wayland_tilemap::is_wayland() {
+            match wayland_tilemap::read() {
+                Ok(clip) => clip,
+                Err(
+                    wl_clipboard_rs::paste::Error::MissingProtocol { .. }
+                    | wl_clipboard_rs::paste::Error::NoSeats
+                    | wl_clipboard_rs::paste::Error::WaylandConnection(_),
+                ) => x11_tilemap::read(),
+                Err(_) => None,
+            }
+        } else {
+            x11_tilemap::read()
+        };
+        #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+        if let Some(clip) = packed {
+            return Completion::Packed(Box::new(clip));
+        }
+        Completion::Paste(self.get())
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn copy_packed(&mut self, clip: &Clipboard) -> Result<(), String> {
+        native_tilemap::publish(clip)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn copy_packed(&mut self, clip: &Clipboard) -> Result<(), String> {
+        let wayland = wayland_tilemap::is_wayland();
+        if wayland && let Some(offer) = wayland_tilemap::publish(clip)? {
+            self.x11_offer = None;
+            self.wayland_offer = Some(offer);
+            return Ok(());
+        }
+        match x11_tilemap::publish(clip) {
+            Ok(offer) => self.x11_offer = Some(offer),
+            Err(_) if wayland => {
+                let (w, h, pixels) = clip.native_bitmap()?;
+                self.set(w, h, &pixels)?;
+                self.x11_offer = None;
+            }
+            Err(error) => return Err(error),
+        }
+        self.wayland_offer = None;
+        Ok(())
+    }
+
     fn native(&mut self) -> Result<&mut arboard::Clipboard, String> {
         if self.native.is_none() {
             self.native = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
@@ -251,7 +370,7 @@ impl NativeClipboard {
                 .map_err(|e| e.to_string())?;
             let mut command = std::process::Command::new("wl-copy");
             command.args(["--type", "image/png"]);
-            match run_helper(command, Some(bytes.into_inner())) {
+            match run_helper(command, Some(bytes.into_inner()), 0) {
                 Ok(_) => return Ok(()),
                 Err(e) if e.contains("timed out") => return Err(e),
                 Err(_) => {}
@@ -270,7 +389,7 @@ impl NativeClipboard {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             let mut command = std::process::Command::new("wl-paste");
             command.args(["--no-newline", "--type", "image/png"]);
-            match run_helper(command, None) {
+            match run_helper(command, None, MAX_PIXELS * 4 + 1024 * 1024) {
                 Ok(bytes) => return decode_png(&bytes),
                 Err(e) if e.contains("timed out") || e.contains("exceeds limits") => return Err(e),
                 Err(_) => {}
@@ -334,7 +453,7 @@ mod worker_regressions {
             job: Some(Job {
                 started: start,
                 response: rx,
-                paste: true,
+                kind: JobKind::ReadImage,
                 expired: false,
             }),
         };
@@ -349,6 +468,7 @@ mod worker_regressions {
         assert!(clipboard.poll_at(start + CLIPBOARD_TIMEOUT).is_none());
         assert!(!clipboard.busy());
     }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn stalled_helper_is_killed_before_ui_deadline() {
@@ -357,13 +477,188 @@ mod worker_regressions {
             command.args(["-c", "exec sleep 30"]);
             let start = Instant::now();
             assert!(
-                run_helper(command, input)
+                run_helper(command, input, 16)
                     .unwrap_err()
                     .contains("timed out")
             );
             assert!(start.elapsed() < CLIPBOARD_TIMEOUT);
         }
     }
+
+    #[cfg(target_os = "linux")]
+    const CHILD_VERIFIED: &str = "Verified packed clipboard and PNG in another process.";
+
+    #[cfg(target_os = "linux")]
+    fn run_clipboard_child(test: &str, child: &str, kind: &str) {
+        let (_, module) = module_path!().split_once("::").unwrap();
+        let test = format!("{module}::{test}");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &test, "--ignored", "--nocapture"])
+            .env(child, kind)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains(CHILD_VERIFIED),
+            "Clipboard child {test} did not verify both formats:\n{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        println!("{stdout}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "Writes the clipboard. Run against an isolated Wayland compositor with data control."]
+    fn wayland_packed_tilemap_cross_process_roundtrip() {
+        use super::tilemap_wire::tests::{indexed_sample, sample};
+        const CHILD: &str = "PIXELCRAFT_WAYLAND_CLIPBOARD_TEST_CHILD";
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_some());
+        assert!(std::env::var_os("DISPLAY").is_none());
+        let mut expected = sample();
+        expected.tileset.as_mut().unwrap().user_data[2].extend(vec![0x77; 200_000]);
+        let mut worker = SystemClipboard::default();
+        let complete = |worker: &mut SystemClipboard| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(result) = worker.poll() {
+                    return result;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "clipboard worker response timed out"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        if let Ok(kind) = std::env::var(CHILD) {
+            let expected = if kind == "indexed" {
+                indexed_sample()
+            } else {
+                expected
+            };
+            assert!(kind == "indexed" || kind == "tilemap");
+            worker.paste().unwrap();
+            let Completion::Packed(actual) = complete(&mut worker) else {
+                panic!("missing packed tilemap in another process");
+            };
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            let bytes = wayland_tilemap::receive("image/png", 1024 * 1024)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                decode_png(&bytes).unwrap(),
+                expected.native_bitmap().unwrap()
+            );
+            println!("{CHILD_VERIFIED}");
+            return;
+        }
+        worker.copy_content(&indexed_sample()).unwrap();
+        assert!(matches!(complete(&mut worker), Completion::Copy(Ok(()))));
+        run_clipboard_child(
+            "wayland_packed_tilemap_cross_process_roundtrip",
+            CHILD,
+            "indexed",
+        );
+        worker.copy_content(&expected).unwrap();
+        let Completion::Copy(result) = complete(&mut worker) else {
+            panic!("missing copy result")
+        };
+        result.unwrap();
+        // This recipient requests a payload larger than a pipe buffer and never reads.
+        let (stalled, _) = wl_clipboard_rs::paste::get_contents(
+            wl_clipboard_rs::paste::ClipboardType::Regular,
+            wl_clipboard_rs::paste::Seat::Unspecified,
+            wl_clipboard_rs::paste::MimeType::Specific(tilemap_wire::Flavor::Tilemap.mime()),
+        )
+        .unwrap();
+        run_clipboard_child(
+            "wayland_packed_tilemap_cross_process_roundtrip",
+            CHILD,
+            "tilemap",
+        );
+        drop(stalled);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "Writes the clipboard. Run against an isolated X11 display."]
+    fn x11_packed_tilemap_cross_process_roundtrip() {
+        use super::tilemap_wire::tests::{indexed_sample, sample};
+        const CHILD: &str = "PIXELCRAFT_X11_CLIPBOARD_TEST_CHILD";
+        assert!(std::env::var_os("WAYLAND_DISPLAY").is_none());
+        assert!(std::env::var_os("DISPLAY").is_some());
+        let mut expected = sample();
+        // The opaque ASE user data makes this larger than one X11 property chunk.
+        expected.tileset.as_mut().unwrap().user_data[2].extend(vec![0x77; 300_000]);
+        let wait = |worker: &mut SystemClipboard| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                if let Some(result) = worker.poll() {
+                    return result;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "clipboard worker response timed out"
+                );
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        };
+        let mut worker = SystemClipboard::default();
+        if let Ok(kind) = std::env::var(CHILD) {
+            let expected = if kind == "indexed" {
+                indexed_sample()
+            } else {
+                expected
+            };
+            assert!(kind == "indexed" || kind == "tilemap");
+            worker.paste().unwrap();
+            let Completion::Packed(actual) = wait(&mut worker) else {
+                panic!("missing packed tilemap in another process");
+            };
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(&expected).unwrap()
+            );
+            let (w, h, pixels) = expected.native_bitmap().unwrap();
+            let bitmap = arboard::Clipboard::new().unwrap().get_image().unwrap();
+            assert_eq!((bitmap.width, bitmap.height), (w, h));
+            assert_eq!(bitmap.bytes.as_ref(), pixels.as_flattened());
+            println!("{CHILD_VERIFIED}");
+            return;
+        }
+        worker.copy_content(&indexed_sample()).unwrap();
+        assert!(matches!(wait(&mut worker), Completion::Copy(Ok(()))));
+        run_clipboard_child(
+            "x11_packed_tilemap_cross_process_roundtrip",
+            CHILD,
+            "indexed",
+        );
+        worker.copy_content(&expected).unwrap();
+        assert!(matches!(wait(&mut worker), Completion::Copy(Ok(()))));
+        run_clipboard_child(
+            "x11_packed_tilemap_cross_process_roundtrip",
+            CHILD,
+            "tilemap",
+        );
+        let (w, h, pixels) = expected.native_bitmap().unwrap();
+        let mut external = arboard::Clipboard::new().unwrap();
+        external
+            .set_image(arboard::ImageData {
+                width: w,
+                height: h,
+                bytes: std::borrow::Cow::Borrowed(pixels.as_flattened()),
+            })
+            .unwrap();
+        worker.paste().unwrap();
+        let Completion::Paste(Ok(actual)) = wait(&mut worker) else {
+            panic!("ordinary PNG must replace the packed offer");
+        };
+        assert_eq!(actual, (w, h, pixels));
+    }
+
     #[test]
     #[ignore = "Requires a native desktop clipboard; run explicitly on Linux and Windows"]
     fn native_clipboard_roundtrip() {

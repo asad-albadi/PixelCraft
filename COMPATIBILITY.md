@@ -1,3 +1,5 @@
+> This branch keeps the Lua APIs already present on `main`. Later Lua workspace, console, plugin-event and native-buffer development is preserved only on `discarded-lua-updates`. Native editor, CLI and MCP improvements are developed separately.
+
 # Aseprite compatibility
 
 PixelCraft is independent software with partial Aseprite compatibility, not a drop-in implementation of the entire Aseprite API. No Aseprite executable, installation, settings, fonts, theme atlas, or other original assets are loaded by the app. Lua 5.4 is embedded; ICC conversion uses the pure Rust moxcms engine.

@@ -68,11 +68,13 @@ def fixture_operations(project, pixelcraft):
             "name": name, "from": i * 2, "to": i * 2 + 1, "direction": 0,
             "repeat": 0, "color": [100, 120, 140],
         }})
+    commands.append({"op": "set-frame", "frame": 3, "name": "Walk contact"})
     edit(blank, initial, commands)
     export(initial)
     yield "first"
 
     edit(initial, redraw, [
+        {"op": "set-frame", "frame": 3, "name": "Walk push-off"},
         shape(3, [0, 0, 0], first=(0, 0), last=(7, 5), alpha=0),
         shape(3, [25, 180, 230], first=(1, 1), last=(6, 4)),
     ])

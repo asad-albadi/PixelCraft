@@ -41,6 +41,7 @@ fn indexed_gray_groups_tags_metadata_roundtrip() {
         d.layers[0].blend = BlendMode::Screen;
         d.layers[0].cel_meta[0].opacity = 190;
         d.tags.push(FrameTag {
+            editor_id: Default::default(),
             name: "Walk".into(),
             from: 0,
             to: 0,
@@ -84,6 +85,7 @@ fn native_project_preserves_metadata_with_non_default_brush() {
 fn ase_tilemap_roundtrip_preserves_tile_ids_flips_and_pixels() {
     let mut d = Document::new(4, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "tiles".into(),
         width: 2,
         height: 2,
@@ -169,6 +171,7 @@ fn ase_preserves_palette_entry_names_layer_uuid_flags_and_tag_repeat() {
     d.layers[0].uuid = vec![42; 16];
     d.layers[0].ase_flags = 32;
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 0,
@@ -216,6 +219,7 @@ fn edited_slice_keys_roundtrip_through_ase_and_sheet_metadata() {
     let mut doc = Document::new(8, 8);
     doc.add_frame(0, false);
     let slice = SpriteSlice {
+        editor_id: Default::default(),
         name: "Hand".into(),
         keys: vec![
             SliceKey {
@@ -248,6 +252,7 @@ fn tile_variants_preserve_neighboring_placements_and_transform_flags() {
     let original = [45, 80, 125, 255];
     let edited = [125, 80, 45, 255];
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Shared".into(),
         width: 2,
         height: 2,
@@ -269,6 +274,7 @@ fn tile_variants_preserve_neighboring_placements_and_transform_flags() {
 fn linked_tilemaps_roundtrip_and_share_later_edits() {
     let mut doc = Document::new(4, 2);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tiles".into(),
         width: 2,
         height: 2,
@@ -288,6 +294,7 @@ fn linked_tilemap_uses_source_grid_and_target_origin() {
     let mut doc = Document::new(4, 4);
     let color = [12, 80, 36, 255];
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tiles".into(),
         width: 2,
         height: 2,
