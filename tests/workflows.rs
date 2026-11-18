@@ -785,3 +785,27 @@ fn rotsprite_resizes_hidden_indexed_corners_and_reopens_them_in_ase() {
     assert_eq!(indices[14], 2);
     assert_eq!(indices[35], 1);
 }
+
+#[test]
+fn polygon_containment_handles_extreme_integer_coordinates_without_overflow() {
+    let points = [
+        (i32::MIN, i32::MIN),
+        (i32::MAX, i32::MIN),
+        (i32::MAX, i32::MAX),
+        (i32::MIN, i32::MAX),
+    ];
+    assert!(pixelcraft::workflows::inside_polygon(&points, 0, 0));
+    assert!(!pixelcraft::workflows::inside_polygon(&points, i32::MAX, 0));
+}
+
+#[test]
+fn long_polygon_containment_can_be_cancelled_during_edge_traversal() {
+    let points = vec![(0, 0); 32768];
+    let polls = std::cell::Cell::new(0);
+    let result = pixelcraft::workflows::inside_polygon_until(&points, 1, 1, || {
+        polls.set(polls.get() + 1);
+        polls.get() >= 3
+    });
+    assert!(result.unwrap_err().contains("cancelled"));
+    assert!(!pixelcraft::workflows::inside_polygon(&points, 1, 1));
+}

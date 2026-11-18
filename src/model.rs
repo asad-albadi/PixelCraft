@@ -1695,319 +1695,409 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.pixel_aspect.is_some_and(|ratio| ratio.contains(&0)) {
-            return Err("Invalid pixel aspect ratio".into());
+        self.validate_until(|| false)
+    }
+
+    /// Validate native document structure with cancellation during bulk traversal.
+    pub fn validate_until(&self, cancelled: impl Fn() -> bool) -> Result<(), String> {
+        let interrupted = std::cell::Cell::new(false);
+        let stopped = |index: usize| {
+            if interrupted.get() {
+                return true;
+            }
+            if index.is_multiple_of(4096) && cancelled() {
+                interrupted.set(true);
+                true
+            } else {
+                false
+            }
+        };
+        if stopped(0) {
+            return Err("Project validation cancelled".into());
         }
-        if self.drawing_grid.is_some_and(|grid| !grid.valid()) {
-            return Err("Invalid drawing grid".into());
-        }
-        let mut reference_pixels = 0usize;
-        for r in &self.references {
-            reference_pixels = reference_pixels.saturating_add(r.width.saturating_mul(r.height));
-            if r.width == 0
-                || r.height == 0
-                || r.width > MAX_DIMENSION
-                || r.height > MAX_DIMENSION
-                || r.pixels.len() != r.width.saturating_mul(r.height)
-                || reference_pixels > MAX_PIXELS
-                || !r.x.is_finite()
-                || !r.y.is_finite()
-                || !r.scale.is_finite()
-                || r.scale <= 0.
-                || r.scale > 1000.
-                || r.options
-                    .scale_y
-                    .is_some_and(|scale| !scale.is_finite() || scale <= 0. || scale > 1000.)
-                || r.options
-                    .source
-                    .as_ref()
-                    .is_some_and(|path| !crate::productivity::valid_reference_source(path))
+        let result: Result<(), String> = (|| {
+            if self.pixel_aspect.is_some_and(|ratio| ratio.contains(&0)) {
+                return Err("Invalid pixel aspect ratio".into());
+            }
+            if self.drawing_grid.is_some_and(|grid| !grid.valid()) {
+                return Err("Invalid drawing grid".into());
+            }
+            let mut reference_pixels = 0usize;
+            for r in &self.references {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                reference_pixels =
+                    reference_pixels.saturating_add(r.width.saturating_mul(r.height));
+                if r.width == 0
+                    || r.height == 0
+                    || r.width > MAX_DIMENSION
+                    || r.height > MAX_DIMENSION
+                    || r.pixels.len() != r.width.saturating_mul(r.height)
+                    || reference_pixels > MAX_PIXELS
+                    || !r.x.is_finite()
+                    || !r.y.is_finite()
+                    || !r.scale.is_finite()
+                    || r.scale <= 0.
+                    || r.scale > 1000.
+                    || r.options
+                        .scale_y
+                        .is_some_and(|scale| !scale.is_finite() || scale <= 0. || scale > 1000.)
+                    || r.options
+                        .source
+                        .as_ref()
+                        .is_some_and(|path| !crate::productivity::valid_reference_source(path))
+                {
+                    return Err("Invalid reference image".into());
+                }
+            }
+            if self.dithering.as_ref().is_some_and(|m| !m.validate()) {
+                return Err("Invalid dithering matrix".into());
+            }
+            if self.width == 0
+                || self.height == 0
+                || self.width > MAX_DIMENSION
+                || self.height > MAX_DIMENSION
+                || self.width.saturating_mul(self.height) > MAX_PIXELS
+                || self.durations.is_empty()
+                || self.layers.is_empty()
+                || self.durations.len() > 65535
+                || self.layers.len() > 65535
+                || self.layers.len().saturating_mul(self.durations.len()) > MAX_CEL_SLOTS
+                || self.stored_pixels_until(&cancelled)? > MAX_DOCUMENT_PIXELS
             {
-                return Err("Invalid reference image".into());
+                return Err("Project dimensions or stored pixel count exceed limits".into());
             }
-        }
-        if self.dithering.as_ref().is_some_and(|m| !m.validate()) {
-            return Err("Invalid dithering matrix".into());
-        }
-        if self.width == 0
-            || self.height == 0
-            || self.width > MAX_DIMENSION
-            || self.height > MAX_DIMENSION
-            || self.width.saturating_mul(self.height) > MAX_PIXELS
-            || self.durations.is_empty()
-            || self.layers.is_empty()
-            || self.durations.len() > 65535
-            || self.layers.len() > 65535
-            || self.layers.len().saturating_mul(self.durations.len()) > MAX_CEL_SLOTS
-            || self.stored_pixels() > MAX_DOCUMENT_PIXELS
-        {
-            return Err("Project dimensions or stored pixel count exceed limits".into());
-        }
-        if self.frame_names.len() > self.durations.len()
-            || self.frame_names.iter().any(|name| {
-                name.chars().count() > MAX_FRAME_NAME_CHARS || name.chars().any(char::is_control)
-            })
-        {
-            return Err("Invalid frame names".into());
-        }
-        if let Some(ids) = &self.frame_export_ids.0 {
-            let mut seen = std::collections::HashSet::with_capacity(ids.frames.len());
-            if ids.frames.len() != self.durations.len()
-                || ids.next > u64::from(u32::MAX) + 1
-                || ids
-                    .frames
-                    .iter()
-                    .any(|&id| u64::from(id) >= ids.next || !seen.insert(id))
+            if self.frame_names.len() > self.durations.len()
+                || self.frame_names.iter().enumerate().any(|(index, name)| {
+                    stopped(index)
+                        || name.chars().take(MAX_FRAME_NAME_CHARS + 1).count()
+                            > MAX_FRAME_NAME_CHARS
+                        || name.chars().any(char::is_control)
+                })
             {
-                return Err("Invalid frame export identities".into());
+                return Err("Invalid frame names".into());
             }
-        }
-        if self
-            .frame_palettes
-            .iter()
-            .any(|p| p.is_empty() || p.len() > 256)
-        {
-            return Err("Invalid frame palette".into());
-        }
-        if self.palette.is_empty() || self.palette.len() > 256 {
-            return Err("Palette must contain 1–256 colors".into());
-        }
-        let group_buffers: Vec<_> = self
-            .layers
-            .iter()
-            .map(|layer| {
-                layer.group
-                    && (self.compose_groups
-                        || layer.mask.is_some()
-                        || layer.cel_meta.iter().any(|cel| {
-                            cel.keyframe
-                                .is_some_and(|key| key != CelKeyframe::default())
-                        }))
-            })
-            .collect();
-        for (i, l) in self.layers.iter().enumerate() {
-            if l.mask
-                .as_ref()
-                .is_some_and(|mask| mask.len() != self.width * self.height)
-            {
-                return Err("Layer mask dimensions must match the canvas".into());
-            }
-            if !l.mask_outside.is_empty()
-                && (l.mask.is_none()
-                    || l.mask_outside
-                        .windows(2)
-                        .any(|pair| pair[0].position() >= pair[1].position())
-                    || l.mask_outside.iter().any(|pixel| {
-                        self.index(pixel.x, pixel.y).is_some()
-                            || !(-131_072..=131_072).contains(&pixel.x)
-                            || !(-131_072..=131_072).contains(&pixel.y)
-                            || pixel.palette_slot.is_some()
-                    }))
-            {
-                return Err("Invalid off-canvas layer mask".into());
-            }
-            if let Some(adjustment) = &l.adjustment {
-                if l.group || l.tileset.is_some() {
-                    return Err("Adjustments require their own image layer".into());
+            if let Some(ids) = &self.frame_export_ids.0 {
+                let mut seen = std::collections::HashSet::with_capacity(ids.frames.len());
+                if ids.frames.len() != self.durations.len()
+                    || ids.next > u64::from(u32::MAX) + 1
+                    || ids.frames.iter().enumerate().any(|(index, &id)| {
+                        stopped(index) || u64::from(id) >= ids.next || !seen.insert(id)
+                    })
+                {
+                    return Err("Invalid frame export identities".into());
                 }
-                adjustment.validate()?;
-            }
-            for m in &l.cel_meta {
-                if m.keyframe.is_some_and(|key| {
-                    key.x.unsigned_abs() > MAX_DIMENSION as u32
-                        || key.y.unsigned_abs() > MAX_DIMENSION as u32
-                }) {
-                    return Err("Position keyframe exceeds the canvas limits".into());
-                }
-                if m.outside.iter().any(|pixel| {
-                    !(-131_072..=131_072).contains(&pixel.x)
-                        || !(-131_072..=131_072).contains(&pixel.y)
-                }) {
-                    return Err("Off-canvas pixels exceed supported coordinates".into());
-                }
-                if m.artwork_link == Some(usize::MAX) {
-                    return Err("Invalid cel link".into());
-                }
-                if m.bounds.is_some_and(|b| {
-                    b[0] < i16::MIN as i32
-                        || b[0] > i16::MAX as i32
-                        || b[1] < i16::MIN as i32
-                        || b[1] > i16::MAX as i32
-                        || b[2] < 0
-                        || b[3] < 0
-                        || b[2] > 65535
-                        || b[3] > 65535
-                        || (b[2] as usize).saturating_mul(b[3] as usize) > MAX_PIXELS
-                }) {
-                    return Err("Invalid cel bounds".into());
-                }
-                if m.tilemap.as_ref().is_some_and(|g| {
-                    g.columns == 0
-                        || g.rows == 0
-                        || g.columns > 65535
-                        || g.rows > 65535
-                        || g.columns.saturating_mul(g.rows) > MAX_PIXELS
-                        || g.x < i16::MIN as i32
-                        || g.x > i16::MAX as i32
-                        || g.y < i16::MIN as i32
-                        || g.y > i16::MAX as i32
-                }) {
-                    return Err("Invalid tilemap geometry".into());
-                }
-            }
-            if l.cel_meta.iter().any(|m| {
-                m.indices
-                    .as_ref()
-                    .is_some_and(|a| a.len() != self.width * self.height)
-            }) {
-                return Err("Invalid indexed cel size".into());
-            }
-            if l.cels.len() != self.durations.len()
-                || l.cel_meta.len() != self.durations.len()
-                || l.tile_cels.len() != self.durations.len()
-                || l.cels.iter().any(|c| c.len() != self.width * self.height)
-            {
-                return Err("Invalid cel dimensions".into());
-            }
-            // Keep scratch allocations bounded independently of sparse backing.
-            let mut buffers = 1 + usize::from(group_buffers[i] || l.tileset.is_some());
-            let mut p = l.parent;
-            let mut depth = 0;
-            while let Some(j) = p {
-                if j >= self.layers.len() || j == i || !self.layers[j].group || depth >= 128 {
-                    return Err("Invalid layer group hierarchy".into());
-                }
-                buffers += usize::from(group_buffers[j]);
-                p = self.layers[j].parent;
-                depth += 1;
             }
             if self
-                .width
-                .saturating_mul(self.height)
-                .saturating_mul(buffers)
-                > MAX_DOCUMENT_PIXELS
+                .frame_palettes
+                .iter()
+                .enumerate()
+                .any(|(index, p)| stopped(index) || p.is_empty() || p.len() > 256)
             {
-                return Err("Layer hierarchy exceeds the compositing workspace budget".into());
+                return Err("Invalid frame palette".into());
             }
-            if let Some(t) = l.tileset {
-                let t = self.tilesets.get(t).ok_or("Missing tileset")?;
-                if t.width == 0 || t.height == 0 {
-                    return Err("Invalid tileset size".into());
-                }
-                let count = self.width.div_ceil(t.width) * self.height.div_ceil(t.height);
-                if l.tile_cels.iter().enumerate().any(|(f, c)| {
-                    let count = l.cel_meta[f]
-                        .tilemap
-                        .as_ref()
-                        .map_or(count, |g| g.columns.saturating_mul(g.rows));
-                    count > MAX_PIXELS
-                        || c.len() != count
-                        || c.iter().any(|v| (v & 0x1fffffff) as usize > t.tiles.len())
-                }) {
-                    return Err("Invalid tile reference".into());
-                }
+            if self.palette.is_empty() || self.palette.len() > 256 {
+                return Err("Palette must contain 1–256 colors".into());
             }
-        }
-        for t in &self.tilesets {
-            if t.width == 0
-                || t.height == 0
-                || t.width > MAX_DIMENSION
-                || t.height > MAX_DIMENSION
-                || t.width
-                    .saturating_mul(t.height)
-                    .saturating_mul(t.tiles.len())
-                    > MAX_PIXELS
-                || t.tiles.iter().any(|p| {
-                    p.len() != t.width * t.height
-                        || p.indices
+            let group_buffers: Vec<_> = self
+                .layers
+                .iter()
+                .map(|layer| {
+                    if stopped(0) {
+                        return false;
+                    }
+                    layer.group
+                        && (self.compose_groups
+                            || layer.mask.is_some()
+                            || layer.cel_meta.iter().enumerate().any(|(index, cel)| {
+                                stopped(index)
+                                    || cel
+                                        .keyframe
+                                        .is_some_and(|key| key != CelKeyframe::default())
+                            }))
+                })
+                .collect();
+            if interrupted.get() {
+                return Err("Project validation cancelled".into());
+            }
+            for (i, l) in self.layers.iter().enumerate() {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                if l.mask
+                    .as_ref()
+                    .is_some_and(|mask| mask.len() != self.width * self.height)
+                {
+                    return Err("Layer mask dimensions must match the canvas".into());
+                }
+                if !l.mask_outside.is_empty()
+                    && (l.mask.is_none()
+                        || l.mask_outside.windows(2).enumerate().any(|(index, pair)| {
+                            stopped(index) || pair[0].position() >= pair[1].position()
+                        })
+                        || l.mask_outside.iter().enumerate().any(|(index, pixel)| {
+                            stopped(index)
+                                || self.index(pixel.x, pixel.y).is_some()
+                                || !(-131_072..=131_072).contains(&pixel.x)
+                                || !(-131_072..=131_072).contains(&pixel.y)
+                                || pixel.palette_slot.is_some()
+                        }))
+                {
+                    return Err("Invalid off-canvas layer mask".into());
+                }
+                if let Some(adjustment) = &l.adjustment {
+                    if l.group || l.tileset.is_some() {
+                        return Err("Adjustments require their own image layer".into());
+                    }
+                    adjustment.validate()?;
+                }
+                for m in &l.cel_meta {
+                    if stopped(0) {
+                        return Err("Project validation cancelled".into());
+                    }
+                    if m.keyframe.is_some_and(|key| {
+                        key.x.unsigned_abs() > MAX_DIMENSION as u32
+                            || key.y.unsigned_abs() > MAX_DIMENSION as u32
+                    }) {
+                        return Err("Position keyframe exceeds the canvas limits".into());
+                    }
+                    if m.outside.iter().enumerate().any(|(index, pixel)| {
+                        stopped(index)
+                            || !(-131_072..=131_072).contains(&pixel.x)
+                            || !(-131_072..=131_072).contains(&pixel.y)
+                    }) {
+                        return Err("Off-canvas pixels exceed supported coordinates".into());
+                    }
+                    if m.artwork_link == Some(usize::MAX) {
+                        return Err("Invalid cel link".into());
+                    }
+                    if m.bounds.is_some_and(|b| {
+                        b[0] < i16::MIN as i32
+                            || b[0] > i16::MAX as i32
+                            || b[1] < i16::MIN as i32
+                            || b[1] > i16::MAX as i32
+                            || b[2] < 0
+                            || b[3] < 0
+                            || b[2] > 65535
+                            || b[3] > 65535
+                            || (b[2] as usize).saturating_mul(b[3] as usize) > MAX_PIXELS
+                    }) {
+                        return Err("Invalid cel bounds".into());
+                    }
+                    if m.tilemap.as_ref().is_some_and(|g| {
+                        g.columns == 0
+                            || g.rows == 0
+                            || g.columns > 65535
+                            || g.rows > 65535
+                            || g.columns.saturating_mul(g.rows) > MAX_PIXELS
+                            || g.x < i16::MIN as i32
+                            || g.x > i16::MAX as i32
+                            || g.y < i16::MIN as i32
+                            || g.y > i16::MAX as i32
+                    }) {
+                        return Err("Invalid tilemap geometry".into());
+                    }
+                }
+                if l.cel_meta.iter().enumerate().any(|(index, m)| {
+                    stopped(index)
+                        || m.indices
                             .as_ref()
-                            .is_some_and(|indices| indices.len() != p.len())
-                })
-            {
-                return Err("Invalid tileset".into());
+                            .is_some_and(|a| a.len() != self.width * self.height)
+                }) {
+                    return Err("Invalid indexed cel size".into());
+                }
+                if l.cels.len() != self.durations.len()
+                    || l.cel_meta.len() != self.durations.len()
+                    || l.tile_cels.len() != self.durations.len()
+                    || l.cels
+                        .iter()
+                        .enumerate()
+                        .any(|(index, c)| stopped(index) || c.len() != self.width * self.height)
+                {
+                    return Err("Invalid cel dimensions".into());
+                }
+                // Keep scratch allocations bounded independently of sparse backing.
+                let mut buffers = 1 + usize::from(group_buffers[i] || l.tileset.is_some());
+                let mut p = l.parent;
+                let mut depth = 0;
+                while let Some(j) = p {
+                    if j >= self.layers.len() || j == i || !self.layers[j].group || depth >= 128 {
+                        return Err("Invalid layer group hierarchy".into());
+                    }
+                    buffers += usize::from(group_buffers[j]);
+                    p = self.layers[j].parent;
+                    depth += 1;
+                }
+                if self
+                    .width
+                    .saturating_mul(self.height)
+                    .saturating_mul(buffers)
+                    > MAX_DOCUMENT_PIXELS
+                {
+                    return Err("Layer hierarchy exceeds the compositing workspace budget".into());
+                }
+                if let Some(t) = l.tileset {
+                    let t = self.tilesets.get(t).ok_or("Missing tileset")?;
+                    if t.width == 0 || t.height == 0 {
+                        return Err("Invalid tileset size".into());
+                    }
+                    let count = self.width.div_ceil(t.width) * self.height.div_ceil(t.height);
+                    if l.tile_cels.iter().enumerate().any(|(f, c)| {
+                        if stopped(f) {
+                            return true;
+                        }
+                        let count = l.cel_meta[f]
+                            .tilemap
+                            .as_ref()
+                            .map_or(count, |g| g.columns.saturating_mul(g.rows));
+                        count > MAX_PIXELS
+                            || c.len() != count
+                            || c.iter().enumerate().any(|(index, v)| {
+                                stopped(index) || (v & 0x1fffffff) as usize > t.tiles.len()
+                            })
+                    }) {
+                        return Err("Invalid tile reference".into());
+                    }
+                }
             }
-        }
-        for slice in &self.slices {
-            if slice.name.len() > u16::MAX as usize
-                || slice
-                    .keys
-                    .windows(2)
-                    .any(|pair| pair[0].frame >= pair[1].frame)
-                || slice.keys.iter().any(|key| {
-                    key.frame >= self.durations.len()
-                        || key.bounds[2] < 0
-                        || key.bounds[3] < 0
-                        || key.center.is_some_and(|rect| rect[2] < 0 || rect[3] < 0)
-                })
-            {
-                return Err("Invalid slice bounds or animation keys".into());
+            for t in &self.tilesets {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                if t.width == 0
+                    || t.height == 0
+                    || t.width > MAX_DIMENSION
+                    || t.height > MAX_DIMENSION
+                    || t.width
+                        .saturating_mul(t.height)
+                        .saturating_mul(t.tiles.len())
+                        > MAX_PIXELS
+                    || t.tiles.iter().enumerate().any(|(index, p)| {
+                        stopped(index)
+                            || p.len() != t.width * t.height
+                            || p.indices
+                                .as_ref()
+                                .is_some_and(|indices| indices.len() != p.len())
+                    })
+                {
+                    return Err("Invalid tileset".into());
+                }
             }
+            for slice in &self.slices {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                if slice.name.len() > u16::MAX as usize
+                    || slice
+                        .keys
+                        .windows(2)
+                        .enumerate()
+                        .any(|(index, pair)| stopped(index) || pair[0].frame >= pair[1].frame)
+                    || slice.keys.iter().enumerate().any(|(index, key)| {
+                        stopped(index)
+                            || key.frame >= self.durations.len()
+                            || key.bounds[2] < 0
+                            || key.bounds[3] < 0
+                            || key.center.is_some_and(|rect| rect[2] < 0 || rect[3] < 0)
+                    })
+                {
+                    return Err("Invalid slice bounds or animation keys".into());
+                }
+            }
+            if self.tags.iter().enumerate().any(|(index, t)| {
+                stopped(index) || t.from > t.to || t.to >= self.durations.len() || t.direction > 3
+            }) {
+                return Err("Invalid animation range".into());
+            }
+            Ok(())
+        })();
+        if interrupted.get() {
+            Err("Project validation cancelled".into())
+        } else {
+            result
         }
-        if self
-            .tags
-            .iter()
-            .any(|t| t.from > t.to || t.to >= self.durations.len() || t.direction > 3)
-        {
-            return Err("Invalid animation range".into());
-        }
-        Ok(())
     }
     pub fn stored_pixels(&self) -> usize {
+        self.stored_pixels_until(|| false)
+            .expect("Non-cancelling accounting cannot be cancelled")
+    }
+
+    /// Count native storage without losing cancellation responsiveness on large timelines.
+    pub fn stored_pixels_until(&self, cancelled: impl Fn() -> bool) -> Result<usize, String> {
+        let check = || {
+            if cancelled() {
+                Err("Project storage accounting cancelled".to_owned())
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
         let mut seen = std::collections::HashSet::new();
-        let raster_pixels = self
+        let rasters = self
             .layers
             .iter()
             .flat_map(|layer| layer.cels.iter().chain(layer.mask.iter()))
             .chain(
                 self.tilesets
                     .iter()
-                    .flat_map(|tileset| tileset.tiles.iter().map(|tile| &tile.pixels)),
+                    .flat_map(|set| set.tiles.iter().map(|tile| &tile.pixels)),
             )
-            .chain(self.references.iter().map(|reference| &reference.pixels))
-            .filter(|pixels| pixels.backing_id().is_some_and(|id| seen.insert(id)))
-            .fold(0usize, |total, pixels| {
-                total.saturating_add(pixels.allocation_pixels())
-            });
+            .chain(self.references.iter().map(|reference| &reference.pixels));
+        let mut total = 0usize;
+        for (index, pixels) in rasters.enumerate() {
+            if index.is_multiple_of(4096) {
+                check()?;
+            }
+            if pixels.backing_id().is_some_and(|id| seen.insert(id)) {
+                total = total.saturating_add(pixels.allocation_pixels());
+            }
+        }
         let mut seen_indices = std::collections::HashSet::new();
-        let tile_index_bytes = self
-            .tilesets
-            .iter()
-            .flat_map(|set| &set.tiles)
-            .filter_map(|tile| tile.indices.as_ref())
-            .filter(|indices| seen_indices.insert(Arc::as_ptr(indices)))
-            .fold(0usize, |total, indices| total.saturating_add(indices.len()));
-        self.layers.iter().fold(
-            raster_pixels.saturating_add(tile_index_bytes.div_ceil(4)),
-            |total, layer| {
-                let placement_pixels = layer
-                    .tile_cels
-                    .iter()
-                    .map(|cells| cells.len())
-                    .sum::<usize>();
-                layer.cel_meta.iter().fold(
-                    total.saturating_add(placement_pixels).saturating_add(
-                        layer
-                            .mask_outside
-                            .len()
-                            .saturating_mul(OutsidePixel::MEMORY_PIXELS),
-                    ),
-                    |total, cel| {
-                        let index_bytes = cel
-                            .indices
-                            .as_ref()
-                            .filter(|indices| seen_indices.insert(Arc::as_ptr(indices)))
-                            .map_or(0, |indices| indices.len());
-                        total
-                            .saturating_add(index_bytes.div_ceil(4))
-                            .saturating_add(
-                                cel.outside
-                                    .len()
-                                    .saturating_mul(OutsidePixel::MEMORY_PIXELS),
-                            )
-                    },
-                )
-            },
-        )
+        let mut tile_index_bytes = 0usize;
+        for (index, tile) in self.tilesets.iter().flat_map(|set| &set.tiles).enumerate() {
+            if index.is_multiple_of(4096) {
+                check()?;
+            }
+            if let Some(indices) = &tile.indices
+                && seen_indices.insert(Arc::as_ptr(indices))
+            {
+                tile_index_bytes = tile_index_bytes.saturating_add(indices.len());
+            }
+        }
+        total = total.saturating_add(tile_index_bytes.div_ceil(4));
+        for layer in &self.layers {
+            check()?;
+            for (index, cells) in layer.tile_cels.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    check()?;
+                }
+                total = total.saturating_add(cells.len());
+            }
+            total = total.saturating_add(
+                layer
+                    .mask_outside
+                    .len()
+                    .saturating_mul(OutsidePixel::MEMORY_PIXELS),
+            );
+            for (index, cel) in layer.cel_meta.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    check()?;
+                }
+                let bytes = cel
+                    .indices
+                    .as_ref()
+                    .filter(|indices| seen_indices.insert(Arc::as_ptr(indices)))
+                    .map_or(0, |indices| indices.len());
+                total = total.saturating_add(bytes.div_ceil(4)).saturating_add(
+                    cel.outside
+                        .len()
+                        .saturating_mul(OutsidePixel::MEMORY_PIXELS),
+                );
+            }
+        }
+        check()?;
+        Ok(total)
     }
 
     pub fn same_editor_layer_targets(&self, other: &Self) -> bool {

@@ -4,6 +4,7 @@
 )]
 
 mod canvas_transform;
+mod clipboard_validation;
 mod color_profiles;
 mod color_wheel;
 mod curve_tool;
@@ -349,75 +350,10 @@ impl Clipboard {
     }
 
     fn validate(&self, limit: usize) -> Result<(), String> {
-        let area = self.w.saturating_mul(self.h);
-        let payload = self.cells.as_ref().map_or(self.pixels.len(), Vec::len);
-        if self.w == 0
-            || self.h == 0
-            || self.w > MAX_DIMENSION
-            || self.h > MAX_DIMENSION
-            || area != payload
-            || area > limit
-            || self.cells.is_some() && (!self.pixels.is_empty() || self.tileset.is_none())
-        {
-            return Err("Invalid clipboard image or pixel budget exceeded".into());
-        }
-        if self.selection.as_ref().is_some_and(|mask| {
-            mask.selected.len() != area
-                || mask.origin[0].checked_add(self.w as i32 - 1).is_none()
-                || mask.origin[1].checked_add(self.h as i32 - 1).is_none()
-        }) || self
-            .palette
-            .as_ref()
-            .is_some_and(|palette| palette.is_empty() || palette.len() > 256)
-        {
-            return Err("Invalid clipboard selection or palette".into());
-        }
-        if let Some(indexed) = &self.indexed {
-            let palette = self
-                .palette
-                .as_ref()
-                .ok_or("Indexed clipboard image has no palette")?;
-            if self.cells.is_some()
-                || indexed.slots.len() != area
-                || usize::from(indexed.transparent) >= palette.len()
-                || indexed
-                    .slots
-                    .iter()
-                    .any(|&slot| usize::from(slot) >= palette.len())
-            {
-                return Err("Invalid indexed clipboard image".into());
-            }
-        }
-        if self.tileset.as_ref().is_some_and(|tileset| {
-            let set = &tileset.set;
-            let area = set.width.saturating_mul(set.height);
-            set.width == 0
-                || set.height == 0
-                || set.width > MAX_DIMENSION
-                || set.height > MAX_DIMENSION
-                || set.name.len() > u16::MAX as usize
-                || tileset.flags & 1 != 0
-                || tileset.user_data.len() > set.tiles.len() + 2
-                || tileset.user_data.iter().any(|chunk| chunk.len() < 4)
-                || tileset.external.iter().any(|chunk| chunk.len() < 12)
-                || tileset
-                    .user_data
-                    .iter()
-                    .chain(&tileset.external)
-                    .map(Vec::len)
-                    .sum::<usize>()
-                    > extensions::MAX_TILESET_METADATA_BYTES
-                || area.saturating_mul(set.tiles.len()).saturating_add(payload) > limit
-                || set.tiles.iter().any(|pixels| pixels.len() != area)
-                || self.cells.as_ref().is_some_and(|cells| {
-                    cells
-                        .iter()
-                        .any(|cell| (cell & 0x1fff_ffff) as usize > set.tiles.len())
-                })
-        }) {
-            return Err("Invalid clipboard tileset or pixel budget exceeded".into());
-        }
-        Ok(())
+        self.validate_until(limit, || false)
+    }
+    fn validate_until(&self, limit: usize, cancelled: impl Fn() -> bool) -> Result<(), String> {
+        clipboard_validation::validate(self, limit, cancelled)
     }
 
     fn native_bitmap(&self) -> Result<(usize, usize, Vec<Pixel>), String> {

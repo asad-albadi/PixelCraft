@@ -120,14 +120,93 @@ fn tile_data(chunks: &[Vec<u8>], tile: usize) -> &[u8] {
     chunks.get(tile + 1).map_or(EMPTY_USER_DATA, Vec::as_slice)
 }
 
-fn tile_key(tile: &TileRaster, metadata: &[u8]) -> u64 {
+fn tile_key_until(
+    tile: &TileRaster,
+    metadata: &[u8],
+    cancelled: impl Fn() -> bool,
+) -> Result<u64, String> {
+    let check = || {
+        if cancelled() {
+            Err("Tile paste cancelled".to_owned())
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
     let mut hasher = DefaultHasher::new();
-    metadata.hash(&mut hasher);
-    tile.indices.hash(&mut hasher);
-    for pixel in tile.iter() {
+    metadata.len().hash(&mut hasher);
+    for chunk in metadata.chunks(8192) {
+        check()?;
+        hasher.write(chunk);
+    }
+    tile.indices.is_some().hash(&mut hasher);
+    if let Some(indices) = &tile.indices {
+        indices.len().hash(&mut hasher);
+        for chunk in indices.chunks(8192) {
+            check()?;
+            hasher.write(chunk);
+        }
+    }
+    tile.len().hash(&mut hasher);
+    for (index, pixel) in tile.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            check()?;
+        }
         pixel.hash(&mut hasher);
     }
-    hasher.finish()
+    check()?;
+    Ok(hasher.finish())
+}
+
+fn bytes_match_until(a: &[u8], b: &[u8], cancelled: impl Fn() -> bool) -> Result<bool, String> {
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    if std::ptr::eq(a.as_ptr(), b.as_ptr()) {
+        return Ok(true);
+    }
+    for (a, b) in a.chunks(8192).zip(b.chunks(8192)) {
+        if cancelled() {
+            return Err("Tile paste cancelled".into());
+        }
+        if a != b {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn tiles_match_until(
+    a: &TileRaster,
+    b: &TileRaster,
+    cancelled: impl Fn() -> bool,
+) -> Result<bool, String> {
+    if cancelled() {
+        return Err("Tile paste cancelled".into());
+    }
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    match (&a.indices, &b.indices) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            if !bytes_match_until(a, b, &cancelled)? {
+                return Ok(false);
+            }
+        }
+        _ => return Ok(false),
+    }
+    if a.pixels.shares_storage(&b.pixels) {
+        return Ok(true);
+    }
+    for (index, (a, b)) in a.iter().zip(b.iter()).enumerate() {
+        if index.is_multiple_of(4096) && cancelled() {
+            return Err("Tile paste cancelled".into());
+        }
+        if a != b {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn clone_tileset(doc: &mut Document, source: &ClipboardTileset) -> Result<usize, String> {
@@ -159,59 +238,148 @@ fn clone_tileset(doc: &mut Document, source: &ClipboardTileset) -> Result<usize,
     Ok(index)
 }
 
+#[derive(Debug)]
+struct MergedTiles {
+    remap: HashMap<usize, u32>,
+    changed: bool,
+}
+
+// paint_tiles mutates placement backing only; no-op writes retain their backing.
+// Include every linked frame, whose grid geometry can differ from the active cel.
+fn placement_storage_changed_until(
+    current: &Layer,
+    original: &Layer,
+    cancelled: impl Fn() -> bool,
+) -> Result<bool, String> {
+    if cancelled() {
+        return Err("Tile clipboard operation cancelled".into());
+    }
+    if current.tile_cels.len() != original.tile_cels.len() {
+        return Ok(true);
+    }
+    for (index, (current, original)) in current
+        .tile_cels
+        .iter()
+        .zip(&original.tile_cels)
+        .enumerate()
+    {
+        if index.is_multiple_of(4096) && cancelled() {
+            return Err("Tile clipboard operation cancelled".into());
+        }
+        if current.backing_id() != original.backing_id() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
 fn merge_tiles(
     doc: &mut Document,
     set: usize,
     source: &ClipboardTileset,
     ids: BTreeSet<usize>,
 ) -> Result<HashMap<usize, u32>, String> {
+    merge_tiles_until(doc, set, source, ids, || false).map(|merged| merged.remap)
+}
+fn merge_tiles_until(
+    doc: &mut Document,
+    set: usize,
+    source: &ClipboardTileset,
+    ids: BTreeSet<usize>,
+    cancelled: impl Fn() -> bool,
+) -> Result<MergedTiles, String> {
+    let check = || {
+        if cancelled() {
+            Err("Tile paste cancelled".to_owned())
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
     let mut remap = HashMap::new();
     if ids.is_empty() {
-        return Ok(remap);
+        return Ok(MergedTiles {
+            remap,
+            changed: false,
+        });
     }
-    let source_data: Vec<_> = ids
-        .iter()
-        .map(|&id| tile_data(&source.user_data, id).to_vec())
-        .collect();
+    let mut source_data = Vec::with_capacity(ids.len());
+    for (index, &id) in ids.iter().enumerate() {
+        if index.is_multiple_of(4096) {
+            check()?;
+        }
+        if id == 0 || id > source.set.tiles.len() {
+            return Err("Invalid clipboard tile ID".into());
+        }
+        source_data.push(tile_data(&source.user_data, id).to_vec());
+    }
     let metadata =
         extensions::remap_tileset_user_data(&source_data, &source.external, &external_data(doc))?;
+    check()?;
     let mut destination_data = user_data(doc, set);
-    let tiles = &mut doc.tilesets[set].tiles;
+    let tiles = &mut doc
+        .tilesets
+        .get_mut(set)
+        .ok_or("Missing destination tileset")?
+        .tiles;
     let existing = tiles.len();
-    let mut by_content = None;
+    let mut by_content: Option<HashMap<u64, Vec<usize>>> = None;
     let mut metadata_changed = metadata.external.is_some();
+    let mut changed = metadata_changed;
     let mut claimed = HashSet::new();
     for (id, original_data) in ids.into_iter().zip(&metadata.data) {
+        check()?;
         let original = &source.set.tiles[id - 1];
-        let same = |candidate: usize| {
-            !claimed.contains(&candidate)
-                && tiles.get(candidate - 1).is_some_and(|tile| {
-                    tile.pixels == original.pixels && tile.indices == original.indices
-                })
-                && tile_data(&destination_data, candidate) == original_data
+        let same = |candidate: usize| -> Result<bool, String> {
+            if claimed.contains(&candidate) {
+                return Ok(false);
+            }
+            let Some(tile) = tiles.get(candidate - 1) else {
+                return Ok(false);
+            };
+            Ok(bytes_match_until(
+                tile_data(&destination_data, candidate),
+                original_data,
+                &cancelled,
+            )? && tiles_match_until(tile, original, &cancelled)?)
         };
-        let target = if same(id) {
-            id
-        } else if let Some(candidate) = by_content
-            .get_or_insert_with(|| {
-                let mut by_content: HashMap<_, Vec<_>> = HashMap::new();
+        let mut target = if same(id)? { Some(id) } else { None };
+        if target.is_none() {
+            if by_content.is_none() {
+                let mut contents: HashMap<u64, Vec<usize>> = HashMap::new();
                 for (index, tile) in tiles[..existing].iter().enumerate() {
+                    check()?;
                     let id = index + 1;
-                    by_content
-                        .entry(tile_key(tile, tile_data(&destination_data, id)))
+                    contents
+                        .entry(tile_key_until(
+                            tile,
+                            tile_data(&destination_data, id),
+                            &cancelled,
+                        )?)
                         .or_default()
                         .push(id);
                 }
-                by_content
-            })
-            .get(&tile_key(original, original_data))
-            .and_then(|ids| ids.iter().copied().find(|&candidate| same(candidate)))
-        {
-            candidate
+                by_content = Some(contents);
+            }
+            let key = tile_key_until(original, original_data, &cancelled)?;
+            if let Some(ids) = by_content.as_ref().and_then(|map| map.get(&key)) {
+                for &candidate in ids {
+                    check()?;
+                    if same(candidate)? {
+                        target = Some(candidate);
+                        break;
+                    }
+                }
+            }
+        }
+        let target = if let Some(target) = target {
+            target
         } else {
             let mut inserted = original.clone();
             inserted.editor_id = EditorId::default();
             tiles.push(inserted);
+            changed = true;
             let target = tiles.len();
             if original_data != EMPTY_USER_DATA {
                 destination_data.resize_with(target + 2, || EMPTY_USER_DATA.to_vec());
@@ -223,10 +391,11 @@ fn merge_tiles(
         claimed.insert(target);
         remap.insert(id, target as u32);
     }
+    check()?;
     if metadata_changed {
         write_user_data(doc, set, destination_data, metadata.external);
     }
-    Ok(remap)
+    Ok(MergedTiles { remap, changed })
 }
 
 #[cfg(test)]
@@ -263,17 +432,21 @@ fn prepare_selected_tile_colors_until(
         .width
         .checked_mul(source.set.height)
         .ok_or("Invalid tile size")?;
-    if area == 0
-        || area.saturating_mul(source.set.tiles.len()) > MAX_PIXELS
-        || source.set.tiles.iter().any(|tile| {
-            tile.len() != area
-                || tile
-                    .indices
-                    .as_ref()
-                    .is_some_and(|slots| slots.len() != area)
-        })
-    {
+    if area == 0 || area.saturating_mul(source.set.tiles.len()) > MAX_PIXELS {
         return Err("Invalid clipboard tile raster".into());
+    }
+    for (index, tile) in source.set.tiles.iter().enumerate() {
+        if index.is_multiple_of(4096) && cancelled() {
+            return Err("Tile paste cancelled".into());
+        }
+        if tile.len() != area
+            || tile
+                .indices
+                .as_ref()
+                .is_some_and(|slots| slots.len() != area)
+        {
+            return Err("Invalid clipboard tile raster".into());
+        }
     }
     let mut result = source.clone();
     let indexed = doc.color_mode == ColorMode::Indexed;
@@ -368,13 +541,16 @@ fn prepare_selected_tile_colors_until(
             }
         }
         tile.indices = if indexed {
-            Some(
-                if before.indices.as_deref().is_some_and(|old| *old == slots) {
-                    std::sync::Arc::clone(before.indices.as_ref().unwrap())
-                } else {
-                    std::sync::Arc::new(slots)
-                },
-            )
+            let same = if let Some(old) = before.indices.as_deref() {
+                bytes_match_until(old, &slots, &cancelled)?
+            } else {
+                false
+            };
+            Some(if same {
+                std::sync::Arc::clone(before.indices.as_ref().unwrap())
+            } else {
+                std::sync::Arc::new(slots)
+            })
         } else {
             None
         };
@@ -403,17 +579,16 @@ fn selected_tile_cells(
     site: &TileCopySite,
     cancelled: impl Fn() -> bool,
 ) -> Result<SelectedCells, String> {
-    let pixel_selected = |x: i32, y: i32| {
+    let pixel_selected = |x: i32, y: i32| -> Result<bool, String> {
         if let Some(mask) = &site.mask {
-            doc.index(x, y).is_some_and(|i| mask.get(i) == Some(&true))
+            Ok(doc.index(x, y).is_some_and(|i| mask.get(i) == Some(&true)))
         } else {
             let [left, top, width, height] = site.bounds;
-            x >= left
-                && y >= top
-                && x < left + width
-                && y < top + height
-                && (site.polygon.is_empty()
-                    || pixelcraft::workflows::inside_polygon(&site.polygon, x, y))
+            let inside = x >= left && y >= top && x < left + width && y < top + height;
+            if !inside || site.polygon.is_empty() {
+                return Ok(inside);
+            }
+            pixelcraft::workflows::inside_polygon_until(&site.polygon, x, y, &cancelled)
         }
     };
     let set = &doc.tilesets[doc.layers[site.layer]
@@ -439,6 +614,7 @@ fn selected_tile_cells(
     }
     let size = [x1 - x0, y1 - y0];
     let mut selected = vec![false; size[0] * size[1]];
+    let mut visited = 0usize;
     for row in y0..y1 {
         if cancelled() {
             return Err("Tile clipboard operation cancelled".into());
@@ -446,8 +622,20 @@ fn selected_tile_cells(
         for col in x0..x1 {
             let x = g.x + col as i32 * w;
             let y = g.y + row as i32 * h;
-            selected[(row - y0) * size[0] + col - x0] = (top.max(y)..bottom.min(y + h))
-                .any(|py| (left.max(x)..right.min(x + w)).any(|px| pixel_selected(px, py)));
+            let mut hit = false;
+            'pixels: for py in top.max(y)..bottom.min(y + h) {
+                for px in left.max(x)..right.min(x + w) {
+                    if visited.is_multiple_of(4096) && cancelled() {
+                        return Err("Tile clipboard operation cancelled".into());
+                    }
+                    visited += 1;
+                    if pixel_selected(px, py)? {
+                        hit = true;
+                        break 'pixels;
+                    }
+                }
+            }
+            selected[(row - y0) * size[0] + col - x0] = hit;
         }
     }
     selected
@@ -568,7 +756,15 @@ fn build_tile_clipboard(
         if cancelled() {
             return Err("Tile clipboard operation cancelled".into());
         }
-        Some(Box::new(result))
+        if placement_storage_changed_until(
+            &result.layers[layer_index],
+            &doc.layers[layer_index],
+            &cancelled,
+        )? {
+            Some(Box::new(result))
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -581,7 +777,7 @@ fn build_tile_paste(
     clip: &Clipboard,
     cancelled: impl Fn() -> bool,
 ) -> TilePasteResult {
-    clip.validate(MAX_PIXELS)?;
+    clip.validate_until(MAX_PIXELS, &cancelled)?;
     if cancelled() {
         return Err("Tile paste cancelled".into());
     }
@@ -607,7 +803,7 @@ fn build_tile_paste(
         if cancelled() {
             return Err("Reference paste cancelled".into());
         }
-        doc.validate()?;
+        doc.validate_until(&cancelled)?;
         return Ok(Some((Box::new(doc), site.layer)));
     }
     let source = clip.tileset.as_ref().ok_or("Missing clipboard tileset")?;
@@ -646,19 +842,21 @@ fn build_tile_paste(
         let [x, y, _, _] = if site.selected { site.bounds } else { [0; 4] };
         let left = (x - g.x).div_euclid(w as i32);
         let top = (y - g.y).div_euclid(h as i32);
-        let ids: BTreeSet<_> = cells
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &cell)| {
-                let x = left + (i % clip.w) as i32;
-                let y = top + (i / clip.w) as i32;
-                (cell & TILE_ID != 0
-                    && clip.selection.as_ref().is_none_or(|mask| mask.selected[i])
-                    && (0..g.columns as i32).contains(&x)
-                    && (0..g.rows as i32).contains(&y))
-                .then_some((cell & TILE_ID) as usize)
-            })
-            .collect();
+        let mut ids = BTreeSet::new();
+        for (i, &cell) in cells.iter().enumerate() {
+            if i.is_multiple_of(4096) && cancelled() {
+                return Err("Tile paste cancelled".into());
+            }
+            let x = left + (i % clip.w) as i32;
+            let y = top + (i / clip.w) as i32;
+            if cell & TILE_ID != 0
+                && clip.selection.as_ref().is_none_or(|mask| mask.selected[i])
+                && (0..g.columns as i32).contains(&x)
+                && (0..g.rows as i32).contains(&y)
+            {
+                ids.insert((cell & TILE_ID) as usize);
+            }
+        }
         if ids.is_empty() {
             return Ok(None);
         }
@@ -667,11 +865,14 @@ fn build_tile_paste(
         prepare_selected_tile_colors_until(&mut doc, frame, source, None, &cancelled)?
     };
     let source = &prepared;
+    // Palette promotion is a real edit even if no placement word changes.
+    let mut changed = doc.palette != source_doc.palette;
     let (layer, set) = if let Some((layer, set)) = target {
         (layer, set)
     } else {
         let set = clone_tileset(&mut doc, source)?;
         doc.add_tile_layer(set)?;
+        changed = true;
         if new_sprite {
             doc.layers.remove(0);
         }
@@ -710,14 +911,17 @@ fn build_tile_paste(
         return Err("Tile paste cancelled".into());
     }
     let remap = if target.is_some() {
-        merge_tiles(
+        let merged = merge_tiles_until(
             &mut doc,
             set,
             source,
             placements()
                 .map(|(_, _, cell)| (cell & TILE_ID) as usize)
                 .collect(),
-        )?
+            &cancelled,
+        )?;
+        changed |= merged.changed;
+        merged.remap
     } else {
         HashMap::new()
     };
@@ -730,9 +934,16 @@ fn build_tile_paste(
     if cancelled() {
         return Err("Tile paste cancelled".into());
     }
-    doc.validate()?;
+    doc.validate_until(&cancelled)?;
 
-    if new_sprite || doc.differs_from_saved(source_doc) {
+    if !changed && target.is_some() {
+        changed = placement_storage_changed_until(
+            &doc.layers[layer],
+            &source_doc.layers[site.layer],
+            &cancelled,
+        )?;
+    }
+    if new_sprite || changed {
         Ok(Some((Box::new(doc), layer)))
     } else {
         Ok(None)
@@ -818,9 +1029,7 @@ impl PixelCraft {
     }
 
     fn finish_tile_copy(&mut self, clip: Clipboard, result: Option<Box<Document>>, cut: bool) {
-        if let Some(result) = result
-            && result.differs_from_saved(&self.doc)
-        {
+        if let Some(result) = result {
             self.remember_action("Cut tiles");
             self.doc = *result;
         }
@@ -1016,6 +1225,247 @@ mod indexed_slot_tests {
             user_data: vec![],
             external: vec![],
         }
+    }
+
+    #[test]
+    fn cancellation_interrupts_selection_scan_inside_one_large_tile() {
+        let mut doc = Document::new(512, 512);
+        doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
+            name: "Large tile".into(),
+            width: 512,
+            height: 512,
+            tiles: vec![Pixels::empty(512 * 512).into()],
+        });
+        doc.add_tile_layer(0).unwrap();
+        let site = TileCopySite {
+            layer: 1,
+            frame: 0,
+            bounds: [0, 0, 512, 512],
+            mask: Some(vec![false; 512 * 512].into()),
+            polygon: vec![],
+            selected: true,
+        };
+        let polls = std::cell::Cell::new(0);
+        let result = selected_tile_cells(&doc, &site, || {
+            polls.set(polls.get() + 1);
+            polls.get() >= 3
+        });
+        assert!(result.is_err());
+        assert!(
+            result.err().unwrap().contains("cancelled"),
+            "Selection scan completed the whole tile before observing cancellation"
+        );
+    }
+
+    #[test]
+    fn empty_tile_cut_does_not_return_a_document_for_ui_comparison_or_publication() {
+        let mut doc = Document::new(2, 1);
+        let mut source = palette_source(vec![[10, 20, 30, 255]], vec![1]);
+        source.set.tiles[0].indices = None;
+        doc.tilesets.push(source.set);
+        doc.add_tile_layer(0).unwrap();
+        let (_, result) = build_tile_clipboard(
+            &doc,
+            1,
+            0,
+            SelectedCells {
+                start: [0, 0],
+                size: [1, 1],
+                selected: vec![true],
+            },
+            true,
+            true,
+            || false,
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "No-op cut returned a full document for UI-thread comparison"
+        );
+    }
+
+    #[test]
+    fn cut_detects_a_changed_linked_peer_with_different_grid_geometry() {
+        let mut doc = Document::new(4, 2);
+        doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
+            name: "Tiles".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![vec![[10, 20, 30, 255]].into()],
+        });
+        doc.add_tile_layer(0).unwrap();
+        doc.layers[1].tile_cels[0] = vec![0, 0, 1, 0, 0, 0, 0, 0].into();
+        doc.add_frame(0, true);
+        doc.link_cel(1, 1, 0).unwrap();
+        doc.layers[1].cel_meta[1].tilemap = Some(TilemapGeometry {
+            x: 0,
+            y: 0,
+            columns: 2,
+            rows: 4,
+        });
+        doc.validate().unwrap();
+        let (_, result) = build_tile_clipboard(
+            &doc,
+            1,
+            0,
+            SelectedCells {
+                start: [0, 1],
+                size: [1, 1],
+                selected: vec![true],
+            },
+            true,
+            true,
+            || false,
+        )
+        .unwrap();
+        let result = result.expect("The linked peer changed even though the active cell was empty");
+        assert_eq!(result.layers[1].tile_cels[0][4], 0);
+        assert_eq!(result.layers[1].tile_cels[1][2], 0);
+        assert_eq!(doc.layers[1].tile_cels[1][2], 1);
+    }
+
+    #[test]
+    fn no_op_tile_placement_still_commits_frame_palette_promotion() {
+        let red = [200, 30, 40, 255];
+        let mut doc = Document::new(1, 1);
+        doc.palette = vec![CLEAR];
+        doc.set_color_mode(ColorMode::Indexed);
+        let mut frame_palette = vec![CLEAR; 8];
+        frame_palette[7] = red;
+        doc.frame_palettes = vec![frame_palette.clone()];
+        let source = palette_source(vec![red], vec![7]);
+        doc.tilesets.push(source.set.clone());
+        doc.add_tile_layer(0).unwrap();
+        doc.paint_tile(1, 0, 0, 0, 1).unwrap();
+        let clip = Clipboard::new(crate::ClipboardData {
+            w: 1,
+            h: 1,
+            pixels: vec![],
+            cells: Some(vec![1]),
+            indexed: None,
+            selection: None,
+            palette: Some(frame_palette),
+            tileset: Some(source),
+        });
+        let site = TilePasteSite {
+            mode: PasteMode::InPlace,
+            layer: 1,
+            frame: 0,
+            bounds: [0, 0, 1, 1],
+            origin: [0, 0],
+            selected: false,
+        };
+        let (result, _) = build_tile_paste(&doc, &site, &clip, || false)
+            .unwrap()
+            .expect("Palette promotion is a real edit");
+        assert_eq!(result.palette.len(), 8);
+        assert_eq!(result.palette[7], red);
+        assert_eq!(result.tilesets[0].tiles.len(), 1);
+        assert_eq!(result.layers[1].tile_cels[0][0], 1);
+        assert_eq!(doc.palette.len(), 1);
+    }
+
+    #[test]
+    fn native_tile_matching_polls_independent_rasters_and_authored_slot_planes() {
+        let a: TileRaster = vec![[10, 20, 30, 255]; 16384].into();
+        let b: TileRaster = vec![[10, 20, 30, 255]; 16384].into();
+        let polls = std::cell::Cell::new(0);
+        assert!(
+            tiles_match_until(&a, &b, || {
+                polls.set(polls.get() + 1);
+                polls.get() >= 3
+            })
+            .is_err()
+        );
+        assert!(tiles_match_until(&a, &b, || false).unwrap());
+        let mut a = a;
+        a.indices = Some(Arc::new(vec![1; 16384]));
+        let mut b = a.clone();
+        b.indices = Some(Arc::new(vec![1; 16384]));
+        polls.set(0);
+        assert!(
+            tiles_match_until(&a, &b, || {
+                polls.set(polls.get() + 1);
+                polls.get() >= 3
+            })
+            .is_err()
+        );
+        Arc::make_mut(b.indices.as_mut().unwrap())[16383] = 2;
+        assert!(!tiles_match_until(&a, &b, || false).unwrap());
+        assert_eq!(a.indices.as_ref().unwrap()[16383], 1);
+    }
+
+    #[test]
+    fn cancelled_native_tile_merge_rejects_without_touching_destination() {
+        let mut doc = Document::new(2, 1);
+        doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
+            name: "Destination".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![vec![[10, 20, 30, 255]].into()],
+        });
+        let source = palette_source(vec![[90, 80, 70, 255]], vec![1]);
+        let result = merge_tiles_until(&mut doc, 0, &source, BTreeSet::from([1]), || true);
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert_eq!(doc.tilesets[0].tiles.len(), 1);
+        assert_eq!(doc.tilesets[0].tiles[0][0], [10, 20, 30, 255]);
+        assert!(doc.metadata.is_empty());
+    }
+
+    #[test]
+    fn native_tile_hash_observes_cancellation_between_raster_chunks() {
+        let tile: TileRaster = vec![[10, 20, 30, 255]; 16384].into();
+        let polls = std::cell::Cell::new(0);
+        let result = tile_key_until(&tile, &[], || {
+            polls.set(polls.get() + 1);
+            polls.get() >= 3
+        });
+        assert!(
+            result.is_err(),
+            "Hashing ignored cancellation across the raster"
+        );
+        assert!(result.err().unwrap().contains("cancelled"));
+        assert_eq!(tile[16383], [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn cancelled_paste_interrupts_clipboard_validation_before_a_late_invalid_cell() {
+        let doc = Document::new(1, 1);
+        let mut cells = vec![1; 16384];
+        cells[16383] = 2;
+        let clip = Clipboard::new(crate::ClipboardData {
+            w: 16384,
+            h: 1,
+            pixels: vec![],
+            cells: Some(cells),
+            indexed: None,
+            selection: None,
+            palette: Some(vec![CLEAR, [10, 20, 30, 255]]),
+            tileset: Some(palette_source(vec![[10, 20, 30, 255]], vec![1])),
+        });
+        let site = TilePasteSite {
+            mode: PasteMode::Reference,
+            layer: 0,
+            frame: 0,
+            bounds: [0, 0, 1, 1],
+            origin: [0, 0],
+            selected: false,
+        };
+        let polls = std::cell::Cell::new(0);
+        let result = build_tile_paste(&doc, &site, &clip, || {
+            polls.set(polls.get() + 1);
+            polls.get() >= 4
+        });
+        assert!(result.is_err());
+        assert!(
+            result.err().unwrap().contains("cancelled"),
+            "Validation did not observe cancellation while walking placement words"
+        );
+        assert!(polls.get() >= 4);
+        assert_eq!(doc.composite(0), vec![CLEAR]);
     }
 
     #[test]

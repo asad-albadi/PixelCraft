@@ -29,7 +29,7 @@
 ## Tasks
 
 - [x] 1. Reproduce selection-mask snapshot copies; introduce transparent COW GUI mask storage and migrate capture/history/recovery consumers without changing wire arrays. Verify snapshot independence, stale-target rejection and serde recovery.
-- [ ] 2. Reproduce non-cancellable clipboard traversal; implement bounded polling in validation/ID/hash/equality/merge paths and native document validation where used by workers. Test atomic cancellation at each expensive phase and run full Windows gates.
+- [x] 2. Reproduce non-cancellable clipboard traversal; implement bounded polling in validation/ID/hash/equality/merge paths and native document validation where used by workers. Test atomic cancellation at each expensive phase and run full Windows gates.
 - [ ] 3. Audit viewport/display conversion against current native source, add regression cases for confirmed defects, fix and test. Record verified behaviors instead of assuming the old tracker proves them.
 - [ ] 4. Run native acceptance on both day/night projects: load, playback/representative render, save/reopen disposable copies and export; record timing, content/metadata equality and source-file hashes.
 - [ ] 5. Reconcile all active original issue20 items to native code/tests/GUI/CLI/MCP evidence, explicitly defer44-47 and Lua part31, record platform/tablet coverage limits, and repeat current source audit for confirmed extra native gaps. Command discovery can be tracked separately from the original55 closure scope.
@@ -44,3 +44,10 @@
 - RED real editor regression showed clipboard/history selection captures allocating different full-mask arrays. Introduced transparent COW SelectionMask for GUI mask state, immutable worker targets, history, tabs, recovery and rotation previews. Equality short-circuits shared backing; edits detach via normal mutable access. Core mutable stencil operations still deliberately produce owned vectors.
 - The same regression now passes, including stale clipboard target detection and undo restoration. A wire regression verifies legacy boolean-array serialization and independent edits after deserialize/clone. Existing recovery/marquee/canvas tests remain unchanged in behavior; expected mask assertions now compare slices. No Lua source/API changes.
 - Verification: formatting/check, strict offline locked all-target Clippy,745 Windows all-target tests and diff whitespace check passed. Final independent review remains the closure-plan gate.
+
+### Task2 checkpoint
+
+- Reproduced uninterruptible clipboard validation, tile hashing/comparison, large-tile selection traversal and full-document validation. Bounded cancellation now covers these traversals plus ID collection, metadata merge, palette preparation and native storage accounting. All cancelled jobs discard private results.
+- Removed completion-time whole-document equality from tile copy/paste: placement COW backing changes plus palette/tileset changes establish whether publication is necessary, including linked peers with different grids. True no-ops do not publish.
+- Reproduced and fixed integer overflow in polygon containment at extreme integer coordinates; polygon traversal is cancellable. Normal selection semantics are preserved.
+- Twelve regressions observed RED then GREEN. Formatting, strict offline locked all-target Clippy,757 Windows all-target tests and whitespace checks passed (EngineChecks/issue20-native-cancellation-final-tests.log). No Lua edits.

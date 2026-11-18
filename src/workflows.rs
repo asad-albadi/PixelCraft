@@ -133,22 +133,41 @@ fn skew_source([x, y, w, h]: [i32; 4], position: [i32; 2], t: Transform) -> (i32
     }
 }
 pub fn inside_polygon(points: &[(i32, i32)], x: i32, y: i32) -> bool {
+    inside_polygon_until(points, x, y, || false)
+        .expect("Non-cancelling polygon containment cannot be cancelled")
+}
+
+/// Even-odd containment with bounded cancellation checks for long lasso outlines.
+pub fn inside_polygon_until(
+    points: &[(i32, i32)],
+    x: i32,
+    y: i32,
+    cancelled: impl Fn() -> bool,
+) -> Result<bool, String> {
+    if cancelled() {
+        return Err("Polygon selection scan cancelled".into());
+    }
     if points.len() < 3 {
-        return false;
+        return Ok(false);
     }
     let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
     let mut hit = false;
     let mut j = points.len() - 1;
     for i in 0..points.len() {
+        if i.is_multiple_of(256) && cancelled() {
+            return Err("Polygon selection scan cancelled".into());
+        }
         let (a, b) = (points[i], points[j]);
         if (a.1 as f64 > py) != (b.1 as f64 > py)
-            && px < (b.0 - a.0) as f64 * (py - a.1 as f64) / (b.1 - a.1) as f64 + a.0 as f64
+            && px
+                < (b.0 as f64 - a.0 as f64) * (py - a.1 as f64) / (b.1 as f64 - a.1 as f64)
+                    + a.0 as f64
         {
-            hit = !hit
+            hit = !hit;
         }
         j = i;
     }
-    hit
+    Ok(hit)
 }
 
 /// Rasterize the closed outline and optional even-odd interior.
