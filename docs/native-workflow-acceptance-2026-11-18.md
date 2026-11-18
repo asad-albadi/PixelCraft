@@ -162,6 +162,6 @@ Local validation after all code and lockfile changes passed with Rust 1.95.0.
 - The original compressed-mask reproducer now returns the pixel-work-limit error before decoding its oversized masks.
 - Vendored TLS source verification matched all pinned upstream hashes.
 
-The standard suite retains its 16 ignored tests; six of those were additionally run explicitly as described above. Remaining manual checks include original-project Linux desktop playback, large-workload profiling, physical tablet input, and local native Wayland clipboard coverage. Earlier platform CI and distribution checks apply to `5f6ca78`. Windows and macOS need CI again after these code and lockfile changes are pushed.
+The standard suite retains its 16 ignored tests; six of those were additionally run explicitly as described above. Remaining manual checks include original-project Linux desktop playback, large-workload profiling, physical tablet input, and local native Wayland clipboard coverage. Earlier distribution checks apply to `5f6ca78`. [PR CI for the review fixes](https://github.com/asad-albadi/PixelCraft/actions/runs/44265180701) passed at `0c944cf` with Linux 778 tests, Windows 771 tests plus standalone/startup checks, and 725 tests on each macOS architecture plus relocated package/runtime/startup checks.
 
 During targeted validation, the Rust linker intermittently crashed before tests could run. Retried builds succeeded; the complete final checks above passed using Cargo with one build job. No linker workaround was committed.
