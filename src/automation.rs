@@ -584,7 +584,15 @@ pub fn apply_command_batch_until(
             op @ ("blit" | "stroke" | "clear-region" | "copy-region" | "move-region"
             | "recolor-region" | "polygon") => {
                 let (layer, frame) = (layer()?, frame()?);
-                crate::automation_paint::paint(&mut out, layer, frame, op, c, &mut paint_budget)?;
+                crate::automation_paint::paint(
+                    &mut out,
+                    layer,
+                    frame,
+                    op,
+                    c,
+                    &mut paint_budget,
+                    &|| deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline),
+                )?;
             }
             op @ ("fill" | "outline" | "shadow") => {
                 let (layer, frame) = (layer()?, frame()?);

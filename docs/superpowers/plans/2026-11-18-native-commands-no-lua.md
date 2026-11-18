@@ -62,3 +62,30 @@
 - Day optimized load3.342s, render24=59.8ms, save1.516s, ASE516ms; night load6.362s, render24=94.2ms, save2.259s, ASE669ms. These are one local run, not universal performance guarantees.
 - Both actual documents passed48 ordered GUI/cache frame presentations each (199ms/186ms work/polling time); this pumps frames and is not a wall-clock playback capture. Authored documents unchanged.
 - Windows isolated portable executable check passed with system-only PATH; source DLL absent and executable scan found no Lua FFI/runtime payload. Native standalone smoke covers save/export/commands/assets without Lua. Native clipboard, platform installers and non-Windows distribution checks remain final CI gates.
+
+### Task5 review findings / final fix pass in progress
+
+Independent code/security reviewers completed source-only review of902176f..e1be1ea (no second review planned). Accepted findings to reproduce and fix:
+
+1. P1 indexed clear stores transparent black rather than effective transparent RGB, corrupting ASE reimport with non-black transparent slots.
+2. P2 linked clear budgets omit frame scans, palette work, index-plane COW/outside lookups; long clear lacks expiry polling.
+3. P2 retained asset palette fallback permits decoder sidecars outside the package.
+4. P2 retained installer reads unbounded archive and copies stored payload before validating length.
+5. P2 recent entries call synchronous is_file through recent_file_label on every picker render and mark missing entries enabled. Use pure labels and async shared availability, with activation revalidation.
+6. P2 opening search tears down curve/floating-transform drafts before dispatch; cancel must preserve drafts.
+7. P2 Enter consumes the focused button's activation and can run a different selected entry. Honor query/button/Close focus.
+8. P2 availability misses flipx/flipy locks and Clear tilemap restrictions, causing phantom Undo/lost Redo. Guard shared dispatch before history.
+9. P2 same-tab frame/layer targets can change during playback/live edits; bind stable targets or stop/invalidate.
+10. P2 native actions swap/resetcolors/savepalette/loadpalette missing; retain alternate menu labels and canonicalize rect/select aliases for displayed bindings.
+11. Coverage: restore successful native asset lifecycle and supported-asset path escape tests (the two non-Lua tests in the retired native_extensions file). File-level classification was insufficient; current retired count must be corrected after restoring native assertions.
+
+All findings enter one final fix pass with focused RED/GREEN regressions followed by final full gates. Local graphics fallback initially failed due missing7z on PATH; normal screenshot/portable passed. Resolve extractor setup/test portability or record failure accurately rather than claiming fallback success.
+
+### Final review fix verification
+
+- All11 grouped review findings addressed. Indexed clears preserve transparent RGB/index through ASE, budget linked-frame/palette/index-plane work and poll expiry. Palette decoding checks primary and sidecar containment; archive input is capped64MiB before decoding and stored ZIP lengths are checked before copying.
+- Picker preserves drafts on open/cancel, honors focused Enter, checks availability before history, binds stable layer/frame targets, holds playback without catch-up, retains native color commands/menu aliases/imported shortcut aliases. Recent labels are pure and shared availability checks use two workers/a32-item queue; activation revalidates through the existing background loader. Deterministically blocked-probe test verifies the UI path remains nonblocking.
+- Focused failures observed RED then GREEN for ASE transparency, linked work budget/expiry, sidecar escape, archive cap, draft loss, focused Close, locked flip history, changed same-document targets, missing color actions and filesystem-free recent labels. Added positive in-package sidecar/asset tests, stale recent activation and playback hold coverage.
+- Corrected retirement accounting:84 Lua-specific tests retired; the2 native asset lifecycle/path-boundary tests from the old Lua-named file are ported/restored.28 additional native tests beyond those ports =>771 baseline -84 +30 =717 passing Windows tests (17 opt-in tests ignored by the normal suite). Prior task2 counts describe its intermediate state, not the final retained coverage.
+- Final Windows all-target test suite717passed; formatting and strict all-target Clippy passed. Built executable passed no-Lua payload scan, isolated system-PATH standalone smoke, normal startup and forced software-OpenGL fallback. Fallback screenshot visually inspected. Test script now also supports the built-in tar extractor and hides its helper window.
+- Source-only independent correctness/security reviews completed before this fix pass; regression/full gates verify the fixes. No second independent review or physical-tablet test is claimed. Real-project final rerun and remote native/package CI follow before final closeout.

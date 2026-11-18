@@ -230,7 +230,11 @@ pub(crate) fn paint(
     op: &str,
     args: &Value,
     budget: &mut usize,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
+    if cancelled() {
+        return Err("Paint request expired; no changes applied".into());
+    }
     if !doc.editable(layer)
         || doc.layers[layer].tileset.is_some()
         || (doc.color_mode != ColorMode::Rgba
@@ -255,7 +259,53 @@ pub(crate) fn paint(
         let region = edit.region;
         check_size(&region, MAX_DIMENSION)?;
         let (x, y, right, bottom) = region.clipped(doc);
-        charge(budget, (right - x) * (bottom - y))?;
+        let area = (right - x) * (bottom - y);
+        let link = doc.layers[layer].cel_meta[frame].artwork_link;
+        let indexed = doc.color_mode == ColorMode::Indexed;
+        let palette_cost = doc
+            .frame_palettes
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0)
+            .max(doc.palette.len());
+        let mut per_pixel = if link.is_some() {
+            doc.durations.len()
+        } else {
+            1
+        };
+        let mut copies = 0usize;
+        for (target, meta) in doc.layers[layer].cel_meta.iter().enumerate() {
+            if target % 256 == 0 && cancelled() {
+                return Err("Paint request expired; no changes applied".into());
+            }
+            if target != frame && (link.is_none() || meta.artwork_link != link) {
+                continue;
+            }
+            if link.is_some() {
+                per_pixel = per_pixel
+                    .saturating_add(meta.outside.len())
+                    .saturating_add(if indexed { palette_cost } else { 1 });
+            }
+            if let Some(indices) = &meta.indices
+                && std::sync::Arc::strong_count(indices) > 1
+            {
+                copies = copies.saturating_add(indices.len());
+            }
+        }
+        charge(
+            budget,
+            area.saturating_mul(per_pixel).saturating_add(copies),
+        )?;
+        let mut clear = if indexed {
+            doc.palette_for(frame)
+                .get(doc.transparent_index)
+                .copied()
+                .unwrap_or(CLEAR)
+        } else {
+            CLEAR
+        };
+        clear[3] = 0;
         let mask = edit
             .mask
             .as_deref()
@@ -263,7 +313,13 @@ pub(crate) fn paint(
             .transpose()?;
         let stride = doc.width;
         for row in y..bottom {
+            if cancelled() {
+                return Err("Paint request expired; no changes applied".into());
+            }
             for col in x..right {
+                if (col - x) % 256 == 0 && cancelled() {
+                    return Err("Paint request expired; no changes applied".into());
+                }
                 let index = row * stride + col;
                 let pixel = doc.layers[layer].cels[frame][index];
                 if (!edit.skip_transparent || pixel[3] != 0)
@@ -271,7 +327,7 @@ pub(crate) fn paint(
                         .as_ref()
                         .is_none_or(|m| mask_contains(m, region.offset(col, row)))
                 {
-                    doc.draw_pixel(layer, frame, index, CLEAR, doc.transparent_index as u8);
+                    doc.draw_pixel(layer, frame, index, clear, doc.transparent_index as u8);
                 }
             }
         }
@@ -713,6 +769,56 @@ mod tests {
 
     fn apply(doc: &Document, command: Value) -> Result<Document, String> {
         crate::automation::apply_command_batch(doc, &json!({"commands":[command]}))
+    }
+
+    #[test]
+    fn expired_clear_is_rejected_before_work() {
+        let mut document = Document::new(2, 2);
+        document.set_pixel(0, 0, 0, [50, 60, 70, 255]);
+        let before = document.clone();
+        let mut budget = 100;
+        let result = paint(
+            &mut document,
+            0,
+            0,
+            "clear-region",
+            &json!({"x":0,"y":0,"width":2,"height":2}),
+            &mut budget,
+            &|| true,
+        );
+        assert!(
+            result.is_err(),
+            "expired work must be rejected before painting"
+        );
+        assert!(document == before);
+    }
+
+    #[test]
+    fn linked_indexed_clear_accounts_for_more_than_source_rectangle_before_mutation() {
+        let mut document = Document::new(2, 1);
+        document.set_color_mode(ColorMode::Indexed);
+        document.stamp(0, 0, 0, 0, [255, 0, 0, 255], 1);
+        document.add_frame(0, true);
+        document.link_cel(0, 1, 0).unwrap();
+        let before = document.clone();
+        let mut budget = 1;
+        let result = paint(
+            &mut document,
+            0,
+            0,
+            "clear-region",
+            &json!({"x":0,"y":0,"width":1,"height":1}),
+            &mut budget,
+            &|| false,
+        );
+        assert!(
+            result.is_err(),
+            "linked frame/palette/index-plane work must be charged before writing"
+        );
+        assert!(
+            document == before,
+            "rejected preflight must leave the private candidate untouched"
+        );
     }
 
     #[test]

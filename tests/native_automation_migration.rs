@@ -138,3 +138,24 @@ fn public_cli_and_mcp_native_edits_replace_selected_cel_scripts() {
     assert_eq!(formats::load(&input).unwrap(), original);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn indexed_clear_preserves_transparent_rgb_and_slots_through_ase_roundtrip() {
+    let mut document = Document::new(3, 1);
+    document.palette = vec![[0, 0, 0, 255], [255, 255, 255, 0]];
+    document.transparent_index = 1;
+    document.set_color_mode(ColorMode::Indexed);
+    for x in 0..3 {
+        document.stamp(0, 0, x, 0, [0, 0, 0, 255], 1);
+    }
+    let result=automation::apply_command_batch(&document,&json!({"commands":[{"op":"clear-region","layer":0,"frame":0,"x":1,"y":0,"width":1,"height":1}]})).unwrap();
+    let reopened = formats::decode_ase(&formats::encode_ase(&result).unwrap()).unwrap();
+    assert_eq!(
+        reopened.composite(0)[1][3],
+        0,
+        "erased indexed artwork must not return after ASE export"
+    );
+    assert_eq!(reopened.composite(0)[0], [0, 0, 0, 255]);
+    assert_eq!(reopened.composite(0)[2], [0, 0, 0, 255]);
+    assert_eq!(result.layers[0].cel_meta[0].indices.as_ref().unwrap()[1], 1);
+}

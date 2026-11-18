@@ -203,7 +203,19 @@ impl Manager {
             if source.is_dir() {
                 copy_directory(source, &staging, 0, &mut 0usize)?;
             } else {
-                unzip(&std::fs::read(source).map_err(|e| e.to_string())?, &staging)?;
+                const LIMIT: u64 = 64 * 1024 * 1024;
+                let file = std::fs::File::open(source).map_err(|e| e.to_string())?;
+                if file.metadata().map_err(|e| e.to_string())?.len() > LIMIT {
+                    return Err("Extension archive exceeds 64 MiB".into());
+                }
+                let mut bytes = Vec::new();
+                file.take(LIMIT + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| e.to_string())?;
+                if bytes.len() as u64 > LIMIT {
+                    return Err("Extension archive exceeds 64 MiB".into());
+                }
+                unzip(&bytes, &staging)?;
             }
             let manifest_path = if staging.join("package.json").is_file() {
                 staging.join("package.json")
@@ -261,12 +273,82 @@ impl Manager {
         result
     }
 
+    /// Decode declarative palettes with the same package boundary for every sidecar.
+    pub fn load_palette_asset(
+        &self,
+        id: &str,
+        asset: &Contribution,
+    ) -> Result<Vec<crate::model::Pixel>, String> {
+        let path = self.asset(id, asset)?;
+        let palette = match path.extension().and_then(|x| x.to_str()) {
+            Some("json") => {
+                serde_json::from_slice(&std::fs::read(&path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?
+            }
+            Some("gpl") => std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())?
+                .lines()
+                .filter_map(|line| {
+                    let mut values = line.split_whitespace();
+                    Some([
+                        values.next()?.parse().ok()?,
+                        values.next()?.parse().ok()?,
+                        values.next()?.parse().ok()?,
+                        255,
+                    ])
+                })
+                .collect(),
+            _ => {
+                crate::formats::load_with_path_check(&path, &|dependency| {
+                    self.check_asset_path(id, dependency)
+                })?
+                .palette
+            }
+        };
+        if palette.is_empty() || palette.len() > 256 {
+            return Err("Palette must contain 1–256 colors".into());
+        }
+        Ok(palette)
+    }
+    pub fn check_asset_path(&self, id: &str, path: &Path) -> Result<(), String> {
+        let root = self.extension_dir(id)?;
+        // Reject lexical escapes before filesystem access; canonicalize also catches symlinks.
+        fn normalized(path: &Path) -> PathBuf {
+            let mut result = PathBuf::new();
+            for component in path.components() {
+                match component {
+                    Component::ParentDir => {
+                        result.pop();
+                    }
+                    Component::CurDir => {}
+                    other => result.push(other.as_os_str()),
+                }
+            }
+            result
+        }
+        let root = std::path::absolute(root).map_err(|e| e.to_string())?;
+        let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
+        if !normalized(&absolute).starts_with(normalized(&root)) {
+            return Err("Extension path must stay inside its package".into());
+        }
+        let root = root.canonicalize().map_err(|e| e.to_string())?;
+        if !path
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(root)
+        {
+            return Err("Extension path must stay inside its package".into());
+        }
+        Ok(())
+    }
     pub fn asset(&self, id: &str, asset: &Contribution) -> Result<PathBuf, String> {
         let dir = self.extension_dir(id)?;
         if dir.join(".disabled").exists() {
             return Err("Extension is disabled".into());
         }
-        Ok(dir.join(safe_path(&asset.path)?))
+        let path = dir.join(safe_path(&asset.path)?);
+        self.check_asset_path(id, &path)?;
+        Ok(path)
     }
 }
 fn copy_directory(
@@ -366,7 +448,8 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
                 .get(offset..offset + compressed)
                 .ok_or("Truncated ZIP data")?;
             let bytes = match method {
-                0 => encoded.to_vec(),
+                0 if encoded.len() == size => encoded.to_vec(),
+                0 => return Err("Invalid stored ZIP size".into()),
                 8 => {
                     let mut out = vec![];
                     flate2::read::DeflateDecoder::new(encoded)

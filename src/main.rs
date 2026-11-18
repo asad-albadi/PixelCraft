@@ -15,6 +15,7 @@ mod export_actions;
 mod file_path_dialog;
 mod fluent;
 mod freehand_stroke;
+mod recent_files;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
 use freehand_stroke::{BrushDynamics, StrokeStabilizer};
 mod ui_icons;
@@ -794,6 +795,7 @@ struct PixelCraft {
     extension_manager: Option<Manager>,
     extension_error: String,
     command_search: command_search::CommandSearch,
+    recent_files: recent_files::RecentFiles,
     shot: Option<PathBuf>,
     shot_frames: u32,
     shot_requested: bool,
@@ -1007,6 +1009,7 @@ impl PixelCraft {
             extension_manager: Manager::new().ok(),
             extension_error: String::new(),
             command_search: command_search::CommandSearch::default(),
+            recent_files: recent_files::RecentFiles::default(),
             shot,
             shot_frames: 0,
             shot_requested: false,
@@ -1884,29 +1887,19 @@ impl PixelCraft {
         } else {
             path
         };
-        let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+        let manager = self
+            .extension_manager
+            .as_ref()
+            .ok_or("Storage unavailable")?;
+        manager.check_asset_path(id, &path)?;
+        let bytes = if kind == "palette" {
+            Vec::new()
+        } else {
+            std::fs::read(&path).map_err(|e| e.to_string())?
+        };
         match kind {
             "palette" => {
-                let palette: Vec<Pixel> =
-                    if path.extension().and_then(|x| x.to_str()) == Some("json") {
-                        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?
-                    } else if path.extension().and_then(|x| x.to_str()) == Some("gpl") {
-                        String::from_utf8(bytes.clone())
-                            .map_err(|e| e.to_string())?
-                            .lines()
-                            .filter_map(|line| {
-                                let mut values = line.split_whitespace();
-                                Some([
-                                    values.next()?.parse().ok()?,
-                                    values.next()?.parse().ok()?,
-                                    values.next()?.parse().ok()?,
-                                    255,
-                                ])
-                            })
-                            .collect()
-                    } else {
-                        formats::load(&path)?.palette
-                    };
+                let palette = manager.load_palette_asset(id, contribution)?;
                 if palette.is_empty() || palette.len() > 256 {
                     return Err("Palette must contain 1–256 colors".into());
                 }
@@ -3366,6 +3359,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn action(&mut self, s: &str) {
+        if s == "command-search" {
+            self.open_command_search();
+            return;
+        }
+        if !self.native_action_enabled(s) {
+            self.status = "Command unavailable for the current target".into();
+            return;
+        }
         self.canvas_transform = None;
         self.cancel_gesture();
         if self.studio_action(s) {
@@ -3751,9 +3752,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             if entries.is_empty() {
                                 ui.label("No recent files yet");
                             }
-                            for (path, label) in entries {
+                            for (path, label, available) in entries {
                                 let response = ui
-                                    .add_enabled_ui(path.is_file(), |ui| {
+                                    .add_enabled_ui(available, |ui| {
                                         ui_icons::button(ui, "open", &label, false, true)
                                     })
                                     .inner
@@ -7170,14 +7171,23 @@ impl PixelCraft {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending = Some(Pending::Close);
         }
+        if self.recent_files.pending() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if !self.dialog_open() {
             self.shortcuts(&ctx)
         }
-        if self.playing {
+        if self.playing && self.command_search.open {
+            self.last_tick = Instant::now();
+        } else if self.playing {
             self.refresh_frame_cache(&ctx);
             ctx.request_repaint_after(self.update_playback_clock(Instant::now()));
         }
-        if self.dialog_open() && (!self.rotation_preview_active() || self.pending.is_some()) {
+        if self.dialog_open()
+            && (self.command_search.open
+                || !self.rotation_preview_active()
+                || self.pending.is_some())
+        {
             ui.disable();
         }
         egui::Panel::top("menu")

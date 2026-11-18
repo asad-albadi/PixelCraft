@@ -11,6 +11,8 @@ pub(super) struct CommandSearch {
     focus: bool,
     document: Option<u64>,
     tab: usize,
+    layer: Option<u64>,
+    frame: u32,
 }
 
 #[derive(Clone)]
@@ -46,9 +48,11 @@ impl PixelCraft {
             "redo" => !self.redo.is_empty(),
             "deleteframe" => self.doc.durations.len() > 1,
             "deletelayer" => self.doc.layers.len() > 1,
-            "clear" | "cut" | "paste" | "rotate" | "selectionflipx" | "selectionflipy" => {
-                self.doc.editable(self.layer)
+            "clear" => {
+                self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none()
             }
+            "flipx" | "flipy" | "cut" | "paste" | "rotate" | "selectionflipx"
+            | "selectionflipy" => self.doc.editable(self.layer),
             "crop"
             | "new-sprite-from-selection"
             | "grid-from-selection"
@@ -58,7 +62,7 @@ impl PixelCraft {
     }
 
     fn command_catalog(&self) -> Vec<Entry> {
-        let mut entries = Vec::new();
+        let mut entries: Vec<Entry> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for &(group, items) in MENU_GROUPS {
             for &(label, action) in items {
@@ -74,7 +78,29 @@ impl PixelCraft {
                         enabled: self.native_action_enabled(action),
                         target: Target::Action(action),
                     });
+                } else if let Some(entry) = entries.iter_mut().find(|entry| entry.id == id) {
+                    let alias = label.split("   ").next().unwrap_or(label).trim();
+                    if !entry.label.contains(alias) {
+                        entry.label.push_str(&format!(" / {alias}"));
+                    }
                 }
+            }
+        }
+        for (action, label) in [
+            ("swap", "Swap colors"),
+            ("resetcolors", "Reset colors"),
+            ("savepalette", "Save palette…"),
+            ("loadpalette", "Load palette…"),
+        ] {
+            let id = format!("action:{action}");
+            if seen.insert(id.clone()) {
+                entries.push(Entry {
+                    id,
+                    label: format!("Colors / {label}"),
+                    shortcut: ui_icons::shortcuts(&self.custom_shortcuts, action),
+                    enabled: true,
+                    target: Target::Action(action),
+                });
             }
         }
         // Tools without a menu/shortcut still use the same native action routing.
@@ -163,7 +189,7 @@ impl PixelCraft {
             enabled: true,
             target: Target::Preview,
         });
-        for (path, label) in self.recent_file_entries() {
+        for (path, label, available) in self.recent_file_entries() {
             let id = format!("recent:{}", path.to_string_lossy());
             if seen.insert(id.clone()) {
                 // Do not probe potentially unavailable network paths on every UI
@@ -172,7 +198,7 @@ impl PixelCraft {
                     id,
                     label: format!("File / Recent / {label}"),
                     shortcut: String::new(),
-                    enabled: true,
+                    enabled: available,
                     target: Target::Recent(path),
                 });
             }
@@ -186,6 +212,12 @@ impl PixelCraft {
             focus: true,
             document: Some(self.doc.editor_id.runtime_key()),
             tab: self.active_tab,
+            layer: self
+                .doc
+                .layers
+                .get(self.layer)
+                .map(|l| l.editor_id.runtime_key()),
+            frame: self.doc.frame_export_id(self.frame),
             ..Default::default()
         };
     }
@@ -193,6 +225,13 @@ impl PixelCraft {
     fn command_search_context_current(&self) -> bool {
         self.command_search.document == Some(self.doc.editor_id.runtime_key())
             && self.command_search.tab == self.active_tab
+            && self.command_search.layer
+                == self
+                    .doc
+                    .layers
+                    .get(self.layer)
+                    .map(|l| l.editor_id.runtime_key())
+            && self.command_search.frame == self.doc.frame_export_id(self.frame)
     }
 
     fn execute_catalog_command(&mut self, ctx: &egui::Context, id: &str) -> bool {
@@ -249,7 +288,8 @@ impl PixelCraft {
                 0
             }
         });
-        let enter = ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter));
+        let enter = ctx.memory(|memory| memory.focused() == Some(egui::Id::new("command-query")))
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Enter));
         let entries = self.command_catalog();
         let mut activate = None;
         let dismiss = fluent::modal_dialog(ctx, "Search commands", |ui| {
@@ -397,6 +437,168 @@ mod tests {
             |ui| editor.render(ui),
         );
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn recent_activation_revalidates_a_removed_file_without_changing_document() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        let path =
+            std::env::temp_dir().join(format!("pixelcraft-recent-{}.pixel", std::process::id()));
+        formats::save(&path, &editor.doc).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while editor.recent_files.availability(&path) == recent_files::Availability::Checking {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            editor.recent_files.availability(&path),
+            recent_files::Availability::Available
+        );
+        std::fs::remove_file(&path).unwrap();
+        let before = editor.doc.clone();
+        editor.open_recent(path);
+        while editor.open_job.is_some() {
+            editor.poll_open_document();
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(editor.doc == before);
+        assert!(editor.path.is_none());
+    }
+    #[test]
+    fn playback_holds_the_search_target_and_resumes_without_catching_up() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        editor.doc.add_frame(0, false);
+        editor.playing = true;
+        editor.last_tick = Instant::now() - Duration::from_secs(2);
+        editor.open_command_search();
+        draw(&mut editor, &ctx, vec![]);
+        assert!(editor.playing);
+        assert_eq!(editor.frame, 0);
+        assert!(editor.command_search.open);
+        assert!(editor.last_tick.elapsed() < Duration::from_secs(1));
+        draw(
+            &mut editor,
+            &ctx,
+            vec![key(Key::Escape, egui::Modifiers::NONE)],
+        );
+        assert!(editor.playing);
+        assert_eq!(editor.frame, 0);
+    }
+
+    #[test]
+    fn search_open_and_cancel_preserve_curve_and_floating_transform() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        draw(&mut editor, &ctx, vec![]);
+        editor.tool = Tool::Curve;
+        for point in [(1, 1), (2, 3), (4, 2)] {
+            editor.curve_click(CanvasPane::Primary, point);
+        }
+        assert!(editor.curve_draft.is_some());
+        editor.action("command-search");
+        assert!(
+            editor.curve_draft.is_some(),
+            "opening search discarded a curve draft"
+        );
+        draw(
+            &mut editor,
+            &ctx,
+            vec![key(Key::Escape, egui::Modifiers::NONE)],
+        );
+        assert!(editor.curve_draft.is_some());
+        editor.cancel_gesture();
+        editor.doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+        editor.start_canvas_transform();
+        assert!(editor.canvas_transform.is_some());
+        editor.action("command-search");
+        assert!(
+            editor.canvas_transform.is_some(),
+            "opening search discarded a floating transform"
+        );
+        draw(
+            &mut editor,
+            &ctx,
+            vec![key(Key::Escape, egui::Modifiers::NONE)],
+        );
+        assert!(editor.canvas_transform.is_some());
+    }
+    #[test]
+    fn locked_flip_dispatch_keeps_redo_and_history() {
+        let mut editor = editor();
+        editor.remember();
+        editor.doc.add_layer();
+        editor.undo();
+        editor.doc.layers[0].locked = true;
+        let before = editor.doc.clone();
+        let undo = editor.undo.len();
+        let redo = editor.redo.len();
+        assert!(redo > 0);
+        editor.action("flipx");
+        assert!(editor.doc == before);
+        assert_eq!(editor.undo.len(), undo);
+        assert_eq!(editor.redo.len(), redo);
+    }
+    #[test]
+    fn search_rejects_changed_layer_or_frame_in_same_document() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        editor.doc.add_layer();
+        editor.open_command_search();
+        editor.layer = 1;
+        assert!(!editor.execute_catalog_command(&ctx, "action:deletelayer"));
+        editor.doc.add_frame(0, false);
+        editor.open_command_search();
+        editor.frame = 1;
+        assert!(!editor.execute_catalog_command(&ctx, "action:deleteframe"));
+    }
+    #[test]
+    fn search_enter_respects_close_button_focus() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        editor.open_command_search();
+        editor.command_search.query = "action:layer".into();
+        draw(&mut editor, &ctx, vec![]);
+        ctx.memory_mut(|m| {
+            m.request_focus(egui::Id::new(("editor-dialog", "Search commands")).with("close"))
+        });
+        draw(
+            &mut editor,
+            &ctx,
+            vec![key(Key::Enter, egui::Modifiers::NONE)],
+        );
+        assert!(!editor.command_search.open);
+        assert_eq!(editor.doc.layers.len(), 1);
+    }
+    #[test]
+    fn search_retains_native_color_actions_menu_aliases_and_shortcut_aliases() {
+        let mut editor = editor();
+        editor
+            .custom_shortcuts
+            .insert("Alt+R".into(), "rect".into());
+        let entries = editor.command_catalog();
+        for action in ["swap", "resetcolors", "savepalette", "loadpalette"] {
+            assert!(
+                entries.iter().any(|e| e.id == format!("action:{action}")),
+                "missing {action}"
+            );
+        }
+        assert!(
+            entries
+                .iter()
+                .find(|e| e.id == "action:rectangle")
+                .unwrap()
+                .shortcut
+                .contains("Alt+R")
+        );
+        assert!(
+            entries
+                .iter()
+                .filter(|e| e.id == "action:workflow")
+                .any(|e| matches_query(&e.label, &e.id, "references"))
+        );
     }
 
     #[test]
