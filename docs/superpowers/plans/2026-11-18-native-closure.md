@@ -32,7 +32,7 @@
 - [x] 2. Reproduce non-cancellable clipboard traversal; implement bounded polling in validation/ID/hash/equality/merge paths and native document validation where used by workers. Test atomic cancellation at each expensive phase and run full Windows gates.
 - [x] 3. Audit viewport/display conversion against current native source, add regression cases for confirmed defects, fix and test. Record verified behaviors instead of assuming the old tracker proves them.
 - [x] 4. Run native acceptance on both day/night projects: load, playback/representative render, save/reopen disposable copies and export; record timing, content/metadata equality and source-file hashes.
-- [ ] 5. Reconcile all active original issue20 items to native code/tests/GUI/CLI/MCP evidence, explicitly defer44-47 and Lua part31, record platform/tablet coverage limits, and repeat current source audit for confirmed extra native gaps. Command discovery can be tracked separately from the original55 closure scope.
+- [x] 5. Reconcile all active original issue20 items to native code/tests/GUI/CLI/MCP evidence, explicitly defer44-47 and Lua part31, record platform/tablet coverage limits, and repeat current source audit for confirmed extra native gaps. Command discovery can be tracked separately from the original55 closure scope.
 - [ ] 6. Fresh correctness/security review, required fixes, final Windows gates, native PR/CI including macOS packaging, accurate issue checklist and pushed evidence. Leave merge approval as the final reviewable step.
 
 ## Execution ledger
@@ -65,3 +65,10 @@
 - Separate real-project GUI/cache acceptance passed48 ordered frame presentations (two loops) per document with background prefetch and unchanged authored documents. Work/polling elapsed176ms day/190ms night; this intentionally pumps frames and is not a wall-clock playback-duration or visual smoothness measurement. Existing clock/deadline tests separately cover authored timing.
 - ffprobe verified both MP4s480x270,3.6s,216 encoded frames. Acceptance exports use native1x for regression speed; scaled export coverage remains in regular tests.
 - Source hashes: day5bb6660d7440de4181de4ae0ba54f45ff047991a621b6dd276d9e2eef990d0ff; nighta21a70ec2cb5e1f7aa87118cf1fe4f5ef88e72d9ce6c51214a14d0fed3aa0689.
+
+### Task5 checkpoint
+
+- Reconciled all55 original requirements against current native implementation and representative tests, checking every cited path and named regression against this checkout. Evidence is docs/native-workflow-acceptance-2026-11-18.md.48 feature items have Windows coverage; packaging items3–4 await fresh native CI;31 is native-complete/Lua-deferred;44–47 are explicitly deferred.
+- Re-fetched both audit repositories: remote heads unchanged from the previous scan. Native command discovery remains an additional confirmed gap, recorded separately as issue22 with keyboard, state/registration, parameterized variant and undo/security acceptance. Newer Lua decimal-dialog work remains deferred. No universal-parity assertion.
+- Windows relocated single-executable verification passed with PATH reduced to Windows system directories, and latest graphical startup screenshot was inspected. No Lua API file differences from main; only macOS packaged-runtime selector differs in its loader.
+- Ruling: original55 closure and additional command discovery are tracked separately — the approved closure plan allows this, and issue22 preserves the gap rather than representing it as implemented; cost if wrong is an extra follow-up issue before broad editor parity.
