@@ -1,15 +1,152 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+mod cel_selection;
+mod composite_area;
+mod conversion_snapshot;
+pub use composite_area::FramePatch;
+mod dense_overlay;
+pub use dense_overlay::DenseOverlay;
+mod frame_order;
+mod grayscale_conversion;
+mod rgba_conversion;
+pub use grayscale_conversion::GrayscaleMethod;
+mod indexed_conversion;
+pub use indexed_conversion::{IndexedDithering, IndexedFit};
+mod layer_conversion;
+mod layer_operations;
+mod layer_order;
+mod palette_span;
+mod palette_tools;
+pub use palette_tools::PaletteSort;
+mod tile_cells;
+pub use tile_cells::TileCells;
+mod tile_operations;
+mod tile_raster;
+pub use cel_selection::CelSelection;
+use composite_area::CompositeArea;
+pub use layer_conversion::LayerConversion;
+pub use layer_order::LayerDrop;
+pub use tile_operations::{TileDefinitionEdit, TilePixelEdit, TileTransform};
 pub type Pixel = [u8; 4];
+pub const TILE_ID_MASK: u32 = 0x1fff_ffff;
 pub const CLEAR: Pixel = [0; 4];
 pub const DEFAULT_DURATION: u16 = 100;
+pub const MAX_FRAME_NAME_CHARS: usize = 256;
 pub const MIN_BRUSH_SIZE: i32 = 1;
 pub const MAX_BRUSH_SIZE: i32 = 64;
 pub const MAX_DIMENSION: usize = 16384;
 pub const MAX_PIXELS: usize = 64_000_000;
 pub const MAX_DOCUMENT_PIXELS: usize = 128_000_000;
 pub(crate) const MAX_CEL_SLOTS: usize = 1_000_000;
-pub(crate) fn line_pixels<E>(
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DrawingGrid {
+    pub origin: [i32; 2],
+    pub size: [u32; 2],
+}
+
+impl Default for DrawingGrid {
+    fn default() -> Self {
+        Self {
+            origin: [0, 0],
+            size: [16, 16],
+        }
+    }
+}
+
+impl DrawingGrid {
+    pub fn valid(self) -> bool {
+        self.origin
+            .iter()
+            .all(|&value| i16::try_from(value).is_ok())
+            && self
+                .size
+                .iter()
+                .all(|&value| value != 0 && u16::try_from(value).is_ok())
+    }
+
+    pub fn snap(self, point: (i32, i32), bounds: (i32, i32, i32, i32)) -> (i32, i32) {
+        let axis = |point: i32, origin: i32, step: u32, low: i32, high: i32| {
+            let (p, o, s) = (i64::from(point), i64::from(origin), i64::from(step));
+            if s == 0 {
+                return point;
+            }
+            let first = (i64::from(low) - o + s - 1).div_euclid(s);
+            let last = (i64::from(high) - o).div_euclid(s);
+            if first > last {
+                return point;
+            }
+            let nearest = (p - o + s / 2).div_euclid(s).clamp(first, last);
+            (o + nearest * s) as i32
+        };
+        (
+            axis(point.0, self.origin[0], self.size[0], bounds.0, bounds.1),
+            axis(point.1, self.origin[1], self.size[1], bounds.2, bounds.3),
+        )
+    }
+
+    pub(crate) fn from_ase_header(header: &[u8]) -> Option<Self> {
+        let bytes: &[u8; 8] = header.get(36..44)?.try_into().ok()?;
+        let grid = Self {
+            origin: [
+                i16::from_le_bytes([bytes[0], bytes[1]]) as i32,
+                i16::from_le_bytes([bytes[2], bytes[3]]) as i32,
+            ],
+            size: [
+                u16::from_le_bytes([bytes[4], bytes[5]]) as u32,
+                u16::from_le_bytes([bytes[6], bytes[7]]) as u32,
+            ],
+        };
+        grid.valid().then_some(grid)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WrapAxes {
+    pub horizontal: bool,
+    pub vertical: bool,
+}
+
+impl WrapAxes {
+    pub const NONE: Self = Self {
+        horizontal: false,
+        vertical: false,
+    };
+    pub const HORIZONTAL: Self = Self {
+        horizontal: true,
+        vertical: false,
+    };
+    pub const VERTICAL: Self = Self {
+        horizontal: false,
+        vertical: true,
+    };
+    pub const BOTH: Self = Self {
+        horizontal: true,
+        vertical: true,
+    };
+
+    pub fn position(self, size: (usize, usize), (mut x, mut y): (i32, i32)) -> Option<(i32, i32)> {
+        let (width, height) = (i32::try_from(size.0).ok()?, i32::try_from(size.1).ok()?);
+        if width == 0 || height == 0 {
+            return None;
+        }
+        if self.horizontal {
+            x = x.rem_euclid(width);
+        }
+        if self.vertical {
+            y = y.rem_euclid(height);
+        }
+        ((0..width).contains(&x) && (0..height).contains(&y)).then_some((x, y))
+    }
+}
+
+impl From<bool> for WrapAxes {
+    fn from(value: bool) -> Self {
+        if value { Self::BOTH } else { Self::NONE }
+    }
+}
+
+pub fn line_pixels<E>(
     a: (i32, i32),
     b: (i32, i32),
     mut visit: impl FnMut((i32, i32)) -> Result<(), E>,
@@ -136,15 +273,25 @@ fn decode_metadata_slots<'de, D: serde::Deserializer<'de>>(
 }
 fn decode_tile_slots<'de, D: serde::Deserializer<'de>>(
     decoder: D,
-) -> Result<Vec<Vec<u32>>, D::Error> {
-    BudgetedVec::<BudgetedVec<u32, 3>, 2>::deserialize(decoder)
-        .map(|slots| slots.0.into_iter().map(|values| values.0).collect())
+) -> Result<Vec<TileCells>, D::Error> {
+    BudgetedVec::<TileCells, 2>::deserialize(decoder).map(|slots| slots.0)
 }
 fn decode_outside_pixels<'de, D: serde::Deserializer<'de>>(
     decoder: D,
 ) -> Result<Vec<OutsidePixel>, D::Error> {
-    BudgetedVec::<OutsidePixel, 3>::deserialize(decoder).map(|values| values.0)
+    BudgetedVec::<OutsidePixel, { OutsidePixel::MEMORY_PIXELS }>::deserialize(decoder)
+        .map(|values| values.0)
 }
+fn decode_outside_mask<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Arc<Vec<OutsidePixel>>, D::Error> {
+    decode_outside_pixels(decoder).map(Arc::new)
+}
+
+fn outside_mask_is_empty(pixels: &Arc<Vec<OutsidePixel>>) -> bool {
+    pixels.is_empty()
+}
+
 fn decode_indices<'de, D: serde::Deserializer<'de>>(
     decoder: D,
 ) -> Result<Option<Arc<Vec<u8>>>, D::Error> {
@@ -163,9 +310,13 @@ pub struct SparsePixels {
 #[derive(Clone, Debug, Serialize)]
 #[serde(untagged)]
 pub enum Pixels {
-    Empty { clear_pixels: usize },
+    Empty {
+        clear_pixels: usize,
+    },
     Sparse(Arc<SparsePixels>),
     Dense(Arc<Vec<Pixel>>),
+    #[serde(serialize_with = "dense_overlay::serialize")]
+    Overlay(Arc<DenseOverlay>),
 }
 impl<'de> Deserialize<'de> for Pixels {
     fn deserialize<D: serde::Deserializer<'de>>(decoder: D) -> Result<Self, D::Error> {
@@ -269,6 +420,7 @@ impl Pixels {
             Self::Empty { clear_pixels } => *clear_pixels,
             Self::Sparse(raster) => raster.len,
             Self::Dense(pixels) => pixels.len(),
+            Self::Overlay(pixels) => pixels.len(),
         }
     }
 
@@ -281,6 +433,7 @@ impl Pixels {
             Self::Empty { .. } => None,
             Self::Sparse(raster) => Some(Arc::as_ptr(raster) as usize),
             Self::Dense(pixels) => Some(Arc::as_ptr(pixels) as usize),
+            Self::Overlay(pixels) => Some(Arc::as_ptr(pixels) as usize),
         }
     }
 
@@ -289,6 +442,43 @@ impl Pixels {
             Self::Empty { .. } => 0,
             Self::Sparse(raster) => raster.blocks.len() * (PIXEL_BLOCK + 8),
             Self::Dense(pixels) => pixels.len(),
+            // The project budget charges edited dense rasters as they serialize.
+            Self::Overlay(pixels) => pixels.len(),
+        }
+    }
+
+    pub fn unique_allocation_pixels(&self, seen: &mut std::collections::HashSet<usize>) -> usize {
+        if !self.backing_id().is_some_and(|id| seen.insert(id)) {
+            return 0;
+        }
+        match self {
+            Self::Overlay(pixels) => pixels.allocated(seen),
+            _ => self.allocation_pixels(),
+        }
+    }
+
+    pub(crate) fn is_dense(&self) -> bool {
+        matches!(self, Self::Dense(_) | Self::Overlay(_))
+    }
+
+    pub(crate) fn dense_slices(&self) -> Option<impl Iterator<Item = &[Pixel]>> {
+        let (contiguous, overlay) = match self {
+            Self::Dense(pixels) => (Some(pixels.as_slice()), None),
+            Self::Overlay(overlay) => (None, Some(overlay.as_ref())),
+            _ => return None,
+        };
+        Some(
+            contiguous
+                .into_iter()
+                .chain(overlay.into_iter().flat_map(DenseOverlay::slices)),
+        )
+    }
+
+    pub(crate) fn copy_dense_range(&self, start: usize, target: &mut [Pixel]) {
+        match self {
+            Self::Dense(pixels) => target.copy_from_slice(&pixels[start..start + target.len()]),
+            Self::Overlay(pixels) => pixels.copy_range(start, target),
+            _ => unreachable!("copy_dense_range requires dense pixels"),
         }
     }
 
@@ -305,10 +495,21 @@ impl Pixels {
             Self::Empty { .. } => false,
             Self::Sparse(raster) => raster.blocks.values().flatten().any(|p| p[3] != 0),
             Self::Dense(pixels) => pixels.iter().any(|p| p[3] != 0),
+            Self::Overlay(pixels) => pixels.slices().flatten().any(|p| p[3] != 0),
         }
     }
 
     pub fn visit_nonclear(&self, mut visit: impl FnMut(usize, Pixel)) {
+        let _ = self.try_visit_nonclear(|index, pixel| {
+            visit(index, pixel);
+            Some(())
+        });
+    }
+
+    pub(crate) fn try_visit_nonclear(
+        &self,
+        mut visit: impl FnMut(usize, Pixel) -> Option<()>,
+    ) -> Option<()> {
         match self {
             Self::Empty { .. } => {}
             Self::Sparse(raster) => {
@@ -316,22 +517,33 @@ impl Pixels {
                     for (offset, &pixel) in pixels.iter().enumerate() {
                         let index = block * PIXEL_BLOCK + offset;
                         if index < raster.len && pixel != CLEAR {
-                            visit(index, pixel);
+                            visit(index, pixel)?;
                         }
                     }
                 }
             }
             Self::Dense(pixels) => {
                 for (index, &pixel) in pixels.iter().enumerate().filter(|(_, p)| **p != CLEAR) {
-                    visit(index, pixel);
+                    visit(index, pixel)?;
+                }
+            }
+            Self::Overlay(pixels) => {
+                for (index, &pixel) in pixels.slices().flatten().enumerate() {
+                    if pixel != CLEAR {
+                        visit(index, pixel)?;
+                    }
                 }
             }
         }
+        Some(())
     }
 
     pub fn to_vec(&self) -> Vec<Pixel> {
         if let Self::Dense(pixels) = self {
             return pixels.as_ref().clone();
+        }
+        if let Self::Overlay(pixels) = self {
+            return pixels.to_vec();
         }
         let mut out = vec![CLEAR; self.len()];
         self.visit_nonclear(|index, pixel| out[index] = pixel);
@@ -394,6 +606,11 @@ impl PartialEq for Pixels {
         if let (Self::Dense(a), Self::Dense(b)) = (self, other) {
             return a == b;
         }
+        if let Some(changes) =
+            self.visit_shared_dense_changes(other, |_| std::ops::ControlFlow::Break(()))
+        {
+            return changes.is_continue();
+        }
         let mut equal = true;
         self.visit_nonclear(|i, pixel| equal &= other[i] == pixel);
         if equal {
@@ -423,6 +640,7 @@ impl std::ops::Index<usize> for Pixels {
                 .get(&(index / PIXEL_BLOCK))
                 .map_or(&CLEAR, |block| &block[index % PIXEL_BLOCK]),
             Self::Dense(pixels) => &pixels[index],
+            Self::Overlay(pixels) => pixels.pixel(index),
         }
     }
 }
@@ -430,11 +648,20 @@ impl std::ops::IndexMut<usize> for Pixels {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         let len = self.len();
         assert!(index < len, "Pixel index out of bounds");
+        if let Self::Dense(pixels) = self
+            && len >= 4 * dense_overlay::PAGE_PIXELS
+            && Arc::strong_count(pixels) > 1
+        {
+            *self = Self::Overlay(Arc::new(DenseOverlay::new(Arc::clone(pixels))));
+        }
+        if matches!(self, Self::Overlay(pixels) if pixels.needs_flattening(index)) {
+            return &mut self.make_dense()[index];
+        }
         let block = index / PIXEL_BLOCK;
         let new_block = match self {
             Self::Empty { .. } => true,
             Self::Sparse(raster) => !raster.blocks.contains_key(&block),
-            Self::Dense(_) => false,
+            Self::Dense(_) | Self::Overlay(_) => false,
         };
         if new_block && self.allocation_pixels() + PIXEL_BLOCK + 8 >= len {
             return &mut self.make_dense()[index];
@@ -451,6 +678,7 @@ impl std::ops::IndexMut<usize> for Pixels {
                 .entry(block)
                 .or_insert([CLEAR; PIXEL_BLOCK])[index % PIXEL_BLOCK],
             Self::Dense(pixels) => &mut Arc::make_mut(pixels)[index],
+            Self::Overlay(pixels) => Arc::make_mut(pixels).pixel_mut(index),
             Self::Empty { .. } => unreachable!(),
         }
     }
@@ -470,6 +698,27 @@ pub enum BrushShape {
     Diamond,
     Horizontal,
     Vertical,
+}
+
+impl BrushShape {
+    pub(crate) fn offsets(self, size: i32) -> impl Iterator<Item = (i32, i32)> {
+        let size = size.clamp(1, MAX_BRUSH_SIZE);
+        let lo = -(size / 2);
+        let even = i32::from(size % 2 == 0);
+        (lo..lo + size).flat_map(move |y| {
+            (lo..lo + size).filter_map(move |x| {
+                let (a, b) = (2 * x + even, 2 * y + even);
+                let inside = match self {
+                    Self::Round => a * a + b * b <= size * size,
+                    Self::Square => true,
+                    Self::Diamond => a.abs() + b.abs() <= size,
+                    Self::Horizontal => y == 0,
+                    Self::Vertical => x == 0,
+                };
+                inside.then_some((x, y))
+            })
+        })
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[repr(u16)]
@@ -524,11 +773,21 @@ impl BlendMode {
             .ok_or_else(|| "Unknown blend mode".into())
     }
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OutsidePixel {
     pub x: i32,
     pub y: i32,
     pub color: Pixel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub palette_slot: Option<u8>,
+}
+impl OutsidePixel {
+    pub const MEMORY_PIXELS: usize =
+        std::mem::size_of::<Self>().div_ceil(std::mem::size_of::<Pixel>());
+
+    fn position(&self) -> (i32, i32) {
+        (self.x, self.y)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TilemapGeometry {
@@ -541,6 +800,13 @@ pub struct TilemapGeometry {
 /// get a fresh identity so a client cannot target a different open document.
 #[derive(Clone, Copy, Debug)]
 pub struct EditorId(u64);
+
+impl EditorId {
+    /// Identifies a runtime target for in-process API bridges.
+    pub fn runtime_key(self) -> u64 {
+        self.0
+    }
+}
 
 impl Default for EditorId {
     fn default() -> Self {
@@ -585,6 +851,8 @@ impl Default for CelKeyframe {
 pub struct CelMeta {
     #[serde(skip)]
     pub editor_id: EditorId,
+    #[serde(skip)]
+    pub image_id: EditorId,
     pub opacity: u8,
     pub z_index: i16,
     #[serde(deserialize_with = "decode_outside_pixels")]
@@ -595,6 +863,9 @@ pub struct CelMeta {
     pub tilemap: Option<TilemapGeometry>,
     #[serde(default)]
     pub bounds: Option<[i32; 4]>,
+    /// ASE reference placement in signed 16.16 sprite coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_bounds: Option<[i32; 4]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artwork_link: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -604,12 +875,14 @@ impl Default for CelMeta {
     fn default() -> Self {
         Self {
             editor_id: EditorId::default(),
+            image_id: EditorId::default(),
             opacity: 255,
             z_index: 0,
             outside: vec![],
             indices: None,
             tilemap: None,
             bounds: None,
+            reference_bounds: None,
             artwork_link: None,
             keyframe: None,
         }
@@ -644,11 +917,6 @@ impl CelRange {
             && self.last_layer < document.layers.len()
             && self.last_frame < document.durations.len()
     }
-
-    fn editable(self, document: &Document) -> bool {
-        self.fits(document)
-            && (self.first_layer..=self.last_layer).all(|layer| document.editable(layer))
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -661,6 +929,8 @@ pub struct SliceKey {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpriteSlice {
+    #[serde(skip)]
+    pub editor_id: EditorId,
     pub name: String,
     pub keys: Vec<SliceKey>,
 }
@@ -672,6 +942,8 @@ impl SpriteSlice {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrameTag {
+    #[serde(skip)]
+    pub editor_id: EditorId,
     pub name: String,
     pub from: usize,
     pub to: usize,
@@ -682,10 +954,50 @@ pub struct FrameTag {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Tileset {
+    #[serde(skip)]
+    pub editor_id: EditorId,
     pub name: String,
     pub width: usize,
     pub height: usize,
-    pub tiles: Vec<Pixels>,
+    pub tiles: Vec<TileRaster>,
+}
+
+/// Tile artwork with an identity that survives native edits and undo.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TileRaster {
+    pub editor_id: EditorId,
+    pub pixels: Pixels,
+    pub indices: Option<Arc<Vec<u8>>>,
+}
+
+impl From<Pixels> for TileRaster {
+    fn from(pixels: Pixels) -> Self {
+        Self {
+            editor_id: EditorId::default(),
+            pixels,
+            indices: None,
+        }
+    }
+}
+
+impl From<Vec<Pixel>> for TileRaster {
+    fn from(pixels: Vec<Pixel>) -> Self {
+        Pixels::from(pixels).into()
+    }
+}
+
+impl std::ops::Deref for TileRaster {
+    type Target = Pixels;
+
+    fn deref(&self) -> &Self::Target {
+        &self.pixels
+    }
+}
+
+impl std::ops::DerefMut for TileRaster {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.pixels
+    }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MetadataChunk {
@@ -694,6 +1006,36 @@ pub struct MetadataChunk {
     pub data: Vec<u8>,
     pub owner: String,
 }
+fn layer_metadata_owner(owner: &str) -> Option<(&str, usize)> {
+    let (prefix, index) = owner.split_once(':')?;
+    matches!(prefix, "layer" | "cel").then_some((prefix, index.parse().ok()?))
+}
+
+impl MetadataChunk {
+    pub(crate) fn is_tag_user_data(&self) -> bool {
+        self.frame == 0 && self.kind == 0x2020 && self.owner == "tags"
+    }
+
+    fn is_frame_independent(&self) -> bool {
+        self.frame == 0
+            && (self.owner.starts_with("layer:")
+                || self.owner.starts_with("slice:")
+                || self.owner.starts_with("tileset:")
+                || self.owner == "tags"
+                || self.owner == "ase:header"
+                || (self.owner == "palette" && self.kind == 0x2020)
+                || (self.owner.is_empty() && self.kind == 0x2008))
+    }
+
+    fn cel_user_data_layer<'a>(&self, layers: &'a [Layer]) -> Option<&'a Layer> {
+        if self.kind != 0x2020 {
+            return None;
+        }
+        let layer = self.owner.strip_prefix("cel:")?.parse::<usize>().ok()?;
+        layers.get(layer)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Adjustment {
@@ -787,7 +1129,7 @@ pub struct Layer {
     pub cel_meta: Vec<CelMeta>,
     pub tileset: Option<usize>,
     #[serde(deserialize_with = "decode_tile_slots")]
-    pub tile_cels: Vec<Vec<u32>>,
+    pub tile_cels: Vec<TileCells>,
     #[serde(default)]
     pub background: bool,
     #[serde(default)]
@@ -800,10 +1142,40 @@ pub struct Layer {
     pub exclude_from_onion: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mask: Option<Pixels>,
+    #[serde(
+        default,
+        skip_serializing_if = "outside_mask_is_empty",
+        deserialize_with = "decode_outside_mask"
+    )]
+    pub mask_outside: Arc<Vec<OutsidePixel>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adjustment: Option<Adjustment>,
 }
 impl Layer {
+    pub fn is_ase_reference(&self) -> bool {
+        self.ase_flags & 64 != 0 && !self.group && self.tileset.is_none()
+    }
+
+    pub(crate) fn set_mask_outside(&mut self, mut pixels: Vec<OutsidePixel>) {
+        pixels.sort_unstable_by_key(OutsidePixel::position);
+        self.mask_outside = Arc::new(pixels);
+    }
+
+    pub(crate) fn replace_cel_image_ids(&mut self) {
+        let mut replacements = std::collections::HashMap::new();
+        for (frame, (meta, raster)) in self.cel_meta.iter_mut().zip(&self.cels).enumerate() {
+            if raster.backing_id().is_some()
+                || !meta.outside.is_empty()
+                || self
+                    .tile_cels
+                    .get(frame)
+                    .is_some_and(|tiles| tiles.iter().any(|&tile| tile != 0))
+            {
+                meta.image_id = *replacements.entry(meta.image_id.runtime_key()).or_default();
+            }
+        }
+    }
+
     fn prune_cel_links(&mut self) {
         let mut counts = std::collections::HashMap::new();
         for link in self.cel_meta.iter().filter_map(|cel| cel.artwork_link) {
@@ -814,6 +1186,33 @@ impl Layer {
                 cel.artwork_link = None;
             }
         }
+    }
+
+    pub(crate) fn repartition_cel_links<K: Eq + std::hash::Hash>(
+        &mut self,
+        mut partition: impl FnMut(&CelMeta) -> K,
+    ) {
+        let mut groups = std::collections::HashMap::new();
+        let mut retained = std::collections::HashSet::new();
+        for meta in &mut self.cel_meta {
+            let Some(link) = meta.artwork_link else {
+                continue;
+            };
+            let next = groups.len();
+            let (group, image) = *groups.entry((link, partition(meta))).or_insert_with(|| {
+                // Keep the prior handle on the first placement group and give
+                // each newly independent group its own backing image handle.
+                let image = if retained.insert(link) {
+                    meta.image_id
+                } else {
+                    EditorId::default()
+                };
+                (next, image)
+            });
+            meta.artwork_link = Some(group);
+            meta.image_id = image;
+        }
+        self.prune_cel_links();
     }
 
     pub fn new(name: String, w: usize, h: usize, frames: usize) -> Self {
@@ -829,13 +1228,14 @@ impl Layer {
             blend: BlendMode::Normal,
             cel_meta: (0..frames).map(|_| CelMeta::default()).collect(),
             tileset: None,
-            tile_cels: vec![vec![]; frames],
+            tile_cels: vec![TileCells::default(); frames],
             background: false,
             ase_flags: 0,
             uuid: vec![],
             link_duplicates: false,
             exclude_from_onion: false,
             mask: None,
+            mask_outside: Arc::default(),
             adjustment: None,
         }
     }
@@ -918,6 +1318,8 @@ pub struct Document {
     pub height: usize,
     pub layers: Vec<Layer>,
     pub durations: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) frame_names: Vec<String>,
     #[serde(default, skip_serializing_if = "FrameExportIds::is_none")]
     pub(crate) frame_export_ids: FrameExportIds,
     pub color_mode: ColorMode,
@@ -945,6 +1347,10 @@ pub struct Document {
     pub wraparound: bool,
     #[serde(default)]
     pub palette_snap: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_grid: Option<DrawingGrid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pixel_aspect: Option<[u8; 2]>,
     #[serde(default)]
     pub references: Vec<crate::productivity::ReferenceImage>,
 }
@@ -1159,6 +1565,7 @@ impl Document {
             height: h,
             layers: vec![Layer::new("Layer 1".into(), w, h, 1)],
             durations: vec![DEFAULT_DURATION],
+            frame_names: vec![],
             frame_export_ids: FrameExportIds::default(),
             color_mode: ColorMode::Rgba,
             palette: default_palette(),
@@ -1176,9 +1583,76 @@ impl Document {
             dithering: None,
             wraparound: false,
             palette_snap: false,
+            drawing_grid: None,
+            pixel_aspect: None,
             references: vec![],
         }
     }
+    pub fn drawing_grid(&self) -> DrawingGrid {
+        self.stored_drawing_grid().unwrap_or_default()
+    }
+
+    pub(crate) fn stored_drawing_grid(&self) -> Option<DrawingGrid> {
+        self.drawing_grid
+            .or_else(|| DrawingGrid::from_ase_header(self.ase_header()?))
+    }
+
+    fn ase_header(&self) -> Option<&[u8]> {
+        self.metadata
+            .iter()
+            .find(|chunk| chunk.owner == "ase:header")
+            .map(|chunk| chunk.data.as_slice())
+    }
+
+    pub(crate) fn pixel_aspect_from_ase_header(header: &[u8]) -> Option<[u8; 2]> {
+        let ratio: [u8; 2] = header.get(34..36)?.try_into().ok()?;
+        (!ratio.contains(&0) && ratio != [1, 1]).then_some(ratio)
+    }
+
+    pub fn pixel_aspect(&self) -> [u8; 2] {
+        self.pixel_aspect
+            .or_else(|| Self::pixel_aspect_from_ase_header(self.ase_header()?))
+            .unwrap_or([1, 1])
+    }
+
+    pub fn frame_name(&self, frame: usize) -> Option<&str> {
+        self.frame_names
+            .get(frame)
+            .filter(|name| !name.is_empty())
+            .map(String::as_str)
+    }
+
+    pub fn has_frame_names(&self) -> bool {
+        self.frame_names.iter().any(|name| !name.is_empty())
+    }
+
+    /// A blank name restores the default numbered label.
+    pub fn set_frame_name(&mut self, frame: usize, name: &str) -> Result<(), String> {
+        if frame >= self.durations.len() {
+            return Err("Invalid frame".into());
+        }
+        let name = name.trim();
+        if name.chars().count() > MAX_FRAME_NAME_CHARS || name.chars().any(char::is_control) {
+            return Err(format!(
+                "Use a single-line frame name of up to {MAX_FRAME_NAME_CHARS} characters"
+            ));
+        }
+        if !name.is_empty() || frame < self.frame_names.len() {
+            if frame >= self.frame_names.len() {
+                self.frame_names.resize_with(frame + 1, String::new);
+            }
+            self.frame_names[frame] = name.to_owned();
+            self.prune_frame_names();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn prune_frame_names(&mut self) {
+        while self.frame_names.last().is_some_and(String::is_empty) {
+            self.frame_names.pop();
+        }
+    }
+
     pub fn frame_export_id(&self, frame: usize) -> u32 {
         self.frame_export_ids
             .0
@@ -1221,257 +1695,446 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        let mut reference_pixels = 0usize;
-        for r in &self.references {
-            reference_pixels = reference_pixels.saturating_add(r.width.saturating_mul(r.height));
-            if r.width == 0
-                || r.height == 0
-                || r.width > MAX_DIMENSION
-                || r.height > MAX_DIMENSION
-                || r.pixels.len() != r.width.saturating_mul(r.height)
-                || reference_pixels > MAX_PIXELS
-                || !r.x.is_finite()
-                || !r.y.is_finite()
-                || !r.scale.is_finite()
-                || r.scale <= 0.
-                || r.scale > 1000.
-            {
-                return Err("Invalid reference image".into());
+        self.validate_until(|| false)
+    }
+
+    /// Validate native document structure with cancellation during bulk traversal.
+    pub fn validate_until(&self, cancelled: impl Fn() -> bool) -> Result<(), String> {
+        let interrupted = std::cell::Cell::new(false);
+        let stopped = |index: usize| {
+            if interrupted.get() {
+                return true;
             }
+            if index.is_multiple_of(4096) && cancelled() {
+                interrupted.set(true);
+                true
+            } else {
+                false
+            }
+        };
+        if stopped(0) {
+            return Err("Project validation cancelled".into());
         }
-        if self.dithering.as_ref().is_some_and(|m| !m.validate()) {
-            return Err("Invalid dithering matrix".into());
-        }
-        if self.width == 0
-            || self.height == 0
-            || self.width > MAX_DIMENSION
-            || self.height > MAX_DIMENSION
-            || self.width.saturating_mul(self.height) > MAX_PIXELS
-            || self.durations.is_empty()
-            || self.layers.is_empty()
-            || self.durations.len() > 65535
-            || self.layers.len() > 65535
-            || self.layers.len().saturating_mul(self.durations.len()) > MAX_CEL_SLOTS
-            || self.stored_pixels() > MAX_DOCUMENT_PIXELS
-        {
-            return Err("Project dimensions or stored pixel count exceed limits".into());
-        }
-        if let Some(ids) = &self.frame_export_ids.0 {
-            let mut seen = std::collections::HashSet::with_capacity(ids.frames.len());
-            if ids.frames.len() != self.durations.len()
-                || ids.next > u64::from(u32::MAX) + 1
-                || ids
-                    .frames
-                    .iter()
-                    .any(|&id| u64::from(id) >= ids.next || !seen.insert(id))
-            {
-                return Err("Invalid frame export identities".into());
+        let result: Result<(), String> = (|| {
+            if self.pixel_aspect.is_some_and(|ratio| ratio.contains(&0)) {
+                return Err("Invalid pixel aspect ratio".into());
             }
-        }
-        if self
-            .frame_palettes
-            .iter()
-            .any(|p| p.is_empty() || p.len() > 256)
-        {
-            return Err("Invalid frame palette".into());
-        }
-        if self.palette.is_empty() || self.palette.len() > 256 {
-            return Err("Palette must contain 1–256 colors".into());
-        }
-        let group_buffers: Vec<_> = self
-            .layers
-            .iter()
-            .map(|layer| {
-                layer.group
-                    && (self.compose_groups
-                        || layer.mask.is_some()
-                        || layer.cel_meta.iter().any(|cel| {
-                            cel.keyframe
-                                .is_some_and(|key| key != CelKeyframe::default())
-                        }))
-            })
-            .collect();
-        for (i, l) in self.layers.iter().enumerate() {
-            if l.mask
-                .as_ref()
-                .is_some_and(|mask| mask.len() != self.width * self.height)
-            {
-                return Err("Layer mask dimensions must match the canvas".into());
+            if self.drawing_grid.is_some_and(|grid| !grid.valid()) {
+                return Err("Invalid drawing grid".into());
             }
-            if let Some(adjustment) = &l.adjustment {
-                if l.group || l.tileset.is_some() {
-                    return Err("Adjustments require their own image layer".into());
+            let mut reference_pixels = 0usize;
+            for r in &self.references {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
                 }
-                adjustment.validate()?;
-            }
-            for m in &l.cel_meta {
-                if m.keyframe.is_some_and(|key| {
-                    key.x.unsigned_abs() > MAX_DIMENSION as u32
-                        || key.y.unsigned_abs() > MAX_DIMENSION as u32
-                }) {
-                    return Err("Position keyframe exceeds the canvas limits".into());
-                }
-                if m.outside.iter().any(|pixel| {
-                    !(-131_072..=131_072).contains(&pixel.x)
-                        || !(-131_072..=131_072).contains(&pixel.y)
-                }) {
-                    return Err("Off-canvas pixels exceed supported coordinates".into());
-                }
-                if m.artwork_link == Some(usize::MAX) {
-                    return Err("Invalid cel link".into());
-                }
-                if m.bounds.is_some_and(|b| {
-                    b[0] < i16::MIN as i32
-                        || b[0] > i16::MAX as i32
-                        || b[1] < i16::MIN as i32
-                        || b[1] > i16::MAX as i32
-                        || b[2] < 0
-                        || b[3] < 0
-                        || b[2] > 65535
-                        || b[3] > 65535
-                        || (b[2] as usize).saturating_mul(b[3] as usize) > MAX_PIXELS
-                }) {
-                    return Err("Invalid cel bounds".into());
-                }
-                if m.tilemap.as_ref().is_some_and(|g| {
-                    g.columns == 0
-                        || g.rows == 0
-                        || g.columns > 65535
-                        || g.rows > 65535
-                        || g.columns.saturating_mul(g.rows) > MAX_PIXELS
-                        || g.x < i16::MIN as i32
-                        || g.x > i16::MAX as i32
-                        || g.y < i16::MIN as i32
-                        || g.y > i16::MAX as i32
-                }) {
-                    return Err("Invalid tilemap geometry".into());
-                }
-            }
-            if l.cel_meta.iter().any(|m| {
-                m.indices
-                    .as_ref()
-                    .is_some_and(|a| a.len() != self.width * self.height)
-            }) {
-                return Err("Invalid indexed cel size".into());
-            }
-            if l.cels.len() != self.durations.len()
-                || l.cel_meta.len() != self.durations.len()
-                || l.tile_cels.len() != self.durations.len()
-                || l.cels.iter().any(|c| c.len() != self.width * self.height)
-            {
-                return Err("Invalid cel dimensions".into());
-            }
-            // Keep scratch allocations bounded independently of sparse backing.
-            let mut buffers = 1 + usize::from(group_buffers[i] || l.tileset.is_some());
-            let mut p = l.parent;
-            let mut depth = 0;
-            while let Some(j) = p {
-                if j >= self.layers.len() || j == i || !self.layers[j].group || depth >= 128 {
-                    return Err("Invalid layer group hierarchy".into());
-                }
-                buffers += usize::from(group_buffers[j]);
-                p = self.layers[j].parent;
-                depth += 1;
-            }
-            if self
-                .width
-                .saturating_mul(self.height)
-                .saturating_mul(buffers)
-                > MAX_DOCUMENT_PIXELS
-            {
-                return Err("Layer hierarchy exceeds the compositing workspace budget".into());
-            }
-            if let Some(t) = l.tileset {
-                let t = self.tilesets.get(t).ok_or("Missing tileset")?;
-                if t.width == 0 || t.height == 0 {
-                    return Err("Invalid tileset size".into());
-                }
-                let count = self.width.div_ceil(t.width) * self.height.div_ceil(t.height);
-                if l.tile_cels.iter().enumerate().any(|(f, c)| {
-                    let count = l.cel_meta[f]
-                        .tilemap
+                reference_pixels =
+                    reference_pixels.saturating_add(r.width.saturating_mul(r.height));
+                if r.width == 0
+                    || r.height == 0
+                    || r.width > MAX_DIMENSION
+                    || r.height > MAX_DIMENSION
+                    || r.pixels.len() != r.width.saturating_mul(r.height)
+                    || reference_pixels > MAX_PIXELS
+                    || !r.x.is_finite()
+                    || !r.y.is_finite()
+                    || !r.scale.is_finite()
+                    || r.scale <= 0.
+                    || r.scale > 1000.
+                    || r.options
+                        .scale_y
+                        .is_some_and(|scale| !scale.is_finite() || scale <= 0. || scale > 1000.)
+                    || r.options
+                        .source
                         .as_ref()
-                        .map_or(count, |g| g.columns.saturating_mul(g.rows));
-                    count > MAX_PIXELS
-                        || c.len() != count
-                        || c.iter().any(|v| (v & 0x1fffffff) as usize > t.tiles.len())
-                }) {
-                    return Err("Invalid tile reference".into());
+                        .is_some_and(|path| !crate::productivity::valid_reference_source(path))
+                {
+                    return Err("Invalid reference image".into());
                 }
             }
-        }
-        for t in &self.tilesets {
-            if t.width == 0
-                || t.height == 0
-                || t.width > MAX_DIMENSION
-                || t.height > MAX_DIMENSION
-                || t.width
-                    .saturating_mul(t.height)
-                    .saturating_mul(t.tiles.len())
-                    > MAX_PIXELS
-                || t.tiles.iter().any(|p| p.len() != t.width * t.height)
-            {
-                return Err("Invalid tileset".into());
+            if self.dithering.as_ref().is_some_and(|m| !m.validate()) {
+                return Err("Invalid dithering matrix".into());
             }
-        }
-        for slice in &self.slices {
-            if slice.name.len() > u16::MAX as usize
-                || slice
-                    .keys
-                    .windows(2)
-                    .any(|pair| pair[0].frame >= pair[1].frame)
-                || slice.keys.iter().any(|key| {
-                    key.frame >= self.durations.len()
-                        || key.bounds[2] < 0
-                        || key.bounds[3] < 0
-                        || key.center.is_some_and(|rect| rect[2] < 0 || rect[3] < 0)
+            if self.width == 0
+                || self.height == 0
+                || self.width > MAX_DIMENSION
+                || self.height > MAX_DIMENSION
+                || self.width.saturating_mul(self.height) > MAX_PIXELS
+                || self.durations.is_empty()
+                || self.layers.is_empty()
+                || self.durations.len() > 65535
+                || self.layers.len() > 65535
+                || self.layers.len().saturating_mul(self.durations.len()) > MAX_CEL_SLOTS
+                || self.stored_pixels_until(&cancelled)? > MAX_DOCUMENT_PIXELS
+            {
+                return Err("Project dimensions or stored pixel count exceed limits".into());
+            }
+            if self.frame_names.len() > self.durations.len()
+                || self.frame_names.iter().enumerate().any(|(index, name)| {
+                    stopped(index)
+                        || name.chars().take(MAX_FRAME_NAME_CHARS + 1).count()
+                            > MAX_FRAME_NAME_CHARS
+                        || name.chars().any(char::is_control)
                 })
             {
-                return Err("Invalid slice bounds or animation keys".into());
+                return Err("Invalid frame names".into());
             }
+            if let Some(ids) = &self.frame_export_ids.0 {
+                let mut seen = std::collections::HashSet::with_capacity(ids.frames.len());
+                if ids.frames.len() != self.durations.len()
+                    || ids.next > u64::from(u32::MAX) + 1
+                    || ids.frames.iter().enumerate().any(|(index, &id)| {
+                        stopped(index) || u64::from(id) >= ids.next || !seen.insert(id)
+                    })
+                {
+                    return Err("Invalid frame export identities".into());
+                }
+            }
+            if self
+                .frame_palettes
+                .iter()
+                .enumerate()
+                .any(|(index, p)| stopped(index) || p.is_empty() || p.len() > 256)
+            {
+                return Err("Invalid frame palette".into());
+            }
+            if self.palette.is_empty() || self.palette.len() > 256 {
+                return Err("Palette must contain 1–256 colors".into());
+            }
+            let group_buffers: Vec<_> = self
+                .layers
+                .iter()
+                .map(|layer| {
+                    if stopped(0) {
+                        return false;
+                    }
+                    layer.group
+                        && (self.compose_groups
+                            || layer.mask.is_some()
+                            || layer.cel_meta.iter().enumerate().any(|(index, cel)| {
+                                stopped(index)
+                                    || cel
+                                        .keyframe
+                                        .is_some_and(|key| key != CelKeyframe::default())
+                            }))
+                })
+                .collect();
+            if interrupted.get() {
+                return Err("Project validation cancelled".into());
+            }
+            for (i, l) in self.layers.iter().enumerate() {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                if l.mask
+                    .as_ref()
+                    .is_some_and(|mask| mask.len() != self.width * self.height)
+                {
+                    return Err("Layer mask dimensions must match the canvas".into());
+                }
+                if !l.mask_outside.is_empty()
+                    && (l.mask.is_none()
+                        || l.mask_outside.windows(2).enumerate().any(|(index, pair)| {
+                            stopped(index) || pair[0].position() >= pair[1].position()
+                        })
+                        || l.mask_outside.iter().enumerate().any(|(index, pixel)| {
+                            stopped(index)
+                                || self.index(pixel.x, pixel.y).is_some()
+                                || !(-131_072..=131_072).contains(&pixel.x)
+                                || !(-131_072..=131_072).contains(&pixel.y)
+                                || pixel.palette_slot.is_some()
+                        }))
+                {
+                    return Err("Invalid off-canvas layer mask".into());
+                }
+                if let Some(adjustment) = &l.adjustment {
+                    if l.group || l.tileset.is_some() {
+                        return Err("Adjustments require their own image layer".into());
+                    }
+                    adjustment.validate()?;
+                }
+                for m in &l.cel_meta {
+                    if stopped(0) {
+                        return Err("Project validation cancelled".into());
+                    }
+                    if m.keyframe.is_some_and(|key| {
+                        key.x.unsigned_abs() > MAX_DIMENSION as u32
+                            || key.y.unsigned_abs() > MAX_DIMENSION as u32
+                    }) {
+                        return Err("Position keyframe exceeds the canvas limits".into());
+                    }
+                    if m.outside.iter().enumerate().any(|(index, pixel)| {
+                        stopped(index)
+                            || !(-131_072..=131_072).contains(&pixel.x)
+                            || !(-131_072..=131_072).contains(&pixel.y)
+                    }) {
+                        return Err("Off-canvas pixels exceed supported coordinates".into());
+                    }
+                    if m.artwork_link == Some(usize::MAX) {
+                        return Err("Invalid cel link".into());
+                    }
+                    if m.bounds.is_some_and(|b| {
+                        b[0] < i16::MIN as i32
+                            || b[0] > i16::MAX as i32
+                            || b[1] < i16::MIN as i32
+                            || b[1] > i16::MAX as i32
+                            || b[2] < 0
+                            || b[3] < 0
+                            || b[2] > 65535
+                            || b[3] > 65535
+                            || (b[2] as usize).saturating_mul(b[3] as usize) > MAX_PIXELS
+                    }) {
+                        return Err("Invalid cel bounds".into());
+                    }
+                    if m.tilemap.as_ref().is_some_and(|g| {
+                        g.columns == 0
+                            || g.rows == 0
+                            || g.columns > 65535
+                            || g.rows > 65535
+                            || g.columns.saturating_mul(g.rows) > MAX_PIXELS
+                            || g.x < i16::MIN as i32
+                            || g.x > i16::MAX as i32
+                            || g.y < i16::MIN as i32
+                            || g.y > i16::MAX as i32
+                    }) {
+                        return Err("Invalid tilemap geometry".into());
+                    }
+                }
+                if l.cel_meta.iter().enumerate().any(|(index, m)| {
+                    stopped(index)
+                        || m.indices
+                            .as_ref()
+                            .is_some_and(|a| a.len() != self.width * self.height)
+                }) {
+                    return Err("Invalid indexed cel size".into());
+                }
+                if l.cels.len() != self.durations.len()
+                    || l.cel_meta.len() != self.durations.len()
+                    || l.tile_cels.len() != self.durations.len()
+                    || l.cels
+                        .iter()
+                        .enumerate()
+                        .any(|(index, c)| stopped(index) || c.len() != self.width * self.height)
+                {
+                    return Err("Invalid cel dimensions".into());
+                }
+                // Keep scratch allocations bounded independently of sparse backing.
+                let mut buffers = 1 + usize::from(group_buffers[i] || l.tileset.is_some());
+                let mut p = l.parent;
+                let mut depth = 0;
+                while let Some(j) = p {
+                    if j >= self.layers.len() || j == i || !self.layers[j].group || depth >= 128 {
+                        return Err("Invalid layer group hierarchy".into());
+                    }
+                    buffers += usize::from(group_buffers[j]);
+                    p = self.layers[j].parent;
+                    depth += 1;
+                }
+                if self
+                    .width
+                    .saturating_mul(self.height)
+                    .saturating_mul(buffers)
+                    > MAX_DOCUMENT_PIXELS
+                {
+                    return Err("Layer hierarchy exceeds the compositing workspace budget".into());
+                }
+                if let Some(t) = l.tileset {
+                    let t = self.tilesets.get(t).ok_or("Missing tileset")?;
+                    if t.width == 0 || t.height == 0 {
+                        return Err("Invalid tileset size".into());
+                    }
+                    let count = self.width.div_ceil(t.width) * self.height.div_ceil(t.height);
+                    if l.tile_cels.iter().enumerate().any(|(f, c)| {
+                        if stopped(f) {
+                            return true;
+                        }
+                        let count = l.cel_meta[f]
+                            .tilemap
+                            .as_ref()
+                            .map_or(count, |g| g.columns.saturating_mul(g.rows));
+                        count > MAX_PIXELS
+                            || c.len() != count
+                            || c.iter().enumerate().any(|(index, v)| {
+                                stopped(index) || (v & 0x1fffffff) as usize > t.tiles.len()
+                            })
+                    }) {
+                        return Err("Invalid tile reference".into());
+                    }
+                }
+            }
+            for t in &self.tilesets {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                if t.width == 0
+                    || t.height == 0
+                    || t.width > MAX_DIMENSION
+                    || t.height > MAX_DIMENSION
+                    || t.width
+                        .saturating_mul(t.height)
+                        .saturating_mul(t.tiles.len())
+                        > MAX_PIXELS
+                    || t.tiles.iter().enumerate().any(|(index, p)| {
+                        stopped(index)
+                            || p.len() != t.width * t.height
+                            || p.indices
+                                .as_ref()
+                                .is_some_and(|indices| indices.len() != p.len())
+                    })
+                {
+                    return Err("Invalid tileset".into());
+                }
+            }
+            for slice in &self.slices {
+                if stopped(0) {
+                    return Err("Project validation cancelled".into());
+                }
+                if slice.name.len() > u16::MAX as usize
+                    || slice
+                        .keys
+                        .windows(2)
+                        .enumerate()
+                        .any(|(index, pair)| stopped(index) || pair[0].frame >= pair[1].frame)
+                    || slice.keys.iter().enumerate().any(|(index, key)| {
+                        stopped(index)
+                            || key.frame >= self.durations.len()
+                            || key.bounds[2] < 0
+                            || key.bounds[3] < 0
+                            || key.center.is_some_and(|rect| rect[2] < 0 || rect[3] < 0)
+                    })
+                {
+                    return Err("Invalid slice bounds or animation keys".into());
+                }
+            }
+            if self.tags.iter().enumerate().any(|(index, t)| {
+                stopped(index) || t.from > t.to || t.to >= self.durations.len() || t.direction > 3
+            }) {
+                return Err("Invalid animation range".into());
+            }
+            Ok(())
+        })();
+        if interrupted.get() {
+            Err("Project validation cancelled".into())
+        } else {
+            result
         }
-        if self
-            .tags
-            .iter()
-            .any(|t| t.from > t.to || t.to >= self.durations.len() || t.direction > 3)
-        {
-            return Err("Invalid animation range".into());
-        }
-        Ok(())
     }
     pub fn stored_pixels(&self) -> usize {
+        self.stored_pixels_until(|| false)
+            .expect("Non-cancelling accounting cannot be cancelled")
+    }
+
+    /// Count native storage without losing cancellation responsiveness on large timelines.
+    pub fn stored_pixels_until(&self, cancelled: impl Fn() -> bool) -> Result<usize, String> {
+        let check = || {
+            if cancelled() {
+                Err("Project storage accounting cancelled".to_owned())
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
         let mut seen = std::collections::HashSet::new();
-        let raster_pixels = self
+        let rasters = self
             .layers
             .iter()
             .flat_map(|layer| layer.cels.iter().chain(layer.mask.iter()))
-            .chain(self.tilesets.iter().flat_map(|tileset| &tileset.tiles))
-            .chain(self.references.iter().map(|reference| &reference.pixels))
-            .filter(|pixels| pixels.backing_id().is_some_and(|id| seen.insert(id)))
-            .fold(0usize, |total, pixels| {
-                total.saturating_add(pixels.allocation_pixels())
-            });
+            .chain(
+                self.tilesets
+                    .iter()
+                    .flat_map(|set| set.tiles.iter().map(|tile| &tile.pixels)),
+            )
+            .chain(self.references.iter().map(|reference| &reference.pixels));
+        let mut total = 0usize;
+        for (index, pixels) in rasters.enumerate() {
+            if index.is_multiple_of(4096) {
+                check()?;
+            }
+            if pixels.backing_id().is_some_and(|id| seen.insert(id)) {
+                total = total.saturating_add(pixels.allocation_pixels());
+            }
+        }
         let mut seen_indices = std::collections::HashSet::new();
-        self.layers.iter().fold(raster_pixels, |total, layer| {
-            let placement_pixels = layer.tile_cels.iter().map(Vec::len).sum::<usize>();
-            layer
-                .cel_meta
+        let mut tile_index_bytes = 0usize;
+        for (index, tile) in self.tilesets.iter().flat_map(|set| &set.tiles).enumerate() {
+            if index.is_multiple_of(4096) {
+                check()?;
+            }
+            if let Some(indices) = &tile.indices
+                && seen_indices.insert(Arc::as_ptr(indices))
+            {
+                tile_index_bytes = tile_index_bytes.saturating_add(indices.len());
+            }
+        }
+        total = total.saturating_add(tile_index_bytes.div_ceil(4));
+        for layer in &self.layers {
+            check()?;
+            for (index, cells) in layer.tile_cels.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    check()?;
+                }
+                total = total.saturating_add(cells.len());
+            }
+            total = total.saturating_add(
+                layer
+                    .mask_outside
+                    .len()
+                    .saturating_mul(OutsidePixel::MEMORY_PIXELS),
+            );
+            for (index, cel) in layer.cel_meta.iter().enumerate() {
+                if index.is_multiple_of(4096) {
+                    check()?;
+                }
+                let bytes = cel
+                    .indices
+                    .as_ref()
+                    .filter(|indices| seen_indices.insert(Arc::as_ptr(indices)))
+                    .map_or(0, |indices| indices.len());
+                total = total.saturating_add(bytes.div_ceil(4)).saturating_add(
+                    cel.outside
+                        .len()
+                        .saturating_mul(OutsidePixel::MEMORY_PIXELS),
+                );
+            }
+        }
+        check()?;
+        Ok(total)
+    }
+
+    pub fn same_editor_layer_targets(&self, other: &Self) -> bool {
+        self.layers
+            .iter()
+            .map(|layer| layer.editor_id.0)
+            .eq(other.layers.iter().map(|layer| layer.editor_id.0))
+    }
+
+    pub fn same_editor_metadata_targets(&self, other: &Self) -> bool {
+        self.tags
+            .iter()
+            .map(|tag| tag.editor_id.0)
+            .eq(other.tags.iter().map(|tag| tag.editor_id.0))
+            && self
+                .slices
                 .iter()
-                .fold(total.saturating_add(placement_pixels), |total, cel| {
-                    let index_bytes = cel
-                        .indices
-                        .as_ref()
-                        .filter(|indices| seen_indices.insert(Arc::as_ptr(indices)))
-                        .map_or(0, |indices| indices.len());
-                    total
-                        .saturating_add(index_bytes.div_ceil(4))
-                        .saturating_add(cel.outside.len().saturating_mul(3))
+                .map(|slice| slice.editor_id.0)
+                .eq(other.slices.iter().map(|slice| slice.editor_id.0))
+            && self
+                .tilesets
+                .iter()
+                .zip(&other.tilesets)
+                .all(|(left, right)| {
+                    left.editor_id.0 == right.editor_id.0
+                        && left
+                            .tiles
+                            .iter()
+                            .map(|tile| tile.editor_id.0)
+                            .eq(right.tiles.iter().map(|tile| tile.editor_id.0))
                 })
-        })
+            && self.tilesets.len() == other.tilesets.len()
     }
 
     pub fn same_editor_targets(&self, other: &Self) -> bool {
         self.editor_id.0 == other.editor_id.0
+            && self.same_editor_metadata_targets(other)
             && self.layers.len() == other.layers.len()
             && self.layers.iter().zip(&other.layers).all(|(a, b)| {
                 a.editor_id.0 == b.editor_id.0
@@ -1481,6 +2144,17 @@ impl Document {
                         .zip(&b.cel_meta)
                         .all(|(a, b)| a.editor_id.0 == b.editor_id.0)
             })
+    }
+
+    /// Compare backing image identities independently of the saved pixels.
+    pub fn same_cel_image_ids(&self, other: &Self) -> bool {
+        fn identities(doc: &Document) -> impl Iterator<Item = u64> + '_ {
+            doc.layers
+                .iter()
+                .flat_map(|layer| &layer.cel_meta)
+                .map(|meta| meta.image_id.runtime_key())
+        }
+        identities(self).eq(identities(other))
     }
 
     pub fn logical_pixels(&self) -> usize {
@@ -1493,10 +2167,12 @@ impl Document {
     pub(crate) fn share_linked_rasters(&mut self) {
         for layer in &mut self.layers {
             let mut shared = std::collections::HashMap::new();
-            for (meta, raster) in layer.cel_meta.iter().zip(&mut layer.cels) {
+            let mut image_ids = std::collections::HashMap::new();
+            for (meta, raster) in layer.cel_meta.iter_mut().zip(&mut layer.cels) {
                 let Some(link) = meta.artwork_link else {
                     continue;
                 };
+                meta.image_id = *image_ids.entry(link).or_insert(meta.image_id);
                 let origin = meta.bounds.map_or((0, 0), |b| (b[0], b[1]));
                 let candidate = shared
                     .entry((link, origin))
@@ -1506,6 +2182,987 @@ impl Document {
                 }
             }
         }
+    }
+
+    /// Applies compatible raster changes from a snapshot to the same native sprite.
+    pub fn merge_snapshot_raster_edits(&self, base: &Self, edited: &Self) -> Option<Self> {
+        if !self.same_editor_targets(base)
+            || !base.same_editor_targets(edited)
+            || (self.width, self.height, self.color_mode)
+                != (base.width, base.height, base.color_mode)
+            || (0..self.durations.len())
+                .any(|frame| self.frame_export_id(frame) != base.frame_export_id(frame))
+        {
+            return None;
+        }
+        // A partial replay applies artwork over the restored geometry and metadata.
+        let mut shape = edited.clone();
+        for (layer, original) in shape.layers.iter_mut().zip(&base.layers) {
+            layer.cels.clone_from(&original.cels);
+            for (meta, original) in layer.cel_meta.iter_mut().zip(&original.cel_meta) {
+                meta.indices.clone_from(&original.indices);
+            }
+        }
+        if shape != *base {
+            return None;
+        }
+
+        self.merge_shared_snapshot_rasters(base, edited)
+    }
+
+    /// Apply independent pixel changes on stable cels shared by three snapshots.
+    pub fn merge_shared_snapshot_rasters(&self, base: &Self, edited: &Self) -> Option<Self> {
+        use std::collections::{HashMap, HashSet};
+        if !self.same_snapshot_canvas(base) || !self.same_snapshot_canvas(edited) {
+            return None;
+        }
+        let layers = |document: &Self| {
+            document
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(slot, layer)| (layer.editor_id.0, slot))
+                .collect::<HashMap<_, _>>()
+        };
+        let frames = |document: &Self| {
+            (0..document.durations.len())
+                .map(|frame| (document.frame_export_id(frame), frame))
+                .collect::<HashMap<_, _>>()
+        };
+        let (base_layers, edited_layers) = (layers(base), layers(edited));
+        let (base_frames, edited_frames) = (frames(base), frames(edited));
+        let shared_frames: Vec<_> = (0..self.durations.len())
+            .filter_map(|frame| {
+                let id = self.frame_export_id(frame);
+                Some((frame, *base_frames.get(&id)?, *edited_frames.get(&id)?))
+            })
+            .collect();
+        let mut merged = self.clone();
+        for (layer_index, layer) in merged.layers.iter_mut().enumerate() {
+            let retained = &self.layers[layer_index];
+            let key = retained.editor_id.0;
+            let Some((&old_layer, &new_layer)) = base_layers.get(&key).zip(edited_layers.get(&key))
+            else {
+                continue;
+            };
+            let original = &base.layers[old_layer];
+            let authored = &edited.layers[new_layer];
+            if retained.group
+                || retained.tileset.is_some()
+                || original.group
+                || original.tileset.is_some()
+                || authored.group
+                || authored.tileset.is_some()
+            {
+                continue;
+            }
+            let mut conflicting_links = HashSet::new();
+            for &(frame, old_frame, new_frame) in &shared_frames {
+                let old = &original.cels[old_frame];
+                let new = &authored.cels[new_frame];
+                let live = &retained.cels[frame];
+                let old_meta = &original.cel_meta[old_frame];
+                let new_meta = &authored.cel_meta[new_frame];
+                let live_meta = &retained.cel_meta[frame];
+                if old == new && old_meta.indices == new_meta.indices {
+                    continue;
+                }
+                let mut geometry = live_meta.clone();
+                geometry.indices.clone_from(&old_meta.indices);
+                let mut authored_geometry = new_meta.clone();
+                authored_geometry.indices.clone_from(&old_meta.indices);
+                if geometry != *old_meta
+                    || authored_geometry != *old_meta
+                    || live_meta.editor_id.0 != old_meta.editor_id.0
+                    || new_meta.editor_id.0 != old_meta.editor_id.0
+                    || self.color_mode == ColorMode::Indexed
+                        && (self.transparent_index != base.transparent_index
+                            || self.transparent_index != edited.transparent_index
+                            || self.palette_for(frame) != base.palette_for(old_frame)
+                            || self.palette_for(frame) != edited.palette_for(new_frame))
+                {
+                    conflicting_links.extend(
+                        [old_meta.artwork_link, live_meta.artwork_link]
+                            .into_iter()
+                            .flatten(),
+                    );
+                    continue;
+                }
+                if live == old && live_meta.indices == old_meta.indices {
+                    layer.cels[frame] = new.clone();
+                    layer.cel_meta[frame].indices.clone_from(&new_meta.indices);
+                    continue;
+                }
+                if live.len() != old.len()
+                    || new.len() != old.len()
+                    || live_meta.indices.as_ref().map(|indices| indices.len())
+                        != old_meta.indices.as_ref().map(|indices| indices.len())
+                    || new_meta.indices.as_ref().map(|indices| indices.len())
+                        != old_meta.indices.as_ref().map(|indices| indices.len())
+                {
+                    conflicting_links.extend(live_meta.artwork_link);
+                    continue;
+                }
+                for index in 0..old.len() {
+                    let sample = |pixels: &Pixels, meta: &CelMeta| {
+                        (
+                            pixels[index],
+                            meta.indices
+                                .as_ref()
+                                .and_then(|indices| indices.get(index))
+                                .copied(),
+                        )
+                    };
+                    let before = sample(old, old_meta);
+                    let after = sample(new, new_meta);
+                    if before == after {
+                        continue;
+                    }
+                    let current = sample(live, live_meta);
+                    if current == before {
+                        layer.cels[frame].set(index, after.0);
+                        if let Some(value) = after.1
+                            && let Some(indices) = &mut layer.cel_meta[frame].indices
+                        {
+                            Arc::make_mut(indices)[index] = value;
+                        }
+                    } else if current != after {
+                        conflicting_links.extend(live_meta.artwork_link);
+                    }
+                }
+            }
+            // Keep linked members consistent if any member has a conflicting sample.
+            for (frame, meta) in retained.cel_meta.iter().enumerate() {
+                if meta
+                    .artwork_link
+                    .is_some_and(|link| conflicting_links.contains(&link))
+                {
+                    layer.cels[frame].clone_from(&retained.cels[frame]);
+                    layer.cel_meta[frame].indices.clone_from(&meta.indices);
+                }
+            }
+        }
+        if merged == *self || merged.validate().is_err() {
+            return None;
+        }
+        merged.share_linked_rasters();
+        Some(merged)
+    }
+
+    /// Replays newly inserted frames on the surviving timeline by stable export ID.
+    pub fn merge_snapshot_frame_additions(&self, base: &Self, edited: &Self) -> Option<Self> {
+        use std::collections::{HashMap, HashSet};
+
+        if self.editor_id.0 != base.editor_id.0
+            || self.editor_id.0 != edited.editor_id.0
+            || (
+                self.width,
+                self.height,
+                self.color_mode,
+                self.transparent_index,
+            ) != (
+                edited.width,
+                edited.height,
+                edited.color_mode,
+                edited.transparent_index,
+            )
+        {
+            return None;
+        }
+        let current_ids: Vec<_> = (0..self.durations.len())
+            .map(|f| self.frame_export_id(f))
+            .collect();
+        let current: HashMap<_, _> = current_ids
+            .iter()
+            .enumerate()
+            .map(|(f, &id)| (id, f))
+            .collect();
+        let observed: HashSet<_> = (0..base.durations.len())
+            .map(|f| base.frame_export_id(f))
+            .collect();
+        let edited_ids: Vec<_> = (0..edited.durations.len())
+            .map(|f| edited.frame_export_id(f))
+            .collect();
+        let anchor = |id: &u32| current.get(id).copied().filter(|_| observed.contains(id));
+        let mut slot = edited_ids.iter().find_map(anchor)?;
+        let mut insertions = vec![Vec::new(); current_ids.len() + 1];
+        for (frame, id) in edited_ids.iter().enumerate() {
+            if let Some(index) = anchor(id) {
+                slot = index + 1;
+            } else if !observed.contains(id) && !current.contains_key(id) {
+                insertions[slot].push(frame);
+            }
+        }
+        if insertions.iter().all(Vec::is_empty) {
+            return None;
+        }
+
+        enum Source {
+            Current(usize),
+            Edited(usize),
+        }
+        let mut timeline = Vec::new();
+        let mut current_positions = vec![0; current_ids.len()];
+        let mut inserted_positions = HashMap::new();
+        let mut ids = Vec::new();
+        for (index, inserted) in insertions.into_iter().enumerate() {
+            for frame in inserted {
+                inserted_positions.insert(frame, timeline.len());
+                timeline.push(Source::Edited(frame));
+                ids.push(edited_ids[frame]);
+            }
+            if let Some(&id) = current_ids.get(index) {
+                current_positions[index] = timeline.len();
+                timeline.push(Source::Current(index));
+                ids.push(id);
+            }
+        }
+
+        let mut result = self.clone();
+        let select = |source: &Source| match *source {
+            Source::Current(frame) => (self, frame),
+            Source::Edited(frame) => (edited, frame),
+        };
+        result.durations = timeline
+            .iter()
+            .map(|slot| {
+                let (doc, frame) = select(slot);
+                doc.durations[frame]
+            })
+            .collect();
+        result.frame_names = timeline
+            .iter()
+            .map(|slot| {
+                let (doc, frame) = select(slot);
+                doc.frame_name(frame).unwrap_or_default().to_owned()
+            })
+            .collect();
+        result.prune_frame_names();
+        if !self.frame_palettes.is_empty()
+            || !edited.frame_palettes.is_empty()
+            || self.palette != edited.palette
+        {
+            result.frame_palettes = timeline
+                .iter()
+                .map(|slot| {
+                    let (doc, frame) = select(slot);
+                    doc.palette_for(frame).to_vec()
+                })
+                .collect();
+        }
+        result.set_sheet_frame_export_ids(
+            ids,
+            self.next_frame_export_id()
+                .max(edited.next_frame_export_id()),
+        );
+
+        let live_layers: HashMap<_, _> = self
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| (layer.editor_id.0, index))
+            .collect();
+        let edited_layers: HashMap<_, _> = edited
+            .layers
+            .iter()
+            .map(|layer| (layer.editor_id.0, layer))
+            .collect();
+        let compatible_layers: Vec<_> = self
+            .layers
+            .iter()
+            .map(|live| {
+                edited_layers
+                    .get(&live.editor_id.0)
+                    .copied()
+                    .filter(|authored| {
+                        authored.group == live.group
+                            && match (live.tileset, authored.tileset) {
+                                (None, None) => true,
+                                (Some(current), Some(source)) => {
+                                    let (current, source) =
+                                        (&self.tilesets[current], &edited.tilesets[source]);
+                                    current.editor_id.0 == source.editor_id.0 && current == source
+                                }
+                                _ => false,
+                            }
+                    })
+            })
+            .collect();
+        for (index, layer) in result.layers.iter_mut().enumerate() {
+            let live = &self.layers[index];
+            let authored = compatible_layers[index];
+            layer.cels.clear();
+            layer.cel_meta.clear();
+            layer.tile_cels.clear();
+            for slot in &timeline {
+                let (input, frame) = match *slot {
+                    Source::Current(frame) => (Some(live), frame),
+                    Source::Edited(frame) => (authored, frame),
+                };
+                if let Some(input) = input {
+                    layer.cels.push(input.cels[frame].clone());
+                    let mut meta = input.cel_meta[frame].clone();
+                    if matches!(slot, Source::Edited(_)) {
+                        meta.artwork_link = None;
+                    }
+                    layer.cel_meta.push(meta);
+                    layer.tile_cels.push(input.tile_cels[frame].clone());
+                } else {
+                    layer.cels.push(Pixels::empty(self.width * self.height));
+                    layer.cel_meta.push(CelMeta {
+                        tilemap: live.cel_meta[0].tilemap.clone(),
+                        ..CelMeta::default()
+                    });
+                    layer
+                        .tile_cels
+                        .push(vec![0; live.tile_cels[0].len()].into());
+                }
+            }
+        }
+        for chunk in &mut result.metadata {
+            if !chunk.is_frame_independent()
+                && let Some(&frame) = current_positions.get(chunk.frame)
+            {
+                chunk.frame = frame;
+            }
+        }
+        result
+            .metadata
+            .extend(edited.metadata.iter().filter_map(|chunk| {
+                let &frame = inserted_positions.get(&chunk.frame)?;
+                if chunk.is_frame_independent() {
+                    return None;
+                }
+                let mut entry = chunk.clone();
+                entry.frame = frame;
+                if let Some((prefix, position)) = layer_metadata_owner(&chunk.owner) {
+                    let source = edited.layers.get(position)?;
+                    let &index = live_layers.get(&source.editor_id.0)?;
+                    compatible_layers[index]?;
+                    entry.owner = format!("{prefix}:{index}");
+                }
+                Some(entry)
+            }));
+        for slice in &mut result.slices {
+            for key in &mut slice.keys {
+                key.frame = current_positions[key.frame];
+            }
+        }
+        let observed_tags: HashMap<_, _> =
+            base.tags.iter().map(|tag| (tag.editor_id.0, tag)).collect();
+        let edited_tags: HashMap<_, _> = edited
+            .tags
+            .iter()
+            .map(|tag| (tag.editor_id.0, tag))
+            .collect();
+        for tag in &mut result.tags {
+            let live_range = (current_ids[tag.from], current_ids[tag.to]);
+            tag.from = current_positions[tag.from];
+            tag.to = current_positions[tag.to];
+            if let Some((before, after)) = observed_tags
+                .get(&tag.editor_id.0)
+                .zip(edited_tags.get(&tag.editor_id.0))
+                && {
+                    let mut surviving = (before.from..=before.to)
+                        .map(|frame| base.frame_export_id(frame))
+                        .filter(|id| current.contains_key(id));
+                    surviving.next().is_some_and(|first| {
+                        live_range == (first, surviving.next_back().unwrap_or(first))
+                    })
+                }
+            {
+                for (_, &position) in inserted_positions
+                    .iter()
+                    .filter(|(source, _)| (after.from..=after.to).contains(source))
+                {
+                    tag.from = tag.from.min(position);
+                    tag.to = tag.to.max(position);
+                }
+            }
+        }
+        result.validate().ok()?;
+        Some(result)
+    }
+
+    /// Replays frame deletions by export ID, preserving frames with newer content.
+    pub fn merge_snapshot_frame_deletions(
+        &self,
+        base: &Self,
+        edited: &Self,
+        restored: Option<&Self>,
+    ) -> Option<Self> {
+        self.merge_snapshot_frame_deletions_against(base, edited, restored, self)
+    }
+
+    /// Applies deletions after other parts of the same callback have already been merged.
+    pub fn merge_snapshot_frame_deletions_against(
+        &self,
+        base: &Self,
+        edited: &Self,
+        restored: Option<&Self>,
+        live: &Self,
+    ) -> Option<Self> {
+        use std::collections::{HashMap, HashSet};
+        let same_canvas = |document: &Self| {
+            document.editor_id.0 == self.editor_id.0
+                && (
+                    document.width,
+                    document.height,
+                    document.color_mode,
+                    document.transparent_index,
+                ) == (
+                    self.width,
+                    self.height,
+                    self.color_mode,
+                    self.transparent_index,
+                )
+        };
+        if !same_canvas(base) || !same_canvas(edited) || !same_canvas(live) {
+            return None;
+        }
+        let surviving: HashSet<_> = (0..edited.durations.len())
+            .map(|frame| edited.frame_export_id(frame))
+            .collect();
+        let deleted: HashMap<_, _> = (0..base.durations.len())
+            .filter_map(|frame| {
+                let id = base.frame_export_id(frame);
+                (!surviving.contains(&id)).then_some((id, frame))
+            })
+            .collect();
+        if deleted.is_empty() {
+            return None;
+        }
+        let restored = restored.filter(|document| same_canvas(document));
+        let restored_frames: HashMap<_, _> = restored
+            .into_iter()
+            .flat_map(|doc| {
+                (0..doc.durations.len()).map(move |frame| (doc.frame_export_id(frame), frame))
+            })
+            .collect();
+        let live_frames: HashMap<_, _> = (0..live.durations.len())
+            .map(|frame| (live.frame_export_id(frame), frame))
+            .collect();
+        let mut result = self.clone();
+        for frame in (0..self.durations.len()).rev() {
+            let id = self.frame_export_id(frame);
+            let Some((&previous, &live_frame)) = deleted.get(&id).zip(live_frames.get(&id)) else {
+                continue;
+            };
+            if live.frame_matches_snapshot(live_frame, base, previous)
+                || restored
+                    .zip(restored_frames.get(&id))
+                    .is_some_and(|(doc, &before)| {
+                        live.frame_matches_snapshot(live_frame, doc, before)
+                    })
+            {
+                result.remove_frame(frame);
+            }
+        }
+        if result.durations.len() == self.durations.len() {
+            return None;
+        }
+        result.retain_frame_export_id_counter(edited);
+        result.validate().ok()?;
+        Some(result)
+    }
+
+    fn frame_matches_snapshot(&self, frame: usize, snapshot: &Self, previous: usize) -> bool {
+        if self.durations[frame] != snapshot.durations[previous]
+            || self.frame_name(frame) != snapshot.frame_name(previous)
+            || self.palette_for(frame) != snapshot.palette_for(previous)
+        {
+            return false;
+        }
+        let layers: std::collections::HashMap<_, _> = snapshot
+            .layers
+            .iter()
+            .map(|layer| (layer.editor_id.0, layer))
+            .collect();
+        if self.layers.iter().any(|layer| {
+            layers.get(&layer.editor_id.0).is_none_or(|old| {
+                let live = &layer.cel_meta[frame];
+                let before = &old.cel_meta[previous];
+                live.editor_id.0 != before.editor_id.0
+                    || live != before
+                    || layer.cels[frame] != old.cels[previous]
+                    || layer.tile_cels[frame] != old.tile_cels[previous]
+            })
+        }) {
+            return false;
+        }
+
+        fn frame_metadata(
+            doc: &Document,
+            frame: usize,
+        ) -> impl Iterator<Item = (&str, Option<u64>, u16, &[u8])> {
+            doc.metadata.iter().filter_map(move |chunk| {
+                if chunk.is_frame_independent() || chunk.frame != frame {
+                    return None;
+                }
+                let owner = match layer_metadata_owner(&chunk.owner) {
+                    Some((prefix, slot)) => (prefix, Some(doc.layers.get(slot)?.editor_id.0)),
+                    None => (chunk.owner.as_str(), None),
+                };
+                Some((owner.0, owner.1, chunk.kind, chunk.data.as_slice()))
+            })
+        }
+        fn slice_keys(doc: &Document, frame: usize) -> impl Iterator<Item = (u64, &str, SliceKey)> {
+            doc.slices.iter().filter_map(move |slice| {
+                let mut key = slice.keys.iter().find(|key| key.frame == frame)?.clone();
+                key.frame = 0;
+                Some((slice.editor_id.0, slice.name.as_str(), key))
+            })
+        }
+        fn single_frame_tags(
+            doc: &Document,
+            frame: usize,
+        ) -> impl Iterator<Item = (u64, FrameTag, Option<&[u8]>)> {
+            let mut properties = doc.metadata.iter().filter(|chunk| chunk.is_tag_user_data());
+            doc.tags.iter().filter_map(move |tag| {
+                let user_data = properties.next().map(|chunk| chunk.data.as_slice());
+                if tag.from != frame || tag.to != frame {
+                    return None;
+                }
+                let mut comparable = tag.clone();
+                comparable.from = 0;
+                comparable.to = 0;
+                Some((tag.editor_id.0, comparable, user_data))
+            })
+        }
+        frame_metadata(self, frame).eq(frame_metadata(snapshot, previous))
+            && slice_keys(self, frame).eq(slice_keys(snapshot, previous))
+            && single_frame_tags(self, frame).eq(single_frame_tags(snapshot, previous))
+    }
+
+    fn same_snapshot_canvas(&self, document: &Self) -> bool {
+        document.editor_id.0 == self.editor_id.0
+            && (document.width, document.height, document.color_mode)
+                == (self.width, self.height, self.color_mode)
+    }
+
+    fn same_snapshot_timeline(&self, document: &Self) -> bool {
+        self.same_snapshot_canvas(document)
+            && document.durations.len() == self.durations.len()
+            && (0..self.durations.len())
+                .all(|frame| document.frame_export_id(frame) == self.frame_export_id(frame))
+    }
+
+    /// Replays layers created in an independent edit using the surviving layer identities.
+    pub fn merge_snapshot_layer_additions(&self, base: &Self, edited: &Self) -> Option<Self> {
+        use std::collections::{HashMap, HashSet};
+
+        let unchanged_layers = edited.layers.len() == base.layers.len()
+            && edited
+                .layers
+                .iter()
+                .zip(&base.layers)
+                .all(|(a, b)| a.editor_id.0 == b.editor_id.0);
+        if unchanged_layers
+            || !self.same_snapshot_canvas(base)
+            || !self.same_snapshot_canvas(edited)
+            || (self.color_mode == ColorMode::Indexed
+                && self.transparent_index != edited.transparent_index)
+        {
+            return None;
+        }
+
+        let source_frames: HashMap<_, _> = (0..edited.durations.len())
+            .map(|frame| (edited.frame_export_id(frame), frame))
+            .collect();
+        let matching_frames: Vec<_> = (0..self.durations.len())
+            .map(|frame| source_frames.get(&self.frame_export_id(frame)).copied())
+            .collect();
+        if self.color_mode == ColorMode::Indexed
+            && matching_frames.iter().enumerate().any(|(frame, source)| {
+                source.is_some_and(|source| self.palette_for(frame) != edited.palette_for(source))
+            })
+        {
+            return None;
+        }
+        let target_frames: HashMap<_, _> = matching_frames
+            .iter()
+            .enumerate()
+            .filter_map(|(current, source)| Some(((*source)?, current)))
+            .collect();
+
+        let existing = base
+            .layers
+            .iter()
+            .map(|layer| layer.editor_id.0)
+            .collect::<HashSet<_>>();
+        let current = self
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| (layer.editor_id.0, index))
+            .collect::<HashMap<_, _>>();
+        let current_tilesets = self
+            .tilesets
+            .iter()
+            .enumerate()
+            .map(|(index, set)| (set.editor_id.0, index))
+            .collect::<HashMap<_, _>>();
+        let tileset_map: Vec<_> = edited
+            .tilesets
+            .iter()
+            .map(|source| {
+                current_tilesets
+                    .get(&source.editor_id.0)
+                    .copied()
+                    .filter(|&index| self.tilesets[index] == *source)
+            })
+            .collect();
+
+        // Keep a new child only if its parent also survives or is added by this edit.
+        let eligible = |mut index: usize| {
+            for _ in 0..=128 {
+                let Some(layer) = edited.layers.get(index) else {
+                    return false;
+                };
+                if let Some(&position) = current.get(&layer.editor_id.0) {
+                    return self.layers[position].group;
+                }
+                if existing.contains(&layer.editor_id.0)
+                    || layer
+                        .tileset
+                        .is_some_and(|set| tileset_map.get(set).is_none_or(Option::is_none))
+                {
+                    return false;
+                }
+                let Some(parent) = layer.parent else {
+                    return true;
+                };
+                index = parent;
+            }
+            false
+        };
+        let mut insertions = vec![Vec::new(); self.layers.len() + 1];
+        let mut slot = edited
+            .layers
+            .iter()
+            .find_map(|layer| current.get(&layer.editor_id.0).copied())
+            .unwrap_or(self.layers.len());
+        let mut added = 0;
+        for (index, layer) in edited.layers.iter().enumerate() {
+            if let Some(&position) = current.get(&layer.editor_id.0) {
+                slot = position + 1;
+            } else if eligible(index) {
+                insertions[slot].push(index);
+                added += 1;
+            }
+        }
+        if added == 0 {
+            return None;
+        }
+
+        let mut result = self.clone();
+        result.layers.clear();
+        let mut current_positions = vec![None; self.layers.len()];
+        let mut added_positions = vec![None; edited.layers.len()];
+        for (index, additions) in insertions.into_iter().enumerate() {
+            for edited_index in additions {
+                added_positions[edited_index] = Some(result.layers.len());
+                let source = &edited.layers[edited_index];
+                let mut layer = source.clone();
+                layer.tileset = layer.tileset.and_then(|set| tileset_map[set]);
+                layer.cels = matching_frames
+                    .iter()
+                    .map(|slot| {
+                        slot.map_or_else(
+                            || Pixels::empty(self.width * self.height),
+                            |f| source.cels[f].clone(),
+                        )
+                    })
+                    .collect();
+                layer.cel_meta = matching_frames
+                    .iter()
+                    .map(|slot| {
+                        slot.map_or_else(
+                            || CelMeta {
+                                tilemap: source.cel_meta[0].tilemap.clone(),
+                                ..CelMeta::default()
+                            },
+                            |f| source.cel_meta[f].clone(),
+                        )
+                    })
+                    .collect();
+                layer.tile_cels = matching_frames
+                    .iter()
+                    .map(|slot| {
+                        slot.map_or_else(
+                            || vec![0; source.tile_cels[0].len()].into(),
+                            |f| source.tile_cels[f].clone(),
+                        )
+                    })
+                    .collect();
+                layer.prune_cel_links();
+                result.layers.push(layer);
+            }
+            if let Some(layer) = self.layers.get(index) {
+                current_positions[index] = Some(result.layers.len());
+                result.layers.push(layer.clone());
+            }
+        }
+        for (index, layer) in self.layers.iter().enumerate() {
+            result.layers[current_positions[index]?].parent =
+                layer.parent.and_then(|parent| current_positions[parent]);
+        }
+        for (index, &position) in added_positions.iter().enumerate() {
+            let Some(position) = position else { continue };
+            result.layers[position].parent = edited.layers[index].parent.and_then(|parent| {
+                added_positions[parent].or_else(|| {
+                    current
+                        .get(&edited.layers[parent].editor_id.0)
+                        .and_then(|&index| current_positions[index])
+                })
+            });
+        }
+        for entry in &mut result.metadata {
+            if let Some((prefix, index)) = layer_metadata_owner(&entry.owner)
+                && let Some(Some(position)) = current_positions.get(index)
+            {
+                entry.owner = format!("{prefix}:{position}");
+            }
+        }
+        result
+            .metadata
+            .extend(edited.metadata.iter().filter_map(|entry| {
+                let (prefix, index) = layer_metadata_owner(&entry.owner)?;
+                let position = added_positions.get(index).copied().flatten()?;
+                let frame = if entry.is_frame_independent() {
+                    entry.frame
+                } else {
+                    *target_frames.get(&entry.frame)?
+                };
+                Some(MetadataChunk {
+                    frame,
+                    owner: format!("{prefix}:{position}"),
+                    ..entry.clone()
+                })
+            }));
+        result.validate().ok()?;
+        Some(result)
+    }
+
+    /// Replays deletions of layers unchanged since the edit or restored by rollback.
+    pub fn merge_snapshot_layer_deletions(
+        &self,
+        base: &Self,
+        edited: &Self,
+        restored: Option<&Self>,
+    ) -> Option<Self> {
+        self.merge_snapshot_layer_deletions_against(base, edited, restored, self)
+    }
+
+    /// Applies deletions after other parts of the same callback have already been merged.
+    pub fn merge_snapshot_layer_deletions_against(
+        &self,
+        base: &Self,
+        edited: &Self,
+        restored: Option<&Self>,
+        live: &Self,
+    ) -> Option<Self> {
+        use std::collections::{HashMap, HashSet};
+
+        if !self.same_snapshot_canvas(base)
+            || !self.same_snapshot_canvas(edited)
+            || !self.same_snapshot_canvas(live)
+        {
+            return None;
+        }
+        let surviving = edited
+            .layers
+            .iter()
+            .map(|layer| layer.editor_id.0)
+            .collect::<HashSet<_>>();
+        let mut deleted = base
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(_, layer)| !surviving.contains(&layer.editor_id.0))
+            .map(|(index, layer)| (layer.editor_id.0, index))
+            .collect::<HashMap<_, _>>();
+        if deleted.is_empty() {
+            return None;
+        }
+        let restored_layers: HashMap<_, _> = restored
+            .into_iter()
+            .flat_map(|doc| doc.layers.iter().enumerate())
+            .map(|(index, layer)| (layer.editor_id.0, index))
+            .collect();
+        let live_layers: HashMap<_, _> = live
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| (layer.editor_id.0, index))
+            .collect();
+        let mut result = self.clone();
+        for (index, layer) in self.layers.iter().enumerate().rev() {
+            let id = layer.editor_id.0;
+            let Some((before, &live_layer)) = deleted.remove(&id).zip(live_layers.get(&id)) else {
+                continue;
+            };
+            let unchanged = live.layer_matches_snapshot(live_layer, base, before);
+            let returned_by_rollback = restored
+                .zip(restored_layers.get(&layer.editor_id.0))
+                .is_some_and(|(doc, &before)| live.layer_matches_snapshot(live_layer, doc, before));
+            if unchanged || returned_by_rollback {
+                result.remove_layer(index);
+            }
+        }
+        if result.layers.len() == self.layers.len() {
+            return None;
+        }
+        result.validate().ok()?;
+        Some(result)
+    }
+
+    /// Replays compatible sibling ordering and reparenting without replacing layer artwork.
+    pub fn merge_snapshot_layer_layout(
+        &self,
+        base: &Self,
+        edited: &Self,
+        restored: Option<&Self>,
+    ) -> Option<Self> {
+        if !self.same_snapshot_canvas(base) || !self.same_snapshot_canvas(edited) {
+            return None;
+        }
+        let indices = |document: &Self| {
+            document
+                .layers
+                .iter()
+                .enumerate()
+                .map(|(index, layer)| (layer.editor_id.0, index))
+                .collect::<std::collections::HashMap<_, _>>()
+        };
+        let current = indices(self);
+        let previous = indices(base);
+        let authored = indices(edited);
+        let restored_indices = restored.map(indices);
+        let parent_key = |document: &Self, index: usize| {
+            document.layers[index]
+                .parent
+                .map(|parent| document.layers[parent].editor_id.0)
+        };
+        let mut moved_parents = Vec::new();
+        let mut blocked_moves = std::collections::HashSet::new();
+        for (index, layer) in self.layers.iter().enumerate() {
+            let key = layer.editor_id.0;
+            let Some((&previous_slot, &authored_slot)) = previous.get(&key).zip(authored.get(&key))
+            else {
+                continue;
+            };
+            let live_parent = parent_key(self, index);
+            let previous_parent = parent_key(base, previous_slot);
+            let wanted = parent_key(edited, authored_slot);
+            let restored_parent = restored
+                .zip(restored_indices.as_ref().and_then(|map| map.get(&key)))
+                .is_some_and(|(document, &slot)| parent_key(document, slot) == live_parent);
+            if wanted != previous_parent && wanted != live_parent {
+                if (live_parent == previous_parent || restored_parent)
+                    && wanted.is_none_or(|parent| {
+                        current
+                            .get(&parent)
+                            .is_some_and(|&slot| self.layers[slot].group)
+                    })
+                {
+                    moved_parents.push((index, wanted.map(|key| current[&key])));
+                } else {
+                    blocked_moves.insert(key);
+                }
+            }
+        }
+        let shared = |key: u64| {
+            !blocked_moves.contains(&key)
+                && current.contains_key(&key)
+                && previous.contains_key(&key)
+                && authored.contains_key(&key)
+        };
+        let project = |document: &Self| {
+            document
+                .layers
+                .iter()
+                .map(|layer| layer.editor_id.0)
+                .filter(|&key| shared(key))
+                .collect::<Vec<_>>()
+        };
+        let before = project(base);
+        let after = project(edited);
+        let mut order: Vec<_> = (0..self.layers.len()).collect();
+        // Reorder only the slots shared by all snapshots. A different live order
+        // means another action changed these same siblings.
+        if before != after && project(self) == before {
+            let slots = before.iter().map(|key| current[key]);
+            for (slot, target) in slots.zip(&after) {
+                order[slot] = current[target];
+            }
+        }
+
+        if moved_parents.is_empty() && order.iter().copied().eq(0..self.layers.len()) {
+            return None;
+        }
+
+        let mut result = self.clone();
+        for (layer, parent) in moved_parents {
+            result.layers[layer].parent = parent;
+        }
+        let mut positions = vec![0; order.len()];
+        for (new, &old) in order.iter().enumerate() {
+            positions[old] = new;
+        }
+        result.layers = order
+            .iter()
+            .map(|&old| {
+                let mut layer = result.layers[old].clone();
+                layer.parent = layer.parent.map(|parent| positions[parent]);
+                layer
+            })
+            .collect();
+        for entry in &mut result.metadata {
+            if let Some((prefix, owner)) = layer_metadata_owner(&entry.owner)
+                && let Some(&index) = positions.get(owner)
+            {
+                entry.owner = format!("{prefix}:{index}");
+            }
+        }
+        result.validate().ok()?;
+        Some(result)
+    }
+
+    fn layer_matches_snapshot(&self, index: usize, snapshot: &Self, previous: usize) -> bool {
+        if !self.same_snapshot_timeline(snapshot) {
+            return false;
+        }
+        let live = &self.layers[index];
+        let original = &snapshot.layers[previous];
+        let parent_key =
+            |doc: &Self, layer: &Layer| layer.parent.map(|parent| doc.layers[parent].editor_id.0);
+        if parent_key(self, live) != parent_key(snapshot, original)
+            || live.cel_meta.len() != original.cel_meta.len()
+            || live
+                .cel_meta
+                .iter()
+                .zip(&original.cel_meta)
+                .any(|(a, b)| a.editor_id.0 != b.editor_id.0)
+        {
+            return false;
+        }
+
+        let mut normalized = original.clone();
+        normalized.parent = live.parent;
+        if *live != normalized {
+            return false;
+        }
+        fn layer_metadata(
+            doc: &Document,
+            index: usize,
+        ) -> impl Iterator<Item = (&str, usize, u16, &[u8])> {
+            doc.metadata.iter().filter_map(move |chunk| {
+                let (prefix, owner) = layer_metadata_owner(&chunk.owner)?;
+                (owner == index).then_some((prefix, chunk.frame, chunk.kind, chunk.data.as_slice()))
+            })
+        }
+        layer_metadata(self, index).eq(layer_metadata(snapshot, previous))
     }
 
     pub fn can_grow(&self, pixels: usize) -> bool {
@@ -1560,6 +3217,7 @@ impl Document {
         (p[index], index as u8)
     }
     pub fn set_color_mode(&mut self, mode: ColorMode) {
+        let was_indexed = self.color_mode == ColorMode::Indexed;
         let palettes: Vec<_> = (0..self.durations.len())
             .map(|f| self.palette_for(f).to_vec())
             .collect();
@@ -1573,6 +3231,54 @@ impl Document {
                     p[3] = 0;
                 }
                 let p = &effective;
+                let quantize = |pixel: Pixel, stored: Option<u8>, x: i32, y: i32| {
+                    let slot = stored
+                        .map(usize::from)
+                        .filter(|&slot| p.get(slot) == Some(&pixel))
+                        .unwrap_or_else(|| {
+                            if pixel[3] == 0 && !l.background {
+                                return self.transparent_index.min(p.len() - 1);
+                            }
+                            self.dithering.as_ref().map_or_else(
+                                || nearest(pixel, p),
+                                |matrix| {
+                                    matrix.index(
+                                        pixel,
+                                        p,
+                                        x.rem_euclid(matrix.width as i32) as usize,
+                                        y.rem_euclid(matrix.height as i32) as usize,
+                                    )
+                                },
+                            )
+                        });
+                    // The transparent slot is a mask, so try visible swatches for opaque ink.
+                    if pixel[3] > 0 && !l.background && p[slot][3] == 0 {
+                        p.iter()
+                            .enumerate()
+                            .filter(|(_, color)| color[3] > 0)
+                            .min_by_key(|(_, color)| {
+                                pixel
+                                    .iter()
+                                    .zip(color.iter())
+                                    .map(|(a, b)| (*a as i32 - *b as i32).pow(2) as u32)
+                                    .sum::<u32>()
+                            })
+                            .map_or(slot, |(index, _)| index)
+                    } else {
+                        slot
+                    }
+                };
+                for outside in &mut l.cel_meta[f].outside {
+                    if mode == ColorMode::Indexed {
+                        let slot =
+                            quantize(outside.color, outside.palette_slot, outside.x, outside.y);
+                        outside.palette_slot = Some(slot as u8);
+                        outside.color = p[slot];
+                    } else {
+                        outside.palette_slot = None;
+                        outside.color = convert(outside.color, mode, p);
+                    }
+                }
                 let old = l.cel_meta[f].indices.clone();
                 if matches!(c, Pixels::Empty { .. }) && old.is_none() && !l.background {
                     continue;
@@ -1584,60 +3290,83 @@ impl Document {
                 };
                 for (i, v) in c.iter_mut().enumerate() {
                     if mode == ColorMode::Indexed {
-                        let n = old
-                            .as_ref()
-                            .and_then(|a| a.get(i))
-                            .copied()
-                            .filter(|n| p.get(*n as usize) == Some(v))
-                            .map(|n| n as usize)
-                            .unwrap_or_else(|| {
-                                if v[3] == 0 && !l.background {
-                                    return self.transparent_index.min(p.len() - 1);
-                                }
-                                self.dithering.as_ref().map_or_else(
-                                    || nearest(*v, p),
-                                    |m| m.index(*v, p, i % self.width, i / self.width),
-                                )
-                            });
-                        // Transparency is a mask, not a candidate shade for opaque artwork.
-                        let n = if v[3] > 0 && !l.background && p[n][3] == 0 {
-                            p.iter()
-                                .enumerate()
-                                .filter(|(_, c)| c[3] > 0)
-                                .min_by_key(|(_, c)| {
-                                    v.iter()
-                                        .zip(c.iter())
-                                        .map(|(a, b)| (*a as i32 - *b as i32).pow(2) as u32)
-                                        .sum::<u32>()
-                                })
-                                .map(|(i, _)| i)
-                                .unwrap_or(n)
-                        } else {
-                            n
-                        };
+                        let n = quantize(
+                            *v,
+                            old.as_ref().and_then(|slots| slots.get(i)).copied(),
+                            (i % self.width) as i32,
+                            (i / self.width) as i32,
+                        );
                         indices.push(n as u8);
                         *v = p[n];
                     } else {
                         *v = convert(*v, mode, p);
                     }
                 }
-                l.cel_meta[f].indices = if mode == ColorMode::Indexed {
-                    Some(Arc::new(indices))
+                l.cel_meta[f].indices =
+                    if mode == ColorMode::Indexed && (!was_indexed || old.is_some()) {
+                        Some(Arc::new(indices))
+                    } else {
+                        None
+                    };
+            }
+        }
+        let mut tile_palette = self.palette.clone();
+        if let Some(color) = tile_palette.get_mut(self.transparent_index) {
+            color[3] = 0;
+        }
+        // Tilesets are shared across frames. Like full sprite conversion, use
+        // frame zero; an active-frame conversion snapshot moves its frame here.
+        let mut converted_tile_palette = palettes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.palette.clone());
+        if let Some(mask) = converted_tile_palette.get_mut(self.transparent_index) {
+            mask[3] = 0;
+        }
+        for t in &mut self.tilesets {
+            for tile in &mut t.tiles {
+                // Revalidating a legacy indexed raster must not create an edit.
+                let store_indices =
+                    mode == ColorMode::Indexed && (!was_indexed || tile.indices.is_some());
+                let old = if was_indexed {
+                    tile.indices.clone()
                 } else {
                     None
                 };
-            }
-            for (f, m) in l.cel_meta.iter_mut().enumerate() {
-                for v in &mut m.outside {
-                    v.color = convert(v.color, mode, &palettes[f]);
+                let mut indices = Vec::new();
+                for (index, pixel) in tile.pixels.iter_mut().enumerate() {
+                    let authored = old.as_ref().and_then(|slots| slots.get(index)).copied();
+                    if mode == ColorMode::Indexed {
+                        let slot = authored
+                            .map(usize::from)
+                            .filter(|&slot| {
+                                tile_palette.get(slot) == Some(pixel)
+                                    || self.palette.get(slot) == Some(pixel)
+                            })
+                            .unwrap_or_else(|| {
+                                if pixel[3] == 0 {
+                                    self.transparent_index
+                                        .min(tile_palette.len().saturating_sub(1))
+                                } else {
+                                    nearest(*pixel, &tile_palette)
+                                }
+                            });
+                        *pixel = tile_palette.get(slot).copied().unwrap_or(CLEAR);
+                        indices.push(slot as u8);
+                    } else {
+                        let color = authored
+                            .map(usize::from)
+                            .filter(|&slot| {
+                                tile_palette.get(slot) == Some(pixel)
+                                    || self.palette.get(slot) == Some(pixel)
+                            })
+                            .and_then(|slot| converted_tile_palette.get(slot))
+                            .copied()
+                            .unwrap_or(*pixel);
+                        *pixel = convert(color, mode, &tile_palette);
+                    }
                 }
-            }
-        }
-        for t in &mut self.tilesets {
-            for c in &mut t.tiles {
-                for v in c.iter_mut() {
-                    *v = convert(*v, mode, &self.palette);
-                }
+                tile.indices = store_indices.then(|| Arc::new(indices));
             }
         }
     }
@@ -1668,52 +3397,28 @@ impl Document {
     }
     /// Move a swatch, remapping indices rather than recoloring existing artwork.
     pub fn reorder_palette(&mut self, from: usize, to: usize) -> Result<(), String> {
-        let n = self.palette.len();
-        if from >= n || to >= n {
+        let count = self.palette.len();
+        if from >= count || to >= count {
             return Err("Invalid palette position".into());
         }
-        if self
-            .frame_palettes
-            .iter()
-            .any(|p| !p.is_empty() && p.len() != n)
-        {
-            return Err("Frame palettes must have matching sizes to reorder".into());
-        }
-        let mut order: Vec<usize> = (0..n).collect();
+        let mut order: Vec<usize> = (0..count).collect();
         let item = order.remove(from);
         order.insert(to, item);
-        let mut remap = vec![0; n];
-        for (new, old) in order.iter().enumerate() {
-            remap[*old] = new;
-        }
-        let reorder = |p: &mut Vec<Pixel>| {
-            if !p.is_empty() {
-                let old = p.clone();
-                *p = order.iter().map(|i| old[*i]).collect();
-            }
-        };
-        reorder(&mut self.palette);
-        for p in &mut self.frame_palettes {
-            reorder(p);
-        }
-        self.palette_names.resize(n, String::new());
-        let name = self.palette_names.remove(from);
-        self.palette_names.insert(to, name);
-        self.transparent_index = remap[self.transparent_index.min(n - 1)];
-        self.drawing_index = self.drawing_index.map(|i| remap[i.min(n - 1)]);
-        for l in &mut self.layers {
-            for m in &mut l.cel_meta {
-                if let Some(indices) = &mut m.indices {
-                    for i in Arc::make_mut(indices) {
-                        *i = remap.get(*i as usize).copied().unwrap_or(0) as u8;
-                    }
-                }
-            }
-        }
+        self.permute_palette(&order)?;
         Ok(())
     }
     /// Append intermediate shades without changing any existing palette slots.
     pub fn palette_ramp(&mut self, from: usize, to: usize, steps: usize) -> Result<(), String> {
+        self.palette_ramp_interpolated(from, to, steps, crate::workflows::RampInterpolation::Rgb)
+    }
+
+    pub fn palette_ramp_interpolated(
+        &mut self,
+        from: usize,
+        to: usize,
+        steps: usize,
+        interpolation: crate::workflows::RampInterpolation,
+    ) -> Result<(), String> {
         if from >= self.palette.len()
             || to >= self.palette.len()
             || !(3..=256).contains(&steps)
@@ -1728,11 +3433,17 @@ impl Document {
         {
             return Err("Frame palettes must have matching sizes to add a shared ramp".into());
         }
-        let colors = crate::workflows::ramp(self.palette[from], self.palette[to], steps);
+        let colors = crate::workflows::ramp_interpolated(
+            self.palette[from],
+            self.palette[to],
+            steps,
+            interpolation,
+        );
         self.palette.extend_from_slice(&colors[1..steps - 1]);
         for p in &mut self.frame_palettes {
             if !p.is_empty() {
-                let ramp = crate::workflows::ramp(p[from], p[to], steps);
+                let ramp =
+                    crate::workflows::ramp_interpolated(p[from], p[to], steps, interpolation);
                 p.extend_from_slice(&ramp[1..steps - 1]);
             }
         }
@@ -1775,7 +3486,16 @@ impl Document {
                     if index == self.transparent_index && !l.background {
                         replacement[3] = 0;
                     }
-                    if l.background || matches!(c, Pixels::Dense(_)) {
+                    for outside in &mut l.cel_meta[f].outside {
+                        let matches = outside.palette_slot.map_or_else(
+                            || p.get(index) == Some(&outside.color),
+                            |slot| usize::from(slot) == index,
+                        );
+                        if matches {
+                            outside.color = replacement;
+                        }
+                    }
+                    if l.background || c.is_dense() {
                         for (i, v) in c.iter_mut().enumerate() {
                             if slot_at(i, *v) == index {
                                 *v = replacement;
@@ -1799,13 +3519,6 @@ impl Document {
                                     c.set(i, replacement);
                                 }
                             }
-                        }
-                    }
-                }
-                for (f, m) in l.cel_meta.iter_mut().enumerate() {
-                    for v in &mut m.outside {
-                        if palettes[f].get(index) == Some(&v.color) {
-                            v.color = color;
                         }
                     }
                 }
@@ -1888,8 +3601,15 @@ impl Document {
                     if let (Some(indexes), Some(slot)) = (&mut indexes, palette_index) {
                         indexes[index] = slot;
                     }
-                } else if color != CLEAR {
-                    outside.push(OutsidePixel { x, y, color });
+                } else if color != CLEAR
+                    || palette_index.is_some_and(|slot| slot as usize != self.transparent_index)
+                {
+                    outside.push(OutsidePixel {
+                        x,
+                        y,
+                        color,
+                        palette_slot: palette_index,
+                    });
                 }
             };
             if let Some(indices) = &meta.indices {
@@ -1912,7 +3632,12 @@ impl Document {
                 });
             }
             for pixel in &meta.outside {
-                place(pixel.x + tx - sx, pixel.y + ty - sy, pixel.color, None);
+                place(
+                    pixel.x + tx - sx,
+                    pixel.y + ty - sy,
+                    pixel.color,
+                    pixel.palette_slot,
+                );
             }
             meta.outside = outside;
             meta.indices = indexes.map(Arc::new);
@@ -1941,13 +3666,17 @@ impl Document {
         });
         meta[source].artwork_link = Some(id);
         meta[frame].artwork_link = Some(id);
+        meta[frame].image_id = meta[source].image_id;
     }
 
     pub fn unlink_cel(&mut self, layer: usize, frame: usize) -> Result<(), String> {
         if !self.editable(layer) || frame >= self.durations.len() {
             return Err("Choose an unlocked cel".into());
         }
-        self.layers[layer].cel_meta[frame].artwork_link = None;
+        let meta = &mut self.layers[layer].cel_meta[frame];
+        if meta.artwork_link.take().is_some() {
+            meta.image_id = EditorId::default();
+        }
         self.layers[layer].prune_cel_links();
         Ok(())
     }
@@ -2052,16 +3781,18 @@ impl Document {
                 .iter()
                 .position(|pixel| pixel.x == dest_x && pixel.y == dest_y)
             {
-                if color == CLEAR {
+                if color == CLEAR && !creates_index {
                     meta.outside.swap_remove(position);
                 } else {
                     meta.outside[position].color = color;
+                    meta.outside[position].palette_slot = indexed.then_some(index);
                 }
-            } else if color != CLEAR {
+            } else if color != CLEAR || creates_index {
                 meta.outside.push(OutsidePixel {
                     x: dest_x,
                     y: dest_y,
                     color,
+                    palette_slot: indexed.then_some(index),
                 });
             }
         }
@@ -2094,11 +3825,113 @@ impl Document {
         let (color, n) = self.drawing_color(l, f, color);
         self.draw_pixel(l, f, i, color, n);
     }
+    /// Estimate pixels inspected and backing allocated by a scoped color replacement.
+    pub fn color_replacement_cost(
+        &self,
+        layer: usize,
+        frame: usize,
+        source: Pixel,
+        replacement: Pixel,
+        area: usize,
+    ) -> (usize, usize) {
+        let layer_data = &self.layers[layer];
+        let cel = &layer_data.cels[frame];
+        let (color, slot) = self.drawing_color(layer, frame, replacement);
+        if area == 0 || color == source {
+            return (1, 0);
+        }
+        let meta = &layer_data.cel_meta[frame];
+        let existing = cel.allocation_pixels();
+        let (scan, raster) = if source == CLEAR {
+            // Each changed pixel could require a separate sparse block.
+            let raster = (existing + area * (PIXEL_BLOCK + 8)).min(cel.len());
+            (area, raster)
+        } else {
+            (area.min(existing), existing)
+        };
+        if scan == 0 {
+            return (1, 0);
+        }
+        let indices = if self.color_mode == ColorMode::Indexed
+            && (meta.indices.is_some() || slot as usize != self.transparent_index)
+        {
+            cel.len().div_ceil(std::mem::size_of::<Pixel>())
+        } else {
+            0
+        };
+        let link_work = if meta.artwork_link.is_some() {
+            self.durations.len()
+        } else {
+            0
+        };
+        (scan + link_work, raster + indices)
+    }
+
+    /// Replace an exact RGBA match in one editable raster cel.
+    /// The region contains the left, top, right, and bottom edges, with exclusive final edges.
+    pub fn replace_color_in_cel(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        source: Pixel,
+        replacement: Pixel,
+        region: [usize; 4],
+        selected: impl Fn(usize) -> bool,
+    ) -> usize {
+        let [left, top, right, bottom] = region;
+        let width = self.width;
+        if source == replacement
+            || frame >= self.durations.len()
+            || !self.editable(layer)
+            || self.layers[layer].tileset.is_some()
+            || left >= right
+            || top >= bottom
+            || right > width
+            || bottom > self.height
+        {
+            return 0;
+        }
+        let (color, slot) = self.drawing_color(layer, frame, replacement);
+        if color == source {
+            return 0;
+        }
+        let cel = self.layers[layer].cels[frame].clone();
+        let mut changed = 0;
+        let mut replace = |i, pixel| {
+            if pixel == source
+                && (left..right).contains(&(i % width))
+                && (top..bottom).contains(&(i / width))
+                && selected(i)
+            {
+                if changed == 0 && self.layers[layer].cel_meta[frame].artwork_link.is_some() {
+                    // An edit with explicit frame or selection limits must not propagate to linked cels.
+                    let meta = &mut self.layers[layer].cel_meta[frame];
+                    meta.artwork_link = None;
+                    meta.image_id = EditorId::default();
+                    self.layers[layer].prune_cel_links();
+                }
+                self.draw_pixel(layer, frame, i, color, slot);
+                changed += 1;
+            }
+        };
+        let area = (right - left) * (bottom - top);
+        if source == CLEAR || area < cel.allocation_pixels() {
+            for y in top..bottom {
+                for i in y * width + left..y * width + right {
+                    replace(i, cel[i]);
+                }
+            }
+        } else {
+            cel.visit_nonclear(replace);
+        }
+        changed
+    }
+
     pub fn editable(&self, l: usize) -> bool {
         self.layer_unlocked(l) && !self.layers[l].group
     }
 
-    fn layer_unlocked(&self, l: usize) -> bool {
+    pub(crate) fn layer_unlocked(&self, l: usize) -> bool {
         let mut p = Some(l);
         let mut n = 0;
         while let Some(i) = p {
@@ -2114,34 +3947,42 @@ impl Document {
         true
     }
     pub fn stamp(&mut self, l: usize, f: usize, x: i32, y: i32, c: Pixel, size: i32) {
+        self.stamp_on_axes((l, f), (x, y), c, size, self.wraparound.into());
+    }
+
+    fn stamp_on_axes(
+        &mut self,
+        (l, f): (usize, usize),
+        (x, y): (i32, i32),
+        c: Pixel,
+        size: i32,
+        axes: WrapAxes,
+    ) {
         if !self.editable(l) || self.layers[l].tileset.is_some() {
             return;
         }
         let (c, ci) = self.drawing_color(l, f, self.snapped_color(f, c));
-        let size = size.clamp(1, MAX_BRUSH_SIZE);
-        let lo = -(size / 2);
-        for dy in lo..lo + size {
-            for dx in lo..lo + size {
-                let (a, b) = (
-                    2 * dx + if size % 2 == 0 { 1 } else { 0 },
-                    2 * dy + if size % 2 == 0 { 1 } else { 0 },
-                );
-                let accept = match self.brush_shape {
-                    BrushShape::Round => a * a + b * b <= size * size,
-                    BrushShape::Square => true,
-                    BrushShape::Diamond => a.abs() + b.abs() <= size,
-                    BrushShape::Horizontal => dy == 0,
-                    BrushShape::Vertical => dx == 0,
-                };
-                if accept && let Some(i) = self.drawing_position(x + dx, y + dy) {
-                    self.draw_pixel(l, f, i, c, ci);
-                }
+        for (dx, dy) in self.brush_shape.offsets(size) {
+            if let Some(i) = self.position_on_axes(x + dx, y + dy, axes) {
+                self.draw_pixel(l, f, i, c, ci);
             }
         }
     }
     pub fn line(&mut self, l: usize, f: usize, a: (i32, i32), b: (i32, i32), c: Pixel, size: i32) {
+        self.line_on_axes((l, f), a, b, c, size, self.wraparound.into());
+    }
+
+    pub fn line_on_axes(
+        &mut self,
+        cel: (usize, usize),
+        a: (i32, i32),
+        b: (i32, i32),
+        c: Pixel,
+        size: i32,
+        axes: WrapAxes,
+    ) {
         let _: Result<(), std::convert::Infallible> = line_pixels(a, b, |(x, y)| {
-            self.stamp(l, f, x, y, c, size);
+            self.stamp_on_axes(cel, (x, y), c, size, axes);
             Ok(())
         });
     }
@@ -2158,6 +3999,18 @@ impl Document {
         c: Pixel,
         filled: bool,
         size: i32,
+    ) {
+        self.ellipse_on_axes((l, f), (a, b), c, filled, size, self.wraparound.into());
+    }
+
+    pub fn ellipse_on_axes(
+        &mut self,
+        cel: (usize, usize),
+        (a, b): ((i32, i32), (i32, i32)),
+        c: Pixel,
+        filled: bool,
+        size: i32,
+        axes: WrapAxes,
     ) {
         let (mut x0, mut y0, mut x1, mut y1) = (
             a.0.min(b.0) as i64,
@@ -2177,10 +4030,17 @@ impl Document {
         b1 = 8 * b * b;
         let mut draw = |lx: i64, rx: i64, y: i64| {
             if filled {
-                self.line(l, f, (lx as i32, y as i32), (rx as i32, y as i32), c, 1)
+                self.line_on_axes(
+                    cel,
+                    (lx as i32, y as i32),
+                    (rx as i32, y as i32),
+                    c,
+                    1,
+                    axes,
+                )
             } else {
-                self.stamp(l, f, lx as i32, y as i32, c, size);
-                self.stamp(l, f, rx as i32, y as i32, c, size);
+                self.stamp_on_axes(cel, (lx as i32, y as i32), c, size, axes);
+                self.stamp_on_axes(cel, (rx as i32, y as i32), c, size, axes);
             }
         };
         loop {
@@ -2211,14 +4071,12 @@ impl Document {
         }
     }
     pub fn drawing_position(&self, x: i32, y: i32) -> Option<usize> {
-        if self.wraparound {
-            self.index(
-                x.rem_euclid(self.width as i32),
-                y.rem_euclid(self.height as i32),
-            )
-        } else {
-            self.index(x, y)
-        }
+        self.position_on_axes(x, y, self.wraparound.into())
+    }
+
+    pub fn position_on_axes(&self, x: i32, y: i32, axes: WrapAxes) -> Option<usize> {
+        let (x, y) = axes.position((self.width, self.height), (x, y))?;
+        Some(y as usize * self.width + x as usize)
     }
     pub fn fill(&mut self, l: usize, f: usize, x: i32, y: i32, c: Pixel) {
         if !self.editable(l) || self.layers[l].tileset.is_some() {
@@ -2246,20 +4104,87 @@ impl Document {
             }
         }
     }
-    pub fn layer_pixels(&self, l: usize, f: usize) -> Vec<Pixel> {
-        let layer = &self.layers[l];
-        let Some(ti) = layer.tileset else {
-            return layer.cels[f].to_vec();
+    /// Read one authored layer pixel without allocating a full layer raster.
+    pub fn sample_layer(&self, layer: usize, frame: usize, x: i32, y: i32) -> Option<Pixel> {
+        let index = self.index(x, y)?;
+        let layer_data = self.layers.get(layer)?;
+        if let Some(set) = layer_data
+            .tileset
+            .and_then(|index| self.tilesets.get(index))
+        {
+            return Some(self.sample_tile_layer(layer, frame, x, y, set));
+        }
+        Some(layer_data.cels.get(frame)?[index])
+    }
+
+    fn sample_tile_layer(
+        &self,
+        layer: usize,
+        frame: usize,
+        x: i32,
+        y: i32,
+        set: &Tileset,
+    ) -> Pixel {
+        let Some((geometry, col, row)) = self.tile_at_point(layer, frame, (x, y)) else {
+            return CLEAR;
         };
-        let Some(t) = self.tilesets.get(ti) else {
-            return vec![CLEAR; self.width * self.height];
+        let placement = self.layers[layer].tile_cels[frame][row * geometry.columns + col];
+        let px = (i64::from(x) - i64::from(geometry.x)) as usize % set.width;
+        let py = (i64::from(y) - i64::from(geometry.y)) as usize % set.height;
+        self.tile_placement_pixel(set, placement, [px, py], frame)
+    }
+
+    /// Sample a displayed tile using this document's effective frame palette.
+    pub fn tile_placement_pixel(
+        &self,
+        set: &Tileset,
+        placement: u32,
+        [x, y]: [usize; 2],
+        frame: usize,
+    ) -> Pixel {
+        if self.color_mode != ColorMode::Indexed {
+            return set.placement_pixel(placement, x, y);
+        }
+        let Some(tile) = (placement & TILE_ID_MASK)
+            .checked_sub(1)
+            .and_then(|id| set.tiles.get(id as usize))
+        else {
+            return CLEAR;
+        };
+        let Some(offset) = set.source_offset(placement, x, y) else {
+            return CLEAR;
+        };
+        tile.pixel_for_palette(
+            offset,
+            &self.palette,
+            self.palette_for(frame),
+            self.transparent_index,
+        )
+    }
+
+    pub fn layer_pixels(&self, l: usize, f: usize) -> Vec<Pixel> {
+        if self.layers[l].tileset.is_none() {
+            return self.layers[l].cels[f].to_vec();
+        }
+        let mut out = vec![CLEAR; self.width * self.height];
+        self.visit_tile_pixels(l, f, |x, y, color| {
+            if let Some(index) = self.index(x, y) {
+                out[index] = color;
+            }
+        });
+        out
+    }
+
+    fn visit_tile_pixels(&self, l: usize, f: usize, mut visit: impl FnMut(i32, i32, Pixel)) {
+        let layer = &self.layers[l];
+        let Some(t) = layer.tileset.and_then(|index| self.tilesets.get(index)) else {
+            return;
         };
         let geometry = layer.cel_meta[f].tilemap.as_ref();
         let cols = geometry.map_or(self.width.div_ceil(t.width), |g| g.columns);
         let (ox, oy) = geometry.map_or((0, 0), |g| (g.x, g.y));
-        let mut out = vec![CLEAR; self.width * self.height];
         for (i, &id) in layer.tile_cels[f].iter().enumerate() {
-            let n = (id & 0x1fffffff) as usize;
+            let n = (id & 0x1fff_ffff) as usize;
             if n == 0 {
                 continue;
             }
@@ -2268,29 +4193,26 @@ impl Document {
             };
             for y in 0..t.height {
                 for x in 0..t.width {
-                    let (mut sx, mut sy) = (x, y);
-                    if id & 0x20000000 != 0 {
-                        std::mem::swap(&mut sx, &mut sy);
-                    }
-                    if sx >= t.width || sy >= t.height {
+                    let Some(offset) = t.source_offset(id, x, y) else {
                         continue;
-                    }
-                    if id & 0x80000000 != 0 {
-                        sx = t.width - 1 - sx
-                    }
-                    if id & 0x40000000 != 0 {
-                        sy = t.height - 1 - sy
-                    }
-                    if let Some(p) = self.index(
+                    };
+                    visit(
                         ox + (i % cols * t.width + x) as i32,
                         oy + (i / cols * t.height + y) as i32,
-                    ) {
-                        out[p] = tile[sy * t.width + sx];
-                    }
+                        if self.color_mode == ColorMode::Indexed {
+                            tile.pixel_for_palette(
+                                offset,
+                                &self.palette,
+                                self.palette_for(f),
+                                self.transparent_index,
+                            )
+                        } else {
+                            tile[offset]
+                        },
+                    );
                 }
             }
         }
-        out
     }
     /// Compare only the inputs used to composite this frame. Shared raster
     /// buffers and layer metadata make the common unchanged check cheap.
@@ -2364,6 +4286,7 @@ impl Document {
             return Err("Choose an unlocked layer and canvas-sized mask".into());
         }
         self.layers[layer].mask = mask;
+        self.layers[layer].mask_outside = Arc::default();
         Ok(())
     }
 
@@ -2391,6 +4314,22 @@ impl Document {
     }
 
     pub fn same_frame_pixels(&self, other: &Self, frame: usize) -> bool {
+        self.same_frame_layout(other, frame)
+            && self
+                .layers
+                .iter()
+                .zip(&other.layers)
+                .all(|(a, b)| match (a.tileset, b.tileset) {
+                    (None, None) => a.cels[frame] == b.cels[frame],
+                    (Some(a_set), Some(b_set)) => {
+                        a.tile_cels[frame] == b.tile_cels[frame]
+                            && self.tilesets.get(a_set) == other.tilesets.get(b_set)
+                    }
+                    _ => false,
+                })
+    }
+
+    fn same_frame_layout(&self, other: &Self, frame: usize) -> bool {
         if frame >= self.durations.len() || frame >= other.durations.len() {
             return false;
         }
@@ -2398,6 +4337,12 @@ impl Document {
             && self.height == other.height
             && self.compose_groups == other.compose_groups
             && self.color_profile == other.color_profile
+            && self.color_mode == other.color_mode
+            && (self.color_mode != ColorMode::Indexed
+                || !self.layers.iter().any(|layer| layer.tileset.is_some())
+                || (self.palette == other.palette
+                    && self.palette_for(frame) == other.palette_for(frame)
+                    && self.transparent_index == other.transparent_index))
             && self.layers.len() == other.layers.len()
             && self
                 .layers
@@ -2416,42 +4361,210 @@ impl Document {
                         && a.opacity == b.opacity
                         && a.blend == b.blend
                         && a.mask == b.mask
+                        && (key.x == 0 && key.y == 0 && !a.is_ase_reference()
+                            || a.mask_outside == b.mask_outside)
                         && a.adjustment == b.adjustment
                         && key == other.sampled_cel_key(layer, frame)
                         && left.opacity == right.opacity
                         && left.z_index == right.z_index
+                        && a.is_ase_reference() == b.is_ase_reference()
+                        && (!a.is_ase_reference()
+                            || (left.reference_bounds == right.reference_bounds
+                                && left.bounds == right.bounds
+                                && left.outside == right.outside))
                         && match (a.tileset, b.tileset) {
                             (None, None) => {
-                                a.cels[frame] == b.cels[frame]
-                                    && ((key.x == 0 && key.y == 0) || left.outside == right.outside)
+                                (key.x == 0 && key.y == 0) || left.outside == right.outside
                             }
-                            (Some(a_set), Some(b_set)) => {
-                                left.tilemap == right.tilemap
-                                    && a.tile_cels[frame] == b.tile_cels[frame]
-                                    && self.tilesets.get(a_set) == other.tilesets.get(b_set)
-                            }
+                            (Some(_), Some(_)) => left.tilemap == right.tilemap,
                             _ => false,
                         }
                 })
     }
 
     pub fn composite(&self, f: usize) -> Vec<Pixel> {
-        self.composite_group(f, None, 0)
+        self.composite_group(f, None, 0, None, false)
     }
-    fn composite_group(&self, f: usize, parent: Option<usize>, depth: usize) -> Vec<Pixel> {
-        let mut out = vec![CLEAR; self.width * self.height];
-        self.composite_into(f, parent, depth, &mut out);
-        out
+    pub fn composite_view(&self, f: usize) -> Vec<Pixel> {
+        self.composite_group(f, None, 0, None, true)
     }
-    fn composite_into(&self, f: usize, parent: Option<usize>, depth: usize, out: &mut Vec<Pixel>) {
-        if depth > self.layers.len() {
+    /// Sample the same compositing path as a full frame while visiting a one-pixel region.
+    pub fn sample_composite(
+        &self,
+        frame: usize,
+        x: i32,
+        y: i32,
+        references: bool,
+    ) -> Option<Pixel> {
+        self.index(x, y)?;
+        if frame >= self.durations.len() {
+            return None;
+        }
+        let area = CompositeArea {
+            x: x as usize,
+            y: y as usize,
+            width: 1,
+            height: 1,
+        };
+        self.composite_area(frame, None, 0, None, references, area)
+            .into_iter()
+            .next()
+    }
+
+    /// Composite a display-space region in sprite coordinates without building the full frame.
+    pub fn composite_view_region(
+        &self,
+        frame: usize,
+        [x, y]: [usize; 2],
+        [width, height]: [usize; 2],
+    ) -> Option<Vec<Pixel>> {
+        if frame >= self.durations.len()
+            || width == 0
+            || height == 0
+            || x.checked_add(width)? > self.width
+            || y.checked_add(height)? > self.height
+        {
+            return None;
+        }
+        let area = CompositeArea {
+            x,
+            y,
+            width,
+            height,
+        };
+        Some(self.composite_area(frame, None, 0, None, true, area))
+    }
+    fn visit_scaled_reference(
+        &self,
+        layer: usize,
+        frame: usize,
+        [dx, dy]: [i32; 2],
+        area: CompositeArea,
+        mut visit: impl FnMut(Option<usize>, [i32; 2], usize, Pixel),
+    ) {
+        const FIXED: i64 = 65_536;
+        const HALF: i64 = FIXED / 2;
+        let layer = &self.layers[layer];
+        let meta = &layer.cel_meta[frame];
+        let Some([x, y, w, h]) = meta.reference_bounds.map(|b| b.map(i64::from)) else {
+            return;
+        };
+        let [sx, sy, sw, sh] = meta
+            .bounds
+            .unwrap_or([0, 0, self.width as i32, self.height as i32]);
+        if w <= 0 || h <= 0 || sw <= 0 || sh <= 0 {
             return;
         }
+        let outside: std::collections::HashMap<_, _> = meta
+            .outside
+            .iter()
+            .map(|pixel| ((pixel.x, pixel.y), pixel.color))
+            .collect();
+        let x = x + i64::from(dx) * FIXED;
+        let y = y + i64::from(dy) * FIXED;
+        let edge = |value: i64, limit: usize| {
+            (value - HALF + FIXED - 1)
+                .div_euclid(FIXED)
+                .clamp(0, limit as i64) as usize
+        };
+        let left = edge(x, area.x + area.width).max(area.x);
+        let right = edge(x + w, area.x + area.width);
+        let top = edge(y, area.y + area.height).max(area.y);
+        let bottom = edge(y + h, area.y + area.height);
+        for row in top..bottom {
+            let py = sy + ((row as i64 * FIXED + HALF - y) * i64::from(sh) / h) as i32;
+            for col in left..right {
+                let px = sx + ((col as i64 * FIXED + HALF - x) * i64::from(sw) / w) as i32;
+                let source = self.index(px, py);
+                let pixel = source.map_or_else(
+                    || outside.get(&(px, py)).copied().unwrap_or(CLEAR),
+                    |index| layer.cels[frame][index],
+                );
+                visit(
+                    source,
+                    [px, py],
+                    (row - area.y) * area.width + col - area.x,
+                    pixel,
+                );
+            }
+        }
+    }
+    pub(crate) fn composite_layer_for_export(&self, frame: usize, layer: usize) -> Vec<Pixel> {
+        let mut include = vec![false; self.layers.len()];
+        let mut index = Some(layer);
+        while let Some(layer) = index {
+            include[layer] = true;
+            index = self.layers[layer].parent;
+        }
+        self.composite_group(frame, None, 0, Some(&include), false)
+    }
+    fn composite_group(
+        &self,
+        f: usize,
+        parent: Option<usize>,
+        depth: usize,
+        include: Option<&[bool]>,
+        show_references: bool,
+    ) -> Vec<Pixel> {
+        self.composite_area(
+            f,
+            parent,
+            depth,
+            include,
+            show_references,
+            CompositeArea::canvas(self.width, self.height),
+        )
+    }
+
+    fn composite_area(
+        &self,
+        f: usize,
+        parent: Option<usize>,
+        depth: usize,
+        include: Option<&[bool]>,
+        show_references: bool,
+        area: CompositeArea,
+    ) -> Vec<Pixel> {
+        let mut out = vec![CLEAR; area.width * area.height];
+        self.composite_into_area(f, parent, depth, include, show_references, (area, &mut out));
+        out
+    }
+    fn composite_into(
+        &self,
+        f: usize,
+        parent: Option<usize>,
+        depth: usize,
+        include: Option<&[bool]>,
+        show_references: bool,
+        out: &mut [Pixel],
+    ) {
+        let area = CompositeArea::canvas(self.width, self.height);
+        self.composite_into_area(f, parent, depth, include, show_references, (area, out));
+    }
+
+    fn composite_into_area(
+        &self,
+        f: usize,
+        parent: Option<usize>,
+        depth: usize,
+        include: Option<&[bool]>,
+        show_references: bool,
+        (area, out): (CompositeArea, &mut [Pixel]),
+    ) {
+        if depth > self.layers.len() || out.is_empty() {
+            return;
+        }
+        let cropped = area != CompositeArea::canvas(self.width, self.height);
         let mut order: Vec<_> = self
             .layers
             .iter()
             .enumerate()
-            .filter(|(_, l)| l.parent == parent && l.visible)
+            .filter(|(index, layer)| {
+                layer.parent == parent
+                    && layer.visible
+                    && (show_references || !layer.is_ase_reference())
+                    && include.is_none_or(|flags| flags[*index])
+            })
             .map(|(i, l)| (i as i32 + l.cel_meta[f].z_index as i32, i))
             .collect();
         order.sort_by_key(|p| (p.0, self.layers[p.1].cel_meta[f].z_index));
@@ -2461,7 +4574,14 @@ impl Document {
             let key = self.sampled_cel_key(i, f);
             if l.group && !self.compose_groups && l.mask.is_none() && key == CelKeyframe::default()
             {
-                self.composite_into(f, Some(i), depth + 1, out);
+                self.composite_into_area(
+                    f,
+                    Some(i),
+                    depth + 1,
+                    include,
+                    show_references,
+                    (area, out),
+                );
                 transparent_rgb_possible = out.iter().any(|p| p[3] == 0 && *p != CLEAR);
                 continue;
             }
@@ -2481,20 +4601,54 @@ impl Document {
                     ((u16::from(opacity) * u16::from(mask[index][3]) + 127) / 255) as u8
                 })
             };
+            let outside_coverage = |x: i32, y: i32| {
+                if l.mask.is_none() {
+                    return opacity;
+                }
+                let alpha = l
+                    .mask_outside
+                    .binary_search_by_key(&(x, y), OutsidePixel::position)
+                    .map_or(0, |index| l.mask_outside[index].color[3]);
+                ((u16::from(opacity) * u16::from(alpha) + 127) / 255) as u8
+            };
+            if l.is_ase_reference() && l.cel_meta[f].reference_bounds.is_some() {
+                self.visit_scaled_reference(
+                    i,
+                    f,
+                    [key.x, key.y],
+                    area,
+                    |source, [x, y], dest, pixel| {
+                        let alpha = source.map_or_else(|| outside_coverage(x, y), coverage);
+                        if pixel[3] != 0 && alpha != 0 {
+                            out[dest] = blend(out[dest], pixel, alpha, l.blend);
+                        }
+                    },
+                );
+                continue;
+            }
             if let Some(adjustment) = &l.adjustment {
                 for (index, pixel) in out
                     .iter_mut()
                     .enumerate()
                     .filter(|(_, pixel)| pixel[3] != 0)
                 {
-                    let Some(source) = self.index(
-                        (index % self.width) as i32 - key.x,
-                        (index / self.width) as i32 - key.y,
-                    ) else {
+                    let (x, y) = area.coordinates(index);
+                    let (x, y) = (x - key.x, y - key.y);
+                    let alpha = self.index(x, y).map_or_else(
+                        || {
+                            if l.mask.is_some() {
+                                outside_coverage(x, y)
+                            } else {
+                                0
+                            }
+                        },
+                        coverage,
+                    );
+                    if alpha == 0 {
                         continue;
-                    };
+                    }
                     let adjusted = adjustment.apply(*pixel);
-                    let alpha = u16::from(coverage(source));
+                    let alpha = u16::from(alpha);
                     for (channel, target) in pixel[..3].iter_mut().zip(adjusted) {
                         *channel = ((u16::from(*channel) * (255 - alpha)
                             + u16::from(target) * alpha
@@ -2504,27 +4658,105 @@ impl Document {
                 }
                 continue;
             }
-            if (key.x != 0 || key.y != 0) && l.tileset.is_none() && !l.group && l.mask.is_none() {
+            if (key.x != 0 || key.y != 0)
+                && l.tileset.is_none()
+                && !l.group
+                && (l.mask.is_none() || !l.mask_outside.is_empty())
+            {
                 for source in &l.cel_meta[f].outside {
-                    if let Some(index) = self.index(source.x + key.x, source.y + key.y) {
+                    if let Some(index) = area.index(source.x + key.x, source.y + key.y) {
                         let target = &mut out[index];
-                        if source.color[3] != 0 || target[3] == 0 {
-                            *target = blend(*target, source.color, opacity, l.blend);
+                        let alpha = outside_coverage(source.x, source.y);
+                        if (alpha != 0 || l.mask.is_none())
+                            && (source.color[3] != 0 || target[3] == 0)
+                        {
+                            *target = blend(*target, source.color, alpha, l.blend);
                             transparent_rgb_possible |= target[3] == 0 && *target != CLEAR;
                         }
                     }
                 }
             }
-            let rendered;
-            let pixels = if l.group {
-                rendered = self.composite_group(f, Some(i), depth + 1);
-                &rendered
-            } else if l.tileset.is_some() {
-                rendered = self.layer_pixels(i, f);
-                &rendered
-            } else if let Pixels::Dense(pixels) = &l.cels[f] {
-                pixels.as_slice()
-            } else {
+            if cropped {
+                let source_area = area.source([key.x, key.y], self.width, self.height);
+                let group = l.group.then(|| {
+                    self.composite_area(
+                        f,
+                        Some(i),
+                        depth + 1,
+                        include,
+                        show_references,
+                        source_area,
+                    )
+                });
+                let tileset = l.tileset.and_then(|index| self.tilesets.get(index));
+                for (index, target) in out.iter_mut().enumerate() {
+                    let (x, y) = area.coordinates(index);
+                    let (x, y) = (x - key.x, y - key.y);
+                    if let Some(source) = self.index(x, y) {
+                        let pixel = if let Some(group) = &group {
+                            group[source_area.index(x, y).unwrap()]
+                        } else if let Some(set) = tileset {
+                            self.sample_tile_layer(i, f, x, y, set)
+                        } else if l.tileset.is_some() {
+                            CLEAR
+                        } else {
+                            l.cels[f][source]
+                        };
+                        let alpha = coverage(source);
+                        if (alpha != 0 || l.mask.is_none()) && (pixel[3] != 0 || target[3] == 0) {
+                            *target = blend(*target, pixel, alpha, l.blend);
+                        }
+                    } else if let Some(set) = tileset
+                        && (key.x != 0 || key.y != 0)
+                        && (l.mask.is_none() || !l.mask_outside.is_empty())
+                    {
+                        let pixel = self.sample_tile_layer(i, f, x, y, set);
+                        let alpha = outside_coverage(x, y);
+                        if (alpha != 0 || l.mask.is_none())
+                            && (pixel[3] != 0 || (pixel != CLEAR && target[3] == 0))
+                        {
+                            *target = blend(*target, pixel, alpha, l.blend);
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(set) = l.tileset.and_then(|index| self.tilesets.get(index))
+                && (key.x != 0 || key.y != 0)
+                && (l.mask.is_none() || !l.mask_outside.is_empty())
+            {
+                let (x, y, columns, rows) = l.cel_meta[f].tilemap.as_ref().map_or_else(
+                    || {
+                        (
+                            0,
+                            0,
+                            self.width.div_ceil(set.width),
+                            self.height.div_ceil(set.height),
+                        )
+                    },
+                    |g| (g.x, g.y, g.columns, g.rows),
+                );
+                if x < 0
+                    || y < 0
+                    || i64::from(x) + (columns * set.width) as i64 > self.width as i64
+                    || i64::from(y) + (rows * set.height) as i64 > self.height as i64
+                {
+                    self.visit_tile_pixels(i, f, |x, y, color| {
+                        if self.index(x, y).is_none()
+                            && let Some(index) = self.index(x + key.x, y + key.y)
+                            && (color[3] != 0 || (color != CLEAR && out[index][3] == 0))
+                        {
+                            let alpha = outside_coverage(x, y);
+                            if alpha != 0 || l.mask.is_none() {
+                                out[index] = blend(out[index], color, alpha, l.blend);
+                                transparent_rgb_possible |=
+                                    out[index][3] == 0 && out[index] != CLEAR;
+                            }
+                        }
+                    });
+                }
+            }
+            if !l.group && l.tileset.is_none() && !l.cels[f].is_dense() {
                 if transparent_rgb_possible {
                     for (index, target) in out.iter_mut().enumerate() {
                         if target[3] == 0
@@ -2552,26 +4784,43 @@ impl Document {
                     }
                 });
                 continue;
-            };
-            if key.x == 0 && key.y == 0 && l.mask.is_none() {
-                for (target, &source) in out.iter_mut().zip(pixels) {
-                    if opacity == 255 && source[3] == 255 && l.blend == BlendMode::Normal {
-                        *target = source;
-                    } else if source[3] != 0 || target[3] == 0 {
-                        *target = blend(*target, source, opacity, l.blend);
-                        transparent_rgb_possible |= target[3] == 0 && *target != CLEAR;
+            }
+            let mut composite_slice = |start: usize, pixels: &[Pixel]| {
+                if key.x == 0 && key.y == 0 && l.mask.is_none() {
+                    for (target, &source) in out[start..start + pixels.len()].iter_mut().zip(pixels)
+                    {
+                        if opacity == 255 && source[3] == 255 && l.blend == BlendMode::Normal {
+                            *target = source;
+                        } else if source[3] != 0 || target[3] == 0 {
+                            *target = blend(*target, source, opacity, l.blend);
+                            transparent_rgb_possible |= target[3] == 0 && *target != CLEAR;
+                        }
+                    }
+                    return;
+                }
+                for (index, &source) in (start..).zip(pixels) {
+                    if let Some(dest) = destination(index) {
+                        let target = &mut out[dest];
+                        let opacity = coverage(index);
+                        if (opacity != 0 || l.mask.is_none()) && (source[3] != 0 || target[3] == 0)
+                        {
+                            *target = blend(*target, source, opacity, l.blend);
+                            transparent_rgb_possible |= target[3] == 0 && *target != CLEAR;
+                        }
                     }
                 }
-                continue;
-            }
-            for (index, &s) in pixels.iter().enumerate() {
-                if let Some(dest) = destination(index) {
-                    let d = &mut out[dest];
-                    let opacity = coverage(index);
-                    if (opacity != 0 || l.mask.is_none()) && (s[3] != 0 || d[3] == 0) {
-                        *d = blend(*d, s, opacity, l.blend);
-                        transparent_rgb_possible |= d[3] == 0 && *d != CLEAR;
-                    }
+            };
+            if l.group {
+                let rendered =
+                    self.composite_group(f, Some(i), depth + 1, include, show_references);
+                composite_slice(0, &rendered);
+            } else if l.tileset.is_some() {
+                composite_slice(0, &self.layer_pixels(i, f));
+            } else if let Some(slices) = l.cels[f].dense_slices() {
+                let mut start = 0;
+                for pixels in slices {
+                    composite_slice(start, pixels);
+                    start += pixels.len();
                 }
             }
         }
@@ -2580,151 +4829,13 @@ impl Document {
         let layer = &mut self.layers[layer];
         layer.cels[frame] = Pixels::empty(self.width * self.height);
         let tile_count = layer.tile_cels[frame].len();
-        layer.tile_cels[frame] = vec![0; tile_count];
+        layer.tile_cels[frame] = vec![0; tile_count].into();
         let geometry = layer.cel_meta[frame].tilemap.take();
         layer.cel_meta[frame] = CelMeta {
             editor_id: layer.cel_meta[frame].editor_id,
             tilemap: geometry,
             ..CelMeta::default()
         };
-    }
-
-    pub fn clear_cel_range(&mut self, range: CelRange) -> Result<(), String> {
-        if !range.editable(self) {
-            return Err("Choose a valid range of unlocked image or tile layers".into());
-        }
-        for layer in range.first_layer..=range.last_layer {
-            for frame in range.first_frame..=range.last_frame {
-                self.clear_cel(layer, frame);
-            }
-            self.layers[layer].prune_cel_links();
-        }
-        self.metadata.retain(|chunk| {
-            chunk
-                .owner
-                .strip_prefix("cel:")
-                .and_then(|layer| layer.parse().ok())
-                .is_none_or(|layer| !range.contains(layer, chunk.frame))
-        });
-        Ok(())
-    }
-
-    pub fn move_cel_range(
-        &mut self,
-        range: CelRange,
-        to_layer: usize,
-        to_frame: usize,
-        duplicate: bool,
-    ) -> Result<(), String> {
-        if !range.editable(self) {
-            return Err("Source range contains a locked, missing, or group layer".into());
-        }
-        let last_layer = to_layer.saturating_add(range.last_layer - range.first_layer);
-        let last_frame = to_frame.saturating_add(range.last_frame - range.first_frame);
-        let target = CelRange {
-            first_layer: to_layer,
-            last_layer,
-            first_frame: to_frame,
-            last_frame,
-        };
-        if !target.editable(self) {
-            return Err("Destination range contains a locked, missing, or group layer".into());
-        }
-        if range == target {
-            return Ok(());
-        }
-        let mut next = self.clone();
-        let applies = |owner: &str, frame: usize, range: CelRange| {
-            owner
-                .strip_prefix("cel:")
-                .and_then(|layer| layer.parse::<usize>().ok())
-                .filter(|&layer| range.contains(layer, frame))
-        };
-        next.metadata
-            .retain(|chunk| applies(&chunk.owner, chunk.frame, target).is_none());
-        if !duplicate {
-            for layer in range.first_layer..=range.last_layer {
-                for frame in range.first_frame..=range.last_frame {
-                    next.clear_cel(layer, frame);
-                    next.layers[layer].cel_meta[frame].editor_id = EditorId::default();
-                }
-            }
-            next.metadata
-                .retain(|chunk| applies(&chunk.owner, chunk.frame, range).is_none());
-        }
-        for (source, target) in (range.first_layer..=range.last_layer).zip(to_layer..=last_layer) {
-            let source_layer = &self.layers[source];
-            let target_layer = &mut next.layers[target];
-            if source_layer.tileset != target_layer.tileset {
-                return Err(
-                    "Source and destination layers must use the same image or tile format".into(),
-                );
-            }
-            for (from, to) in (range.first_frame..=range.last_frame).zip(to_frame..=last_frame) {
-                target_layer.cels[to] = source_layer.cels[from].clone();
-                target_layer.tile_cels[to] = source_layer.tile_cels[from].clone();
-                let mut meta = source_layer.cel_meta[from].clone();
-                if duplicate {
-                    meta.editor_id = target_layer.cel_meta[to].editor_id;
-                }
-                if source != target || duplicate && !target_layer.link_duplicates {
-                    meta.artwork_link = None;
-                }
-                target_layer.cel_meta[to] = meta;
-            }
-            if duplicate && source == target && target_layer.link_duplicates {
-                // Resolve links after copying so overlapping sources still read the original artwork.
-                if (range.first_frame..=range.last_frame)
-                    .any(|f| (to_frame..=last_frame).contains(&f))
-                {
-                    return Err(
-                        "Choose a non-overlapping destination when duplicating linked cels".into(),
-                    );
-                }
-                for (from, to) in (range.first_frame..=range.last_frame).zip(to_frame..=last_frame)
-                {
-                    next.set_cel_link(source, to, from);
-                }
-            }
-        }
-        for chunk in &self.metadata {
-            if let Some(layer) = applies(&chunk.owner, chunk.frame, range) {
-                let mut chunk = chunk.clone();
-                chunk.owner = format!("cel:{}", to_layer + layer - range.first_layer);
-                chunk.frame = to_frame + chunk.frame - range.first_frame;
-                next.metadata.push(chunk);
-            }
-        }
-        for layer in &mut next.layers {
-            layer.prune_cel_links();
-        }
-        next.validate()?;
-        *self = next;
-        Ok(())
-    }
-
-    pub fn set_range_duration(&mut self, range: CelRange, duration: u16) -> Result<(), String> {
-        if duration == 0 || !range.fits(self) {
-            return Err("Choose a valid timeline range and positive duration".into());
-        }
-        self.durations[range.first_frame..=range.last_frame].fill(duration);
-        Ok(())
-    }
-
-    pub fn set_range_linked(&mut self, range: CelRange, linked: bool) -> Result<(), String> {
-        if !range.editable(self) {
-            return Err("Choose a valid range of unlocked image or tile layers".into());
-        }
-        for layer in range.first_layer..=range.last_layer {
-            for frame in range.first_frame..=range.last_frame {
-                if !linked {
-                    self.unlink_cel(layer, frame)?;
-                } else if frame != range.first_frame {
-                    self.link_cel(layer, frame, range.first_frame)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     pub fn can_add_frame(&self, frame: usize, duplicate: bool) -> bool {
@@ -2778,6 +4889,7 @@ impl Document {
                 if duplicate {
                     CelMeta {
                         editor_id: EditorId::default(),
+                        image_id: EditorId::default(),
                         ..l.cel_meta[f].clone()
                     }
                 } else {
@@ -2792,11 +4904,20 @@ impl Document {
                 if duplicate {
                     l.tile_cels[f].clone()
                 } else {
-                    vec![0; l.tile_cels[f].len()]
+                    vec![0; l.tile_cels[f].len()].into()
                 },
             );
         }
         self.durations.insert(f + 1, self.durations[f]);
+        if f < self.frame_names.len() {
+            let name = if duplicate {
+                self.frame_names[f].clone()
+            } else {
+                String::new()
+            };
+            self.frame_names.insert(f + 1, name);
+            self.prune_frame_names();
+        }
         if duplicate {
             for index in 0..self.layers.len() {
                 if self.layers[index].link_duplicates && !self.layers[index].group {
@@ -2838,8 +4959,40 @@ impl Document {
     }
     pub fn remove_frame(&mut self, f: usize) {
         if self.durations.len() > 1 && f < self.durations.len() {
+            self.metadata.retain_mut(|chunk| {
+                if chunk.is_frame_independent() {
+                    return true;
+                }
+                if chunk.frame == f {
+                    let replacement = chunk.cel_user_data_layer(&self.layers).and_then(|layer| {
+                        let link = layer.cel_meta[f].artwork_link?;
+                        if layer.cel_meta[..f]
+                            .iter()
+                            .any(|cel| cel.artwork_link == Some(link))
+                        {
+                            return None;
+                        }
+                        let next = layer.cel_meta[f + 1..]
+                            .iter()
+                            .position(|cel| cel.artwork_link == Some(link))?;
+                        Some(f + 1 + next)
+                    });
+                    let Some(replacement) = replacement else {
+                        return false;
+                    };
+                    chunk.frame = replacement;
+                }
+                if chunk.frame > f {
+                    chunk.frame -= 1;
+                }
+                true
+            });
             self.explicit_frame_export_ids().frames.remove(f);
             self.durations.remove(f);
+            if f < self.frame_names.len() {
+                self.frame_names.remove(f);
+                self.prune_frame_names();
+            }
             if f < self.frame_palettes.len() {
                 self.frame_palettes.remove(f);
             }
@@ -2857,7 +5010,7 @@ impl Document {
                     }
                 }
             }
-            self.tags.retain(|t| !(t.from == f && t.to == f));
+            self.retain_tags(|_, t| !(t.from == f && t.to == f));
             for t in &mut self.tags {
                 if t.from > f {
                     t.from -= 1
@@ -2866,14 +5019,38 @@ impl Document {
                     t.to = t.to.saturating_sub(1)
                 }
             }
-            self.metadata.retain(|m| m.frame != f);
-            for m in &mut self.metadata {
-                if m.frame > f {
-                    m.frame -= 1
-                }
-            }
         }
     }
+    /// Remove a tag and its positional ASE user-data chunk.
+    pub fn remove_tag(&mut self, index: usize) -> bool {
+        if index >= self.tags.len() {
+            return false;
+        }
+        self.retain_tags(|i, _| i != index);
+        true
+    }
+
+    fn retain_tags(&mut self, mut keep: impl FnMut(usize, &FrameTag) -> bool) {
+        let mut keep_tag = Vec::with_capacity(self.tags.len());
+        self.tags.retain(|tag| {
+            let retain = keep(keep_tag.len(), tag);
+            keep_tag.push(retain);
+            retain
+        });
+        if keep_tag.iter().all(|&keep| keep) {
+            return;
+        }
+        let mut index = 0;
+        self.metadata.retain(|chunk| {
+            if !chunk.is_tag_user_data() {
+                return true;
+            }
+            let retain = keep_tag.get(index).copied().unwrap_or(true);
+            index += 1;
+            retain
+        });
+    }
+
     pub fn add_layer(&mut self) {
         if self.can_add_layer() {
             self.layers.push(Layer::new(
@@ -2904,9 +5081,86 @@ impl Document {
         let l = self.layers.last_mut().unwrap();
         l.tileset = Some(tileset);
         l.name = "Tile layer".into();
-        l.tile_cels = vec![vec![0; count]; self.durations.len()];
+        l.tile_cels = vec![vec![0; count].into(); self.durations.len()];
         Ok(())
     }
+    pub fn tile_at_point(
+        &self,
+        layer: usize,
+        frame: usize,
+        point: (i32, i32),
+    ) -> Option<(TilemapGeometry, usize, usize)> {
+        let layer = self.layers.get(layer)?;
+        let set = self.tilesets.get(layer.tileset?)?;
+        let geometry = layer
+            .cel_meta
+            .get(frame)?
+            .tilemap
+            .clone()
+            .unwrap_or(TilemapGeometry {
+                x: 0,
+                y: 0,
+                columns: self.width.div_ceil(set.width),
+                rows: self.height.div_ceil(set.height),
+            });
+        let x = usize::try_from(i64::from(point.0) - i64::from(geometry.x)).ok()? / set.width;
+        let y = usize::try_from(i64::from(point.1) - i64::from(geometry.y)).ok()? / set.height;
+        if x >= geometry.columns || y >= geometry.rows {
+            return None;
+        }
+        layer.tile_cels.get(frame)?.get(y * geometry.columns + x)?;
+        Some((geometry, x, y))
+    }
+
+    pub fn paint_matching_tiles(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        tile: u32,
+        hits: &[bool],
+    ) -> Result<(), String> {
+        if !self.editable(layer) {
+            return Err("Layer is locked".into());
+        }
+        let layer = &mut self.layers[layer];
+        let tile_count = layer
+            .tileset
+            .and_then(|index| self.tilesets.get(index))
+            .ok_or("Select a tile layer")?
+            .tiles
+            .len();
+        if (tile & 0x1fffffff) as usize > tile_count
+            || layer
+                .tile_cels
+                .get(frame)
+                .is_none_or(|cells| cells.len() != hits.len())
+        {
+            return Err("Tile is outside the map or tileset".into());
+        }
+        let link = layer.cel_meta[frame].artwork_link;
+        let mut written = std::collections::BTreeMap::<usize, TileCells>::new();
+        for (target, cells) in layer.tile_cels.iter_mut().enumerate() {
+            if target == frame || link.is_some() && layer.cel_meta[target].artwork_link == link {
+                let key = cells.backing_id();
+                if link.is_some()
+                    && let Some(shared) = written.get(&key)
+                {
+                    *cells = shared.clone();
+                    continue;
+                }
+                for (index, hit) in hits.iter().enumerate().take(cells.len()) {
+                    if *hit {
+                        cells.set(index, tile);
+                    }
+                }
+                if link.is_some() {
+                    written.insert(key, cells.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn paint_tile(
         &mut self,
         l: usize,
@@ -2915,6 +5169,16 @@ impl Document {
         y: usize,
         tile: u32,
     ) -> Result<(), String> {
+        self.paint_tiles(l, f, std::iter::once((x, y, tile)))
+    }
+
+    /// Place a batch of tiles in cell coordinates and mirror it to linked cels.
+    pub fn paint_tiles(
+        &mut self,
+        l: usize,
+        f: usize,
+        placements: impl Iterator<Item = (usize, usize, u32)> + Clone,
+    ) -> Result<(), String> {
         if !self.editable(l) {
             return Err("Layer is locked".into());
         }
@@ -2922,19 +5186,43 @@ impl Document {
             .tileset
             .and_then(|i| self.tilesets.get(i))
             .ok_or("Select a tile layer")?;
-        let geometry = self.layers[l].cel_meta[f].tilemap.as_ref();
-        let cols = geometry.map_or(self.width.div_ceil(t.width), |g| g.columns);
-        let rows = geometry.map_or(self.height.div_ceil(t.height), |g| g.rows);
-        if x >= cols || y >= rows || (tile & 0x1fffffff) as usize > t.tiles.len() {
+        let active = self.layers[l]
+            .cel_meta
+            .get(f)
+            .ok_or("Missing tilemap frame")?;
+        let geometry = active.tilemap.as_ref();
+        let default_cols = self.width.div_ceil(t.width);
+        let default_rows = self.height.div_ceil(t.height);
+        let cols = geometry.map_or(default_cols, |g| g.columns);
+        let rows = geometry.map_or(default_rows, |g| g.rows);
+        if placements.clone().any(|(x, y, tile)| {
+            x >= cols || y >= rows || (tile & 0x1fff_ffff) as usize > t.tiles.len()
+        }) {
             return Err("Tile is outside the map or tileset".into());
         }
         let layer = &mut self.layers[l];
         let link = layer.cel_meta[f].artwork_link;
+        let mut written = std::collections::BTreeMap::<(usize, usize, usize), TileCells>::new();
         for (target, cells) in layer.tile_cels.iter_mut().enumerate() {
-            if (target == f || link.is_some() && layer.cel_meta[target].artwork_link == link)
-                && let Some(cell) = cells.get_mut(y * cols + x)
-            {
-                *cell = tile;
+            if target == f || link.is_some() && layer.cel_meta[target].artwork_link == link {
+                let geometry = layer.cel_meta[target].tilemap.as_ref();
+                let cols = geometry.map_or(default_cols, |g| g.columns);
+                let rows = geometry.map_or(default_rows, |g| g.rows);
+                let key = (cells.backing_id(), cols, rows);
+                if link.is_some()
+                    && let Some(shared) = written.get(&key)
+                {
+                    *cells = shared.clone();
+                    continue;
+                }
+                for (x, y, tile) in placements.clone() {
+                    if x < cols && y < rows {
+                        cells.set(y * cols + x, tile);
+                    }
+                }
+                if link.is_some() {
+                    written.insert(key, cells.clone());
+                }
             }
         }
         Ok(())
@@ -2948,6 +5236,23 @@ impl Document {
         color: Pixel,
         variant: bool,
     ) -> Result<(), String> {
+        let mode = if variant {
+            TilePixelEdit::ReuseVariant
+        } else {
+            TilePixelEdit::Shared
+        };
+        self.paint_tile_pixel(layer, frame, cell, pixel, color, mode)
+    }
+
+    pub fn paint_tile_pixel(
+        &mut self,
+        layer: usize,
+        frame: usize,
+        cell: (usize, usize),
+        pixel: (usize, usize),
+        color: Pixel,
+        mode: TilePixelEdit,
+    ) -> Result<(), String> {
         if !self.editable(layer) || frame >= self.durations.len() {
             return Err("Choose an unlocked tile cel".into());
         }
@@ -2957,47 +5262,145 @@ impl Document {
         let columns = geometry.map_or(self.width.div_ceil(set.width), |g| g.columns);
         let rows = geometry.map_or(self.height.div_ceil(set.height), |g| g.rows);
         let (x, y) = cell;
-        let (mut px, mut py) = pixel;
+        let (px, py) = pixel;
         if x >= columns || y >= rows || px >= set.width || py >= set.height {
             return Err("Tile or pixel is outside the map".into());
         }
         let slot = y * columns + x;
         let placed = self.layers[layer].tile_cels[frame][slot];
-        let id = (placed & 0x1fff_ffff) as usize;
-        if placed & 0x2000_0000 != 0 {
-            std::mem::swap(&mut px, &mut py);
-        }
-        if px >= set.width || py >= set.height {
-            return Err("This pixel is outside the flipped tile".into());
-        }
-        if placed & 0x8000_0000 != 0 {
-            px = set.width - 1 - px;
-        }
-        if placed & 0x4000_0000 != 0 {
-            py = set.height - 1 - py;
-        }
-        let offset = py * set.width + px;
+        let id = (placed & TILE_ID_MASK) as usize;
+        let offset = set
+            .source_offset(placed, px, py)
+            .ok_or("This pixel is outside the flipped tile")?;
         if id == 0 && color == CLEAR {
             return Ok(());
         }
         if id > set.tiles.len() {
             return Err("Tile placement refers to a missing tile".into());
         }
-        if !variant && id != 0 {
-            self.tilesets[tileset].tiles[id - 1].set(offset, color);
+        let transparent = self.transparent_index;
+        let mut palette = std::borrow::Cow::Borrowed(self.palette.as_slice());
+        if self.color_mode == ColorMode::Indexed
+            && self
+                .palette
+                .get(transparent)
+                .is_some_and(|mask| mask[3] != 0)
+        {
+            palette.to_mut()[transparent][3] = 0;
+        }
+        let mut drawing_palette = std::borrow::Cow::Borrowed(self.palette_for(frame));
+        if self.color_mode == ColorMode::Indexed
+            && drawing_palette
+                .get(transparent)
+                .is_some_and(|mask| mask[3] != 0)
+        {
+            drawing_palette.to_mut()[transparent][3] = 0;
+        }
+        let drawing_slot = if self.color_mode == ColorMode::Indexed {
+            Some(
+                self.drawing_index
+                    .filter(|&i| {
+                        self.palette_for(frame).get(i) == Some(&color)
+                            || drawing_palette.get(i) == Some(&color)
+                    })
+                    .unwrap_or_else(|| {
+                        if color[3] == 0 {
+                            self.transparent_index
+                        } else {
+                            nearest(color, &drawing_palette)
+                        }
+                    }),
+            )
+        } else {
+            None
+        };
+        // Frame palettes may extend beyond the base palette. Promote only the
+        // missing tail into base storage, and only commit it after a successful edit.
+        let added_colors = drawing_slot
+            .filter(|&index| index >= self.palette.len())
+            .map(|index| {
+                self.palette_for(frame)
+                    .get(self.palette.len()..=index)
+                    .map(<[Pixel]>::to_vec)
+                    .ok_or("Missing indexed tile color")
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if !added_colors.is_empty() {
+            palette.to_mut().extend_from_slice(&added_colors);
+            if let Some(mask) = palette.to_mut().get_mut(transparent) {
+                mask[3] = 0;
+            }
+        }
+        let color = if let Some(index) = drawing_slot {
+            *palette.get(index).ok_or("Missing indexed tile color")?
+        } else {
+            color
+        };
+        let update = |artwork: &mut TileRaster| -> Result<(), String> {
+            if let Some(index) = drawing_slot {
+                let mut indices = artwork.indices.take().unwrap_or_else(|| {
+                    Arc::new(
+                        artwork
+                            .iter()
+                            .map(|color| {
+                                if color[3] == 0 {
+                                    transparent as u8
+                                } else {
+                                    nearest(*color, &palette) as u8
+                                }
+                            })
+                            .collect(),
+                    )
+                });
+                if indices.get(offset).copied() != Some(index as u8) {
+                    *Arc::make_mut(&mut indices)
+                        .get_mut(offset)
+                        .ok_or("Invalid indexed tile size")? = index as u8;
+                }
+                artwork.indices = Some(indices);
+            } else {
+                artwork.indices = None;
+            }
+            artwork.pixels.set(offset, color);
+            Ok(())
+        };
+        if mode == TilePixelEdit::Shared && id != 0 {
+            update(&mut self.tilesets[tileset].tiles[id - 1])?;
+            self.palette.extend(added_colors);
             return Ok(());
         }
-        let mut artwork = if id == 0 {
-            Pixels::empty(set.width * set.height)
+        let mut artwork: TileRaster = if id == 0 {
+            Pixels::empty(set.width * set.height).into()
         } else {
             set.tiles[id - 1].clone()
         };
-        artwork.set(offset, color);
-        let existing = set.tiles.iter().position(|tile| *tile == artwork);
+        let unchanged = artwork[offset] == color
+            && drawing_slot.is_none_or(|index| {
+                artwork.matching_slot(offset, &self.palette, self.transparent_index)
+                    == Some(index as u8)
+            });
+        if mode == TilePixelEdit::CreateVariant && unchanged {
+            return Ok(());
+        }
+        update(&mut artwork)?;
+        let existing = if mode == TilePixelEdit::CreateVariant {
+            None
+        } else {
+            set.tiles
+                .iter()
+                .position(|tile| tile.pixels == artwork.pixels && tile.indices == artwork.indices)
+        };
         let new_id = if let Some(existing) = existing {
             existing + 1
         } else {
-            if !self.can_grow(artwork.allocation_pixels())
+            let storage = artwork.allocation_pixels().saturating_add(
+                artwork
+                    .indices
+                    .as_ref()
+                    .map_or(0, |indices| indices.len().div_ceil(4)),
+            );
+            if !self.can_grow(storage)
                 || (set.tiles.len() + 1)
                     .saturating_mul(set.width)
                     .saturating_mul(set.height)
@@ -3005,12 +5408,14 @@ impl Document {
             {
                 return Err("Tile variant exceeds the tileset or project pixel budget".into());
             }
+            artwork.editor_id = Default::default();
             self.tilesets[tileset].tiles.push(artwork);
             self.tilesets[tileset].tiles.len()
         };
-        self.layers[layer].tile_cels[frame][slot] = (placed & 0xe000_0000) | new_id as u32;
+        self.layers[layer].tile_cels[frame][slot] = (placed & !TILE_ID_MASK) | new_id as u32;
         self.layers[layer].cel_meta[frame].artwork_link = None;
         self.layers[layer].prune_cel_links();
+        self.palette.extend(added_colors);
         Ok(())
     }
 

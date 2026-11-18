@@ -2,6 +2,7 @@ use pixelcraft::{extensions, formats::*, model::*};
 fn tile_doc() -> Document {
     let mut d = Document::new(3, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "set".into(),
         width: 2,
         height: 2,
@@ -71,6 +72,249 @@ fn negative_subtile_origin_survives_save() {
         d.composite(0)
     );
 }
+
+#[test]
+fn ase_reference_cels_use_precise_bounds_without_exporting_as_artwork() {
+    let mut source = Document::new(6, 3);
+    let red = [210, 20, 30, 255];
+    let green = [35, 190, 20, 255];
+    source.layers[0].ase_flags |= 64;
+    source.layers[0].cel_meta[0].bounds = Some([-1, 0, 2, 1]);
+    source.layers[0].cel_meta[0].outside.push(OutsidePixel {
+        x: -1,
+        y: 0,
+        color: red,
+        palette_slot: None,
+    });
+    source.layers[0].cels[0].set(0, green);
+    let mut data = 1u32.to_le_bytes().to_vec();
+    for v in [81_920i32, 49_152, 4 * 65_536, 98_304] {
+        data.extend(v.to_le_bytes()); // Destination (1.25, .75), size (4, 1.5).
+    }
+    data.extend([0; 16]);
+    source.metadata.push(MetadataChunk {
+        frame: 0,
+        kind: 0x2006,
+        data,
+        owner: "cel:0".into(),
+    });
+    source.add_frame(0, true);
+    source.layers[0].cel_meta[0].artwork_link = Some(0);
+    source.layers[0].cel_meta[1].artwork_link = Some(0);
+    let mut second = source.metadata[0].clone();
+    second.frame = 1;
+    second.data[4..8].copy_from_slice(&(-16_384i32).to_le_bytes());
+    source.metadata.retain(|chunk| chunk.frame != 1);
+    source.metadata.push(second);
+
+    let loaded = decode_ase(&encode_ase(&source).unwrap()).unwrap();
+    let legacy = decode_project(&encode_project(&source).unwrap()).unwrap();
+    let native = decode_project(&encode_project(&loaded).unwrap()).unwrap();
+    let ase = decode_ase(&encode_ase(&loaded).unwrap()).unwrap();
+    for d in [loaded, legacy, native, ase] {
+        let bounds = [81_920, 49_152, 262_144, 98_304];
+        assert_eq!(d.layers[0].cel_meta[0].reference_bounds, Some(bounds));
+        assert_eq!(
+            d.layers[0].cel_meta[1].reference_bounds.unwrap()[0],
+            -16_384
+        );
+        assert!(d.layers[0].cel_meta[1].artwork_link.is_some());
+        let sample = |x, y| pixelcraft::productivity::sample_canvas(&d, 0, x, y, true);
+        assert_eq!(sample(1, 1), red);
+        assert_eq!(sample(2, 1), red);
+        assert_eq!(sample(3, 1), green);
+        assert_eq!(sample(4, 1), green);
+        for (x, y) in [(0, 1), (5, 1), (2, 0), (2, 2)] {
+            assert_eq!(sample(x, y), CLEAR);
+        }
+        assert_eq!(d.composite(0), vec![CLEAR; 18]);
+        assert_eq!(
+            d.composite_view(1)[6..12],
+            [red, red, green, green, CLEAR, CLEAR]
+        );
+        let mut moved = d.clone();
+        moved.layers[0].cel_meta[0]
+            .reference_bounds
+            .as_mut()
+            .unwrap()[0] += 65_536;
+        assert!(!d.same_frame_pixels(&moved, 0));
+        assert!(d.same_frame_pixels(&moved, 1));
+        assert_eq!(
+            moved.composite_view(0)[6..12],
+            [CLEAR, CLEAR, red, red, green, green]
+        );
+    }
+}
+
+#[test]
+fn ase_reference_rotation_and_flip_transform_both_geometry_and_source_pixels() {
+    use pixelcraft::workflows::{Orientation, orient_sprite};
+
+    let mut source = Document::new(6, 3);
+    let red = [210, 20, 30, 255];
+    let green = [35, 190, 20, 255];
+    source.layers[0].ase_flags |= 64;
+    let meta = &mut source.layers[0].cel_meta[0];
+    meta.bounds = Some([-1, 0, 2, 1]);
+    meta.reference_bounds = Some([81_920, 49_152, 262_144, 98_304]);
+    meta.outside.push(OutsidePixel {
+        x: -1,
+        y: 0,
+        color: red,
+        palette_slot: None,
+    });
+    source.layers[0].cels[0].set(0, green);
+    let source = decode_ase(&encode_ase(&source).unwrap()).unwrap();
+    let original = source.composite_view(0);
+    let original_id = source.layers[0].cel_meta[0].image_id.runtime_key();
+    for (orientation, bounds, preserves_image) in [
+        (
+            Orientation::TurnRight,
+            [49_152, 81_920, 98_304, 262_144],
+            false,
+        ),
+        (
+            Orientation::TurnLeft,
+            [49_152, 49_152, 98_304, 262_144],
+            false,
+        ),
+        (
+            Orientation::TurnHalf,
+            [49_152, 49_152, 262_144, 98_304],
+            false,
+        ),
+        (
+            Orientation::FlipHorizontal,
+            [49_152, 49_152, 262_144, 98_304],
+            true,
+        ),
+        (
+            Orientation::FlipVertical,
+            [81_920, 49_152, 262_144, 98_304],
+            true,
+        ),
+    ] {
+        let transformed = orient_sprite(&source, orientation).unwrap();
+        let meta = &transformed.layers[0].cel_meta[0];
+        assert_eq!(meta.reference_bounds, Some(bounds));
+        assert_eq!(meta.image_id.runtime_key() == original_id, preserves_image);
+        let reopened = decode_ase(&encode_ase(&transformed).unwrap()).unwrap();
+        assert_eq!(
+            reopened.layers[0].cel_meta[0].reference_bounds,
+            Some(bounds)
+        );
+        let view = transformed.composite_view(0);
+        assert_eq!(reopened.composite_view(0), view);
+        for y in 0..source.height {
+            for x in 0..source.width {
+                let (tx, ty) = match orientation {
+                    Orientation::TurnRight => (source.height - y - 1, x),
+                    Orientation::TurnLeft => (y, source.width - x - 1),
+                    Orientation::TurnHalf => (source.width - x - 1, source.height - y - 1),
+                    Orientation::FlipHorizontal => (source.width - x - 1, y),
+                    Orientation::FlipVertical => (x, source.height - y - 1),
+                };
+                assert_eq!(
+                    view[ty * transformed.width + tx],
+                    original[y * source.width + x]
+                );
+            }
+        }
+        assert_eq!(transformed.composite(0), vec![CLEAR; view.len()]);
+    }
+}
+
+#[test]
+fn ase_reference_crop_and_resample_preserve_source_artwork() {
+    use pixelcraft::workflows::{crop, resample_sprite, resize_canvas};
+
+    let mut source = Document::new(6, 3);
+    let red = [210, 20, 30, 255];
+    let green = [35, 190, 20, 255];
+    // Put one source pixel beyond the resized canvas and enlarge it in the view.
+    source.layers[0].ase_flags |= 64;
+    let meta = &mut source.layers[0].cel_meta[0];
+    meta.bounds = Some([3, 0, 2, 1]);
+    meta.reference_bounds = Some([81_920, 49_152, 262_144, 98_304]);
+    source.layers[0].cels[0].set(3, red);
+    source.layers[0].cels[0].set(4, green);
+    let source = decode_ase(&encode_ase(&source).unwrap()).unwrap();
+    let id = source.layers[0].cel_meta[0].image_id.runtime_key();
+
+    let verify = |doc: &Document, bounds, rendered: &[Pixel]| {
+        let meta = &doc.layers[0].cel_meta[0];
+        assert_eq!(meta.reference_bounds, Some(bounds));
+        assert_eq!(meta.bounds, Some([3, 0, 2, 1]));
+        assert_eq!(meta.image_id.runtime_key(), id);
+        assert_eq!(doc.composite_view(0), rendered);
+        for reopened in [
+            decode_ase(&encode_ase(doc).unwrap()).unwrap(),
+            decode_project(&encode_project(doc).unwrap()).unwrap(),
+        ] {
+            assert_eq!(reopened.composite_view(0), rendered);
+            assert_eq!(reopened.layers[0].cel_meta[0].bounds, Some([3, 0, 2, 1]));
+        }
+    };
+
+    let mut cropped = source.clone();
+    crop(&mut cropped, [1, 1, 3, 2]).unwrap();
+    let mut resized = source.clone();
+    resize_canvas(&mut resized, [3, 2], [-1, -1]).unwrap();
+    let cropped_view = [red, red, green, CLEAR, CLEAR, CLEAR];
+    for mut doc in [cropped, resized] {
+        verify(&doc, [16_384, -16_384, 262_144, 98_304], &cropped_view);
+        assert_eq!(doc.layers[0].cel_meta[0].outside.len(), 2);
+        resize_canvas(&mut doc, [6, 3], [1, 1]).unwrap();
+        assert!(doc.layers[0].cel_meta[0].outside.is_empty());
+        verify(
+            &doc,
+            [81_920, 49_152, 262_144, 98_304],
+            &source.composite_view(0),
+        );
+    }
+
+    let sampled = resample_sprite(&source, [3, 6]).unwrap();
+    let mut sampled_view = vec![CLEAR; 18];
+    for row in 1..4 {
+        sampled_view[row * 3 + 1] = red;
+        sampled_view[row * 3 + 2] = green;
+    }
+    verify(&sampled, [40_960, 98_304, 131_072, 196_608], &sampled_view);
+}
+
+#[test]
+fn precise_reference_uses_its_source_mask_when_canvas_resizes() {
+    use pixelcraft::workflows::{crop, resample_sprite};
+
+    let mut doc = Document::new(6, 2);
+    let ink = [210, 61, 35, 255];
+    doc.layers[0].ase_flags |= 64;
+    let cel = &mut doc.layers[0].cel_meta[0];
+    cel.bounds = Some([4, 0, 1, 1]);
+    cel.reference_bounds = Some([2 * 65_536, 0, 2 * 65_536, 65_536]);
+    doc.layers[0].cels[0].set(4, ink);
+    let mut mask = Pixels::empty(12);
+    mask.set(4, [0, 0, 0, 127]);
+    doc.set_layer_mask(0, Some(mask)).unwrap();
+    let expected = doc.composite_view(0)[2];
+    assert_eq!(expected, [210, 61, 35, 127]);
+    assert_eq!(doc.sample_composite(0, 2, 0, true), Some(expected));
+    assert_eq!(
+        doc.sample_composite(0, 2, 0, false),
+        Some(doc.composite(0)[2])
+    );
+    assert_eq!(doc.sample_composite(0, -1, 0, true), None);
+
+    let sampled = resample_sprite(&doc, [3, 2]).unwrap();
+    assert_eq!(sampled.composite_view(0)[1], expected);
+    crop(&mut doc, [1, 0, 3, 2]).unwrap();
+    assert_eq!(doc.composite_view(0)[1], expected);
+    assert_eq!(
+        doc.composite_view_region(0, [1, 0], [1, 1]).unwrap(),
+        [expected]
+    );
+}
+
 #[test]
 fn lua_selection_undo_color_and_commands() {
     let d = Document::new(3, 2);
@@ -185,6 +429,11 @@ fn external_tilesets_resolve_relative_to_file_and_embed_on_save() {
     })
     .unwrap();
     assert_eq!(calls, 1);
+    assert_ne!(
+        decoded.tilesets[0].tiles[0].editor_id.runtime_key(),
+        d.tilesets[0].tiles[0].editor_id.runtime_key(),
+        "external definitions need fresh document-local editing identities"
+    );
     assert_eq!(decoded.composite(0), d.composite(0));
     let root = std::env::temp_dir().join(format!("pixelcraft-external-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();

@@ -43,6 +43,7 @@ fn groups_blend_and_cel_opacity_render_together() {
 fn tiles_and_ranges_survive_native_project_roundtrip() {
     let mut d = Document::new(4, 2);
     d.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tiles".into(),
         width: 2,
         height: 2,
@@ -52,6 +53,7 @@ fn tiles_and_ranges_survive_native_project_roundtrip() {
     let l = d.layers.len() - 1;
     d.paint_tile(l, 0, 1, 0, 1).unwrap();
     d.tags.push(FrameTag {
+        editor_id: Default::default(),
         name: "Idle".into(),
         from: 0,
         to: 0,
@@ -390,6 +392,7 @@ fn translated_off_canvas_edits_invalidate_the_composited_frame() {
         x: -1,
         y: 0,
         color: [220, 90, 40, 255],
+        palette_slot: None,
     });
 
     assert_ne!(before.composite(0), doc.composite(0));

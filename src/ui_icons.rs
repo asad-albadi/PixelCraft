@@ -41,6 +41,15 @@ pub fn icon_name(action: &str) -> &str {
         "saveas" => "save-as",
         "picker" => "eyedropper",
         "selection" => "select",
+        "elliptical-marquee" => "ellipse",
+        "polygonal-lasso" => "lasso",
+        "polygon" => "line",
+        "curve" => "move",
+        "text" => "document",
+        "spray" => "dither",
+        "blur-brush" => "opacity",
+        "jumble-brush" => "wrap",
+        "contour" => "brush",
         "selectall" => "select-all",
         "layer" => "layer-add",
         "deletelayer" => "layer-delete",
@@ -52,15 +61,16 @@ pub fn icon_name(action: &str) -> &str {
         "up" => "arrow-up",
         "down" => "arrow-down",
         "onion" => "onion-skin",
-        "seamless" => "wrap",
+        "drawing-grid" | "drawing-grid-settings" | "grid-from-selection" | "snap-to-grid" => "grid",
+        "seamless" | "seamless-horizontal" | "seamless-vertical" => "wrap",
         "rotate" => "rotate-cw",
         "flipx" | "selectionflipx" => "flip-horizontal",
         "flipy" | "selectionflipy" => "flip-vertical",
         "png" | "demo" => "image",
         "mp4" => "gif",
         "png-sequence" => "export",
-        "sequence" => "import",
-        "tiles" | "tiledexport" => "tilemap",
+        "sequence" | "import-layer" => "import",
+        "tiles" | "tiledexport" | "tileset-atlas" => "tilemap",
         "workflow" => "settings",
 
         "resetcolors" => "swatches",
@@ -70,6 +80,11 @@ pub fn icon_name(action: &str) -> &str {
 }
 pub fn action_label(action: &str) -> &str {
     match action {
+        "copy-merged" => "Copy Merged",
+        "paste-as-sprite" => "Paste as New Sprite",
+        "paste-as-layer" => "Paste as New Layer",
+        "paste-as-reference" => "Paste as Reference",
+        "new-sprite-from-selection" => "New Sprite from Selection",
         "closetab" => "Close sprite",
         "prev" => "Previous frame",
         "next" => "Next frame",
@@ -77,6 +92,15 @@ pub fn action_label(action: &str) -> &str {
         "new" => "New sprite",
         "picker" => "Eyedropper",
         "selection" => "Rectangular selection",
+        "elliptical-marquee" => "Elliptical marquee",
+        "polygonal-lasso" => "Polygonal lasso",
+        "polygon" => "Polygon",
+        "curve" => "Bézier curve",
+        "text" => "Text",
+        "spray" => "Spray",
+        "blur-brush" => "Blur brush",
+        "jumble-brush" => "Jumble brush",
+        "contour" => "Filled contour",
         "eraser" => "Eraser",
         "fill" => "Paint bucket",
         "eyedropper" => "Eyedropper",
@@ -590,9 +614,16 @@ fn button_named(
                 | "gradient"
                 | "hand"
                 | "grid"
+                | "drawing-grid"
+                | "split-canvas"
+                | "snap-to-grid"
                 | "onion"
                 | "seamless"
+                | "seamless-horizontal"
+                | "seamless-vertical"
                 | "play"
+                | "rewind-on-stop"
+                | "undo-history"
                 | "lock"
                 | "theme"
         );

@@ -589,3 +589,102 @@ pub fn script_file_request(
         _ => Err("Unknown file operation".into()),
     }
 }
+
+// Native clipboard metadata transfer, independent of the scripting runtime.
+pub const MAX_TILESET_METADATA_BYTES: usize = 4 * 1024 * 1024;
+pub use crate::ase_properties::{TilesetUserData, remap_tileset_user_data};
+
+pub(crate) fn visit_zip(
+    b: &[u8],
+    mut visit: impl FnMut(PathBuf, Option<Vec<u8>>) -> Result<(), String>,
+) -> Result<(), String> {
+    fn w(b: &[u8], p: usize) -> Result<usize, String> {
+        Ok(
+            u16::from_le_bytes(b.get(p..p + 2).ok_or("Truncated ZIP")?.try_into().unwrap())
+                as usize,
+        )
+    }
+    fn d(b: &[u8], p: usize) -> Result<usize, String> {
+        Ok(
+            u32::from_le_bytes(b.get(p..p + 4).ok_or("Truncated ZIP")?.try_into().unwrap())
+                as usize,
+        )
+    }
+    let end = (b.len().saturating_sub(65557)..b.len().saturating_sub(21))
+        .rev()
+        .find(|&i| b.get(i..i + 4) == Some(b"PK\x05\x06"))
+        .ok_or("Invalid ZIP directory")?;
+    let count = w(b, end + 10)?;
+    let mut p = d(b, end + 16)?;
+    let mut total = 0usize;
+    for _ in 0..count {
+        if b.get(p..p + 4) != Some(b"PK\x01\x02") {
+            return Err("Invalid ZIP entry".into());
+        }
+        let flags = w(b, p + 8)?;
+        let method = w(b, p + 10)?;
+        let crc = d(b, p + 16)? as u32;
+        let compressed = d(b, p + 20)?;
+        let size = d(b, p + 24)?;
+        let name_len = w(b, p + 28)?;
+        let extra = w(b, p + 30)?;
+        let comment = w(b, p + 32)?;
+        let local = d(b, p + 42)?;
+        let name = std::str::from_utf8(
+            b.get(p + 46..p + 46 + name_len)
+                .ok_or("Truncated ZIP name")?,
+        )
+        .map_err(|e| e.to_string())?;
+        let relative = safe_path(name.trim_end_matches('/'))?;
+        if flags & 1 != 0 {
+            return Err("Encrypted extensions are unsupported".into());
+        }
+        if (d(b, p + 38)? >> 16) & 0xf000 == 0xa000 {
+            return Err("ZIP symlinks are unsupported".into());
+        }
+        total = total.saturating_add(size);
+        if total > 32 * 1024 * 1024 {
+            return Err("Extension exceeds 32 MiB".into());
+        }
+        if name.ends_with('/') {
+            visit(relative, None)?;
+        } else {
+            if b.get(local..local + 4) != Some(b"PK\x03\x04") {
+                return Err("Invalid local ZIP header".into());
+            }
+            let offset = local + 30 + w(b, local + 26)? + w(b, local + 28)?;
+            let encoded = b
+                .get(offset..offset + compressed)
+                .ok_or("Truncated ZIP data")?;
+            let bytes = match method {
+                0 if encoded.len() == size => encoded.to_vec(),
+                0 => return Err("ZIP size mismatch".into()),
+                8 => {
+                    let mut out = vec![];
+                    flate2::read::DeflateDecoder::new(encoded)
+                        .take(size as u64 + 1)
+                        .read_to_end(&mut out)
+                        .map_err(|e| e.to_string())?;
+                    out
+                }
+                _ => return Err("Unsupported ZIP compression".into()),
+            };
+            if bytes.len() != size {
+                return Err("ZIP size mismatch".into());
+            }
+            let mut calculated = 0xffffffffu32;
+            for byte in &bytes {
+                calculated ^= *byte as u32;
+                for _ in 0..8 {
+                    calculated = (calculated >> 1) ^ (0xedb88320u32.wrapping_mul(calculated & 1));
+                }
+            }
+            if !calculated != crc {
+                return Err("ZIP checksum mismatch".into());
+            }
+            visit(relative, Some(bytes))?;
+        }
+        p += 46 + name_len + extra + comment;
+    }
+    Ok(())
+}

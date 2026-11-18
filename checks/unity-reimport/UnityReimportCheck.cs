@@ -32,6 +32,7 @@ namespace PixelCraft.Checks
         private sealed class Frame
         {
             public string filename;
+            public string frameName;
             public int frameId;
             public int sourceFrame;
             public Box frame;
@@ -118,7 +119,7 @@ namespace PixelCraft.Checks
             AssetDatabase.SaveAssets();
 
             var sheet = JsonUtility.FromJson<Sheet>(File.ReadAllText(JsonPath));
-            ValidateSheet(sheet, inserted);
+            ValidateSheet(sheet, first, inserted);
             var sprites = SubAssets<Sprite>(SheetPath);
             Require(sprites.Length == sheet.frames.Length, "Sprite count does not match JSON");
             var byName = sprites.ToDictionary(sprite => sprite.name);
@@ -284,12 +285,15 @@ namespace PixelCraft.Checks
         private static T[] SubAssets<T>(string path) where T : UnityEngine.Object =>
             AssetDatabase.LoadAllAssetsAtPath(path).OfType<T>().ToArray();
 
-        private static void ValidateSheet(Sheet sheet, bool inserted)
+        private static void ValidateSheet(Sheet sheet, bool first, bool inserted)
         {
             var ids = inserted ? new[] { 0, 1, 2, 6, 3, 4, 5 } : new[] { 0, 1, 2, 3, 4, 5 };
             var durations = inserted ? new[] { 93, 147, 71, 111, 173, 121, 203 } :
                 new[] { 93, 147, 71, 129, 121, 203 };
             Require(sheet.frames.Length == ids.Length, "Unexpected JSON frame count");
+            var named = sheet.frames.Single(frame => frame.frameId == 3);
+            Require(named.frameName == (first ? "Walk contact" : "Walk push-off"),
+                "Frame label must follow its stable ID across rename and insertion");
             Require(sheet.meta.size.w == 32 && sheet.meta.size.h == 12, "Unexpected atlas dimensions");
             for (int i = 0; i < ids.Length; ++i)
             {

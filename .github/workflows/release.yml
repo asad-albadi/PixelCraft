@@ -38,14 +38,13 @@ jobs:
             build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
             libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev libwebp-dev \
-            desktop-file-utils patchelf xvfb xauth weston \
+            desktop-file-utils dpkg-dev binutils patchelf xvfb xauth weston sway \
             libgl1-mesa-dri libegl-mesa0 python3-pil
 
-      - name: Install stable Rust
+      - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup component add clippy rustfmt
-          rustup override set stable
+          rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
+          rustup override set 1.95.0
 
       # The checked-in development Lua binary requires a newer glibc.
       # Embed Ubuntu's Lua instead so the release supports Ubuntu 22.04+.
@@ -64,10 +63,43 @@ jobs:
           target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
 
       - name: Native clipboard and automatic graphics fallback on Linux
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
-          xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
+          xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
+          env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a cargo test --locked --bin pixelcraft x11_packed_tilemap_cross_process_roundtrip -- --ignored --nocapture
           WGPU_BACKEND=metal xvfb-run -a bash checks/graphical-startup.sh target/release/pixelcraft "$RUNNER_TEMP/fallback-linux"
           grep -F 'restarting with OpenGL' "$RUNNER_TEMP/fallback-linux/startup.log"
+
+      - name: Packed clipboard on native Wayland
+        env:
+          WLR_BACKENDS: headless
+          WLR_HEADLESS_OUTPUTS: '1'
+          WLR_LIBINPUT_NO_DEVICES: '1'
+          WLR_RENDERER: pixman
+        run: |
+          unset DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/pixelcraft-clipboard-wayland"
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
+          printf '%s\n' 'output * mode 1280x720' 'seat seat0 fallback true' > "$XDG_RUNTIME_DIR/sway.conf"
+          sway --config "$XDG_RUNTIME_DIR/sway.conf" > "$RUNNER_TEMP/clipboard-sway.log" 2>&1 &
+          sway_pid=$!
+          trap 'kill "$sway_pid" 2>/dev/null || true; wait "$sway_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..100}; do
+            for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
+              if [[ -S "$socket" ]]; then
+                export WAYLAND_DISPLAY="${socket##*/}"
+                break 2
+              fi
+            done
+            kill -0 "$sway_pid" 2>/dev/null || break
+            sleep 0.1
+          done
+          if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+            cat "$RUNNER_TEMP/clipboard-sway.log"
+            exit 1
+          fi
+          cargo test --locked --bin pixelcraft wayland_packed_tilemap_cross_process_roundtrip -- --ignored --nocapture
 
       - name: Set artifact version
         shell: bash
@@ -89,6 +121,7 @@ jobs:
           install -m 644 LICENSE AppDir/usr/share/doc/pixelcraft/LICENSE
           install -m 644 assets/fonts/LICENSE AppDir/usr/share/doc/pixelcraft/FONT-LICENSE.txt
           install -m 644 runtime/LUA-LICENSE.txt AppDir/usr/share/doc/pixelcraft/LUA-LICENSE.txt
+          install -m 644 /usr/share/doc/libwebpdemux2/copyright AppDir/usr/share/doc/pixelcraft/WEBP-COPYRIGHT.txt
           desktop-file-validate packaging/pixelcraft.desktop
           curl --fail --location --retry 3 \
             https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
@@ -125,6 +158,19 @@ jobs:
           "dist/$OUTPUT" --standalone-check "$RUNNER_TEMP/pixelcraft-appimage-check"
           cd dist
           sha256sum "$OUTPUT" > "$OUTPUT.sha256"
+
+      - name: Build the Linux tarball and Debian package
+        run: |
+          app_version=$(cargo metadata --locked --no-deps --format-version 1 |
+            python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "pixelcraft"))')
+          bash packaging/build-linux-tarball.sh AppDir dist "$VERSION"
+          bash packaging/build-linux-deb.sh target/release/pixelcraft dist "$VERSION" "$app_version"
+      - name: Verify tarball and Debian package startup and WebP
+        run: |
+          bash checks/linux-packages.sh \
+            "dist/PixelCraft-$VERSION-linux-x86_64.tar.gz" \
+            "dist/PixelCraft-$VERSION-linux-amd64.deb" \
+            "$RUNNER_TEMP/startup-linux-packages"
 
       - name: Graphical startup on X11
         shell: bash
@@ -172,6 +218,8 @@ jobs:
           path: |
             ${{ runner.temp }}/startup-x11/startup.*
             ${{ runner.temp }}/startup-wayland/startup.*
+            ${{ runner.temp }}/startup-linux-packages/*/startup/startup.*
+            ${{ runner.temp }}/startup-linux-packages/*/webp.*
             ${{ runner.temp }}/weston.log
           if-no-files-found: ignore
 
@@ -198,12 +246,11 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-      - name: Install stable Rust
+      - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
           if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
-          rustup component add clippy rustfmt
-          rustup override set stable
+          rustup override set 1.95.0
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain selection failed' }
       - name: Restore Windows build cache
         uses: actions/cache/restore@v4
@@ -212,7 +259,7 @@ jobs:
           key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
       - name: Build embedded Windows Lua
         run: ./packaging/build-windows-lua.ps1
-      - name: Build Windows WebP runtime
+      - name: Build static Windows WebP
         run: ./packaging/build-windows-webp.ps1
       - name: Test and build Windows release
         env:
@@ -228,13 +275,17 @@ jobs:
           path: target
           key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
       - name: Strict lint and native clipboard on Windows
+        env:
+          PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
           cargo fmt --check
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
           cargo clippy --locked --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Strict lint failed' }
-          cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture
+          cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Native clipboard failed' }
+          cargo test --locked --bin pixelcraft packed_tilemap_cross_process_roundtrip -- --ignored --nocapture --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Packed clipboard failed' }
           ./checks/graphics-fallback.ps1
 
       - name: Upload Windows startup diagnostics
@@ -269,12 +320,24 @@ jobs:
           $version = $version -replace '[^A-Za-z0-9._-]', '-'
           $output = "PixelCraft-$version-x86_64-Setup"
           "OUTPUT=$output.exe" >> $env:GITHUB_ENV
+          "PORTABLE=PixelCraft-$version-x86_64-Portable.exe" >> $env:GITHUB_ENV
           $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (!(Test-Path $compiler)) { throw 'Inno Setup 6 is missing from the Windows runner' }
           & $compiler "/DAppVersion=$appVersion" "/DOutputName=$output" packaging/windows.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
       - name: Verify installed app, uninstall and checksum
         run: ./checks/windows-installer.ps1 -Installer "dist/$env:OUTPUT"
+      - name: Package and smoke-test the portable executable
+        run: |
+          $portable = "dist/$env:PORTABLE"
+          Copy-Item -LiteralPath 'target/release/pixelcraft.exe' -Destination $portable
+          ./checks/windows-portable.ps1 -App $portable
+          $hash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $env:PORTABLE" | Set-Content "$portable.sha256" -Encoding ascii
+          $notices = @('LICENSE', 'assets/fonts/LICENSE', 'runtime/LUA-LICENSE.txt',
+              'runtime/webp/WEBP-COPYING.txt', 'runtime/webp/WEBP-PATENTS.txt', 'runtime/webp/WEBP-AUTHORS.txt')
+          $notices | ForEach-Object { "---- $_"; Get-Content -LiteralPath $_; "" } |
+              Set-Content "$portable-LICENSES.txt" -Encoding utf8
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -282,8 +345,12 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  macos:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    uses: ./.github/workflows/macos-build.yml
+
   publish:
-    needs: [appimage, windows]
+    needs: [appimage, windows, macos]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
@@ -296,6 +363,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: PixelCraft-Windows-x86_64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: PixelCraft-macOS-arm64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: PixelCraft-macOS-x86_64
           path: dist
       - name: Publish tagged release
         env:

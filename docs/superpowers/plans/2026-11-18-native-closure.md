@@ -1,0 +1,85 @@
+# Native issue20 closure implementation plan
+
+> **For agentic workers:** Use superpowers:executing-plans inline with test-driven development. Preserve this ledger across context compaction.
+
+**Goal:** Finish and verify outstanding non-Lua work on feature/issue-20-native-workflows and prepare a reviewed PR with accurate issue20 closure evidence.
+
+**Architecture:** Keep native workers operating on immutable COW snapshots and publish only current targets. Poll cancellation within expensive data traversal, retaining existing non-cancelling wrappers for file/clipboard consumers. Validate the exact native branch against remaining original requirements and saved-project workflows.
+
+**Tech Stack:** Rust1.95, egui, existing serde/native COW storage, existing CLI/MCP and GitHub CI. No new Lua APIs or integration.
+
+**Spec:** docs/branch-split-2026-11-18.md; issue20 active non-Lua requirements; docs/source-audit-2026-11-18.md. User explicitly instructed to finish pending work here and ignore Lua. Linux desktop testing is user-deferred.
+
+## Global constraints
+
+- Keep main's existing Lua capabilities unchanged; only the existing macOS runtime selection compatibility is retained.
+- Preserve native/ASE/clipboard serialized data and authored indexed slots, metadata, tile flips, history and stale-target protections.
+- Never mutate either original Autumn Breeze project during acceptance; use read-only loads and disposable output copies.
+- No arbitrary limit increases or timing-only unit assertions to mask expensive work.
+- Do not merge main or close the issue before actual requirements/evidence are reconciled. PR creation and branch pushes are authorized; retain original stack/archive branches.
+
+## Review focus
+
+- Selection edits after capture must detach without changing worker/history snapshots; unchanged comparisons must avoid scanning identical shared masks.
+- Cancellation during validation, selected-ID collection, tile hashing/equality and document checks must discard private results with no publication.
+- Source/destination palettes and outside artwork must survive all clipboard cases, including duplicate slots and metadata namespaces.
+- Viewport display conversion must preserve source samples and avoid stale previews across active tabs/frames/profiles.
+- Verification counts must distinguish native tests from archived Lua additions; unexecuted platform/hardware checks remain explicit.
+
+## Tasks
+
+- [x] 1. Reproduce selection-mask snapshot copies; introduce transparent COW GUI mask storage and migrate capture/history/recovery consumers without changing wire arrays. Verify snapshot independence, stale-target rejection and serde recovery.
+- [x] 2. Reproduce non-cancellable clipboard traversal; implement bounded polling in validation/ID/hash/equality/merge paths and native document validation where used by workers. Test atomic cancellation at each expensive phase and run full Windows gates.
+- [x] 3. Audit viewport/display conversion against current native source, add regression cases for confirmed defects, fix and test. Record verified behaviors instead of assuming the old tracker proves them.
+- [x] 4. Run native acceptance on both day/night projects: load, playback/representative render, save/reopen disposable copies and export; record timing, content/metadata equality and source-file hashes.
+- [x] 5. Reconcile all active original issue20 items to native code/tests/GUI/CLI/MCP evidence, explicitly defer44-47 and Lua part31, record platform/tablet coverage limits, and repeat current source audit for confirmed extra native gaps. Command discovery can be tracked separately from the original55 closure scope.
+- [ ] 6. Fresh correctness/security review, required fixes, final Windows gates, native PR/CI including macOS packaging, accurate issue checklist and pushed evidence. Leave merge approval as the final reviewable step.
+
+## Execution ledger
+
+- Start: ea78ccc; clean native worktree;743 Windows tests plus standalone/startup checks passed at split checkpoint. Shared clipboard payload optimization already measured; GUI selection masks still use owned Vec values in target/history/worker captures. Clipboard validation and tile merge hashing/equality still contain unpolled scans. No live process at start.
+
+### Task1 checkpoint
+
+- RED real editor regression showed clipboard/history selection captures allocating different full-mask arrays. Introduced transparent COW SelectionMask for GUI mask state, immutable worker targets, history, tabs, recovery and rotation previews. Equality short-circuits shared backing; edits detach via normal mutable access. Core mutable stencil operations still deliberately produce owned vectors.
+- The same regression now passes, including stale clipboard target detection and undo restoration. A wire regression verifies legacy boolean-array serialization and independent edits after deserialize/clone. Existing recovery/marquee/canvas tests remain unchanged in behavior; expected mask assertions now compare slices. No Lua source/API changes.
+- Verification: formatting/check, strict offline locked all-target Clippy,745 Windows all-target tests and diff whitespace check passed. Final independent review remains the closure-plan gate.
+
+### Task2 checkpoint
+
+- Reproduced uninterruptible clipboard validation, tile hashing/comparison, large-tile selection traversal and full-document validation. Bounded cancellation now covers these traversals plus ID collection, metadata merge, palette preparation and native storage accounting. All cancelled jobs discard private results.
+- Removed completion-time whole-document equality from tile copy/paste: placement COW backing changes plus palette/tileset changes establish whether publication is necessary, including linked peers with different grids. True no-ops do not publish.
+- Reproduced and fixed integer overflow in polygon containment at extreme integer coordinates; polygon traversal is cancellable. Normal selection semantics are preserved.
+- Twelve regressions observed RED then GREEN. Formatting, strict offline locked all-target Clippy,757 Windows all-target tests and whitespace checks passed (EngineChecks/issue20-native-cancellation-final-tests.log). No Lua edits.
+
+### Task3 checkpoint
+
+- RED: a pending large current-frame request still rendered synchronously; a completed detached preview could publish the wrong requested frame. Both regressions now pass. Cold canvas misses above2M pixels share the existing bounded single in-flight frame worker. Pan/zoom remain available; painting waits for the requested texture. Small canvases and incremental texture patches retain the existing path.
+- Added actual worker output, loading-input and invalid-profile/source-integrity regressions. Existing ICC/profile, crop, patch upload, obsolete-snapshot, playback-clock, linked-frame cache and detached-preview tests passed. Display-profile changes discard outstanding requests and caches. No document sample/profile mutation occurs during display conversion.
+- Windows formatting, strict offline locked all-target Clippy,762 all-target tests and whitespace checks passed.
+
+### Task4 checkpoint
+
+- Opt-in native-project acceptance passed against both original files using disposable EngineChecks/native-closure-projects outputs. Every native field and all24 composites matched after save/reopen. PNG reimport matched source samples; GIF and MP4 exports succeeded. Both source SHA256 values were unchanged. Exported day/night PNGs were visually inspected.
+- Optimized day: load3.347s, compose24=59.16ms, save1.505s, reopen3.462s, exports1.561s;23layers. Night: load5.089s, compose24=93.62ms, save2.215s, reopen5.165s, exports1.841s;34layers. These measurements exclude GUI event scheduling.
+- Separate real-project GUI/cache acceptance passed48 ordered frame presentations (two loops) per document with background prefetch and unchanged authored documents. Work/polling elapsed176ms day/190ms night; this intentionally pumps frames and is not a wall-clock playback-duration or visual smoothness measurement. Existing clock/deadline tests separately cover authored timing.
+- ffprobe verified both MP4s480x270,3.6s,216 encoded frames. Acceptance exports use native1x for regression speed; scaled export coverage remains in regular tests.
+- Source hashes: day5bb6660d7440de4181de4ae0ba54f45ff047991a621b6dd276d9e2eef990d0ff; nighta21a70ec2cb5e1f7aa87118cf1fe4f5ef88e72d9ce6c51214a14d0fed3aa0689.
+
+### Task5 checkpoint
+
+- Reconciled all55 original requirements against current native implementation and representative tests, checking every cited path and named regression against this checkout. Evidence is docs/native-workflow-acceptance-2026-11-18.md.48 feature items have Windows coverage; packaging items3–4 await fresh native CI;31 is native-complete/Lua-deferred;44–47 are explicitly deferred.
+- Re-fetched both audit repositories: remote heads unchanged from the previous scan. Native command discovery remains an additional confirmed gap, recorded separately as issue22 with keyboard, state/registration, parameterized variant and undo/security acceptance. Newer Lua decimal-dialog work remains deferred. No universal-parity assertion.
+- Windows relocated single-executable verification passed with PATH reduced to Windows system directories, and latest graphical startup screenshot was inspected. No Lua API file differences from main; only macOS packaged-runtime selector differs in its loader.
+- Ruling: original55 closure and additional command discovery are tracked separately — the approved closure plan allows this, and issue22 preserves the gap rather than representing it as implemented; cost if wrong is an extra follow-up issue before broad editor parity.
+
+### Task6 final source/test review checkpoint
+
+- Fresh read-only correctness/security review of base5c4daae..6cad071 found one important detached-preview starvation/wrong-frame defect. The review covered current snapshot/cancellation/palette/metadata/profile/clipboard/filesystem paths; it did not claim line-by-line inspection of all158 changed files.
+- Final: fixed detached-preview starvation and paused wrong-frame substitution — two new delayed-completion clock/GUI regressions and a strengthened paused-request regression observed RED then GREEN; final Windows suite764/764, formatting and strict all-target Clippy passed. Large detached playback waits for presentation, holds the authored duration, and advances to a single successor. Pending paused previews show no substituted artwork. Small preview clocks retain their prior scheduling behavior.
+- Extended real-project acceptance to ASE save/reopen: all24composites, durations and layer counts matched; optimized saves505ms day/634ms night. Original hashes remained unchanged. Native save/export acceptance remained green.
+- Ruling: physical tablet and Linux desktop playback remain unverified — synthetic pressure tests and user-deferred Linux playback are the available scope; cost if wrong is device/desktop-specific behavior not reproduced here.
+- Ruling: platform build/startup evidence is taken from actual PR21 CI, not inferred from Windows — Linux passed at2fb68a4 while Windows/macOS were still running; final-head results are maintained in PR21's checks and final review comment; cost if wrong is an unnoticed platform-specific packaging failure before merge.
+- Ruling: the fresh review is risk-focused, not exhaustive inspection of all158 files — full automated coverage and existing prior-stack reviews supplement that pass; cost if wrong is a defect outside reviewed paths, so this is not a universal security assurance.
+- Ruling: the post-review preview fix is verified by observed RED/GREEN regressions and the full suite rather than a second reviewer — follows the single final-fix-pass plan; cost if wrong is an untested edge of the fix.
+- No deferred minor findings. Merge remains a separate final review decision; no merge or issue closure was performed.

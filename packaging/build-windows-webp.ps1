@@ -16,8 +16,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'WebP source extraction failed' }
     $source = Join-Path $build 'libwebp-1.6.0'
     $binary = Join-Path $build 'compiled'
-    # Build all three DLLs with /MT, so no VC redistributable is needed.
-    $options = @('-DBUILD_SHARED_LIBS=ON', '-DWEBP_LINK_STATIC=OFF',
+    # Build static libraries with /MT for the single-file executable.
+    $options = @('-DBUILD_SHARED_LIBS=OFF', '-DWEBP_LINK_STATIC=ON',
         '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded')
     foreach ($feature in @('ANIM_UTILS', 'CWEBP', 'DWEBP', 'GIF2WEBP', 'IMG2WEBP', 'VWEBP', 'WEBPINFO', 'LIBWEBPMUX', 'WEBPMUX', 'EXTRAS')) {
         $options += "-DWEBP_BUILD_${feature}=OFF"
@@ -27,16 +27,21 @@ try {
     & cmake --build $binary --config Release --target webpdemux --parallel
     if ($LASTEXITCODE -ne 0) { throw 'WebP compilation failed' }
     New-Item -ItemType Directory -Force $runtime | Out-Null
-    foreach ($dll in @('libwebpdemux.dll', 'libwebp.dll', 'libsharpyuv.dll')) {
-        Copy-Item (Join-Path $binary "Release/$dll") (Join-Path $runtime $dll)
-        # Cargo integration tests live in deps; local app builds live one level up.
-        foreach ($directory in @('target/debug', 'target/debug/deps', 'target/release', 'target/release/deps')) {
-            $destination = Join-Path $root $directory
-            New-Item -ItemType Directory -Force $destination | Out-Null
-            Copy-Item (Join-Path $runtime $dll) (Join-Path $destination $dll)
-        }
+    foreach ($name in @('webpdemux', 'webp', 'sharpyuv')) {
+        $lib = Get-ChildItem -LiteralPath $binary -Recurse -File -Filter '*.lib' |
+            Where-Object { $_.BaseName -in @($name, "lib$name") -and $_.Directory.Name -eq 'Release' } |
+            Select-Object -First 1
+        if (!$lib) { throw "Missing static WebP library: $name" }
+        Copy-Item -LiteralPath $lib.FullName -Destination (Join-Path $runtime "$name.lib")
     }
     foreach ($notice in @('COPYING', 'PATENTS', 'AUTHORS')) {
         Copy-Item (Join-Path $source $notice) (Join-Path $runtime "WEBP-$notice.txt")
     }
-} finally { Remove-Item -Recurse -Force $build }
+} finally {
+    $resolved = (Resolve-Path -LiteralPath $build).Path
+    $temp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    if (!$resolved.StartsWith($temp, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unexpected build directory: $resolved"
+    }
+    Remove-Item -LiteralPath $resolved -Recurse -Force
+}

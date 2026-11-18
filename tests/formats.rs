@@ -1,4 +1,204 @@
 use pixelcraft::{formats::*, model::*};
+
+#[test]
+fn edited_dense_cels_keep_the_project_and_ase_pixel_formats() {
+    let mut document = Document::new(129, 65);
+    let len = document.width * document.height;
+    document.layers[0].cels[0] = vec![[83, 29, 113, 217]; len].into();
+    document.add_frame(0, false);
+    document.link_cel(0, 1, 0).unwrap();
+    let before = document.clone();
+    document.set_pixel(0, 0, len - 1, [193, 97, 29, 0]);
+    assert!(matches!(&document.layers[0].cels[0], Pixels::Overlay(_)));
+    assert_eq!(before.layers[0].cels[0][len - 1], [83, 29, 113, 217]);
+
+    let serialized = serde_json::to_value(&document.layers[0].cels[0]).unwrap();
+    assert_eq!(serialized.as_array().unwrap().len(), len);
+    assert_eq!(serialized[len - 1], serde_json::json!([193, 97, 29, 0]));
+    let path =
+        std::env::temp_dir().join(format!("pixelcraft-overlay-{}.pixel", std::process::id()));
+    save(&path, &document).unwrap();
+    let reopened = load(&path).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(reopened == document);
+
+    let ase = decode_ase(&encode_ase(&document).unwrap()).unwrap();
+    for frame in 0..2 {
+        assert_eq!(ase.layers[0].cels[frame], document.layers[0].cels[frame]);
+        assert!(ase.layers[0].cel_meta[frame].artwork_link.is_some());
+    }
+    let expected: Vec<_> = (63 * 129..len)
+        .map(|index| document.layers[0].cels[0][index])
+        .collect();
+    pixelcraft::workflows::crop(&mut document, [0, 63, 129, 2]).unwrap();
+    assert_eq!(document.layers[0].cels[0].to_vec(), expected);
+    assert_eq!(document.layers[0].cels[1].to_vec(), expected);
+}
+
+#[test]
+fn tileset_atlas_file_and_live_exports_write_the_same_pixels_and_layout() {
+    use pixelcraft::automation::{prepare_live_export, run_cli};
+    use serde_json::json;
+    let base =
+        std::env::temp_dir().join(format!("pixelcraft-tileset-atlas-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let source = base.join("source.pixel");
+    let out = base.join("atlas.png");
+    let live_out = base.join("live.png");
+    let _ = std::fs::remove_file(&live_out);
+    let mut doc = Document::new(2, 1);
+    let a = [15, 62, 119, 255];
+    let b = [213, 28, 80, 255];
+    doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
+        name: "Authored".into(),
+        width: 1,
+        height: 1,
+        tiles: vec![vec![a].into(), vec![b].into()],
+    });
+    doc.add_tile_layer(0).unwrap();
+    doc.layers[1].visible = false;
+    save(&source, &doc).unwrap();
+    let args =
+        json!({"input":source,"output":out,"format":"tileset-atlas","layers":[1],"columns":1});
+    let file = run_cli(&["export".into(), args.to_string()]).unwrap();
+    let args = json!({"output":live_out,"format":"tileset-atlas","layers":[1],"columns":1});
+    let live = prepare_live_export(&doc, 0, &args, "rev")
+        .unwrap()
+        .write()
+        .unwrap();
+    for meta in [file, live] {
+        assert_eq!(meta["format"], "tileset-atlas");
+        assert_eq!(meta["width"], 1);
+        assert_eq!(meta["height"], 2);
+        assert_eq!(meta["tilesets"][0]["tile_count"], 2);
+    }
+    for path in [&out, &live_out] {
+        assert_eq!(
+            image::open(path).unwrap().into_rgba8().into_raw(),
+            [a, b].concat()
+        );
+    }
+    assert!(prepare_live_export(&doc, 0, &args, "rev").is_err());
+    std::fs::remove_file(source).unwrap();
+    std::fs::remove_file(out).unwrap();
+    std::fs::remove_file(live_out).unwrap();
+    std::fs::remove_dir(base).unwrap();
+}
+
+#[test]
+fn tileset_atlas_exports_each_authored_set_once_and_honors_layer_scope() {
+    use pixelcraft::interchange::{TilesetAtlasScope, tileset_atlas};
+    let mut doc = Document::new(4, 4);
+    let red = [210, 20, 40, 255];
+    let blue = [20, 60, 220, 255];
+    let green = [50, 190, 60, 255];
+    doc.tilesets = vec![
+        Tileset {
+            editor_id: Default::default(),
+            name: "Ground".into(),
+            width: 2,
+            height: 1,
+            tiles: vec![vec![red, blue].into(), vec![blue, red].into()],
+        },
+        Tileset {
+            editor_id: Default::default(),
+            name: "Plants".into(),
+            width: 1,
+            height: 2,
+            tiles: vec![vec![green, red].into()],
+        },
+        Tileset {
+            editor_id: Default::default(),
+            name: "Unreferenced".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![vec![blue].into()],
+        },
+    ];
+    let hidden = doc.add_group("Hidden plants").unwrap();
+    doc.layers[hidden].visible = false;
+    doc.add_tile_layer(0).unwrap();
+    let ground = doc.layers.len() - 1;
+    doc.add_tile_layer(0).unwrap();
+    doc.add_tile_layer(1).unwrap();
+    doc.layers.last_mut().unwrap().parent = Some(hidden);
+    doc.paint_tile(ground, 0, 0, 0, 0x8000_0001).unwrap();
+
+    let (visible, layout) = tileset_atlas(&doc, TilesetAtlasScope::Visible, Some(2)).unwrap();
+    assert_eq!(visible.dimensions(), (4, 1));
+    assert_eq!(visible.into_raw(), [red, blue, blue, red].concat());
+    assert_eq!(layout.tilesets.len(), 1);
+    assert_eq!(layout.tilesets[0].tile_count, 2);
+
+    let (mixed, layout) = tileset_atlas(
+        &doc,
+        TilesetAtlasScope::Selected(&[hidden, ground]),
+        Some(2),
+    )
+    .unwrap();
+    assert_eq!(mixed.dimensions(), (4, 4));
+    assert_eq!(layout.cell_size, [2, 2]);
+    assert_eq!(layout.tilesets[1].first_cell, 2);
+    assert_eq!(mixed.get_pixel(0, 2).0, green);
+    assert_eq!(mixed.get_pixel(0, 3).0, red);
+    assert_eq!(mixed.get_pixel(1, 3).0, CLEAR);
+    assert!(tileset_atlas(&doc, TilesetAtlasScope::Selected(&[0]), None).is_err());
+    assert!(tileset_atlas(&doc, TilesetAtlasScope::Selected(&[100]), None).is_err());
+    assert!(tileset_atlas(&doc, TilesetAtlasScope::Visible, Some(0)).is_err());
+}
+
+#[test]
+fn native_and_ase_projects_preserve_editable_drawing_grid_geometry() {
+    let mut doc = Document::new(8, 8);
+    let grid = DrawingGrid {
+        origin: [-12, 9],
+        size: [36, 17],
+    };
+    doc.drawing_grid = Some(grid);
+    let native = decode_project(&encode_project(&doc).unwrap()).unwrap();
+    assert_eq!(native.drawing_grid(), grid);
+    let ase = encode_ase(&doc).unwrap();
+    assert_eq!(&ase[36..44], &[244, 255, 9, 0, 36, 0, 17, 0]);
+    let reopened = decode_ase(&ase).unwrap();
+    assert_eq!(reopened.drawing_grid(), grid);
+
+    // A zero-height grid is treated as absent in older ASE headers.
+    let mut legacy = ase;
+    legacy[42..44].fill(0);
+    let reopened = decode_ase(&legacy).unwrap();
+    assert_eq!(reopened.drawing_grid, None);
+    assert_eq!(reopened.drawing_grid(), DrawingGrid::default());
+    assert_eq!(&encode_ase(&reopened).unwrap()[36..44], &legacy[36..44]);
+
+    doc.drawing_grid = Some(DrawingGrid {
+        size: [0, 16],
+        ..grid
+    });
+    assert!(encode_project(&doc).is_err());
+    assert!(encode_ase(&doc).is_err());
+}
+
+#[test]
+fn pixel_aspect_round_trips_and_edits_override_legacy_header() {
+    let mut bytes = encode_ase(&Document::new(4, 3)).unwrap();
+    bytes[34..36].copy_from_slice(&[2, 3]);
+    let mut doc = decode_ase(&bytes).unwrap();
+    assert_eq!(doc.pixel_aspect, Some([2, 3]));
+    doc.pixel_aspect = None; // Older native documents stored only the header.
+    let mut restored = decode_project(&encode_project(&doc).unwrap()).unwrap();
+    assert_eq!(restored.pixel_aspect(), [2, 3]);
+    restored.pixel_aspect = Some([1, 1]);
+    let output = encode_ase(&restored).unwrap();
+    assert_eq!(decode_ase(&output).unwrap().pixel_aspect(), [1, 1]);
+    assert_eq!(&output[34..36], &[1, 1]);
+    bytes[34] = 0;
+    assert_eq!(decode_ase(&bytes).unwrap().pixel_aspect(), [1, 1]);
+    restored.pixel_aspect = Some([0, 2]);
+    assert!(encode_project(&restored).is_err());
+    assert!(encode_ase(&restored).is_err());
+}
+
 #[test]
 fn ase_roundtrip_preserves_pixels_layers_visibility_and_timing() {
     let mut d = Document::new(4, 3);
@@ -149,6 +349,7 @@ fn ase_rejects_legacy_tile_ids_that_alias_transform_bits() {
     use std::io::Write;
     let mut doc = Document::new(1, 1);
     doc.tilesets.push(Tileset {
+        editor_id: Default::default(),
         name: "Tile".into(),
         width: 1,
         height: 1,
