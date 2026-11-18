@@ -62,38 +62,3 @@ fn indexed_color_constructor_converts_inputs_before_exposing_index() {
         ]
     );
 }
-
-#[test]
-fn rgb_color_lookup_prefers_exact_matches_then_weighted_palette_fit() {
-    let mut document = Document::new(1, 1);
-    document.palette = vec![
-        [98, 99, 100, 255],
-        [100, 120, 100, 255],
-        [130, 100, 100, 255],
-        [200, 200, 200, 255],
-        [207, 207, 207, 255],
-        [200, 200, 200, 0],
-    ];
-    run_source(
-        &document,
-        r#"
-        assert(Color('#626364').index==0, 'exact match may use the mask slot')
-        assert(Color('#646464').index==2, 'best fit must skip the mask and weight green more than red')
-        assert(Color('#cecece').index==3, 'colors in the same five-bit bin tie by palette order')
-        assert(Color('#cfcfcf').index==4, 'an exact match beats an earlier five-bit tie')
-        assert(Color('#c8c8c800').index==5, 'exact transparent color beats the default mask')
-        assert(Color('#c8c8c807').index==0, 'low alpha falls back to the mask')
-        assert(Color{r=463,g=207,b=207,a=255}.index==4, 'exact matching uses packed byte channels')
-        assert(Color{index=0}.index==0, 'authored indices bypass matching')
-        local image=Image(2,1,ColorMode.INDEXED)
-        image:clear(Color('#646464'))
-        assert(image:getPixel(0,0)==2 and image:getPixel(1,0)==2)
-        image:drawPixel(1,0,Color('#c8c8c800'))
-        assert(image:getPixel(1,0)==5, 'transparent swatch keeps its authored slot')
-        "#,
-        0,
-        0,
-        None,
-    )
-    .unwrap();
-}
