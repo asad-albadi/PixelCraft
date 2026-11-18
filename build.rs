@@ -15,13 +15,6 @@ fn main() {
             _ => panic!("PixelCraft supports Apple Silicon and Intel macOS targets"),
         };
         let runtime = root.join("runtime/macos").join(arch);
-        let lua = runtime.join("liblua5.4.dylib");
-        println!("cargo:rerun-if-changed={}", lua.display());
-        assert!(
-            lua.is_file(),
-            "Run packaging/build-macos-runtime.sh {arch} before building PixelCraft"
-        );
-        println!("cargo:rustc-env=PIXELCRAFT_MACOS_LUA={}", lua.display());
         println!("cargo:rustc-link-search=native={}", runtime.display());
         for library in ["webpdemux", "webp", "sharpyuv"] {
             let archive = runtime.join(format!("lib{library}.a"));

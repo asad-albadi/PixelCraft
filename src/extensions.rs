@@ -1,5 +1,4 @@
 //! Independent local extensions. Never discovers or launches another editor.
-use crate::{formats, model::Document};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Read,
@@ -40,42 +39,7 @@ pub fn projects_directory() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
     Ok(p)
 }
-pub fn run_source(
-    doc: &Document,
-    source: &str,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-) -> Result<Document, String> {
-    run_source_with_colors(doc, source, frame, layer, command, None)
-}
 
-/// Pass the editor color preferences as a snapshot to the isolated Lua worker.
-pub fn run_source_with_colors(
-    doc: &Document,
-    source: &str,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-    colors: Option<[[u8; 4]; 2]>,
-) -> Result<Document, String> {
-    let json = crate::lua::execute(doc, source, frame, layer, command, false, colors)?;
-    let mut edited: Document =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
-    edited.validate()?;
-    edited.set_color_mode(edited.color_mode);
-    Ok(edited)
-}
-pub fn run_lua(
-    doc: &Document,
-    path: &Path,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-) -> Result<Document, String> {
-    let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    run_source(doc, &source, frame, layer, command)
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Contribution {
     pub path: String,
@@ -99,8 +63,11 @@ pub struct Contributions {
 }
 impl Contributions {
     pub fn has_assets(&self) -> bool {
-        !self.themes.is_empty() || !self.palettes.is_empty() || !self.shortcuts.is_empty()
-            || !self.languages.is_empty() || !self.dithering_matrices.is_empty()
+        !self.themes.is_empty()
+            || !self.palettes.is_empty()
+            || !self.shortcuts.is_empty()
+            || !self.languages.is_empty()
+            || !self.dithering_matrices.is_empty()
     }
     pub fn script_warning(&self) -> Option<&'static str> {
         (!self.scripts.is_empty()).then_some("Lua scripts are no longer supported; script contributions are ignored. Use native CLI/MCP workflows.")
@@ -123,15 +90,7 @@ pub struct Installed {
     pub manifest: Manifest,
     pub enabled: bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginCommand {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub package: String,
-    #[serde(default)]
-    pub script: PathBuf,
-}
+
 #[derive(Clone, Debug)]
 pub struct Manager {
     pub root: PathBuf,
@@ -201,10 +160,14 @@ impl Manager {
         }
         if enabled {
             let manifest: Manifest = serde_json::from_slice(
-                &std::fs::read(dir.join("package.json")).map_err(|e| e.to_string())?
-            ).map_err(|e| e.to_string())?;
+                &std::fs::read(dir.join("package.json")).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
             if !manifest.contributes.has_assets() {
-                return Err("This package has no supported assets. Lua scripts are no longer supported".into());
+                return Err(
+                    "This package has no supported assets. Lua scripts are no longer supported"
+                        .into(),
+                );
             }
         }
         let p = dir.join(".disabled");
@@ -221,7 +184,10 @@ impl Manager {
         std::fs::remove_dir_all(self.extension_dir(id)?).map_err(|e| e.to_string())
     }
     pub fn install(&self, source: &Path) -> Result<String, String> {
-        if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("lua")) {
+        if source
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lua"))
+        {
             return Err("Lua scripts are no longer supported; use native CLI/MCP workflows".into());
         }
         let staging = self.root.join("extensions").join(format!(
@@ -294,10 +260,7 @@ impl Manager {
         let _ = std::fs::remove_dir_all(staging);
         result
     }
-    /// Legacy discovery never reads or evaluates script files.
-    pub fn commands(&self) -> Result<Vec<PluginCommand>, String> {
-        Ok(Vec::new())
-    }
+
     pub fn asset(&self, id: &str, asset: &Contribution) -> Result<PathBuf, String> {
         let dir = self.extension_dir(id)?;
         if dir.join(".disabled").exists() {
@@ -435,122 +398,6 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
         p += 46 + name_len + extra + comment;
     }
     Ok(())
-}
-// Temporary internal sessions keep asynchronous edits isolated and undoable.
-#[derive(Clone, Debug)]
-pub struct Session {
-    pub directory: PathBuf,
-}
-impl Session {
-    pub fn new(doc: &Document) -> Result<Self, String> {
-        // Clock timestamps can repeat for concurrent calls on Windows.
-        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let directory = std::env::temp_dir().join(format!(
-            "pixelcraft-session-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| e.to_string())?
-                .as_nanos(),
-            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
-        let s = Self { directory };
-        formats::save(&s.input_path(), doc)?;
-        Ok(s)
-    }
-    pub fn input_path(&self) -> PathBuf {
-        self.directory.join("input.pixel")
-    }
-    pub fn result_path(&self) -> PathBuf {
-        self.directory.join("result.pixel")
-    }
-    pub fn load_result(&self) -> Result<Document, String> {
-        formats::load(&self.result_path())
-    }
-}
-
-/// Interactive hosts receive declarative widgets and validated document snapshots;
-/// Lua stays on its worker thread while the editor owns all UI operations.
-pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Preserve the established public API"
-)]
-pub fn run_source_with_host(
-    doc: &Document,
-    source: &str,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-    colors: Option<[[u8; 4]; 2]>,
-    options: serde_json::Value,
-    host: ScriptHost,
-) -> Result<Document, String> {
-    let json = crate::lua::execute_with_host(
-        doc,
-        source,
-        frame,
-        layer,
-        command,
-        false,
-        colors,
-        options,
-        Some(host),
-    )?;
-    let mut edited: Document =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
-    edited.validate()?;
-    edited.set_color_mode(edited.color_mode);
-    Ok(edited)
-}
-
-/// Filesystem bridge used only by explicitly executed scripts. Relative filenames
-/// follow the script folder; it never searches Aseprite's installation or settings.
-pub fn script_file_request(
-    base: &Path,
-    request: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    use serde_json::json;
-    let path = base.join(request["path"].as_str().unwrap_or(""));
-    match request["op"].as_str().unwrap_or("") {
-        "open" => Ok(json!({"document":formats::load(&path)?})),
-        "readScript" => {
-            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            if bytes.len() > 2 * 1024 * 1024 {
-                return Err("Lua module exceeds 2 MiB".into());
-            }
-            Ok(json!({"source":String::from_utf8(bytes).map_err(|e|e.to_string())?}))
-        }
-        "save" => {
-            let d: Document =
-                serde_json::from_value(request["document"].clone()).map_err(|e| e.to_string())?;
-            d.validate()?;
-            match path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_lowercase()
-                .as_str()
-            {
-                "png" => formats::export_png(&path, &d, 0, false)?,
-                "gif" => formats::export_gif(&path, &d)?,
-                _ => formats::save(&path, &d)?,
-            };
-            Ok(json!({}))
-        }
-        "isFile" => Ok(json!({"value":path.is_file()})),
-        "isDirectory" => Ok(json!({"value":path.is_dir()})),
-        "listFiles" => Ok(
-            json!({"value":std::fs::read_dir(path).map_err(|e|e.to_string())?.filter_map(Result::ok).map(|e|e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()}),
-        ),
-        "makeDirectory" => {
-            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
-            Ok(json!({"value":true}))
-        }
-        "close" => Ok(json!({})),
-        _ => Err("Unknown file operation".into()),
-    }
 }
 
 // Native clipboard metadata transfer, independent of the scripting runtime.

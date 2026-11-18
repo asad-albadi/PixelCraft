@@ -1,3 +1,5 @@
+> Historical checkpoint before Lua retirement in issue #23. Current native automation policy: [migration guide](/docs/native-automation-migration.md). Earlier preserve/defer-Lua statements below are superseded.
+
 # Native workflow acceptance — 2026-11-18
 
 Scope: `feature/issue-20-native-workflows`, based directly on main `5c4daae`; PR #21. This supersedes historical completion counts that included newer Lua work. Main's Lua API files are byte-identical; its loader differs only for the packaged macOS dylib selector. New Lua work is archived on `discarded-lua-updates`.

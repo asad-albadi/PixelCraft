@@ -1,4 +1,4 @@
-use pixelcraft::{extensions, formats::*, model::*};
+use pixelcraft::{formats::*, model::*};
 fn tile_doc() -> Document {
     let mut d = Document::new(3, 2);
     d.tilesets.push(Tileset {
@@ -316,21 +316,6 @@ fn precise_reference_uses_its_source_mask_when_canvas_resizes() {
 }
 
 #[test]
-fn lua_selection_undo_color_and_commands() {
-    let d = Document::new(3, 2);
-    let out=extensions::run_source(&d,r#"
-local s=app.activeSprite
-s.selection:select(Rectangle(0,0,1,1))
-assert(s.selection:contains(Point(0,0)) and not s.selection:contains(1,0))
-app.transaction('paint',function() app.activeImage:drawPixel(0,0,Color{h=120,s=1,v=1}.rgbaPixel) end)
-app.command.Undo(); assert(app.activeImage:getPixel(0,0)==0)
-app.command.Redo(); assert(app.pixelColor.rgbaG(app.activeImage:getPixel(0,0))==255)
-app.command.NewLayer{ name='Extension layer' }; assert(app.activeLayer.name=='Extension layer')
-app.fgColor=Color{r=5,g=6,b=7};assert(app.fgColor.red==5)
-"#,0,0,None).unwrap();
-    assert_eq!(out.layers.len(), 2);
-}
-#[test]
 fn compact_tile_encodings_and_legacy_empty_ids() {
     use std::io::Write;
     fn z(bytes: &[u8]) -> Vec<u8> {
@@ -449,41 +434,4 @@ fn external_tilesets_resolve_relative_to_file_and_embed_on_save() {
         decode_ase(&standalone).unwrap().composite(0),
         d.composite(0)
     );
-}
-#[test]
-fn lua_frame_commands_are_individually_undoable() {
-    let d = Document::new(1, 1);
-    extensions::run_source(&d,"app.command.NewFrame();assert(#app.activeSprite.frames==2);app.command.Undo();assert(#app.activeSprite.frames==1);app.command.Redo();assert(#app.activeSprite.frames==2)",0,0,None).unwrap();
-}
-#[test]
-fn lua_clear_uses_sprite_coordinates_for_offset_cels() {
-    let mut d = Document::new(6, 6);
-    d.stamp(0, 0, 4, 4, [255, 0, 0, 255], 1);
-    d.layers[0].cel_meta[0].bounds = Some([4, 4, 1, 1]);
-    let out = extensions::run_source(
-        &d,
-        "app.activeSprite.selection:select(Rectangle(4,4,1,1));app.command.Clear()",
-        0,
-        0,
-        None,
-    )
-    .unwrap();
-    assert_eq!(out.composite(0)[28][3], 0);
-}
-#[test]
-fn lua_clear_uses_the_actual_transparent_index() {
-    let mut d = Document::new(1, 1);
-    d.palette = vec![[255, 0, 0, 255], CLEAR];
-    d.transparent_index = 1;
-    d.set_color_mode(ColorMode::Indexed);
-    d.stamp(0, 0, 0, 0, [255, 0, 0, 255], 1);
-    let out = extensions::run_source(&d, "app.command.Clear()", 0, 0, None).unwrap();
-    assert_eq!(out.composite(0)[0][3], 0);
-}
-#[test]
-fn lua_change_pixel_format_converts_before_next_api_call() {
-    let mut d = Document::new(1, 1);
-    d.layers[0].cels[0][0] = [255, 0, 0, 255];
-    let out=extensions::run_source(&d,"app.command.ChangePixelFormat{format='gray'};assert(app.activeImage:getPixel(0,0)==app.pixelColor.graya(54,255),'conversion must be immediate')",0,0,None).unwrap();
-    assert_eq!(out.layers[0].cels[0][0], [54, 54, 54, 255]);
 }

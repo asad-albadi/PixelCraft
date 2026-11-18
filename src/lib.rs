@@ -3,7 +3,6 @@ pub mod formats;
 pub mod model;
 
 mod ase_properties;
-mod lua;
 
 pub mod color;
 pub mod contributions;

@@ -406,11 +406,7 @@ impl PixelCraft {
                 }
             }
         }
-        if self.script_job.is_some()
-            || self.shot.is_some()
-            || !self.studio.recovery_enabled
-            || !self.power.autosave_enabled()
-        {
+        if self.shot.is_some() || !self.studio.recovery_enabled || !self.power.autosave_enabled() {
             return;
         }
         if self.studio.recovery_job.is_some()
@@ -520,7 +516,7 @@ impl PixelCraft {
         let Some(job) = &self.studio.salvage_job else {
             return;
         };
-        if !job.is_finished() || self.script_job.is_some() || self.save_job.is_some() {
+        if !job.is_finished() || self.save_job.is_some() {
             ctx.request_repaint_after(Duration::from_millis(25));
             return;
         }
@@ -584,9 +580,7 @@ impl PixelCraft {
                                         label.on_hover_text(path.display().to_string());
                                     }
                                     ui.add_enabled_ui(
-                                        !tab.raw_recovery
-                                            && self.script_job.is_none()
-                                            && self.save_job.is_none(),
+                                        !tab.raw_recovery && self.save_job.is_none(),
                                         |ui| {
                                             if ui.pc_button("Restore").clicked() {
                                                 restore = Some(Some(index));
@@ -617,9 +611,7 @@ impl PixelCraft {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.add_enabled_ui(
-                        state.tabs.iter().any(|tab| !tab.raw_recovery)
-                            && self.script_job.is_none()
-                            && self.save_job.is_none(),
+                        state.tabs.iter().any(|tab| !tab.raw_recovery) && self.save_job.is_none(),
                         |ui| {
                             if ui.pc_button("Restore all").clicked() {
                                 restore = Some(None);
@@ -1489,11 +1481,7 @@ impl PixelCraft {
         let Some(job) = &self.studio.sprite_job else {
             return;
         };
-        if !job.worker.is_finished()
-            || self.save_job.is_some()
-            || self.script_job.is_some()
-            || self.start.is_some()
-        {
+        if !job.worker.is_finished() || self.save_job.is_some() || self.start.is_some() {
             ctx.request_repaint_after(Duration::from_millis(25));
             return;
         }

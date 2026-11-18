@@ -231,9 +231,10 @@ pub(crate) fn paint(
     args: &Value,
     budget: &mut usize,
 ) -> Result<(), String> {
-    if doc.color_mode != ColorMode::Rgba
-        || !doc.editable(layer)
+    if !doc.editable(layer)
         || doc.layers[layer].tileset.is_some()
+        || (doc.color_mode != ColorMode::Rgba
+            && (op != "clear-region" || doc.layers[layer].background))
     {
         return Err("Bulk paint requires an unlocked RGBA image layer".into());
     }
@@ -270,7 +271,7 @@ pub(crate) fn paint(
                         .as_ref()
                         .is_none_or(|m| mask_contains(m, region.offset(col, row)))
                 {
-                    doc.draw_pixel(layer, frame, index, CLEAR, 0);
+                    doc.draw_pixel(layer, frame, index, CLEAR, doc.transparent_index as u8);
                 }
             }
         }

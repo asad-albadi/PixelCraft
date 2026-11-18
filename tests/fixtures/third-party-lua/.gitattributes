@@ -1,2 +1,0 @@
-# Keep byte-for-byte upstream Lua sources, including their whitespace.
-*.lua -text whitespace=-blank-at-eol

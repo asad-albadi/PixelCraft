@@ -743,7 +743,6 @@ fn local_button_tooltips_never_borrow_icon_shortcuts() {
     for label in [
         "Choose sprites…",
         "Browse…",
-        "Run .lua…",
         "Install folder…",
         "Open…",
         "Save",

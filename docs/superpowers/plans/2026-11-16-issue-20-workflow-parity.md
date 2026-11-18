@@ -1,3 +1,5 @@
+> Historical checkpoint before Lua retirement in issue #23. Current native automation policy: [migration guide](/docs/native-automation-migration.md). Earlier preserve/defer-Lua statements below are superseded.
+
 # PixelCraft issue #20 implementation plan
 
 > Use Superpowers test-driven development and verify each batch before recording it as complete.

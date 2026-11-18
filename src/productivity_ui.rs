@@ -1064,7 +1064,7 @@ impl PixelCraft {
     }
 
     pub(super) fn poll_open_document(&mut self) {
-        if self.start.is_some() || self.script_job.is_some() {
+        if self.start.is_some() {
             return;
         }
         let Some(job) = &self.open_job else { return };
@@ -2981,7 +2981,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     }
 
     fn live_busy(&self) -> bool {
-        self.start.is_some() || self.script_job.is_some() || self.power.reference_drag.is_some()
+        self.start.is_some() || self.power.reference_drag.is_some()
     }
 
     fn begin_live_request(

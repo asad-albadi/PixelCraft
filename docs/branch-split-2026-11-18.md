@@ -1,3 +1,5 @@
+> Historical checkpoint before Lua retirement in issue #23. Current native automation policy: [migration guide](/docs/native-automation-migration.md). Earlier preserve/defer-Lua statements below are superseded.
+
 # Native workflow branch separation
 
 The user approved preserving the full PR stack and issue #20 work on `discarded-lua-updates`, and moving all non-Lua changes to a separate branch based on `main`. Existing Lua support on `main` remains supported; further Lua development is stopped.

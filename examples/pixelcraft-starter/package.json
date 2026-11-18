@@ -3,9 +3,23 @@
   "displayName": "PixelCraft Starter",
   "version": "1.0.0",
   "contributes": {
-    "scripts": [{"path": "main.lua"}],
-    "themes": [{"id": "midnight", "path": "theme.json"}],
-    "palettes": [{"id": "starter", "path": "palette.json"}],
-    "shortcuts": [{"id": "drawing", "path": "shortcuts.json"}]
+    "themes": [
+      {
+        "id": "midnight",
+        "path": "theme.json"
+      }
+    ],
+    "palettes": [
+      {
+        "id": "starter",
+        "path": "palette.json"
+      }
+    ],
+    "shortcuts": [
+      {
+        "id": "drawing",
+        "path": "shortcuts.json"
+      }
+    ]
   }
 }

@@ -731,7 +731,6 @@ pub fn label_action(label: &str) -> &'static str {
         "Fit" => "fit",
         "Stop extension" => "stop",
         "Remove" => "trash",
-        "Run .lua…" => "terminal",
         "Install package…" | "Install folder…" => "install",
         "Check for updates" => "refresh",
         "Normal" => "brush",

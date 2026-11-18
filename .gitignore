@@ -16,6 +16,5 @@
 Thumbs.db
 
 # Generated native runtimes (built from verified source).
-/runtime/lua54.dll
 /runtime/webp/
 /runtime/macos/

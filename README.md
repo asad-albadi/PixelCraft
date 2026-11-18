@@ -63,12 +63,10 @@
     </td>
     <td width="33%" valign="top">
       <h3>Keep your work editable</h3>
-      Save native .pixel projects. Exchange supported ASE sprites, export PNG sheets and animated GIFs, and extend the editor with bundled Lua.
     </td>
   </tr>
 </table>
 
-PixelCraft runs independently of Aseprite. Its executable includes a Lua 5.4 runtime and uses its own preferences, extensions and project storage. Aseprite's executable, configuration and assets are not needed.
 
 ## Get started
 
@@ -78,7 +76,6 @@ Future tagged releases will include `PixelCraft-<version>-x86_64-Setup.exe` besi
 
 ### Windows portable executable
 
-Tagged release builds also produce `PixelCraft-<version>-x86_64-Portable.exe`, a SHA-256 checksum, and license notices. Run the executable directly on Windows x64. Animated WebP and Lua are available from the single executable.
 
 ### Linux AppImage
 
@@ -105,28 +102,25 @@ Open PixelCraft from the application menu or run `pixelcraft` in a terminal. The
 
 Maintainers: publish the contents of this `app/` directory as the repository root, including `.github/`. Push a version tag such as `v0.1.0` to run `.github/workflows/release.yml`. **Actions → Desktop releases → Run workflow** creates downloadable artifacts without publishing a release. Tagged runs publish all platform assets and checksums after the Windows, Linux, and macOS jobs pass. The version tag controls artifact filenames; update `Cargo.toml` and `Cargo.lock` before tagging a new app version.
 
-The Linux job builds on Ubuntu 22.04, embeds that runner's Lua 5.4 library, packages using [linuxdeploy](https://docs.appimage.org/packaging-guide/from-source/native-binaries.html), and checks packaged save/export/Lua functionality. The Windows job uses Windows Server 2022, stable MSVC Rust and Inno Setup 6. It compiles a checksum-verified [official Lua 5.4.9 source archive](https://www.lua.org/ftp/) into an embedded x64 DLL with a static C runtime, links the decoder from checksum-verified libwebp 1.6.0 source, runs the Rust tests, and builds a per-user installer and a standalone executable. Before uploading, it silently installs to a path containing spaces, exercises animated WebP import, saving, exports and Lua plugins from the installed executable with build-tool directories removed from PATH, repeats installation for the upgrade path, checks uninstall, and verifies the portable executable in a separate directory containing only the app. Both executables get SHA-256 checksums. Windows release verification runs on the Windows runner; local Linux checks cannot execute that installer. No Windows installer is produced until the workflow runs.
+The Linux job builds on Ubuntu22.04 and verifies AppImage, tarball and Debian package startup. Windows builds static WebP, tests the editor, and verifies its installed and standalone executables. Both native macOS architectures build and verify relocated application bundles. Automation uses native CLI/MCP operations and requires no bundled interpreter.
 
 Before uploading a release, the workflow also opens the packaged AppImage on an Xvfb X11 display and a headless Weston Wayland display using Mesa software rendering. Each check must exit successfully and produce a nonblank editor screenshot within 60 seconds. Wayland runs without `DISPLAY` so it cannot fall back to X11. Screenshots and startup/compositor logs are saved in the `PixelCraft-startup-diagnostics` Actions artifact, including on failure. Packaging fails if any `libwayland-*.so*` files or symlinks enter the AppDir. These checks validate startup on the Ubuntu release runner; they do not cover every Linux distribution or graphics driver.
 
-The release job also relocates the extracted tarball to a path containing spaces and installs the Debian package using apt. Both package checks cover graphical startup on X11, animated WebP import, and the standalone Lua and export checks. The Debian check also verifies the desktop entry and removes the package afterward.
 
 ### macOS
 
-The macOS build produces separate ZIP archives for Apple Silicon (`arm64`) and Intel (`x86_64`). Extract the matching archive and open `PixelCraft.app`. The bundle includes its Lua and WebP runtimes and targets macOS 12 and later. The release smoke tests run on macOS 15 with both architectures.
 
 The build applies an ad-hoc signature to the app bundle. Developer ID signing and Apple notarization require separate release credentials.
 
 ### Build from source
 
-Build from the repository root with a Rust toolchain supporting edition 2024 and Cargo. Linux graphics and window-system libraries are required; a graphical desktop session is needed to open the editor. For Windows x64, use an x64 MSVC developer PowerShell with stable Rust and run `./packaging/build-windows-lua.ps1` and `./packaging/build-windows-webp.ps1` first (requires network access to download verified Lua and WebP sources). The generated `runtime/lua54.dll` is embedded at compile time. The WebP script requires CMake and builds the static libraries under `runtime/webp`. The Linux Lua runtime is checked in.
+Build from the repository root with Rust1.95 and Cargo. Linux requires the graphics/window-system and WebP development libraries. Windows uses an x64 MSVC developer PowerShell and `./packaging/build-windows-webp.ps1`; macOS uses `bash packaging/build-macos-runtime.sh arm64` (or `x86_64`) for static WebP. No Lua toolchain or runtime is required.
 
 ```bash
 cargo build --release
 cargo run --release
 ```
 
-On macOS, install the Xcode command-line tools, CMake, and Rust. Run `bash packaging/build-macos-runtime.sh` before Cargo. The script builds Lua and WebP for the host architecture. Set `MACOSX_DEPLOYMENT_TARGET=12.0` for the Cargo build to match the release configuration.
 
 The first build downloads dependencies. After Cargo has cached them, add `--offline` to build or run without network access. The release executable is `target/release/pixelcraft` on Linux or `target/release/pixelcraft.exe` on Windows.
 
@@ -240,9 +234,8 @@ ASE imports apply the stored pixel aspect ratio to the canvas and Preview and us
 
 ## Independent extensions and storage
 
-**Extensions → Extensions & scripts** runs Lua scripts and installs `.lua`, `.zip`, `.aseprite-extension`, or folders containing `package.json`. Manifest contributions include `scripts`, `themes`, `palettes`, `keys`/`shortcuts`, `languages`, and `ditheringMatrices`, each with a `path`. Original theme directory paths beginning with `./` are accepted. Installed packages can be enabled, disabled and uninstalled here; registered plugin commands run in this interface. ZIP extraction supports stored/deflated entries, checks CRC and size, and rejects path traversal, symlinks and encryption. Installation is staged; existing packages are not overwritten.
+**Extensions → Asset extensions** installs themes, palettes, shortcuts, languages and dithering matrices from ZIP/asset packages or folders. Archive validation rejects traversal, symlinks, encryption, invalid CRC and oversized contents. Lua scripting/plugins are no longer supported. Mixed packages retain independent assets and show a script-retirement warning. See [migration and CLI/MCP workflows](docs/native-automation-migration.md).
 
-`examples/pixelcraft-starter` is an original installable package demonstrating a Lua command, JSON theme, palette and shortcuts. It is also embedded into the standalone verification mode.
 
 - Data and projects: `$XDG_DATA_HOME/pixelcraft/{extensions,projects}`, normally `~/.local/share/pixelcraft`.
 - Preferences: `$XDG_CONFIG_HOME/pixelcraft`, normally `~/.config/pixelcraft`.
@@ -254,31 +247,25 @@ On Linux, System mode reads the desktop appearance portal and listens for change
 
 Themes accept original XML color definitions or JSON with `dark`, `panel`, `text`, `accent` (RGB arrays). Palettes are JSON arrays of RGBA bytes, GIMP `.gpl` palettes, or ASE palettes. Shortcuts accept original `.aseprite-keys`/XML files for supported commands and tools, or JSON maps such as `{"P":"pencil","Ctrl+S":"save"}`; supported actions include tools, file/edit commands and playback. Applied theme/shortcut settings are copied into PixelCraft's preferences and remembered.
 
-Lua runs transactionally on a separate document copy; successful results import as one undoable change. Errors, unsupported APIs and resource limits leave the original document unchanged. Lua has a 256 MiB allocation budget, an instruction/CPU-time budget, and a one-million-stored-pixel invocation limit. Interactive editor sessions support dialogs, events, timers, preferences, file operations and local modules. Process execution and Lua io remain unavailable. Original language INI and BMP/PNG dithering contributions are supported; themes adapt XML colors to native widgets. See [the compatibility list](COMPATIBILITY.md) for the tested API and remaining limitations.
 
-## Supported native Lua API
+### Native automation and asset compatibility
 
 - `app.activeSprite`, `activeLayer`, `activeFrame`, `activeCel`, `activeImage`, `sprites`, `params`, `apiVersion`, `isUIAvailable`, `transaction(fn)`, `refresh()`, `alert()`.
 - Sprite width/height/layers/frames/cels/palettes/colorMode, `newCel`, `deleteCel`, `newLayer`, `newGroup`, `newFrame`, `newEmptyFrame`, `newTag`.
 - Layer name/opacity/visibility/editability/blendMode/parent/group/cels and `cel(frame)`; frame number/duration; cel image/opacity/frame/layer. Frame API durations are seconds.
 - `Image(width,height)` or `Image(image)`, `drawPixel`, `getPixel`, `clear`, `clone`, `drawImage` (source-over), and `pixels()` iterators.
 - `Color`, `Point`, `Size`, `Rectangle`, `ColorMode`, `BlendMode`, `AniDir`, packed RGBA functions under `app.pixelColor`.
-- Palette `getColor`, `setColor`, `resize`; tag name/fromFrame/toFrame/aniDir. Pixel coordinates and palette indices are zero-based; frame/layer Lua handles are one-based.
 - `init(plugin)`, `plugin:newCommand{id,title,onclick}`, menu grouping/separator declarations. Supported command calls: `NewLayer`, `NewFrame`, `NewEmptyFrame`. Additional selection, undo, file and interactive APIs are listed in [COMPATIBILITY.md](COMPATIBILITY.md). Unlisted commands return errors.
 
 ## Verification
 
 Pull requests targeting main run formatting, strict Clippy, and Rust tests on Linux and Windows. The Windows check opens the application and verifies that it renders. Tagged builds run the separate release packaging workflow.
 
-`cargo test --offline` covers model behavior, real pointer editing, undo, rendering caches, palettes, groups, tilemaps, tags, file round trips, PNG metadata, embedded Lua, package lifecycle and error rollback. `cargo build --offline` builds the app; Craft Anything's `rebuild_check` builds and captures its window.
 
-`target/debug/pixelcraft --standalone-check /tmp/workshop-check` exercises drawing, project save/open, PNG/sheet/GIF exports, embedded Lua plugin installation/execution, theme/palette/shortcut application, disable and uninstall without opening a window. `checks/standalone.sh` runs it in an otherwise empty Bubblewrap filesystem containing only the binary, basic Linux libraries and a writable output directory—no original editor, system Lua interpreter, home configuration or assets are mounted.
 
 ## Status
 
-PixelCraft is an early-alpha desktop app with Linux AppImage and Windows installer release workflows. Drawing, animation, advanced document features, native project persistence and independent Lua extensions have automated coverage. The standalone check also exercises saving, exports and plugins in an isolated filesystem without Aseprite or an installed Lua interpreter.
 
-Compatibility is partial and explicitly documented in [COMPATIBILITY.md](COMPATIBILITY.md). Ten real Aseprite projects (33 frames) have reference-image and metadata round-trip coverage, and the baseline upstream scripts have automated coverage. Exact original widget skins, every API/command, multi-document Lua objects and monitor-specific ICC calibration are outside the supported surface. Other operating systems and architectures have not been validated.
 
 ## License and credits
 
@@ -286,9 +273,8 @@ PixelCraft is licensed under the [MIT License](LICENSE).
 
 **Made via [CraftAnything](https://github.com/storytold/craft-anything) by [ArtCraft](https://getartcraft.com/).** Craft Anything provided the workflow used to study the reference application, build this independent editor and check the result.
 
-PixelCraft was created using [Aseprite](https://github.com/aseprite/aseprite) as its basis and reference for pixel-art editing features, file compatibility and scripting behavior. Thank you to the Aseprite developers and contributors.
+PixelCraft was created using [Aseprite](https://github.com/aseprite/aseprite) as its basis and reference for pixel-art editing features, file compatibility. Thank you to the Aseprite developers and contributors.
 
-The bundled Lua runtime retains its [MIT license and attribution](runtime/LUA-LICENSE.txt). Rust dependencies retain their respective licenses; exact versions are recorded in [Cargo.lock](Cargo.lock). ASE interoperability follows the published file specification linked above. The sample garden artwork is original to this project.
 
 <p align="center">
   <a href="https://github.com/storytold/craft-anything">Made with CraftAnything</a> ·
@@ -389,9 +375,9 @@ MCP file writes require `"overwrite": true` to replace an existing file. This ap
 
 Live access starts **disabled** and is never restored from preferences. Enable **Workflow tools → Assistants & headless tools → Allow assistants to access this live editor**. The editor displays an MCP command with `--live BRIDGE_CONFIG`. That instance adds `live-inspect`, `live-render`, `live-edit` and `live-undo`. The bridge listens on loopback with a random token in a private file, which is removed when access is disabled or the editor closes. Disable the checkbox to revoke access.
 
-Live inspection returns a session/document revision. Supply that exact revision to edit or undo; user edits, undo/redo and document changes invalidate it. Assistant changes are one regular undo step. Active gestures and scripts block edits, and expired requests are discarded rather than applied after a stalled editor resumes. Reference overlays are excluded from assistant artwork rendering too.
+Live inspection returns a session/document revision. Supply that exact revision to edit or undo; user edits, undo/redo and document changes invalidate it. Assistant changes are one regular undo step. Active gestures and pending document operations block edits, and expired requests are discarded rather than applied after a stalled editor resumes. Reference overlays are excluded from assistant artwork rendering too.
 
-Live inspection reports the session, document and layer IDs. Use `live-cel-targets` with a layer ID, start frame and count to look up cel IDs. Commands accept `layer_id` and `cel_id` alongside the existing index-based API. IDs are scoped to the open document. Refresh them after reopening a file or after structural script edits.
+Live inspection reports the session, document and layer IDs. Use `live-cel-targets` with a layer ID, start frame and count to look up cel IDs. Commands accept `layer_id` and `cel_id` alongside the existing index-based API. IDs are scoped to the open document. Refresh them after reopening a file or after structural document edits.
 
 Send an identical command batch to `live-preview-commands` and `live-commands` with the same `revision` and optional `document_id`. Preview returns PNG and changed RGBA cel bounds, without adding an Undo step. If the revision or target changes, inspect again before applying. To get a PNG of the applied result in the same response, set `return_preview: true` on `live-commands` or `live-edit`. The optional `frame`, `layers`, `region` and `scale` select the view. The preview and changed bounds carry the committed revision. A preview error rejects the whole edit before it commits. If the reply would exceed the 8 MB live bridge limit, request a smaller crop, use a lower scale, or omit the preview. Live undo, redo, and saves also check reply size before changing history or publishing a file.
 

@@ -37,7 +37,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libx11-dev libxi-dev libxcursor-dev \
             libxrandr-dev libxinerama-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libgl1-mesa-dev libegl1-mesa-dev liblua5.4-dev libwebp-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libwebp-dev \
             desktop-file-utils dpkg-dev binutils patchelf xvfb xauth weston sway \
             libgl1-mesa-dri libegl-mesa0 python3-pil
 
@@ -45,11 +45,6 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
           rustup override set 1.95.0
-
-      # The checked-in development Lua binary requires a newer glibc.
-      # Embed Ubuntu's Lua instead so the release supports Ubuntu 22.04+.
-      - name: Use release-compatible embedded Lua
-        run: cp -L /usr/lib/x86_64-linux-gnu/liblua5.4.so.0 runtime/liblua5.4.so
 
       - name: Test and build release
         env:
@@ -60,6 +55,7 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
           cargo build --release --locked
+          python3 checks/no-lua-runtime.py target/release/pixelcraft
           target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
 
       - name: Native clipboard and automatic graphics fallback on Linux
@@ -120,7 +116,6 @@ jobs:
           mkdir -p dist AppDir/usr/share/doc/pixelcraft
           install -m 644 LICENSE AppDir/usr/share/doc/pixelcraft/LICENSE
           install -m 644 assets/fonts/LICENSE AppDir/usr/share/doc/pixelcraft/FONT-LICENSE.txt
-          install -m 644 runtime/LUA-LICENSE.txt AppDir/usr/share/doc/pixelcraft/LUA-LICENSE.txt
           install -m 644 /usr/share/doc/libwebpdemux2/copyright AppDir/usr/share/doc/pixelcraft/WEBP-COPYRIGHT.txt
           desktop-file-validate packaging/pixelcraft.desktop
           curl --fail --location --retry 3 \
@@ -257,8 +252,6 @@ jobs:
         with:
           path: target
           key: windows-target-v1-${{ hashFiles('Cargo.lock') }}
-      - name: Build embedded Windows Lua
-        run: ./packaging/build-windows-lua.ps1
       - name: Build static Windows WebP
         run: ./packaging/build-windows-webp.ps1
       - name: Test and build Windows release
@@ -269,6 +262,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+          python checks/no-lua-runtime.py target/release/pixelcraft.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Unexpected Lua runtime payload' }
       - name: Save Windows build cache
         uses: actions/cache/save@v4
         with:
@@ -334,7 +329,7 @@ jobs:
           ./checks/windows-portable.ps1 -App $portable
           $hash = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $env:PORTABLE" | Set-Content "$portable.sha256" -Encoding ascii
-          $notices = @('LICENSE', 'assets/fonts/LICENSE', 'runtime/LUA-LICENSE.txt',
+          $notices = @('LICENSE', 'assets/fonts/LICENSE',
               'runtime/webp/WEBP-COPYING.txt', 'runtime/webp/WEBP-PATENTS.txt', 'runtime/webp/WEBP-AUTHORS.txt')
           $notices | ForEach-Object { "---- $_"; Get-Content -LiteralPath $_; "" } |
               Set-Content "$portable-LICENSES.txt" -Encoding utf8

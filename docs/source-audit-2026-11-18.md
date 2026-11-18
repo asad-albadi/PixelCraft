@@ -1,3 +1,5 @@
+> Historical checkpoint before Lua retirement in issue #23. Current native automation policy: [migration guide](/docs/native-automation-migration.md). Earlier preserve/defer-Lua statements below are superseded.
+
 > Historical audit at `8a8ccd0`. Lua implementation is deferred and preserved on `discarded-lua-updates`. Current native implementation and verification are recorded in the [acceptance report](native-workflow-acceptance-2026-11-18.md).
 
 # Source and Large-Project Audit: 2026-11-18

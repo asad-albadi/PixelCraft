@@ -1,3 +1,5 @@
+> Historical checkpoint before Lua retirement in issue #23. Current native automation policy: [migration guide](/docs/native-automation-migration.md). Earlier preserve/defer-Lua statements below are superseded.
+
 # Native issue20 closure implementation plan
 
 > **For agentic workers:** Use superpowers:executing-plans inline with test-driven development. Preserve this ledger across context compaction.

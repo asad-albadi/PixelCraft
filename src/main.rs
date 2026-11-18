@@ -22,7 +22,6 @@ mod palette_conversion;
 mod productivity_ui;
 mod retouch_tool;
 
-mod script_ui;
 mod selection_mask;
 mod selection_tools;
 use selection_mask::SelectionMask;
@@ -37,9 +36,8 @@ mod system_clipboard;
 mod tilemap_clipboard;
 use eframe::egui::{self, Color32, Key, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use export_actions::{ExportJob, ExportKind, ExportRecipe, export_layer_ids, load_atlas_inputs};
-use pixelcraft::extensions::Session;
 use pixelcraft::{
-    extensions::{self, Manager, PluginCommand},
+    extensions::{self, Manager},
     formats,
     model::*,
     updates::{self, AboutInfo, INSTALLED_VERSION, Release},
@@ -793,12 +791,7 @@ struct PixelCraft {
     next_update_check: Option<Instant>,
     extensions_open: bool,
     extension_manager: Option<Manager>,
-    plugin_commands: Vec<PluginCommand>,
     extension_error: String,
-    extension_session: Option<Session>,
-    script_ui: script_ui::ScriptUi,
-    script_preview_doc: Option<Document>,
-    script_job: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     shot: Option<PathBuf>,
     shot_frames: u32,
     shot_requested: bool,
@@ -1010,12 +1003,7 @@ impl PixelCraft {
             next_update_check: None,
             extensions_open: false,
             extension_manager: Manager::new().ok(),
-            plugin_commands: vec![],
             extension_error: String::new(),
-            extension_session: None,
-            script_job: None,
-            script_ui: script_ui::ScriptUi::default(),
-            script_preview_doc: None,
             shot,
             shot_frames: 0,
             shot_requested: false,
@@ -2376,7 +2364,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.studio.sheet_open
             || self.studio.tiles_open
             || self.extensions_open
-            || (self.script_job.is_some() && !self.script_ui.modeless)
             || self.status.starts_with("Could not")
             || self.status.starts_with("Export failed")
     }
@@ -2499,7 +2486,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         let mut open = true;
         let mut jump = None;
-        let can_jump = !self.dialog_open() && self.script_job.is_none();
+        let can_jump = !self.dialog_open();
         let current = self.undo.len();
         let total = current + self.redo.len();
         egui::Window::new("Undo History")
@@ -2554,7 +2541,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.cancel_gesture();
         self.split_canvas = None;
         self.active_canvas = CanvasPane::Primary;
-        self.extension_session = None;
         self.active_tag = None;
         self.preview_playback = None;
         self.palette_index = 0;
@@ -2623,7 +2609,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.replace(doc, path);
     }
     fn switch_tab(&mut self, index: usize) {
-        if index == self.active_tab || index >= self.tabs.len() || self.script_job.is_some() {
+        if index == self.active_tab || index >= self.tabs.len() {
             return;
         }
         self.cancel_gesture();
@@ -2670,7 +2656,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
         self.preview_playback = None;
-        self.extension_session = None;
         self.render_snapshot = None;
         self.stop_playback(false);
         self.hover = None;
@@ -2732,10 +2717,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn save(&mut self, as_new: bool) -> bool {
-        if self.script_job.is_some() {
-            self.status = "Wait for the current script before saving the canvas".into();
-            return false;
-        }
         if self.save_job.is_some() {
             self.status = "A save is already running".into();
             return false;
@@ -3316,10 +3297,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn open_derived_sprite(&mut self, doc: Document, status: &str) {
-        if self.script_job.is_some() {
-            self.status = "Wait for the current script before opening another tab".into();
-            return;
-        }
         let blank = Document::new(doc.width, doc.height);
         self.open_document(doc, None);
         self.saved = blank;
@@ -3624,129 +3601,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             _ => {}
         }
     }
-    fn import_extension_result(&mut self) -> Result<(), String> {
-        let session = self
-            .extension_session
-            .as_ref()
-            .ok_or("No script result is available")?;
-        let doc = session.load_result()?;
-        if doc != self.doc {
-            self.remember_action("Run extension");
-            self.doc = doc;
-            self.clamp();
-        }
-        self.status = "Imported extension changes. Undo restores your previous sprite.".into();
-        Ok(())
-    }
+
     fn refresh_extensions(&mut self) {
         if let Some(manager) = &self.extension_manager {
-            match manager.commands() {
-                Ok(commands) => {
-                    self.plugin_commands = commands;
-                    self.extension_error.clear();
-                }
-                Err(e) => self.extension_error = e,
-            }
+            self.extension_error = manager.list().err().unwrap_or_default();
         }
     }
-    fn start_script(&mut self, script: PathBuf, command: Option<String>) -> Result<(), String> {
-        let session = Session::new(&self.doc)?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        let work = session.clone();
-        let doc = self.doc.clone();
-        let (frame, layer) = (self.frame, self.layer);
-        let colors = [self.fg, self.bg];
-        let (ui_tx, ui_rx) = std::sync::mpsc::channel::<script_ui::Request>();
-        self.script_ui.connect(ui_rx);
-        self.script_preview_doc = Some(self.doc.clone());
-        let preferences_path = extensions::config_directory().join("lua-preferences.json");
-        let saved_preferences: serde_json::Value = std::fs::read(&preferences_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or(serde_json::json!({}));
-        let selection=self.selection.map(|(x0,y0,x1,y1)|serde_json::json!({"x":x0.min(x1),"y":y0.min(y1),"width":(x1-x0).abs()+1,"height":(y1-y0).abs()+1}));
-        let options = serde_json::json!({"selection":selection,"timelineRange":self.timeline_range(),"filename":self.path.as_ref().map(|p|p.to_string_lossy()),"zoom":self.zoom,"preferences":saved_preferences["preferences"],"pluginPreferences":saved_preferences[script.to_string_lossy().as_ref()],"configPath":extensions::config_directory(),"projectPath":script.parent()});
-        std::thread::spawn(move || {
-            let result = std::fs::read_to_string(&script)
-                .map_err(|e| e.to_string())
-                .and_then(|source| {
-                    let base = script
-                        .parent()
-                        .unwrap_or(std::path::Path::new("."))
-                        .to_path_buf();
-                    let mut preferences = saved_preferences;
-                    extensions::run_source_with_host(
-                        &doc,
-                        &source,
-                        frame,
-                        layer,
-                        command.as_deref(),
-                        Some(colors),
-                        options,
-                        Box::new(move |request| {
-                            let op = request["op"].as_str().unwrap_or("");
-                            if matches!(
-                                op,
-                                "open"
-                                    | "save"
-                                    | "isFile"
-                                    | "isDirectory"
-                                    | "listFiles"
-                                    | "makeDirectory"
-                                    | "close"
-                                    | "readScript"
-                            ) {
-                                return extensions::script_file_request(&base, &request);
-                            }
-                            if op == "preferences" {
-                                preferences["preferences"] = request["preferences"].clone();
-                                preferences[script.to_string_lossy().as_ref()] =
-                                    request["pluginPreferences"].clone();
-                                std::fs::create_dir_all(preferences_path.parent().unwrap())
-                                    .map_err(|e| e.to_string())?;
-                                std::fs::write(
-                                    &preferences_path,
-                                    serde_json::to_vec(&preferences).map_err(|e| e.to_string())?,
-                                )
-                                .map_err(|e| e.to_string())?;
-                            }
-                            let (reply, rx) = std::sync::mpsc::channel();
-                            ui_tx
-                                .send(script_ui::Request {
-                                    value: request,
-                                    reply,
-                                })
-                                .map_err(|_| "Editor closed".to_string())?;
-                            rx.recv().map_err(|_| "Editor closed".to_string())
-                        }),
-                    )
-                })
-                .and_then(|d| formats::save(&work.result_path(), &d));
-            let _ = tx.send(result);
-        });
-        self.extension_session = Some(session);
-        self.script_job = Some(rx);
-        self.playing = false;
-        self.playback_waiting_for_frame = false;
-        self.status = "Running embedded Lua…".into();
-        Ok(())
-    }
+
     fn extension_action(&mut self, action: &str) -> Result<(), String> {
         match action {
-            "run-lua" => {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Lua script", &["lua"])
-                    .pick_file()
-                {
-                    self.start_script(path, None)?;
-                }
-            }
             "install-extension" => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter(
-                        "Extension package or Lua",
-                        &["aseprite-extension", "zip", "lua"],
-                    )
+                    .add_filter("Asset extension package", &["aseprite-extension", "zip"])
                     .pick_file()
                 {
                     let id = self
@@ -3776,80 +3642,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         Ok(())
     }
-    fn show_script_ui(&mut self, ctx: &egui::Context) {
-        if self.script_ui.modeless
-            && self
-                .script_preview_doc
-                .as_ref()
-                .is_some_and(|d| d != &self.doc)
-        {
-            self.script_ui.editor_update = Some(
-                serde_json::json!({"document":self.doc,"frame":self.frame+1,"layer":self.layer+1}),
-            );
-            self.script_preview_doc = Some(self.doc.clone());
-        }
-        self.script_ui.show(ctx);
-        if let Some(request) = self.script_ui.preview.take()
-            && let Ok(document) = serde_json::from_value::<Document>(request["document"].clone())
-            && document.validate().is_ok()
-            && self.script_ui.editor_update.is_none()
-        {
-            self.doc = document;
-            self.script_preview_doc = Some(self.doc.clone());
-        }
-        if let Some(context) = self.script_ui.final_context.take() {
-            let s = &context["selection"];
-            self.selection = match (
-                s["x"].as_i64(),
-                s["y"].as_i64(),
-                s["width"].as_i64(),
-                s["height"].as_i64(),
-            ) {
-                (Some(x), Some(y), Some(w), Some(h)) if w > 0 && h > 0 => {
-                    Some((x as i32, y as i32, (x + w - 1) as i32, (y + h - 1) as i32))
-                }
-                _ => None,
-            };
-            if let Ok(colors) = serde_json::from_value::<[Pixel; 2]>(context["colors"].clone()) {
-                self.fg = colors[0];
-                self.bg = colors[1];
-                self.set_active_color(self.fg);
-            }
-            self.frame = context["frame"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
-            self.layer = context["layer"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
-        }
-    }
 
-    fn poll_script(&mut self) {
-        let result = self.script_job.as_ref().map(|rx| rx.try_recv());
-        match result {
-            Some(Ok(result)) => {
-                self.script_job = None;
-                self.script_ui.disconnect();
-                if let Some(session) = &self.extension_session
-                    && let Ok(original) = formats::load(&session.input_path())
-                {
-                    self.doc = original;
-                }
-                let result = result.and_then(|()| self.import_extension_result());
-                if let Err(e) = result {
-                    self.status = format!("Extension failed: {e}");
-                }
-            }
-            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                self.script_job = None;
-                self.script_ui.disconnect();
-                if let Some(session) = &self.extension_session
-                    && let Ok(original) = formats::load(&session.input_path())
-                {
-                    self.doc = original;
-                }
-                self.status =
-                    "Extension failed: the Lua worker stopped. Your sprite is unchanged.".into();
-            }
-            _ => {}
-        }
-    }
     #[cfg(test)]
     fn action_tooltip(&self, action: &str, label: &str) -> String {
         ui_icons::tooltip(&self.custom_shortcuts, action, label)
@@ -4090,7 +3883,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ("Export mask PNG…", "export-selection-mask"),
                     ],
                 ),
-                ("Extensions", vec![("Extensions & scripts…", "extensions")]),
+                ("Extensions", vec![("Asset extensions…", "extensions")]),
                 (
                     "Help",
                     vec![("Tools and file support", "help"), ("About", "about")],
@@ -7247,25 +7040,126 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if self.extensions_open {
             let mut open = true;
             let mut action = None;
-            let mut run = None;
             let mut change = None;
             let mut asset = None;
-            egui::Window::new("PixelCraft extensions").open(&mut open).default_width(560.).show(ctx,|ui|{
-                ui.label("Install plugins, themes, palettes and shortcuts for PixelCraft.");
-                ui.collapsing("Aseprite compatibility",|ui|{egui::ScrollArea::vertical().max_height(260.).show(ui,|ui|{ui.label(include_str!("../COMPATIBILITY.md"));});});
-                ui.small("Lua runs inside PixelCraft. Supported API: app, Sprite, Layer, Cel, Image, Color, palettes, tags and plugin commands. Dialogs, callbacks, events and timers run in the editor. See COMPATIBILITY.md for supported APIs and limitations.");
-                ui.horizontal_wrapped(|ui|{for(label,id)in [("Run .lua…","run-lua"),("Install package…","install-extension"),("Install folder…","install-folder")]{if ui.add_enabled_ui(self.script_job.is_none(),|ui| ui.pc_button(label)).inner.clicked(){action=Some(id);}}});
-                ui.separator();
-                if let Some(manager)=&self.extension_manager {
-                    ui.small(format!("Storage: {}",manager.root.display()));
-                    match manager.list(){Ok(packages)=>{if packages.is_empty(){ui.label("No extensions installed yet.");}for p in packages{ui.horizontal(|ui|{let mut enabled=p.enabled;if ui_icons::checkbox(ui,&mut enabled,"extensions",if p.manifest.display_name.is_empty(){&p.id}else{&p.manifest.display_name}).changed(){change=Some((p.id.clone(),Some(enabled)));}
-if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}});if p.enabled{for a in &p.manifest.contributes.palettes{if ui.pc_button(format!("Use palette: {}",a.path)).clicked(){asset=Some(("palette",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.themes{if ui.pc_button(format!("Use theme: {}",a.path)).clicked(){asset=Some(("theme",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.languages{if ui.pc_button(format!("Use language: {}",a.id)).clicked(){asset=Some(("language",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.dithering_matrices{if ui.pc_button(format!("Use dithering: {}",a.id)).clicked(){asset=Some(("dither",p.id.clone(),a.clone()));}}for a in &p.manifest.contributes.shortcuts{if ui.pc_button(format!("Use shortcuts: {}",a.path)).clicked(){asset=Some(("shortcuts",p.id.clone(),a.clone()));}}}}},Err(e)=>{ui.label(e);}}
-                }else{ui.label("Extension storage could not be created.");}
-                ui.separator();ui.strong("Plugin commands");
-                for c in &self.plugin_commands{if ui.add_enabled_ui(self.script_job.is_none(),|ui| ui_icons::local_button(ui,"terminal",&format!("{} · {}",c.package,c.title))).inner.clicked(){run=Some(c.clone());}}
-                if !self.extension_error.is_empty(){ui_icons::feedback(ui,"error",&self.extension_error);}
-                if self.script_job.is_some(){ui.spinner();ctx.request_repaint_after(Duration::from_millis(100));}ui.label(&self.status);
-            });
+            egui::Window::new("PixelCraft extensions")
+                .open(&mut open)
+                .default_width(560.)
+                .show(ctx, |ui| {
+                    ui.label(
+                        "Install themes, palettes, shortcuts, languages and dithering matrices.",
+                    );
+                    ui.collapsing("Aseprite compatibility", |ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(260.)
+                            .show(ui, |ui| {
+                                ui.label(include_str!("../COMPATIBILITY.md"));
+                            });
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, id) in [
+                            ("Install package…", "install-extension"),
+                            ("Install folder…", "install-folder"),
+                        ] {
+                            if ui
+                                .add_enabled_ui(true, |ui| ui.pc_button(label))
+                                .inner
+                                .clicked()
+                            {
+                                action = Some(id);
+                            }
+                        }
+                    });
+                    ui.separator();
+                    if let Some(manager) = &self.extension_manager {
+                        ui.small(format!("Storage: {}", manager.root.display()));
+                        match manager.list() {
+                            Ok(packages) => {
+                                if packages.is_empty() {
+                                    ui.label("No extensions installed yet.");
+                                }
+                                for p in packages {
+                                    ui.horizontal(|ui| {
+                                        let mut enabled = p.enabled;
+                                        if ui_icons::checkbox(
+                                            ui,
+                                            &mut enabled,
+                                            "extensions",
+                                            if p.manifest.display_name.is_empty() {
+                                                &p.id
+                                            } else {
+                                                &p.manifest.display_name
+                                            },
+                                        )
+                                        .changed()
+                                        {
+                                            change = Some((p.id.clone(), Some(enabled)));
+                                        }
+                                        if ui.pc_small_button("Uninstall").clicked() {
+                                            change = Some((p.id.clone(), None));
+                                        }
+                                    });
+                                    if let Some(warning) = p.manifest.contributes.script_warning() {
+                                        ui.weak(warning);
+                                    }
+                                    if p.enabled {
+                                        for a in &p.manifest.contributes.palettes {
+                                            if ui
+                                                .pc_button(format!("Use palette: {}", a.path))
+                                                .clicked()
+                                            {
+                                                asset = Some(("palette", p.id.clone(), a.clone()));
+                                            }
+                                        }
+                                        for a in &p.manifest.contributes.themes {
+                                            if ui
+                                                .pc_button(format!("Use theme: {}", a.path))
+                                                .clicked()
+                                            {
+                                                asset = Some(("theme", p.id.clone(), a.clone()));
+                                            }
+                                        }
+                                        for a in &p.manifest.contributes.languages {
+                                            if ui
+                                                .pc_button(format!("Use language: {}", a.id))
+                                                .clicked()
+                                            {
+                                                asset = Some(("language", p.id.clone(), a.clone()));
+                                            }
+                                        }
+                                        for a in &p.manifest.contributes.dithering_matrices {
+                                            if ui
+                                                .pc_button(format!("Use dithering: {}", a.id))
+                                                .clicked()
+                                            {
+                                                asset = Some(("dither", p.id.clone(), a.clone()));
+                                            }
+                                        }
+                                        for a in &p.manifest.contributes.shortcuts {
+                                            if ui
+                                                .pc_button(format!("Use shortcuts: {}", a.path))
+                                                .clicked()
+                                            {
+                                                asset =
+                                                    Some(("shortcuts", p.id.clone(), a.clone()));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                ui.label(e);
+                            }
+                        }
+                    } else {
+                        ui.label("Extension storage could not be created.");
+                    }
+                    ui.separator();
+                    if !self.extension_error.is_empty() {
+                        ui_icons::feedback(ui, "error", &self.extension_error);
+                    }
+                    ui.label(&self.status);
+                });
             self.extensions_open = open;
             if let Some((id, enabled)) = change {
                 let result = if let Some(manager) = &self.extension_manager {
@@ -7288,12 +7182,6 @@ if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}}
                     self.status = format!("Extension failed: {e}");
                 }
             }
-            if let Some(c) = run
-                && let Err(e) =
-                    self.start_script(c.script, if c.id.is_empty() { None } else { Some(c.id) })
-            {
-                self.status = e;
-            }
             if let Some(action) = action {
                 self.cancel_gesture();
                 if let Err(e) = self.extension_action(action) {
@@ -7314,7 +7202,7 @@ if ui.pc_small_button("Uninstall").clicked(){change=Some((p.id.clone(),None));}}
                     ui.strong("File support");
                     ui.label("Open PixelCraft projects, PNG and ASE sprites. Save .pixel projects or ASE sprites. Export PNG, sprite sheets, animated GIF and MP4.");
                     ui.label("Properties in the Sprite menu opens color modes, groups, blend modes, cel opacity, tile editing and named animation ranges. ASE profiles, metadata and off-canvas image pixels are retained. Embedded ICC profiles are converted to sRGB for display; source pixels are retained.");
-                    ui.label("PixelCraft is standalone. Extensions install into its own data directory. Lua, JSON themes, palettes and shortcuts run here through the documented supported native API.");
+                    ui.label("PixelCraft is standalone. Extensions install into its own data directory. Native asset packages provide themes, palettes and shortcuts. Automation uses the CLI and MCP interfaces.");
                 });
                 close = ui.pc_button("Close").clicked();
                 close
@@ -7343,7 +7231,7 @@ impl PixelCraft {
         } else {
             Vec2::new(4., 3.)
         };
-        if self.script_job.is_none() && self.start.is_none() {
+        if self.start.is_none() {
             let dropped = ctx.input(|i| i.raw.dropped_files.clone());
             for file in dropped {
                 self.open_recent(file.path().to_path_buf());
@@ -7425,15 +7313,7 @@ impl PixelCraft {
         self.start_update_download(&ctx, true);
         self.about_dialog(&ctx);
         self.settings_dialog(&ctx);
-        self.show_script_ui(&ctx);
-        self.poll_script();
-        if self.script_job.is_some() {
-            ctx.request_repaint_after(Duration::from_millis(16));
-        }
-        if self.script_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.status = "Finish the current extension before closing PixelCraft".into();
-        } else if self.save_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
+        if self.save_job.is_some() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.status = "Wait for the current save before closing PixelCraft".into();
         } else if ctx.input(|i| i.viewport().close_requested())
@@ -7791,10 +7671,6 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     for (name, bytes) in [
         (
-            "main.lua",
-            include_bytes!("../examples/pixelcraft-starter/main.lua").as_slice(),
-        ),
-        (
             "palette.json",
             include_bytes!("../examples/pixelcraft-starter/palette.json").as_slice(),
         ),
@@ -7811,14 +7687,14 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
     }
     let manager = Manager::at(root.join("pixelcraft"))?;
     let id = manager.install(&source)?;
-    let command = manager
-        .commands()?
-        .into_iter()
-        .find(|c| c.id == "paint-mark")
-        .ok_or("Plugin command not registered")?;
-    let edited = extensions::run_lua(&app.doc, &command.script, 0, 0, Some(&command.id))?;
+    let edited = pixelcraft::automation::apply_command_batch(
+        &app.doc,
+        &serde_json::json!({"commands":[
+            {"op":"shape","layer":0,"frame":0,"kind":"rectangle","x":0,"y":0,"x2":0,"y2":0,"color":[12,34,56,255],"filled":true}
+        ]}),
+    )?;
     if edited.layers[0].cels[0][0] != [12, 34, 56, 255] {
-        return Err("Plugin drawing mismatch".into());
+        return Err("Native command drawing mismatch".into());
     }
     app.doc = edited;
     app.extension_manager = Some(manager.clone());
@@ -7846,12 +7722,12 @@ fn standalone_check(root: PathBuf) -> Result<(), String> {
         return Err("Extension asset mismatch".into());
     }
     manager.set_enabled(&id, false)?;
-    if !manager.commands()?.is_empty() {
+    if manager.list()?.iter().any(|package| package.enabled) {
         return Err("Disabled plugin is still active".into());
     }
     manager.uninstall(&id)?;
     println!(
-        "Standalone check passed: drawing, native save/open, PNG/sheet/GIF exports, embedded Lua plugin, theme, palette, shortcuts, disable and uninstall."
+        "Standalone check passed: drawing, native save/open, PNG/sheet/GIF exports, native command edits, theme, palette, shortcuts, disable and uninstall."
     );
     Ok(())
 }
@@ -8166,49 +8042,7 @@ mod tests {
         assert_eq!(a.tabs.len(), 1);
         assert_eq!(a.doc.width, 8);
     }
-    #[test]
-    fn opening_another_document_detaches_the_previous_extension_session() {
-        let mut a = app();
-        let session = Session::new(&a.doc).unwrap();
-        formats::save(&session.result_path(), &a.doc).unwrap();
-        a.extension_session = Some(session.clone());
-        a.replace(Document::new(3, 3), Some(PathBuf::from("other.aseprite")));
-        assert!(a.import_extension_result().is_err());
-        assert_eq!(a.doc.width, 3);
-        assert!(session.result_path().is_file());
-        std::fs::remove_dir_all(session.directory).unwrap();
-    }
-    #[test]
-    fn extension_import_is_undoable_and_keeps_save_target() {
-        let mut a = app();
-        let before = a.doc.clone();
-        a.path = Some(PathBuf::from("original.aseprite"));
-        let session = Session::new(&a.doc).unwrap();
-        let mut changed = a.doc.clone();
-        changed.layers[0].cels[0][0] = [12, 34, 56, 255];
-        formats::save(&session.result_path(), &changed).unwrap();
-        a.extension_session = Some(session.clone());
-        a.import_extension_result().unwrap();
-        assert_eq!(a.doc, changed);
-        assert!(a.dirty());
-        assert_eq!(a.path, Some(PathBuf::from("original.aseprite")));
-        a.undo();
-        assert_eq!(a.doc, before);
-        std::fs::remove_dir_all(session.directory).unwrap();
-    }
-    #[test]
-    fn failed_extension_import_preserves_document_and_history() {
-        let mut a = app();
-        let before = a.doc.clone();
-        let session = Session::new(&a.doc).unwrap();
-        std::fs::write(session.result_path(), b"bad result").unwrap();
-        a.extension_session = Some(session.clone());
-        assert!(a.import_extension_result().is_err());
-        assert_eq!(a.doc, before);
-        assert!(a.undo.is_empty());
-        assert!(session.result_path().is_file());
-        std::fs::remove_dir_all(session.directory).unwrap();
-    }
+
     #[test]
     fn system_without_reported_theme_opens_light() {
         let ctx = egui::Context::default();
