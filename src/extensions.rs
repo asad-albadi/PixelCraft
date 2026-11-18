@@ -97,6 +97,15 @@ pub struct Contributions {
     #[serde(default, rename = "ditheringMatrices")]
     pub dithering_matrices: Vec<Contribution>,
 }
+impl Contributions {
+    pub fn has_assets(&self) -> bool {
+        !self.themes.is_empty() || !self.palettes.is_empty() || !self.shortcuts.is_empty()
+            || !self.languages.is_empty() || !self.dithering_matrices.is_empty()
+    }
+    pub fn script_warning(&self) -> Option<&'static str> {
+        (!self.scripts.is_empty()).then_some("Lua scripts are no longer supported; script contributions are ignored. Use native CLI/MCP workflows.")
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub name: String,
@@ -178,8 +187,8 @@ impl Manager {
             list.push(Installed {
                 id,
                 directory: directory.clone(),
+                enabled: manifest.contributes.has_assets() && !directory.join(".disabled").exists(),
                 manifest,
-                enabled: !directory.join(".disabled").exists(),
             });
         }
         list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -189,6 +198,14 @@ impl Manager {
         let dir = self.extension_dir(id)?;
         if !dir.join("package.json").is_file() {
             return Err("Extension not installed".into());
+        }
+        if enabled {
+            let manifest: Manifest = serde_json::from_slice(
+                &std::fs::read(dir.join("package.json")).map_err(|e| e.to_string())?
+            ).map_err(|e| e.to_string())?;
+            if !manifest.contributes.has_assets() {
+                return Err("This package has no supported assets. Lua scripts are no longer supported".into());
+            }
         }
         let p = dir.join(".disabled");
         if enabled {
@@ -204,6 +221,9 @@ impl Manager {
         std::fs::remove_dir_all(self.extension_dir(id)?).map_err(|e| e.to_string())
     }
     pub fn install(&self, source: &Path) -> Result<String, String> {
+        if source.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("lua")) {
+            return Err("Lua scripts are no longer supported; use native CLI/MCP workflows".into());
+        }
         let staging = self.root.join("extensions").join(format!(
             ".install-{}-{}",
             std::process::id(),
@@ -216,32 +236,6 @@ impl Manager {
         let result = (|| {
             if source.is_dir() {
                 copy_directory(source, &staging, 0, &mut 0usize)?;
-            } else if source.extension().and_then(|x| x.to_str()) == Some("lua") {
-                let name = source
-                    .file_stem()
-                    .and_then(|x| x.to_str())
-                    .ok_or("Invalid script filename")?;
-                if !valid_id(name) {
-                    return Err("Rename the script with letters, numbers or hyphens".into());
-                }
-                std::fs::copy(source, staging.join("main.lua")).map_err(|e| e.to_string())?;
-                std::fs::write(
-                    staging.join("package.json"),
-                    serde_json::to_vec(&Manifest {
-                        name: name.into(),
-                        display_name: name.into(),
-                        version: "1".into(),
-                        contributes: Contributions {
-                            scripts: vec![Contribution {
-                                path: "main.lua".into(),
-                                id: String::new(),
-                            }],
-                            ..Default::default()
-                        },
-                    })
-                    .map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
             } else {
                 unzip(&std::fs::read(source).map_err(|e| e.to_string())?, &staging)?;
             }
@@ -275,9 +269,8 @@ impl Manager {
             let c = &manifest.contributes;
             let mut count = 0;
             for contribution in c
-                .scripts
+                .themes
                 .iter()
-                .chain(&c.themes)
                 .chain(&c.palettes)
                 .chain(&c.shortcuts)
                 .chain(&c.languages)
@@ -292,7 +285,7 @@ impl Manager {
             }
             if count == 0 {
                 return Err(
-                    "Package has no supported scripts, themes, palettes or shortcuts".into(),
+                    "Package has no supported assets. Lua scripts are no longer supported; use native CLI/MCP workflows".into(),
                 );
             }
             std::fs::rename(package_dir, &dest).map_err(|e| e.to_string())?;
@@ -301,39 +294,9 @@ impl Manager {
         let _ = std::fs::remove_dir_all(staging);
         result
     }
+    /// Legacy discovery never reads or evaluates script files.
     pub fn commands(&self) -> Result<Vec<PluginCommand>, String> {
-        let mut out = vec![];
-        for p in self.list()?.into_iter().filter(|p| p.enabled) {
-            for s in &p.manifest.contributes.scripts {
-                let script = p.directory.join(safe_path(&s.path)?);
-                let source = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
-                // Plain scripts can open dialogs immediately. A discovery-only
-                // failure must not hide them from the explicit Run action.
-                let json =
-                    crate::lua::execute(&Document::new(1, 1), &source, 0, 0, None, true, None)
-                        .unwrap_or_else(|_| "[]".into());
-                let mut commands: Vec<PluginCommand> =
-                    serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                if commands.is_empty() {
-                    commands.push(PluginCommand {
-                        id: String::new(),
-                        title: script
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        package: String::new(),
-                        script: PathBuf::new(),
-                    });
-                }
-                for command in &mut commands {
-                    command.package = p.id.clone();
-                    command.script = script.clone();
-                }
-                out.extend(commands);
-            }
-        }
-        Ok(out)
+        Ok(Vec::new())
     }
     pub fn asset(&self, id: &str, asset: &Contribution) -> Result<PathBuf, String> {
         let dir = self.extension_dir(id)?;
