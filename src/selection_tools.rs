@@ -9,7 +9,7 @@ use pixelcraft::{
 pub(super) struct RememberedMask {
     dimensions: (usize, usize),
     bounds: SelectionBounds,
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     polygon: Vec<(i32, i32)>,
 }
 
@@ -306,7 +306,7 @@ impl PixelCraft {
         if self.selection.is_none() {
             vec![false; self.doc.width * self.doc.height]
         } else if let Some(mask) = &self.studio.mask {
-            mask.clone()
+            mask.to_vec()
         } else {
             (0..self.doc.height as i32)
                 .flat_map(|y| (0..self.doc.width as i32).map(move |x| self.selected(x, y)))

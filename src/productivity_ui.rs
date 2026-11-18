@@ -1275,7 +1275,8 @@ impl PixelCraft {
         }
     }
 
-    pub(super) fn set_selection_mask(&mut self, mask: Vec<bool>) {
+    pub(super) fn set_selection_mask(&mut self, mask: impl Into<SelectionMask>) {
+        let mask = mask.into();
         let (mut x0, mut y0, mut x1, mut y1) = (self.doc.width, self.doc.height, 0, 0);
         let mut any = false;
         for (i, hit) in mask.iter().enumerate() {
@@ -3944,7 +3945,7 @@ mod bridge_tests {
         let original_tab = a.active_tab;
         let before = a.doc.clone();
         a.selection = Some((0, 0, 0, 0));
-        a.studio.mask = Some(vec![true, false, false, false]);
+        a.studio.mask = Some((vec![true, false, false, false]).into());
         let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
         let args = serde_json::json!({"revision":info["revision"],"commands":[
             {"op":"add-group","name":"Effects"},
@@ -3978,7 +3979,10 @@ mod bridge_tests {
         a.undo();
         a.undo();
         assert_eq!(a.doc, before);
-        assert_eq!(a.studio.mask, Some(vec![true, false, false, false]));
+        assert_eq!(
+            a.studio.mask.as_deref(),
+            Some([true, false, false, false].as_slice())
+        );
         let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
         request(
             &mut a,

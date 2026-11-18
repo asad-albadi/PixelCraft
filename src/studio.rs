@@ -35,8 +35,8 @@ pub(super) struct Studio {
     sheet_use_timeline_layers: bool,
     sheet_slice: Option<String>,
     pub polygon: Vec<(i32, i32)>,
-    pub mask: Option<Vec<bool>>,
-    pub move_mask: Option<Vec<bool>>,
+    pub mask: Option<SelectionMask>,
+    pub move_mask: Option<SelectionMask>,
     pub stroke: Vec<((i32, i32), f32)>,
     pub stroke_force: Option<f32>,
     pub selection_origin: Option<(i32, i32, i32, i32)>,
@@ -164,7 +164,7 @@ struct RotationPreviewRequest {
     layer: usize,
     frame: usize,
     bounds: [i32; 4],
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     polygon: Vec<(i32, i32)>,
     degrees: f64,
     pivot: [f64; 2],
@@ -316,7 +316,7 @@ struct StoredTab {
     selection: Option<(i32, i32, i32, i32)>,
     polygon: Vec<(i32, i32)>,
     #[serde(default)]
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     #[serde(default)]
     symmetry_axes: [Option<i32>; 2],
 }

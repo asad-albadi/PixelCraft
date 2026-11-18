@@ -1,4 +1,7 @@
-use super::{Clipboard, ClipboardMask, ClipboardTarget, ClipboardTileset, PasteMode, PixelCraft};
+use super::{
+    Clipboard, ClipboardMask, ClipboardTarget, ClipboardTileset, PasteMode, PixelCraft,
+    SelectionMask,
+};
 use eframe::egui;
 use pixelcraft::{extensions, model::*};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -390,7 +393,7 @@ struct TileCopySite {
     layer: usize,
     frame: usize,
     bounds: [i32; 4],
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     polygon: Vec<(i32, i32)>,
     selected: bool,
 }

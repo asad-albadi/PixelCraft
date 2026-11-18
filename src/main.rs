@@ -22,7 +22,9 @@ mod productivity_ui;
 mod retouch_tool;
 
 mod script_ui;
+mod selection_mask;
 mod selection_tools;
+use selection_mask::SelectionMask;
 mod shortcut_editor;
 mod spray_tool;
 mod sprite_text;
@@ -229,7 +231,7 @@ struct ClipboardTarget {
     layer: usize,
     frame: usize,
     selection: Option<(i32, i32, i32, i32)>,
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     polygon: Vec<(i32, i32)>,
 }
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -536,7 +538,7 @@ struct HistoryEntry {
     label: &'static str,
     doc: Document,
     selection: Option<(i32, i32, i32, i32)>,
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     polygon: Vec<(i32, i32)>,
     layer: usize,
     frame: usize,
@@ -602,14 +604,14 @@ struct SpriteTab {
     timeline_frames: TimelineHeaders,
     timeline_layers: TimelineHeaders,
     polygon: Vec<(i32, i32)>,
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     symmetry_axes: [Option<i32>; 2],
     previous_selection: Option<selection_tools::RememberedMask>,
 }
 #[derive(Default)]
 struct NativeSelectionState {
     bounds: Option<SelectionBounds>,
-    mask: Option<Vec<bool>>,
+    mask: Option<SelectionMask>,
     polygon: Vec<(i32, i32)>,
 }
 
@@ -6687,11 +6689,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         self.last = Some(b);
                         self.selection = self.studio.selection_origin;
                         let bounds = self.selection_bounds();
-                        let mask = self
-                            .studio
-                            .move_mask
-                            .clone()
-                            .unwrap_or_else(|| vec![true; self.doc.width * self.doc.height]);
+                        let mask =
+                            self.studio.move_mask.clone().unwrap_or_else(|| {
+                                vec![true; self.doc.width * self.doc.height].into()
+                            });
                         if let Ok(r) = pixelcraft::workflows::transform(
                             &mut self.doc,
                             self.layer,
@@ -8514,7 +8515,7 @@ mod tests {
         }
         a.doc.layers[2].locked = true;
         a.selection = Some((0, 0, 2, 0));
-        a.studio.mask = Some(vec![true, false, true]);
+        a.studio.mask = Some((vec![true, false, true]).into());
         let before = a.doc.clone();
         a.apply_replace_color(ReplaceColor {
             source,
@@ -8736,6 +8737,33 @@ mod tests {
             [merged, CLEAR, merged, merged]
         );
         assert!(a.dirty());
+    }
+
+    #[test]
+    fn clipboard_and_history_capture_share_selection_masks_without_changing_snapshots() {
+        let ctx = egui::Context::default();
+        let mut editor = PixelCraft::with_context(&ctx, None);
+        editor.replace(Document::new(1024, 1024), None);
+        editor.set_selection_mask(vec![true; 1024 * 1024]);
+        let target = editor.clipboard_destination(PasteMode::InPlace);
+        let pointer = editor.studio.mask.as_ref().unwrap().as_ptr();
+        assert_eq!(
+            target.mask.as_ref().unwrap().as_ptr(),
+            pointer,
+            "Clipboard target capture copied the entire selection mask"
+        );
+        editor.remember_action("Captured selection");
+        assert_eq!(
+            editor.undo.last().unwrap().mask.as_ref().unwrap().as_ptr(),
+            pointer,
+            "History capture copied the entire selection mask"
+        );
+        editor.studio.mask.as_mut().unwrap()[1048575] = false;
+        assert!(target.mask.as_ref().unwrap()[1048575]);
+        assert!(editor.undo.last().unwrap().mask.as_ref().unwrap()[1048575]);
+        assert!(target != editor.clipboard_destination(PasteMode::InPlace));
+        editor.undo();
+        assert!(editor.studio.mask.as_ref().unwrap()[1048575]);
     }
 
     #[test]
@@ -9776,7 +9804,7 @@ mod tests {
         editor.replace(source.clone(), None);
         editor.layer = 1;
         editor.selection = Some((0, 0, 5, 0));
-        editor.studio.mask = Some(vec![true, false, false, false, true, false]);
+        editor.studio.mask = Some((vec![true, false, false, false, true, false]).into());
         editor.action("cut");
         assert_eq!(editor.doc.layers[1].tile_cels, vec![vec![0, 1, 0]; 2]);
         let clip = editor.clipboard.as_ref().unwrap();
@@ -11833,7 +11861,7 @@ mod selection_history_expansion {
         a.replace(Document::new(4, 2), None);
         let mask = vec![true, false, true, false, false, false, false, false];
         a.selection = Some((0, 0, 2, 0));
-        a.studio.mask = Some(mask.clone());
+        a.studio.mask = Some((mask.clone()).into());
         a.remember();
         a.doc.add_frame(0, false);
         a.frame = 1;
@@ -11841,7 +11869,7 @@ mod selection_history_expansion {
         a.studio.mask = None;
         a.undo();
         assert_eq!(a.selection, Some((0, 0, 2, 0)));
-        assert_eq!(a.studio.mask, Some(mask));
+        assert_eq!(a.studio.mask.as_deref(), Some(mask.as_slice()));
         assert_eq!(a.frame, 0);
         a.redo();
         assert_eq!(a.selection, Some((1, 1, 2, 1)));
