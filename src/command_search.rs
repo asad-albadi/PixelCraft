@@ -1,7 +1,7 @@
 //! Native command discovery. No executable extension registration or evaluation.
 use super::*;
 mod catalog;
-pub(super) use catalog::MENU_GROUPS;
+pub(super) use catalog::{MENU_GROUPS, MenuItem};
 
 #[derive(Default)]
 pub(super) struct CommandSearch {
@@ -34,57 +34,103 @@ pub(super) struct Entry {
 }
 
 fn matches_query(label: &str, id: &str, query: &str) -> bool {
-    let searchable = format!("{} {}", label.to_lowercase(), id.to_lowercase());
+    let aliases = id
+        .strip_prefix("action:")
+        .map_or_else(String::new, |action| {
+            catalog::LEGACY_ALIASES
+                .iter()
+                .filter(|(target, _)| *target == action)
+                .map(|(_, alias)| *alias)
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+    let searchable = format!("{label} {id} {aliases}").to_lowercase();
     query
         .split_whitespace()
         .all(|word| searchable.contains(&word.to_lowercase()))
 }
 
 impl PixelCraft {
-    pub(super) fn native_action_enabled(&self, action: &str) -> bool {
+    pub(super) fn native_action_disabled_reason(&self, action: &str) -> Option<&'static str> {
         match action {
-            "repeat-export" => self.can_repeat_export(),
-            "undo" => !self.undo.is_empty(),
-            "redo" => !self.redo.is_empty(),
-            "deleteframe" => self.doc.durations.len() > 1,
-            "deletelayer" => self.doc.layers.len() > 1,
-            "clear" => {
-                self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none()
+            "repeat-export" if !self.can_repeat_export() => {
+                Some("No repeatable export is available for this document")
+            }
+            "undo" if self.undo.is_empty() => Some("Nothing to undo"),
+            "redo" if self.redo.is_empty() => Some("Nothing to redo"),
+            "deleteframe" if self.doc.durations.len() <= 1 => {
+                Some("A sprite must keep at least one frame")
+            }
+            "deletelayer" if self.doc.layers.len() <= 1 => {
+                Some("A sprite must keep at least one layer")
+            }
+            "clear" if !self.doc.editable(self.layer) => {
+                Some("The active layer is locked or not editable")
+            }
+            "clear" if self.doc.layers[self.layer].tileset.is_some() => {
+                Some("Clear is unavailable for tilemap layers")
             }
             "flipx" | "flipy" | "cut" | "paste" | "rotate" | "selectionflipx"
-            | "selectionflipy" => self.doc.editable(self.layer),
+            | "selectionflipy"
+                if !self.doc.editable(self.layer) =>
+            {
+                Some("The active layer is locked or not editable")
+            }
             "crop"
             | "new-sprite-from-selection"
             | "grid-from-selection"
-            | "export-selection-mask" => self.selection.is_some(),
-            _ => true,
+            | "export-selection-mask"
+                if self.selection.is_none() =>
+            {
+                Some("Select an area first")
+            }
+            _ => None,
         }
+    }
+
+    pub(super) fn native_action_enabled(&self, action: &str) -> bool {
+        self.native_action_disabled_reason(action).is_none()
     }
 
     fn command_catalog(&self) -> Vec<Entry> {
         let mut entries: Vec<Entry> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for &(group, items) in MENU_GROUPS {
-            for &(label, action) in items {
-                let id = format!("action:{action}");
-                if seen.insert(id.clone()) {
-                    entries.push(Entry {
-                        id,
-                        label: format!(
-                            "{group} / {}",
-                            label.split("   ").next().unwrap_or(label).trim()
-                        ),
-                        shortcut: ui_icons::shortcuts(&self.custom_shortcuts, action),
-                        enabled: self.native_action_enabled(action),
-                        target: Target::Action(action),
-                    });
-                } else if let Some(entry) = entries.iter_mut().find(|entry| entry.id == id) {
-                    let alias = label.split("   ").next().unwrap_or(label).trim();
-                    if !entry.label.contains(alias) {
-                        entry.label.push_str(&format!(" / {alias}"));
+        fn append(
+            entries: &mut Vec<Entry>,
+            seen: &mut std::collections::HashSet<String>,
+            editor: &PixelCraft,
+            path: &str,
+            items: &[MenuItem],
+        ) {
+            for item in items {
+                match item {
+                    MenuItem::Separator => {}
+                    MenuItem::Submenu(label, children) => {
+                        append(
+                            entries,
+                            seen,
+                            editor,
+                            &format!("{path} / {label}"),
+                            children,
+                        );
+                    }
+                    MenuItem::Action(label, action) => {
+                        let id = format!("action:{action}");
+                        if seen.insert(id.clone()) {
+                            entries.push(Entry {
+                                id,
+                                label: format!("{path} / {label}"),
+                                shortcut: ui_icons::shortcuts(&editor.custom_shortcuts, action),
+                                enabled: editor.native_action_enabled(action),
+                                target: Target::Action(action),
+                            });
+                        }
                     }
                 }
             }
+        }
+        for &(group, items) in MENU_GROUPS {
+            append(&mut entries, &mut seen, self, group, items);
         }
         for (action, label) in [
             ("swap", "Swap colors"),
@@ -364,6 +410,19 @@ impl PixelCraft {
                                 .wrap()
                                 .min_size(Vec2::new(ui.available_width(), 28.)),
                         );
+                        let reason = match entry.target {
+                            Target::Action(action) => self.native_action_disabled_reason(action),
+                            Target::Recent(_) if !entry.enabled => {
+                                Some("This recent file is unavailable")
+                            }
+                            _ => None,
+                        };
+                        let response = if let Some(reason) = reason {
+                            ui.weak(reason);
+                            response.on_disabled_hover_text(reason)
+                        } else {
+                            response
+                        };
                         #[cfg(test)]
                         ctx.data_mut(|data| {
                             data.insert_temp(
@@ -418,7 +477,11 @@ mod tests {
             modifiers,
         }
     }
-    fn draw(editor: &mut PixelCraft, ctx: &egui::Context, mut events: Vec<egui::Event>) {
+    fn draw(
+        editor: &mut PixelCraft,
+        ctx: &egui::Context,
+        mut events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
         let modifiers = events
             .iter()
             .rev()
@@ -437,6 +500,71 @@ mod tests {
             |ui| editor.render(ui),
         );
         output.textures_delta.clear();
+        output
+    }
+
+    #[test]
+    fn disabled_search_results_explain_the_current_action_constraint() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        editor.doc.layers[0].locked = true;
+        for (action, reason) in [
+            ("undo", "Nothing to undo"),
+            ("deleteframe", "A sprite must keep at least one frame"),
+            ("clear", "The active layer is locked or not editable"),
+            ("crop", "Select an area first"),
+        ] {
+            editor.open_command_search();
+            editor.command_search.query = format!("action:{action}");
+            let output = draw(&mut editor, &ctx, vec![]);
+            assert!(output.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(reason))
+            }), "missing disabled explanation for {action}: {reason}");
+        }
+    }
+
+    #[test]
+    fn grouped_catalog_exposes_export_selection_and_tool_destinations() {
+        let editor = editor();
+        let entries = editor.command_catalog();
+        for (id, path) in [
+            ("action:pcx", "File / Export / Export PCX…"),
+            ("action:sequence", "File / Import / Import PNG sequence…"),
+            ("action:sheet", "File / Export sprite sheet…"),
+            (
+                "action:export-selection-mask",
+                "Select / Mask / Export mask PNG…",
+            ),
+            ("action:repeat-export", "File / Repeat Last Export"),
+            ("action:selectall", "Select / Select all"),
+            ("action:rotate", "Select / Transform / Rotate selection 90°"),
+            ("action:studio", "Tools / Drawing & selection studio…"),
+            ("action:extensions", "Tools / Asset extensions…"),
+            (
+                "action:flipx",
+                "Frame / Cel transform / Flip active cel horizontally",
+            ),
+        ] {
+            let entry = entries.iter().find(|entry| entry.id == id).unwrap();
+            assert_eq!(entry.label, path, "wrong destination for {id}");
+        }
+    }
+
+    #[test]
+    fn rendered_search_finds_legacy_routes_after_menu_reorganization() {
+        let ctx = egui::Context::default();
+        let mut editor = editor_with_context(&ctx);
+        for (query, expected) in [
+            ("Edit select all", "action:selectall"),
+            ("Sprite flip active cel horizontally", "action:flipx"),
+            ("Extensions asset", "action:extensions"),
+            ("grid import tag batch atlas", "action:workflow"),
+        ] {
+            editor.open_command_search();
+            editor.command_search.query = query.into();
+            draw(&mut editor, &ctx, vec![]);
+            assert_eq!(editor.command_search.selected.as_deref(), Some(expected));
+        }
     }
 
     #[test]

@@ -15,6 +15,7 @@ mod export_actions;
 mod file_path_dialog;
 mod fluent;
 mod freehand_stroke;
+mod menu_ui;
 mod recent_files;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
 use freehand_stroke::{BrushDynamics, StrokeStabilizer};
@@ -3746,111 +3747,89 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     RichText::new(translated)
                 };
                 ui.menu_button(title_text, |ui| {
-                    if title == "File" {
-                        ui_icons::submenu(ui, "history", "Recent files", |ui| {
-                            let entries = self.recent_file_entries();
-                            if entries.is_empty() {
-                                ui.label("No recent files yet");
-                            }
-                            for (path, label, available) in entries {
-                                let response = ui
-                                    .add_enabled_ui(available, |ui| {
-                                        ui_icons::button(ui, "open", &label, false, true)
-                                    })
-                                    .inner
-                                    .on_hover_text(path.display().to_string());
-                                if response.clicked() {
-                                    self.open_recent(path);
-                                    ui.close();
-                                }
-                            }
-                        });
-                        ui.separator();
-                    }
-                    if title == "View" {
-                        let open = self.inspector_open;
-                        if ui
-                            .button(if open {
-                                "Hide inspector"
-                            } else {
-                                "Show inspector"
-                            })
-                            .clicked()
-                        {
-                            self.inspector_open = !open;
-                            ui.close();
-                        }
-                        if ui
-                            .button(if self.preview_settings.visible {
-                                "Hide Preview"
-                            } else {
-                                "Show Preview"
-                            })
-                            .clicked()
-                        {
-                            self.toggle_preview_visibility();
-                            ui.close();
-                        }
-                        ui.menu_button("Density", |ui| {
-                            self.density_options(ui);
-                        });
-                        ui_icons::submenu(ui, "theme", "Theme", |ui| {
-                            for (label, preference) in [
-                                ("System", egui::ThemePreference::System),
-                                ("Light", egui::ThemePreference::Light),
-                                ("Dark", egui::ThemePreference::Dark),
-                            ] {
-                                if ui_icons::button(
-                                    ui,
-                                    "theme",
-                                    label,
-                                    self.theme_preference == preference,
-                                    false,
-                                )
-                                .clicked()
-                                {
-                                    self.set_theme_preference(ui.ctx(), preference);
-                                    self.save_theme();
-                                    ui.close();
-                                }
-                            }
-                        });
-                        ui.separator();
-                    }
-                    for &(label, a) in items {
-                        if ["closetab", "deletelayer", "deleteframe", "clear"].contains(&a) {
+                    menu_ui::scroll_menu(ui, |ui| {
+                        if title == "File" {
+                            ui_icons::submenu(ui, "history", "Recent files", |ui| {
+                                menu_ui::scroll_menu(ui, |ui| {
+                                    let entries = self.recent_file_entries();
+                                    if entries.is_empty() {
+                                        ui.label("No recent files yet");
+                                    }
+                                    for (path, label, available) in entries {
+                                        let response = ui
+                                            .add_enabled_ui(available, |ui| {
+                                                ui_icons::button(ui, "open", &label, false, true)
+                                            })
+                                            .inner
+                                            .on_hover_text(path.display().to_string())
+                                            .on_disabled_hover_text(format!(
+                                                "This recent file is unavailable: {}",
+                                                path.display()
+                                            ));
+                                        if response.gained_focus() {
+                                            response.scroll_to_me(None);
+                                        }
+                                        if response.clicked() {
+                                            self.open_recent(path);
+                                            ui.close();
+                                        }
+                                    }
+                                })
+                            });
                             ui.separator();
                         }
-                        let label = label.split("   ").next().unwrap_or(label);
-                        let selected = match a {
-                            "grid" => self.grid,
-                            "split-canvas" => self.split_canvas.is_some(),
-                            "drawing-grid" => self.show_drawing_grid,
-                            "snap-to-grid" => self.snap_to_grid,
-                            "onion" => self.onion,
-                            "rewind-on-stop" => self.rewind_on_stop(),
-                            "play" => self.playing,
-                            "seamless" => self.studio.seamless == WrapAxes::BOTH,
-                            "seamless-horizontal" => self.studio.seamless == WrapAxes::HORIZONTAL,
-                            "seamless-vertical" => self.studio.seamless == WrapAxes::VERTICAL,
-                            _ => false,
-                        };
-                        let icon = if a == "play" && self.playing {
-                            "stop"
-                        } else {
-                            a
-                        };
-                        let enabled = self.native_action_enabled(a);
-                        let response = ui
-                            .add_enabled_ui(enabled, |ui| {
-                                ui_icons::button_as(ui, icon, a, label, selected, true)
-                            })
-                            .inner;
-                        if response.clicked() {
-                            action = Some(a);
-                            ui.close();
+                        if title == "View" {
+                            let open = self.inspector_open;
+                            if ui
+                                .button(if open {
+                                    "Hide inspector"
+                                } else {
+                                    "Show inspector"
+                                })
+                                .clicked()
+                            {
+                                self.inspector_open = !open;
+                                ui.close();
+                            }
+                            if ui
+                                .button(if self.preview_settings.visible {
+                                    "Hide Preview"
+                                } else {
+                                    "Show Preview"
+                                })
+                                .clicked()
+                            {
+                                self.toggle_preview_visibility();
+                                ui.close();
+                            }
+                            ui.menu_button("Density", |ui| {
+                                self.density_options(ui);
+                            });
+                            ui_icons::submenu(ui, "theme", "Theme", |ui| {
+                                for (label, preference) in [
+                                    ("System", egui::ThemePreference::System),
+                                    ("Light", egui::ThemePreference::Light),
+                                    ("Dark", egui::ThemePreference::Dark),
+                                ] {
+                                    if ui_icons::button(
+                                        ui,
+                                        "theme",
+                                        label,
+                                        self.theme_preference == preference,
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        self.set_theme_preference(ui.ctx(), preference);
+                                        self.save_theme();
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.separator();
                         }
-                    }
+                        self.menu_items(ui, items, &mut action);
+                    })
                 });
             }
             let menus_right = ui.cursor().left();

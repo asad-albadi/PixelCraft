@@ -41,13 +41,15 @@ Use the existing Rust/egui Fluent UI, native window decorations, command dispatc
 
 Files are src/command_search/catalog.rs, src/command_search.rs and the menu renderer in src/main.rs. A focused menu renderer module can be introduced if it reduces the existing large method.
 
-- [ ] Add a failing regression for uncommon export and selection/tool actions being discoverable through grouped menu paths, alongside existing disabled/action routing tests.
-- [ ] Add separators and one-level submenus to the shared catalog. Group File import/export, Edit history/clipboard/transforms, Sprite transforms, Layer operations, Frame playback and View grids/layout.
-- [ ] Use the File, Edit, Sprite, Layer, Frame, Select, View, Tools, Help baseline. Select owns selection commands. Tools owns drawing and asset destinations.
-- [ ] Flatten the same catalog into search entries with stable IDs, old label aliases, current bindings and current availability.
-- [ ] Preserve dynamic recent-file, theme, density, Inspector and Preview entries.
-- [ ] Run targeted menu/search and rendered interaction regressions, formatting and Clippy.
-- [ ] Review correctness and security, fix findings and recheck. Commit.
+- [x] Add a failing regression for uncommon export and selection/tool actions being discoverable through grouped menu paths, alongside existing disabled/action routing tests.
+- [x] Add separators and one-level submenus to the shared catalog. Group File import/export, Edit history/clipboard/transforms, Sprite transforms, Layer operations, Frame playback and View grids/layout.
+- [x] Use the File, Edit, Sprite, Layer, Frame, Select, View, Tools, Help baseline. Select owns selection commands. Tools owns drawing and asset destinations.
+- [x] Flatten the same catalog into search entries with stable IDs, old label aliases, current bindings and current availability.
+- [x] Preserve dynamic recent-file, theme, density, Inspector and Preview entries.
+- [x] Run targeted menu/search and rendered interaction regressions, formatting and Clippy.
+- [x] Review correctness and security, fix findings and recheck. Commit.
+
+Verification: isolated staged snapshot passed 18 command-search tests, 4 rendered menu tests, formatting and strict all-target Clippy. Regressions exercise pointer activation, wheel-scroll and Tab/Enter reachability of uncommon exports at 683×384. Independent review found and verified fixes for clipped menus, hidden keyboard focus and missing disabled explanations. All 120 original action IDs remain.
 
 ## Batch 3 — Categorized and searchable settings
 
