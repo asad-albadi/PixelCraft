@@ -67,6 +67,14 @@ impl ShortcutChord {
         ) || (self.alt && self.key == Key::F4)
             || (cfg!(target_os = "macos") && self.command && self.key == Key::Q)
             || self.clipboard_action().is_some()
+            || (cfg!(target_os = "macos") && self.navigation_action().is_some())
+    }
+
+    fn navigation_action(self) -> Option<&'static str> {
+        match (self.key, self.command, self.shift, self.alt) {
+            (Key::Comma, true, false, false) => Some("settings"),
+            _ => None,
+        }
     }
 
     fn clipboard_action(self) -> Option<&'static str> {
@@ -84,6 +92,7 @@ impl ShortcutChord {
     pub(super) fn allowed_for(self, action: &str) -> bool {
         !self.reserved()
             || self.clipboard_action() == Some(action)
+            || self.navigation_action() == Some(action)
             || (self.key == Key::Escape
                 && !self.command
                 && !self.shift

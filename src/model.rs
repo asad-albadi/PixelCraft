@@ -3931,7 +3931,9 @@ impl Document {
         self.layer_unlocked(l) && !self.layers[l].group
     }
 
-    pub(crate) fn layer_unlocked(&self, l: usize) -> bool {
+    /// Returns whether a layer and every ancestor are unlocked.
+    /// Unlike `editable`, this also permits unlocked groups for property edits.
+    pub fn layer_unlocked(&self, l: usize) -> bool {
         let mut p = Some(l);
         let mut n = 0;
         while let Some(i) = p {

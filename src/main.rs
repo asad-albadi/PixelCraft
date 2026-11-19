@@ -17,6 +17,7 @@ mod fluent;
 mod freehand_stroke;
 mod menu_ui;
 mod recent_files;
+mod workspace_navigation;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
 use freehand_stroke::{BrushDynamics, StrokeStabilizer};
 mod ui_icons;
@@ -802,6 +803,8 @@ struct PixelCraft {
     shot_requested: bool,
     initial_view: u8,
     inspector_open: bool,
+    reset_scale_requested: bool,
+    reset_layout_requested: bool,
 }
 impl PixelCraft {
     fn native_selection_state(&self) -> NativeSelectionState {
@@ -1017,6 +1020,8 @@ impl PixelCraft {
             shot_requested: false,
             initial_view: 3,
             inspector_open: true,
+            reset_scale_requested: false,
+            reset_layout_requested: false,
         }
     }
     fn apply_theme(ctx: &egui::Context, dark: bool) {
@@ -2132,7 +2137,31 @@ impl PixelCraft {
         if !self.properties_open {
             return;
         }
-        let mut open = true;
+        use productivity_ui::workflow::PropertyPage;
+        let Some(target) = self.current_property_target() else {
+            self.properties_open = false;
+            self.power.property_target = None;
+            self.power.property_page = PropertyPage::Sprite;
+            return;
+        };
+        if self
+            .power
+            .property_target
+            .is_some_and(|opened| opened != target)
+        {
+            self.properties_open = false;
+            self.power.property_target = None;
+            self.power.property_page = PropertyPage::Sprite;
+            self.status = "Properties closed because the active document or object changed".into();
+            return;
+        }
+        self.power.property_target = Some(target);
+        let title = match self.power.property_page {
+            PropertyPage::Sprite => "Sprite properties",
+            PropertyPage::Layer => "Layer properties",
+            PropertyPage::Frame => "Frame and animation properties",
+            PropertyPage::Tileset => "Tileset tools",
+        };
         let mut edited = self.doc.clone();
         let mut import = false;
         let mut capture = false;
@@ -2142,7 +2171,17 @@ impl PixelCraft {
         let mut grayscale_conversion = false;
         let mut rgba_conversion = false;
         let mut remove_tag = None;
-        egui::Window::new("Sprite properties").open(&mut open).default_width(550.).max_height(660.).vscroll(true).show(ctx,|ui|{
+        let footer_key = egui::Id::new(("properties-footer-id", title));
+        let close = fluent::modal_dialog_sized(ctx, title, 550., |ui| {
+            let mut outside = vec![egui::Id::new(("editor-dialog", title)).with("close")];
+            if let Some(id) = ctx.data(|data| data.get_temp::<egui::Id>(footer_key)) {
+                outside.push(id);
+            }
+            let _scroll = egui::ScrollArea::vertical().id_salt(("properties",title))
+                .max_height((ctx.content_rect().height() - 145.).max(48.))
+                .show(ui, |ui| {
+            match self.power.property_page {
+                PropertyPage::Sprite => {
             ui.heading("Color & project");let mut mode=edited.color_mode;
             egui::ComboBox::from_label("Color mode").selected_text(format!("{:?}",mode)).show_ui(ui,|ui|{for value in [ColorMode::Rgba,ColorMode::Indexed,ColorMode::Grayscale]{ui.pc_selectable_value(&mut mode,value,format!("{:?}",value));}});if mode!=edited.color_mode{if mode==ColorMode::Indexed{indexed_options=true;}else if mode==ColorMode::Grayscale{grayscale_conversion=true;}else{rgba_conversion=true;}}
             if ui.pc_button("Palette and Color Conversion…").clicked(){indexed_options=true;}
@@ -2165,6 +2204,13 @@ impl PixelCraft {
                 }
             });
             ui.small(format!("Preserved: {} metadata chunks · {} profile bytes · {} off-canvas pixels",edited.metadata.len(),edited.color_profile.len(),edited.layers.iter().flat_map(|l|&l.cel_meta).map(|m|m.outside.len()).sum::<usize>()));
+            self.slice_controls(ui, &mut edited);
+
+                }
+                PropertyPage::Layer => {
+                    let editable = self.doc.layer_unlocked(self.layer);
+                    if !editable { ui.label("Unlock this layer and its parent groups to edit its properties."); }
+                    ui.add_enabled_ui(editable, |ui| {
             ui.separator();ui.heading("Active layer & cel");ui.label(&edited.layers[self.layer].name);
             let mut blend=edited.layers[self.layer].blend;
             egui::ComboBox::from_label("Blend mode").selected_text(format!("{:?}",blend)).show_ui(ui,|ui|{for v in BlendMode::ALL{ui.pc_selectable_value(&mut blend,v,format!("{:?}",v));}});edited.layers[self.layer].blend=blend;
@@ -2175,6 +2221,10 @@ impl PixelCraft {
             ui.add(egui::Slider::new(&mut edited.layers[self.layer].cel_meta[self.frame].opacity,0..=255).text("Cel opacity"));
             ui.add(egui::DragValue::new(&mut edited.layers[self.layer].cel_meta[self.frame].z_index).range(-32768..=32767).prefix("Cel order "));
             if ui.pc_button("+ New group").clicked(){add_group=true;}
+
+                    });
+                }
+                PropertyPage::Tileset => {
             ui.separator();ui.heading("Tilesets & tile layers");
             ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}
 if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
@@ -2193,12 +2243,39 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(TilePixelEdit::CreateVariant), "Always create variant")
                     .on_hover_text("Create one independent tile for each changed placement in a stroke");
             });
-            self.slice_controls(ui, &mut edited);
+
+                }
+                PropertyPage::Frame => {
+                    ui.label(format!("Frame {}", self.frame + 1));
+                    ui.add(egui::DragValue::new(&mut edited.durations[self.frame]).range(1..=65535).prefix("Duration ").suffix(" ms"));
             ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{editor_id: Default::default(),name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
             for(i,t)in edited.tags.iter_mut().enumerate(){ui.horizontal(|ui|{ui.text_edit_singleline(&mut t.name);let mut from=t.from+1;let mut to=t.to+1;ui.add(egui::DragValue::new(&mut from).range(1..=edited.durations.len()).prefix("From "));ui.add(egui::DragValue::new(&mut to).range(from..=edited.durations.len()).prefix("To "));t.from=from-1;t.to=to.max(from)-1;if ui_icons::button(ui, "trash", "Remove range", false, false).clicked(){remove_tag=Some(i);}});ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("direction",i)).selected_text(["Forward","Reverse","Ping-pong","Ping-pong reverse"][t.direction as usize]).show_ui(ui,|ui|{for (d,name)in ["Forward","Reverse","Ping-pong","Ping-pong reverse"].iter().enumerate(){ui.pc_selectable_value(&mut t.direction,d as u8,*name);}});if ui_icons::button(ui,"tag","Use for playback",self.active_tag==Some(i),false).clicked(){self.active_tag=Some(i);self.frame=if t.direction==1||t.direction==3{t.to}else{t.from};self.playback_reverse=t.direction==3;}});}
             if ui.pc_button("Use all frames for playback").clicked(){self.active_tag=None;}ui.small("Range names, endpoints and playback direction are saved in the project.");
+                }
+            }
+
+                    fluent::reveal_focused_control(ui, &outside);
+                    #[cfg(test)] ctx.data_mut(|data| data.insert_temp(egui::Id::new("properties-body-clip"),ui.clip_rect()));
+                });
+            #[cfg(test)]
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("properties-body-offset"),
+                    _scroll.state.offset,
+                )
+            });
+            ui.separator();
+            let done = ui
+                .push_id(("properties-footer", title), |ui| ui.pc_button("Done"))
+                .inner;
+            ctx.data_mut(|data| data.insert_temp(footer_key, done.id));
+            done.clicked()
         });
-        self.properties_open = open;
+        if close {
+            self.properties_open = false;
+            self.power.property_target = None;
+            self.power.property_page = PropertyPage::Sprite;
+        }
         if let Some(i) = remove_tag {
             edited.remove_tag(i);
             self.active_tag = None;
@@ -2239,30 +2316,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.layer = self.doc.layers.len() - 1;
             }
         }
-        if capture {
-            let (x0, y0, x1, y1) = self.selection.unwrap_or((
-                0,
-                0,
-                self.tile_size.min(self.doc.width) as i32 - 1,
-                self.tile_size.min(self.doc.height) as i32 - 1,
-            ));
-            let (w, h) = ((x1 - x0 + 1) as usize, (y1 - y0 + 1) as usize);
-            let pixels = self.doc.layer_pixels(self.layer, self.frame);
-            let mut p = vec![];
-            for y in y0..=y1 {
-                for x in x0..=x1 {
-                    p.push(pixels[y as usize * self.doc.width + x as usize]);
-                }
-            }
-            self.remember_action("Capture selection as tile");
-            self.doc.tilesets.push(Tileset {
-                editor_id: Default::default(),
-                name: "Captured tile".into(),
-                width: w,
-                height: h,
-                tiles: vec![p.into()],
-            });
-            self.selected_tile = 1;
+        if capture && let Err(error) = self.capture_property_tile() {
+            self.status = error;
         }
         if import && let Err(e) = self.import_tileset() {
             self.status = format!("Could not import tileset: {e}");
@@ -2904,8 +2959,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             suggested,
         );
     }
+    #[cfg(test)]
     fn start_export(&mut self, kind: &str, path: PathBuf) {
-        let scale = self.studio.sheet.scale;
+        self.start_export_with_scale(kind, path, self.studio.sheet.scale);
+    }
+    fn start_export_with_scale(&mut self, kind: &str, path: PathBuf, scale: usize) {
         let kind = match kind {
             "png-sequence" => ExportKind::Sequence { scale },
             "gif" => ExportKind::Animation {
@@ -3363,28 +3421,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn action(&mut self, s: &str) {
-        if self.open_settings_destination(s) {
-            return;
-        }
-        if s == "settings" {
-            self.settings_open = true;
-            return;
-        }
-        if s == "workflow" {
-            self.power.open = true;
-            return;
-        }
-        if s == "shortcuts" {
-            self.shortcut_settings_open = true;
-            return;
-        }
-        if s == "extensions" {
-            self.refresh_extensions();
-            self.extensions_open = true;
-            return;
-        }
-        if s == "about" {
-            self.about = true;
+        if self.navigation_action(s) {
             return;
         }
         if s == "command-search" {
@@ -5245,7 +5282,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             ui.pc_checkbox(&mut self.onion, "Onion skin");
             if ui.pc_button("Properties & ranges…").clicked() {
-                self.properties_open = true;
+                self.action("frame-properties");
                 ui.close();
             }
             if ui.pc_small_button("Rename").clicked() {
@@ -7062,6 +7099,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 }
 impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
+        self.navigation_shortcuts(ui.ctx());
+        if std::mem::take(&mut self.reset_layout_requested) {
+            ui.ctx().data_mut(|data| {
+                for panel in ["palette_panel", "timeline"] {
+                    data.remove::<egui::containers::panel::PanelState>(egui::Id::new(panel));
+                }
+            });
+        }
+        if std::mem::take(&mut self.reset_scale_requested) {
+            self.reset_interface_scale(ui.ctx());
+        }
         self.canvas_pixels_per_point = ui.ctx().pixels_per_point();
         ui_icons::set_bindings(ui.ctx(), &self.custom_shortcuts);
         self.dark_mode = ui.ctx().theme() == egui::Theme::Dark;

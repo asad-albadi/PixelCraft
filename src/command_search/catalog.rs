@@ -20,6 +20,7 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
                 &[
                     Action("Import as Layer…", "import-layer"),
                     Action("Import PNG sequence…", "sequence"),
+                    Action("Import sprite sheet…", "import-grid"),
                 ],
             ),
             Separator,
@@ -27,6 +28,8 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
             Action("Save as…", "saveas"),
             Separator,
             Action("Export sprite sheet…", "sheet"),
+            Action("Export animation tags…", "batch-tags"),
+            Action("Export multi-file atlas…", "atlas"),
             Action("Repeat Last Export", "repeat-export"),
             Submenu(
                 "Export",
@@ -88,7 +91,7 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
     (
         "Sprite",
         &[
-            Action("Properties, layers, tiles & ranges…", "properties"),
+            Action("Sprite properties…", "properties"),
             Separator,
             Action("Palette and Color Conversion…", "palette-conversion"),
             Action("Color Profile…", "color-profile"),
@@ -109,11 +112,13 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
             ),
             Separator,
             Action("Tileset browser…", "tiles"),
+            Action("Tileset tools…", "tileset-properties"),
         ],
     ),
     (
         "Layer",
         &[
+            Action("Layer properties…", "layer-properties"),
             Separator,
             Action("New layer", "layer"),
             Action("Duplicate layer or group", "layer-duplicate"),
@@ -141,6 +146,7 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
     (
         "Frame",
         &[
+            Action("Frame and animation properties…", "frame-properties"),
             Separator,
             Action("Duplicate frame", "frame"),
             Action("New empty frame", "blank"),
@@ -223,7 +229,14 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
                     Action("Set drawing grid from selection", "grid-from-selection"),
                 ],
             ),
-            Submenu("Layout", &[Action("Split canvas", "split-canvas")]),
+            Submenu(
+                "Layout",
+                &[
+                    Action("Split canvas", "split-canvas"),
+                    Action("Restore default layout", "reset-layout"),
+                    Action("Reset interface scale", "reset-interface-scale"),
+                ],
+            ),
             Submenu(
                 "Seamless canvas",
                 &[
@@ -238,9 +251,13 @@ pub(crate) const MENU_GROUPS: &[MenuGroup] = &[
         "Tools",
         &[
             Action("Drawing & selection studio…", "studio"),
-            Action("Brushes, references & workflow tools…", "workflow"),
+            Action("Palette tools…", "palette-tools"),
+            Action("Brushes and selection…", "brushes"),
+            Action("Reference images…", "references"),
+            Action("Workflow tools…", "workflow"),
             Separator,
             Action("Asset extensions…", "extensions"),
+            Action("Assistant access…", "assistants"),
         ],
     ),
     (

@@ -346,6 +346,7 @@ pub(super) struct SettingsState {
     reveal: Option<&'static str>,
     confirm_reset: bool,
     return_from: Option<Page>,
+    sidebar_layout: Option<(Page, u32)>,
 }
 
 fn settings_color_button(response: egui::Response, label: &str) -> egui::Response {
@@ -414,6 +415,7 @@ impl PixelCraft {
         self.power.settings.query.clear();
         self.power.settings.confirm_reset = false;
         self.power.settings.return_from = None;
+        self.power.settings.sidebar_layout = None;
         self.settings_open = true;
         self.save_workflow_preferences();
         true
@@ -431,6 +433,7 @@ impl PixelCraft {
             self.settings_open = true;
         }
         if !self.settings_open {
+            self.power.settings.sidebar_layout = None;
             return;
         }
         let closed = fluent::modal_dialog_sized(ctx, "Settings", 860., |ui| {
@@ -440,6 +443,7 @@ impl PixelCraft {
         if closed {
             self.settings_open = false;
             self.power.settings.confirm_reset = false;
+            self.power.settings.sidebar_layout = None;
         }
     }
 
@@ -504,7 +508,7 @@ impl PixelCraft {
         }
         let page = Page::from_id(&self.power.preferences.last_settings_page);
         let query = self.power.settings.query.trim().to_owned();
-        let content_height = (ui.ctx().content_rect().height() - 280.).max(40.);
+        let content_height = (ui.ctx().content_rect().height() - 280.).clamp(40., 440.);
         if !query.is_empty() {
             egui::ScrollArea::vertical()
                 .id_salt("settings-results")
@@ -536,6 +540,8 @@ impl PixelCraft {
                     }
                 });
         } else if ui.available_width() >= 640. {
+            let sidebar_layout = (page, content_height.to_bits());
+            let reveal_selected = self.power.settings.sidebar_layout != Some(sidebar_layout);
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(190.);
@@ -543,6 +549,13 @@ impl PixelCraft {
                         .id_salt("settings-sidebar")
                         .max_height(content_height)
                         .show(ui, |ui| {
+                            #[cfg(test)]
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(
+                                    egui::Id::new("settings-sidebar-clip"),
+                                    ui.clip_rect(),
+                                )
+                            });
                             for destination in Page::ALL {
                                 let response =
                                     ui.selectable_label(page == destination, destination.label());
@@ -553,7 +566,9 @@ impl PixelCraft {
                                         (response.id, response.rect),
                                     )
                                 });
-                                if response.gained_focus() {
+                                if response.gained_focus()
+                                    || (reveal_selected && page == destination)
+                                {
                                     response.scroll_to_me(Some(egui::Align::Center));
                                 }
                                 if response.clicked() {
@@ -574,7 +589,9 @@ impl PixelCraft {
                     self.settings_page_scroll(ui, page, content_height);
                 });
             });
+            self.power.settings.sidebar_layout = Some(sidebar_layout);
         } else {
+            self.power.settings.sidebar_layout = None;
             let mut selected = page;
             let _selector = egui::ComboBox::from_id_salt("settings-page-selector")
                 .selected_text(page.label())
@@ -989,7 +1006,7 @@ impl PixelCraft {
                     let r = ui.pc_button("Assistant access…");
                     if r.clicked() {
                         app.leave_settings_for(page);
-                        app.action("workflow");
+                        app.action("assistant-access");
                     }
                     r
                 });
@@ -1194,6 +1211,64 @@ mod tests {
         assert!(
             ctx.content_rect()
                 .contains_rect(rect(&ctx, "settings-onion-next-tint"))
+        );
+    }
+    #[test]
+    fn restored_category_reveals_on_open_and_resize_but_allows_manual_sidebar_scroll() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.power.preferences.last_settings_page = "files".into();
+        app.settings_open = true;
+        let size = Vec2::new(683., 384.);
+        for _ in 0..6 {
+            frame(&mut app, &ctx, size, vec![]);
+        }
+        let selected = |ctx: &egui::Context| {
+            let (_, rect) = ctx
+                .data(|d| {
+                    d.get_temp::<(egui::Id, Rect)>(egui::Id::new(("settings-sidebar", "files")))
+                })
+                .unwrap();
+            let clip = ctx
+                .data(|d| d.get_temp::<Rect>(egui::Id::new("settings-sidebar-clip")))
+                .unwrap();
+            (rect, clip)
+        };
+        let (rect, clip) = selected(&ctx);
+        assert!(
+            clip.contains_rect(rect),
+            "restored Files category is clipped: {rect:?} in {clip:?}"
+        );
+        frame(
+            &mut app,
+            &ctx,
+            size,
+            vec![
+                egui::Event::PointerMoved(Pos2::new(rect.center().x, clip.center().y)),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    phase: egui::TouchPhase::Move,
+                    delta: Vec2::new(0., 300.),
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        for _ in 0..10 {
+            frame(&mut app, &ctx, size, vec![]);
+        }
+        let (rect, clip) = selected(&ctx);
+        assert!(
+            !clip.contains_rect(rect),
+            "manual sidebar scrolling must not be undone"
+        );
+        let resized = Vec2::new(683., 420.);
+        for _ in 0..6 {
+            frame(&mut app, &ctx, resized, vec![]);
+        }
+        let (rect, clip) = selected(&ctx);
+        assert!(
+            clip.contains_rect(rect),
+            "resized sidebar must reveal its selected category"
         );
     }
     #[test]
@@ -1583,6 +1658,12 @@ mod tests {
                 "shortcuts" => ctx
                     .data(|d| {
                         d.get_temp::<Rect>(egui::Id::new(("dialog-close", "Keyboard shortcuts")))
+                    })
+                    .unwrap()
+                    .center(),
+                "assistant-access" => ctx
+                    .data(|d| {
+                        d.get_temp::<Rect>(egui::Id::new(("dialog-close", "Assistant access")))
                     })
                     .unwrap()
                     .center(),

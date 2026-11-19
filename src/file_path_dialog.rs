@@ -18,6 +18,8 @@ pub(super) struct FilePathDialog {
     error: Option<String>,
     overwrite: Option<PathBuf>,
     focus: bool,
+    focus_requested: bool,
+    scale: Option<usize>,
 }
 
 impl FilePathPurpose {
@@ -38,6 +40,12 @@ impl FilePathPurpose {
             Self::Save => "Save",
             Self::Export { .. } => "Export",
         }
+    }
+
+    fn supports_scale(&self) -> bool {
+        matches!(self, Self::Export { kind, .. } if matches!(kind.as_str(),
+            "png" | "bmp" | "jpeg" | "ico" | "pcx" | "qoi" | "tga" | "webp" |
+            "svg" | "css" | "sheet" | "png-sequence" | "gif" | "mp4" | "fli" | "flc"))
     }
 
     fn is_folder(&self) -> bool {
@@ -157,6 +165,7 @@ impl PixelCraft {
             .map(Path::to_path_buf)
             .or_else(|| extensions::projects_directory().ok())
             .unwrap_or_else(|| PathBuf::from("."));
+        let scale = purpose.supports_scale().then_some(self.studio.sheet.scale);
         self.file_path = Some(FilePathDialog {
             purpose,
             directory,
@@ -164,6 +173,8 @@ impl PixelCraft {
             error: None,
             overwrite: None,
             focus: true,
+            focus_requested: false,
+            scale,
         });
     }
 
@@ -171,27 +182,49 @@ impl PixelCraft {
         let mut dialog = self.file_path.take().unwrap();
         let mut chosen = None;
         let mut cancelled = false;
-        let close = fluent::modal_dialog(ctx, dialog.purpose.title(), |ui| {
+        let title = dialog.purpose.title();
+        let footer_key = egui::Id::new(("file-path-footer-ids", title));
+        let close = fluent::modal_dialog(ctx, title, |ui| {
             if let Some(path) = &dialog.overwrite {
                 ui.label("A file already exists at this path.");
                 ui.label(path.display().to_string());
+                if let Some(scale) = dialog.scale {
+                    ui.small(format!("Export scale: {scale}×"));
+                }
                 return ui
-                    .horizontal(|ui| {
-                        if ui.pc_button("Replace file").clicked() {
-                            chosen = dialog.overwrite.take();
-                            true
-                        } else if ui.pc_button("Change path").clicked() {
-                            dialog.overwrite = None;
-                            dialog.focus = true;
-                            false
-                        } else {
-                            cancelled = ui.pc_button("Cancel").clicked();
-                            cancelled
-                        }
+                    .push_id(("file-path-footer", title), |ui| {
+                        ui.horizontal(|ui| {
+                            let replace = ui.pc_button("Replace file");
+                            let change = ui.pc_button("Change path");
+                            let cancel = ui.pc_button("Cancel");
+                            ctx.data_mut(|data| {
+                                data.insert_temp(footer_key, vec![replace.id, change.id, cancel.id])
+                            });
+                            if replace.clicked() {
+                                chosen = dialog.overwrite.take();
+                                true
+                            } else if change.clicked() {
+                                dialog.overwrite = None;
+                                dialog.focus = true;
+                                dialog.focus_requested = false;
+                                false
+                            } else {
+                                cancelled = cancel.clicked();
+                                cancelled
+                            }
+                        })
+                        .inner
                     })
                     .inner;
             }
-
+            let mut outside = ctx
+                .data(|data| data.get_temp::<Vec<egui::Id>>(footer_key))
+                .unwrap_or_default();
+            outside.push(egui::Id::new(("editor-dialog", title)).with("close"));
+            let enter=egui::ScrollArea::vertical()
+                .id_salt(("file-path-options",title))
+                .max_height((ctx.content_rect().height()-150.).max(48.))
+                .show(ui,|ui| {
             ui.label(if dialog.purpose.is_folder() {
                 "Folder path"
             } else {
@@ -200,52 +233,78 @@ impl PixelCraft {
             let mut entry = egui::TextEdit::singleline(&mut dialog.input)
                 .desired_width(ui.available_width())
                 .show(ui);
-            if std::mem::take(&mut dialog.focus) {
-                entry.response.request_focus();
-                entry
-                    .state
-                    .cursor
-                    .set_char_range(Some(egui::text::CCursorRange::two(
+            if dialog.focus {
+                // A parent modal can still own focus during its closing pass.
+                // Retire the request only after the next pass observes delivery.
+                if dialog.focus_requested && entry.response.has_focus() {
+                    dialog.focus = false;
+                    dialog.focus_requested = false;
+                } else {
+                    entry.response.request_focus();
+                    dialog.focus_requested = true;
+                    entry.state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
                         egui::text::CCursor::new(0),
                         egui::text::CCursor::new(dialog.input.chars().count()),
                     )));
-                entry.state.store(ui.ctx(), entry.response.id);
+                    entry.state.store(ui.ctx(), entry.response.id);
+                }
             }
             ui.small(format!("Relative paths use {}", dialog.directory.display()));
             if let Some(error) = &dialog.error {
                 ui.label(error);
             }
-            let enter = entry.response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            ui.horizontal(|ui| {
-                if ui.pc_button(dialog.purpose.action()).clicked() || enter {
-                    match dialog.typed() {
-                        Ok(path)
-                            if dialog.purpose.output_extension().is_some()
-                                && std::fs::symlink_metadata(&path).is_ok() =>
-                        {
-                            dialog.overwrite = Some(path);
+            if let Some(scale)=&mut dialog.scale {
+                Self::export_scale_value_ui(ui,scale);
+                let samples=if matches!(&dialog.purpose,FilePathPurpose::Export {kind,..} if kind=="sheet") {self.doc.durations.len()} else {1};
+                let mut width=self.doc.width.saturating_mul(samples).saturating_mul(*scale);
+                let mut height=self.doc.height.saturating_mul(*scale);
+                if matches!(&dialog.purpose,FilePathPurpose::Export {kind,..} if kind=="mp4") {width=width.next_multiple_of(2);height=height.next_multiple_of(2);}
+                ui.small(format!("{width} × {height} pixels"));
+            }
+            let enter=entry.response.lost_focus() && ui.input(|i|i.key_pressed(Key::Enter));
+            fluent::reveal_focused_control(ui,&outside);
+            enter
+            }).inner;
+            ui.separator();
+            ui.push_id(("file-path-footer", title), |ui| {
+                ui.horizontal(|ui| {
+                    let action = ui.pc_button(dialog.purpose.action());
+                    let browse = ui.pc_button("Browse…");
+                    let cancel = ui.pc_button("Cancel");
+                    ctx.data_mut(|data| {
+                        data.insert_temp(footer_key, vec![action.id, browse.id, cancel.id])
+                    });
+                    if action.clicked() || enter {
+                        match dialog.typed() {
+                            Ok(path)
+                                if dialog.purpose.output_extension().is_some()
+                                    && std::fs::symlink_metadata(&path).is_ok() =>
+                            {
+                                dialog.overwrite = Some(path);
+                            }
+                            Ok(path) => chosen = Some(path),
+                            Err(error) => dialog.error = Some(error),
                         }
-                        Ok(path) => chosen = Some(path),
-                        Err(error) => dialog.error = Some(error),
                     }
-                }
-                if ui.pc_button("Browse…").clicked()
-                    && let Some(path) = dialog.browse()
-                {
-                    match dialog.validate(path.clone()) {
-                        Ok(resolved)
-                            if resolved != path
-                                && dialog.purpose.output_extension().is_some()
-                                && std::fs::symlink_metadata(&resolved).is_ok() =>
-                        {
-                            dialog.overwrite = Some(resolved);
+                    if browse.clicked()
+                        && let Some(path) = dialog.browse()
+                    {
+                        match dialog.validate(path.clone()) {
+                            Ok(resolved)
+                                if resolved != path
+                                    && dialog.purpose.output_extension().is_some()
+                                    && std::fs::symlink_metadata(&resolved).is_ok() =>
+                            {
+                                dialog.overwrite = Some(resolved);
+                            }
+                            Ok(path) => chosen = Some(path),
+                            Err(error) => dialog.error = Some(error),
                         }
-                        Ok(path) => chosen = Some(path),
-                        Err(error) => dialog.error = Some(error),
                     }
-                }
-                cancelled = ui.pc_button("Cancel").clicked();
-                chosen.is_some() || cancelled
+                    cancelled = cancel.clicked();
+                    chosen.is_some() || cancelled
+                })
+                .inner
             })
             .inner
         });
@@ -266,11 +325,273 @@ impl PixelCraft {
                     } else {
                         path
                     };
-                    self.start_export(&kind, path);
+                    self.start_export_with_scale(
+                        &kind,
+                        path,
+                        dialog.scale.unwrap_or(self.studio.sheet.scale),
+                    );
                 }
             }
         } else if !close && !cancelled {
             self.file_path = Some(dialog);
         }
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+    fn frame(
+        app: &mut PixelCraft,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(683., 384.))),
+            events,
+            ..Default::default()
+        };
+        input.time = Some(ctx.cumulative_frame_nr() as f64 * 0.1);
+        let mut output = ctx.run_ui(input, |ui| app.render(ui));
+        output.textures_delta.clear();
+        output
+    }
+    fn position(output: &egui::FullOutput, label: &str) -> Pos2 {
+        output
+            .shapes
+            .iter()
+            .rev()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing visible export control {label}"))
+    }
+    fn click(pos: Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            },
+        ]
+    }
+    fn settled(app: &mut PixelCraft, ctx: &egui::Context) -> egui::FullOutput {
+        frame(app, ctx, vec![]);
+        frame(app, ctx, vec![]);
+        frame(app, ctx, vec![])
+    }
+    fn wait_export(app: &mut PixelCraft) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.export_job.is_some() && Instant::now() < deadline {
+            app.poll_export();
+            if app.export_job.is_some() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert!(app.export_job.is_none(), "export worker did not finish");
+        assert!(app.status.starts_with("Exported "), "{}", app.status);
+    }
+    #[test]
+    fn png_bmp_and_sequence_export_scale_is_selected_in_the_path_flow_and_preserved_on_repeat() {
+        for kind in ["png", "bmp", "png-sequence"] {
+            let ctx = egui::Context::default();
+            let mut app = PixelCraft::with_context(&ctx, None);
+            app.replace(Document::new(3, 2), None);
+            app.doc.set_pixel(0, 0, 0, [200, 10, 30, 255]);
+            if kind == "png-sequence" {
+                app.doc.add_frame(0, true);
+            }
+            app.studio.sheet.scale = 1;
+            app.action(kind);
+            let mut output = settled(&mut app, &ctx);
+            if kind == "png-sequence" {
+                frame(
+                    &mut app,
+                    &ctx,
+                    click(position(&output, "Choose export location…")),
+                );
+                output = settled(&mut app, &ctx);
+            }
+            position(&output, "Export scale");
+            frame(&mut app, &ctx, click(position(&output, "2×")));
+            let root = std::env::temp_dir().join(format!(
+                "pixelcraft-export-scale-{kind}-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let destination = if kind == "png-sequence" {
+                root.clone()
+            } else {
+                root.join(format!("sprite.{kind}"))
+            };
+            app.file_path.as_mut().unwrap().input = destination.to_string_lossy().into_owned();
+            output = settled(&mut app, &ctx);
+            let export = position(&output, "Export");
+            assert!(Rect::from_min_size(Pos2::ZERO, Vec2::new(683., 384.)).contains(export));
+            frame(&mut app, &ctx, click(export));
+            assert!(
+                app.export_job.is_some(),
+                "{kind} export click did not start worker: path_open={}, error={:?}, overwrite={:?}, status={}, click={export:?}",
+                app.file_path.is_some(),
+                app.file_path
+                    .as_ref()
+                    .and_then(|dialog| dialog.error.as_ref()),
+                app.file_path
+                    .as_ref()
+                    .and_then(|dialog| dialog.overwrite.as_ref()),
+                app.status
+            );
+            wait_export(&mut app);
+            let image_path = if kind == "png-sequence" {
+                root.join(&app.sequence_name).join("frame-0001.png")
+            } else {
+                destination
+            };
+            assert_eq!(
+                image::image_dimensions(&image_path).unwrap(),
+                (6, 4),
+                "{kind} selected output scale"
+            );
+            if kind == "png-sequence" {
+                assert_eq!(
+                    image::image_dimensions(root.join(&app.sequence_name).join("frame-0002.png"))
+                        .unwrap(),
+                    (6, 4)
+                );
+            }
+            app.studio.sheet.scale = 4;
+            app.doc.set_pixel(0, 0, 0, [10, 210, 50, 255]);
+            app.action("repeat-export");
+            wait_export(&mut app);
+            let rendered = image::open(&image_path).unwrap().into_rgba8();
+            assert_eq!(
+                rendered.dimensions(),
+                (6, 4),
+                "repeat must retain accepted scale for {kind}"
+            );
+            assert_eq!(rendered.get_pixel(0, 0).0, [10, 210, 50, 255]);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn cancelling_an_image_export_keeps_the_sheet_operation_draft() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.studio.sheet.scale = 4;
+        app.action("png");
+        let output = settled(&mut app, &ctx);
+        frame(&mut app, &ctx, click(position(&output, "2×")));
+        let output = settled(&mut app, &ctx);
+        frame(&mut app, &ctx, click(position(&output, "Cancel")));
+        assert!(app.file_path.is_none());
+        assert_eq!(app.studio.sheet.scale, 4);
+        assert!(app.export_job.is_none());
+    }
+
+    #[test]
+    fn sheet_export_keyboard_navigation_reveals_bottom_export_control() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(4, 4), None);
+        app.action("sheet");
+        let output = settled(&mut app, &ctx);
+        let tree = output.platform_output.accesskit_update.as_ref().unwrap();
+        let target = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("Export PNG + metadata…"))
+            .map(|(id, _)| *id)
+            .expect("sheet export button accessible");
+        let tab = || egui::Event::Key {
+            key: Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        for _ in 0..400 {
+            if ctx
+                .memory(|m| m.focused())
+                .is_some_and(|id| id.accesskit_id() == target)
+            {
+                break;
+            }
+            frame(&mut app, &ctx, vec![tab()]);
+        }
+        let focus = ctx
+            .memory(|m| m.focused())
+            .expect("sheet export is keyboard reachable");
+        assert_eq!(focus.accesskit_id(), target);
+        for _ in 0..12 {
+            frame(&mut app, &ctx, vec![]);
+        }
+        let response = ctx.read_response(focus).unwrap();
+        assert!(
+            Rect::from_min_size(Pos2::ZERO, Vec2::new(683., 384.)).contains_rect(response.rect),
+            "focused sheet export offscreen {:?}",
+            response.rect
+        );
+        assert!(
+            response
+                .interact_rect
+                .contains_rect(response.rect.shrink(1.)),
+            "focused sheet export clipped {:?}/{:?}",
+            response.rect,
+            response.interact_rect
+        );
+    }
+
+    #[test]
+    fn typed_image_export_confirms_overwrite_and_keeps_the_selected_local_scale() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(3, 2), None);
+        app.doc.set_pixel(0, 0, 0, [210, 30, 80, 255]);
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-overwrite-scale-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Typed sprite.png");
+        std::fs::write(&path, b"preserve until confirmed").unwrap();
+        app.action("png");
+        settled(&mut app, &ctx);
+        frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Text(format!("\"{}\"", path.display()))],
+        );
+        assert_eq!(
+            app.file_path.as_ref().unwrap().input,
+            format!("\"{}\"", path.display())
+        );
+        let output = settled(&mut app, &ctx);
+        frame(&mut app, &ctx, click(position(&output, "2×")));
+        let output = settled(&mut app, &ctx);
+        frame(&mut app, &ctx, click(position(&output, "Export")));
+        assert!(app.export_job.is_none());
+        assert_eq!(std::fs::read(&path).unwrap(), b"preserve until confirmed");
+        let output = settled(&mut app, &ctx);
+        position(&output, "Export scale: 2×");
+        app.studio.sheet.scale = 4;
+        frame(&mut app, &ctx, click(position(&output, "Replace file")));
+        wait_export(&mut app);
+        let exported = image::open(&path).unwrap().into_rgba8();
+        assert_eq!(exported.dimensions(), (6, 4));
+        assert_eq!(exported.get_pixel(0, 0).0, [210, 30, 80, 255]);
+        assert_eq!(app.studio.sheet.scale, 4);
+        assert_eq!((app.doc.width, app.doc.height), (3, 2));
+        assert!(app.undo.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

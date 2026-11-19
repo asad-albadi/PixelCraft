@@ -1,4 +1,6 @@
 //! Rendered UI checks exercise the same widget tree without a display server.
+#[path = "ui_discovery_tests.rs"]
+mod discovery;
 use super::*;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -2585,6 +2587,11 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
             1.,
             vec![egui::Event::Text(format!("\"{}\"", path.display()))],
         );
+        assert_eq!(
+            app.file_path.as_ref().unwrap().input,
+            format!("\"{}\"", path.display()),
+            "Typed {action} path did not reach the focused path field"
+        );
         let _ = text_position(&mut output, "Browse…");
         let accept = output
             .shapes
@@ -3129,13 +3136,17 @@ fn palette_ramp_controls_replace_span_and_undo_as_one_edit() {
     app.doc.import_palette(vec![red, blue, CLEAR]).unwrap();
     app.fg = blue;
     app.palette_index = 1;
-    app.action("workflow");
+    app.action("palette-tools");
     for _ in 0..3 {
         discard_frame(&mut app, &ctx, size, 1., vec![]);
     }
     let mut out = frame(&mut app, &ctx, size, 1., vec![]);
     let heading = text_position(&mut out, "Palette order & ramps");
     discard_frame(&mut app, &ctx, size, 1., click(heading));
+    // The centered modal settles after the collapsing section expands.
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
     let mut out = frame(&mut app, &ctx, size, 1., vec![]);
     let button = text_position(&mut out, "Replace selected span");
     discard_frame(&mut app, &ctx, size, 1., click(button));
@@ -4733,4 +4744,27 @@ fn tablet_pressure_controls_size_and_opacity_without_building_on_overlap() {
     app.action("pencil");
     discard_frame(&mut app, &ctx, size, 1., click(center(15)));
     assert_eq!(app.doc.layers[0].cels[0][105], app.fg);
+}
+
+#[test]
+fn advanced_drawing_toolbar_opens_brushes_after_an_unrelated_workflow() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app =
+        PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-toolbar-workflow.png")));
+    app.open_workflow_destination("assistants");
+    app.power.open = false;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let advanced = text_position(&mut output, "…");
+    discard_frame(&mut app, &ctx, size, 1., click(advanced));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    text_position(&mut output, "Brushes and selection");
+    assert!(app.power.open);
+    assert!(app.power.bridge.is_none());
 }

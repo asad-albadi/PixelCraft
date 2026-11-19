@@ -70,21 +70,23 @@ Verification: the isolated Settings-only staged snapshot passed all 345 binary t
 
 Files are src/productivity_ui.rs, src/main.rs, src/fluent.rs, src/studio.rs and catalog routes.
 
-- [ ] Add failing route tests for palette tools, brushes, references, sheet import, tag export, atlas and assistant access.
-- [ ] Give these workflows named page destinations and direct actions through current dispatch. Reuse existing operation renderers and native guards.
-- [ ] Route Sprite, Layer, Frame and Tileset properties to their relevant section.
-- [ ] Retarget Palette tools and toolbar/context shortcuts to their actual task. Tool options remain in the active tool strip.
-- [ ] Move export scale to export controls, and label document settings and new-document defaults by scope.
-- [ ] Verify opening/closing/reopening routes, document switches, dirty drafts, locked layers and Undo/Redo.
-- [ ] Review/fix and commit.
+- [x] Add failing route tests for palette tools, brushes, references, sheet import, tag export, atlas and assistant access.
+- [x] Give these workflows named page destinations and direct actions through current dispatch. Reuse existing operation renderers and native guards.
+- [x] Route Sprite, Layer, Frame and Tileset properties to their relevant section.
+- [x] Retarget Palette tools and toolbar/context shortcuts to their actual task. Tool options remain in the active tool strip.
+- [x] Move export scale to export controls, and label document settings and new-document defaults by scope.
+- [x] Verify opening/closing/reopening routes, document switches, dirty drafts, locked layers and Undo/Redo.
+- [x] Review/fix and commit.
+
+Verification: all 777 Linux tests pass (16 ignored), with strict all-target Clippy. Independent review loops verified focused routes, preserved drafts/history, stale property targets, group locks, clipped tile capture and current-operation export scale. Rendered tests exercise actual PNG/BMP/sequence output, overwrite confirmation, repeat scale and keyboard reachability. Native Linux screenshots at both resolutions/all four DPI factors in both themes informed the Settings height cap and selected-category reveal.
 
 ## Batch 5 — Recovery and native platform integration
 
 Files are settings/menu routing, src/fluent.rs, shortcut handling and a macOS-only integration module if supported by the current native stack.
 
-- [ ] Add failing regressions for layout reset, scale recovery, confirmed reset scope and current-document preservation.
-- [ ] Implement View layout recovery using existing Inspector/Preview/split-view state and stored configuration.
-- [ ] Verify scale recovery through keyboard and settings at minimum logical sizes.
+- [x] Add failing regressions for layout reset, scale recovery, confirmed reset scope and current-document preservation.
+- [x] Implement View layout recovery using existing Inspector/Preview/split-view state and stored configuration.
+- [x] Verify scale recovery through keyboard and settings at minimum logical sizes.
 - [ ] Implement the early-assessed native AppKit Settings adapter with retained target/menu ownership and bounded event delivery through the existing settings action.
 - [ ] Run relevant regressions and platform compilation/CI where available. Review/fix and commit.
 

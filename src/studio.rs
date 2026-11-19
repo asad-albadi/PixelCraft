@@ -2119,11 +2119,17 @@ impl PixelCraft {
         if !self.studio.sheet_open {
             return;
         }
-        let mut open = true;
-        egui::Window::new("Export sprite sheet")
-            .open(&mut open)
-            .default_width(390.)
-            .show(ctx, |ui| {
+        let title = "Export sprite sheet";
+        let footer_key = egui::Id::new("sheet-export-footer");
+        let close = fluent::modal_dialog_sized(ctx, title, 390., |ui| {
+            let mut outside = vec![egui::Id::new(("editor-dialog", title)).with("close")];
+            if let Some(id) = ctx.data(|data| data.get_temp::<egui::Id>(footer_key)) {
+                outside.push(id);
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("sheet-export-options")
+                .max_height((ctx.content_rect().height()-145.).max(48.))
+                .show(ui,|ui| {
                 self.export_scale_ui(ui);
                 let layout = &mut self.studio.sheet.layout;
                 egui::ComboBox::from_label("Layout")
@@ -2315,8 +2321,18 @@ impl PixelCraft {
                         ui.label(error);
                     }
                 }
+                fluent::reveal_focused_control(ui,&outside);
             });
-        self.studio.sheet_open = open;
+            ui.separator();
+            let done = ui
+                .push_id("sheet-export-footer", |ui| ui.pc_button("Done"))
+                .inner;
+            ctx.data_mut(|data| data.insert_temp(footer_key, done.id));
+            done.clicked()
+        });
+        if close {
+            self.studio.sheet_open = false;
+        }
     }
 
     pub(super) fn stroke_line(&mut self, a: (i32, i32), b: (i32, i32), color: Pixel) {

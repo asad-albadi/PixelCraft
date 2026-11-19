@@ -8,6 +8,7 @@ use pixelcraft::{
 use serde::{Deserialize, Serialize};
 mod brush_library;
 pub(crate) mod settings;
+pub(super) mod workflow;
 use brush_library::BrushLibrary;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,6 +232,9 @@ fn recent_file_label(path: &std::path::Path, paths: &[PathBuf]) -> String {
 
 pub(super) struct PowerTools {
     pub open: bool,
+    workflow_page: workflow::WorkflowPage,
+    pub(super) property_page: workflow::PropertyPage,
+    pub(super) property_target: Option<(u64, u64, u32, usize, usize)>,
     pub mode: BrushMode,
     pub reverse: bool,
     pub stamp: Option<(usize, usize, Vec<Pixel>)>,
@@ -279,6 +283,9 @@ impl Default for PowerTools {
     fn default() -> Self {
         Self {
             open: false,
+            workflow_page: workflow::WorkflowPage::Index,
+            property_page: workflow::PropertyPage::Sprite,
+            property_target: None,
             mode: BrushMode::Normal,
             reverse: false,
             stamp: None,
@@ -605,13 +612,16 @@ impl PixelCraft {
         }
     }
     pub(super) fn export_scale_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        Self::export_scale_value_ui(ui, &mut self.studio.sheet.scale);
+    }
+    pub(super) fn export_scale_value_ui(ui: &mut egui::Ui, value: &mut usize) {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Export scale");
             for scale in [1, 2, 4] {
-                ui.pc_selectable_value(&mut self.studio.sheet.scale, scale, format!("{scale}×"));
+                ui.pc_selectable_value(value, scale, format!("{scale}×"));
             }
             ui.add(
-                egui::DragValue::new(&mut self.studio.sheet.scale)
+                egui::DragValue::new(value)
                     .range(1..=16384)
                     .prefix("Custom "),
             );
@@ -1872,46 +1882,7 @@ impl PixelCraft {
         }
     }
     pub(super) fn power_dialogs(&mut self, ctx: &egui::Context) {
-        if !self.power.open {
-            return;
-        }
-        let mut open = true;
-        egui::Window::new("Workflow tools").open(&mut open).default_width(530.).default_height(650.).show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{
- self.palette_arrangement_ui(ui);
- ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
- ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember_action("Change drawing options");self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("The seamless canvas uses the axes selected under View.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
-if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
- ui.collapsing("Reference images", |ui| self.reference_controls(ui));
- ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
- ui.collapsing("Grid sprite-sheet import", |ui| self.grid_import_ui(ui));
-        ui.collapsing("Batch export animation tags", |ui| {
-            ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");
-            egui::ComboBox::from_label("Sheet engine preset")
-                .selected_text(&self.studio.sheet.preset)
-                .show_ui(ui, |ui| {
-                    for preset in SheetOptions::PRESETS {
-                        ui.pc_selectable_value(&mut self.studio.sheet.preset, preset.into(), preset);
-                    }
-                });
-            ui.horizontal(|ui| {
-                for (gif, label) in [(true, "Export tag GIFs…"), (false, "Export tag sheets…")] {
-                    if ui.add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button(label)).inner.clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
-                    {
-                        let kind = ExportKind::Tags { gif, options: Box::new(self.studio.sheet.clone()) };
-                        self.start_export_recipe(ExportRecipe { path, kind }, false);
-                    }
-                }
-            });
-        });
- ui.collapsing("Multi-file atlas", |ui| self.atlas_export_ui(ui));
- ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label,available) in self.recent_file_entries(){if ui.add_enabled_ui(available,|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
-if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
-if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();if ui.pc_button("Keyboard shortcuts…").clicked(){self.action("shortcuts");}});
- ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{if let Some(progress)=self.power.bridge_export.take(){progress.cancel();}self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
-if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
- });});
-        self.power.open = open;
+        self.workflow_dialog(ctx);
     }
     fn grid_import_ui(&mut self, ui: &mut egui::Ui) {
         if ui.pc_button("Choose sprite sheet…").clicked()

@@ -11,6 +11,11 @@ pub(super) struct CurveDraft {
 }
 
 impl PixelCraft {
+    pub(super) fn retarget_curve_to_primary(&mut self) {
+        if let Some(draft) = &mut self.curve_draft {
+            draft.pane = CanvasPane::Primary;
+        }
+    }
     pub(super) fn cancel_curve(&mut self) {
         if self.curve_draft.take().is_some() {
             self.status = "Curve cancelled".into();

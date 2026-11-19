@@ -147,6 +147,24 @@ pub(super) fn modal_dialog_sized(
     dismiss || content_closed
 }
 
+/// Call at the end of a scrolling body. Explicit exclusions identify fixed
+/// chrome, whose previous-pass rectangle may overlap the full content bounds.
+pub(super) fn reveal_focused_control(ui: &mut egui::Ui, excluded: &[egui::Id]) {
+    let Some(focus) = ui.ctx().memory(|memory| memory.focused()) else {
+        return;
+    };
+    if excluded.contains(&focus) {
+        return;
+    }
+    if let Some(response) = ui.ctx().read_response(focus)
+        && response.gained_focus()
+        && response.layer_id == ui.layer_id()
+        && ui.min_rect().contains_rect(response.rect)
+    {
+        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+    }
+}
+
 fn heading(ui: &mut egui::Ui, text: &str) -> bool {
     ui.add_space(4.);
     let id = ui.make_persistent_id(("inspector-section", text));
@@ -377,7 +395,7 @@ impl PixelCraft {
         }
         self.preview_settings_path = Some(path);
     }
-    fn save_preview_settings(&mut self) {
+    pub(super) fn save_preview_settings(&mut self) {
         if let Some(path) = &self.preview_settings_path {
             let result = std::fs::create_dir_all(path.parent().unwrap()).and_then(|()| {
                 std::fs::write(path, serde_json::to_vec(&self.preview_settings).unwrap())
@@ -621,7 +639,7 @@ impl PixelCraft {
                         });
                 });
             if ui.pc_small_button("Palette tools…").clicked() {
-                self.action("workflow");
+                self.action("palette-tools");
             }
         });
         if let Some((from, to)) = reorder {
@@ -994,7 +1012,7 @@ impl PixelCraft {
                 });
                 ui.add_space(8.);
                 if ui.pc_button("Properties & color mode…").clicked() {
-                    self.properties_open = true;
+                    self.action("properties");
                 }
             });
     }
@@ -1247,7 +1265,7 @@ impl PixelCraft {
             .on_hover_text("Advanced drawing tools")
             .clicked()
         {
-            self.power.open = true;
+            self.action("brushes");
         }
     }
 }
