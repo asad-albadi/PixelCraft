@@ -1713,6 +1713,9 @@ pub(crate) fn load_with_path_check(
     raster::load_static(path, &ext)
 }
 pub fn save(path: &Path, d: &Document) -> Result<(), String> {
+    save_with_overwrite(path, d, true)
+}
+pub fn save_with_overwrite(path: &Path, d: &Document, overwrite: bool) -> Result<(), String> {
     if path.extension().and_then(|s| s.to_str()) != Some("pixel") && d.has_frame_names() {
         return Err("Save As .pixel to keep frame names. Use Export baked ASE copy to export artwork for ASE interchange.".into());
     }
@@ -1729,22 +1732,19 @@ pub fn save(path: &Path, d: &Document) -> Result<(), String> {
     } else {
         encode_ase(d)?
     };
-    write_project_bytes(path, bytes)
+    write_project_bytes(path, bytes, overwrite)
 }
 
 pub fn export_baked_ase(path: &Path, doc: &Document) -> Result<(), String> {
-    write_project_bytes(path, encode_ase(doc)?)
+    write_project_bytes(path, encode_ase(doc)?, true)
 }
 
-fn write_project_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), String> {
-    let temp = path.with_file_name(format!(
-        ".{}.{}.tmp",
-        path.file_name().unwrap_or_default().to_string_lossy(),
-        std::process::id()
-    ));
-    mcp_io::write(&temp, bytes).map_err(|e| e.to_string())?;
-    mcp_io::rename(&temp, path).map_err(|e| e.to_string())
+fn write_project_bytes(path: &Path, bytes: Vec<u8>, overwrite: bool) -> Result<(), String> {
+    crate::automation::write_editor_file(path, overwrite, |temporary| {
+        mcp_io::write(temporary, bytes).map_err(|e| e.to_string())
+    })
 }
+
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
     export_raster_scaled(path, d, f, sheet, 1)
 }
@@ -1866,7 +1866,16 @@ pub fn export_gif_frames(
     repeat: u16,
     frames: impl IntoIterator<Item = usize>,
 ) -> Result<(), String> {
-    encode_gif(path, d, repeat, frames, 1, |_, _| Ok(()))
+    export_gif_frames_scaled(path, d, repeat, frames, 1)
+}
+pub fn export_gif_frames_scaled(
+    path: &Path,
+    d: &Document,
+    repeat: u16,
+    frames: impl IntoIterator<Item = usize>,
+    scale: usize,
+) -> Result<(), String> {
+    encode_gif(path, d, repeat, frames, scale, |_, _| Ok(()))
 }
 
 pub(crate) fn export_gif_progress(
@@ -2238,7 +2247,7 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
     if crate::automation::mcp_access::restricted() {
         // The staged PNG is already present. Replace it with a newly created
         // file so even a swapped hardlink cannot be opened for truncation.
-        write_project_bytes(path, out)
+        write_project_bytes(path, out, true)
     } else {
         mcp_io::write(path, out).map_err(|e| e.to_string())
     }

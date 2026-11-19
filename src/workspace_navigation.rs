@@ -2,11 +2,17 @@
 use super::*;
 
 impl PixelCraft {
+    fn navigation_chord_available(&self, chord: &str, action: &str) -> bool {
+        let chord = ShortcutChord::parse(chord);
+        let mut matches = self
+            .custom_shortcuts
+            .iter()
+            .filter(|(binding, _)| ShortcutChord::parse(binding) == chord);
+        matches.next().is_some_and(|(_, target)| target == action)
+            && matches.all(|(_, target)| target == action)
+    }
     pub(super) fn settings_shortcut_available(&self) -> bool {
-        let settings = ShortcutChord::parse("Ctrl+Comma");
-        self.custom_shortcuts.iter().all(|(binding, target)| {
-            ShortcutChord::parse(binding) != settings || target == "settings"
-        })
+        self.shortcut_edit.is_none() && self.navigation_chord_available("Ctrl+Comma", "settings")
     }
     /// Opening a destination does not cancel an unfinished canvas operation.
     pub(super) fn navigation_action(&mut self, action: &str) -> bool {
@@ -49,14 +55,12 @@ impl PixelCraft {
     }
 
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
-        // Recovery defaults must not steal a valid binding saved by an older
-        // version. AppKit uses the same override predicate as egui.
-        let available = |chord: &str, action: &str| {
-            self.custom_shortcuts.iter().all(|(binding, target)| {
-                ShortcutChord::parse(binding) != ShortcutChord::parse(chord) || target == action
-            })
-        };
-        let recovery_available = available("Ctrl+Shift+0", "reset-interface-scale");
+        // Shortcut capture owns every chord, including native recovery defaults.
+        if self.shortcut_edit.is_some() {
+            return;
+        }
+        let recovery_available =
+            self.navigation_chord_available("Ctrl+Shift+0", "reset-interface-scale");
         let settings_available = self.settings_shortcut_available();
         let exact_press = |chord: &str| {
             ctx.input(|input| ShortcutChord::parse(chord).is_some_and(|chord| chord.matches(input)))
@@ -82,6 +86,67 @@ impl PixelCraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removed_navigation_defaults_remain_removed_after_reload_and_render() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.custom_shortcuts
+            .retain(|_, a| a != "settings" && a != "reset-interface-scale");
+        app.custom_shortcuts = pixelcraft::productivity::load_shortcuts(
+            &pixelcraft::productivity::save_shortcuts(&app.custom_shortcuts).unwrap(),
+        )
+        .unwrap();
+        ctx.set_zoom_factor(2.);
+        for (key, modifiers) in [
+            (Key::Comma, egui::Modifiers::COMMAND),
+            (Key::Num0, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT),
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100., 800.))),
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| app.render(ui),
+            );
+            output.textures_delta.clear();
+            assert!(!app.settings_open);
+            assert_eq!(ctx.zoom_factor(), 2.);
+        }
+        assert!(!app.settings_shortcut_available());
+    }
+    #[test]
+    fn playback_holds_properties_until_the_user_closes_them() {
+        for action in ["properties", "layer-properties", "frame-properties"] {
+            let ctx = egui::Context::default();
+            let mut app = PixelCraft::with_context(&ctx, None);
+            app.doc.add_frame(0, false);
+            app.action("play");
+            app.action(action);
+            app.last_tick = Instant::now() - Duration::from_secs(2);
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100., 800.))),
+                    ..Default::default()
+                },
+                |ui| app.render(ui),
+            );
+            output.textures_delta.clear();
+            assert!(app.properties_open, "{action} closed during playback");
+            assert_eq!(app.frame, 0);
+            assert!(app.playing);
+        }
+    }
 
     #[test]
     fn navigation_defaults_do_not_steal_custom_chords_with_extra_modifiers() {

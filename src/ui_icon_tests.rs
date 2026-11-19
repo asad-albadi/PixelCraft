@@ -249,7 +249,7 @@ fn background_save_updates_only_the_originating_tab_and_keeps_new_edits_dirty() 
         "pixelcraft-background-save-{}.pixel",
         std::process::id()
     ));
-    app.queue_save(path.clone(), snapshot.clone());
+    app.queue_save(path.clone(), snapshot.clone(), true);
     app.doc.set_pixel(0, 0, 1, [80, 60, 40, 255]);
     app.open_document(Document::new(4, 4), None);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -2608,7 +2608,10 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
     };
     let poll = |app: &mut PixelCraft| {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while (app.open_job.is_some() || app.save_job.is_some() || app.export_job.is_some())
+        while (app.open_job.is_some()
+            || app.save_job.is_some()
+            || app.export_job.is_some()
+            || app.export_preflight.is_some())
             && Instant::now() < deadline
         {
             discard_frame(app, &ctx, size, 1., vec![]);

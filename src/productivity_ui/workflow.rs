@@ -254,7 +254,7 @@ impl PixelCraft {
                     for (gif, label) in [(true, "Export tag GIFs…"), (false, "Export tag sheets…")]
                     {
                         if ui
-                            .add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button(label))
+                            .add_enabled_ui(!self.export_busy(), |ui| ui.pc_button(label))
                             .inner
                             .clicked()
                             && let Some(path) = rfd::FileDialog::new().pick_folder()
@@ -263,7 +263,14 @@ impl PixelCraft {
                                 gif,
                                 options: Box::new(self.studio.sheet.clone()),
                             };
-                            self.start_export_recipe(ExportRecipe { path, kind }, false);
+                            self.start_export_recipe(
+                                ExportRecipe {
+                                    published: Default::default(),
+                                    path,
+                                    kind,
+                                },
+                                false,
+                            );
                         }
                     }
                 });
@@ -445,6 +452,57 @@ mod tests {
             },
         ]
     }
+    #[test]
+    fn rejected_tile_layer_creation_preserves_document_and_both_history_stacks() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let mut doc = Document::new(4096, 4096);
+        for _ in 0..7 {
+            doc.add_frame(0, false);
+        }
+        doc.tilesets.push(Tileset {
+            editor_id: Default::default(),
+            name: "Small".into(),
+            width: 1,
+            height: 1,
+            tiles: vec![vec![[255, 0, 0, 255]].into()],
+        });
+        app.replace(doc, None);
+        app.remember_action("seed");
+        app.doc.layers[0].name = "Changed".into();
+        app.undo();
+        let before = app.doc.clone();
+        let history = (app.undo.len(), app.redo.len());
+        assert!(history.1 > 0);
+        app.open_property_destination("tileset-properties");
+        frame(&mut app, &ctx, vec![]);
+        let output = frame(&mut app, &ctx, vec![]);
+        let button = text_position(&output, "Tile layer from last tileset").unwrap_or_else(|| {
+            panic!(
+                "visible={:?}, status={}, tilesets={}, open={}",
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| if let egui::Shape::Text(t) = &s.shape {
+                        Some(t.galley.text())
+                    } else {
+                        None
+                    })
+                    .collect::<Vec<_>>(),
+                app.status,
+                app.doc.tilesets.len(),
+                app.properties_open
+            )
+        });
+        frame(&mut app, &ctx, click(button));
+        assert!(app.doc == before);
+        assert_eq!(
+            (app.undo.len(), app.redo.len()),
+            history,
+            "failed edit damaged history"
+        );
+    }
+
     #[test]
     fn focused_workflows_render_only_their_task_and_keep_done_reachable() {
         for (id, marker) in [

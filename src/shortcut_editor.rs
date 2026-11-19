@@ -7,6 +7,47 @@ mod shortcut_event_tests {
     use super::*;
 
     #[test]
+    fn navigation_recovery_yields_to_shortcut_capture_in_full_render() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.shortcut_settings_open = true;
+        ctx.set_zoom_factor(2.);
+        let draw = |app: &mut PixelCraft, events| {
+            let mut out = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1100., 800.))),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.render(ui),
+            );
+            out.textures_delta.clear();
+        };
+        draw(&mut app, vec![]);
+        app.begin_shortcut_capture(&ctx, "pencil".into());
+        draw(&mut app, vec![]);
+        let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+        draw(
+            &mut app,
+            vec![
+                egui::Event::ModifiersChanged(modifiers),
+                egui::Event::Key {
+                    key: Key::Num0,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                },
+            ],
+        );
+        assert_eq!(ctx.zoom_factor(), 2., "recovery stole shortcut capture");
+        let ShortcutStage::Review { keys, .. } = &app.shortcut_edit.as_ref().unwrap().stage else {
+            panic!("key was not captured")
+        };
+        assert_eq!(keys[0].binding(), "Ctrl+Shift+0");
+    }
+
+    #[test]
     fn quick_shortcut_taps_use_press_modifiers_even_after_release_in_the_same_frame() {
         for (binding, key, modifiers, action) in [
             (

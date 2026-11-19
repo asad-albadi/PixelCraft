@@ -341,7 +341,7 @@ struct CachedGridPreview {
 struct AtlasPreview {
     inputs: Vec<PathBuf>,
     options: AtlasOptions,
-    packed: (image::RgbaImage, serde_json::Value),
+    packed: Arc<(image::RgbaImage, serde_json::Value)>,
     texture: egui::TextureHandle,
 }
 
@@ -2159,6 +2159,7 @@ impl PixelCraft {
     }
 
     fn atlas_export_ui(&mut self, ui: &mut egui::Ui) {
+        let can_export = !self.export_busy();
         if ui.pc_button("Add sprites…").clicked()
             && let Some(paths) = rfd::FileDialog::new()
                 .add_filter("Sprites", ATLAS_EXTENSIONS)
@@ -2266,7 +2267,7 @@ impl PixelCraft {
                 Ok(AtlasPreview {
                     inputs,
                     options: options.clone(),
-                    packed,
+                    packed: Arc::new(packed),
                     texture,
                 })
             })();
@@ -2282,7 +2283,7 @@ impl PixelCraft {
                     .min(8.);
                 ui.add(egui::Image::new(&preview.texture).fit_to_exact_size(dimensions * scale));
                 if ui
-                    .add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button("Save atlas…"))
+                    .add_enabled_ui(can_export, |ui| ui.pc_button("Save atlas…"))
                     .inner
                     .clicked()
                     && let Some(path) = rfd::FileDialog::new()
@@ -2290,26 +2291,19 @@ impl PixelCraft {
                         .set_file_name("atlas.png")
                         .save_file()
                 {
-                    self.status = match save_packed_atlas_with_metadata(
-                        &path,
-                        &preview.packed,
-                        options.metadata,
-                    ) {
-                        Ok(()) => {
-                            self.last_export = Some(ExportRecipe {
-                                path,
-                                kind: ExportKind::MultiAtlas {
-                                    inputs: preview.inputs.clone(),
-                                    options: AtlasOptions {
-                                        metadata: options.metadata,
-                                        ..preview.options.clone()
-                                    },
-                                },
-                            });
-                            "Exported multi-file atlas".into()
-                        }
-                        Err(error) => format!("Export failed: {error}"),
+                    let recipe = ExportRecipe {
+                        published: Default::default(),
+                        path: path.clone(),
+                        kind: ExportKind::MultiAtlas {
+                            packed: Some(preview.packed.clone()),
+                            inputs: preview.inputs.clone(),
+                            options: AtlasOptions {
+                                metadata: options.metadata,
+                                ..preview.options.clone()
+                            },
+                        },
                     };
+                    self.request_export_recipe(recipe, false, &[]);
                 }
             }
             Some(Err(error)) => {
@@ -2334,16 +2328,29 @@ impl PixelCraft {
         };
         if let Some(path) = path {
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("hex");
+            if export {
+                let kind = ExportKind::Palette {
+                    colors: self.doc.palette.clone(),
+                    extension: ext.into(),
+                };
+                self.start_export_recipe(
+                    ExportRecipe {
+                        path,
+                        kind,
+                        published: Default::default(),
+                    },
+                    false,
+                );
+                return;
+            }
             let result = (|| {
-                if export {
-                    std::fs::write(&path, write_palette(&self.doc.palette, ext)?)
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    let p = parse_palette(&std::fs::read(&path).map_err(|e| e.to_string())?, ext)?;
-                    self.remember_action("Import palette");
-                    self.doc.import_palette(p)?;
-                    self.doc.palette_names.clear();
-                }
+                let palette = pixelcraft::productivity::load_palette(&path)?;
+                let mut candidate = self.doc.clone();
+                candidate.import_palette(palette)?;
+                candidate.palette_names.clear();
+                candidate.validate()?;
+                self.remember_action("Import palette");
+                self.doc = candidate;
                 Ok::<_, String>(())
             })();
             self.status = match result {
@@ -3701,7 +3708,9 @@ mod bridge_tests {
         app.start_export("png-sequence", output.clone());
         app.doc.set_pixel(0, 1, 0, [255, 0, 0, 255]);
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.export_job.is_some() && Instant::now() < deadline {
+        while (app.export_job.is_some() || app.export_preflight.is_some())
+            && Instant::now() < deadline
+        {
             app.poll_export();
             std::thread::sleep(Duration::from_millis(1));
         }

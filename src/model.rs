@@ -35,6 +35,8 @@ pub const DEFAULT_DURATION: u16 = 100;
 pub const MAX_FRAME_NAME_CHARS: usize = 256;
 pub const MIN_BRUSH_SIZE: i32 = 1;
 pub const MAX_BRUSH_SIZE: i32 = 64;
+#[cfg(test)]
+thread_local! {pub(crate) static DOCUMENT_VALIDATIONS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
 pub const MAX_DIMENSION: usize = 16384;
 pub const MAX_PIXELS: usize = 64_000_000;
 pub const MAX_DOCUMENT_PIXELS: usize = 128_000_000;
@@ -1695,6 +1697,8 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        #[cfg(test)]
+        DOCUMENT_VALIDATIONS.set(DOCUMENT_VALIDATIONS.get() + 1);
         self.validate_until(|| false)
     }
 

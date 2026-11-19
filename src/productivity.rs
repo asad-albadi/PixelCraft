@@ -912,14 +912,41 @@ pub fn onion_pixels(d: &Document, f: usize, o: &OnionOptions) -> Vec<Pixel> {
     out
 }
 
+pub const MAX_PALETTE_BYTES: usize = 1024 * 1024;
+/// Bound external palette data before allocating/parsing it, including growing files.
+pub fn load_palette(path: &Path) -> Result<Vec<Pixel>, String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("hex");
+    load_palette_with_extension(path, ext)
+}
+pub fn load_palette_with_extension(path: &Path, ext: &str) -> Result<Vec<Pixel>, String> {
+    use std::io::Read;
+    let file = mcp_io::open(path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_PALETTE_BYTES as u64 {
+        return Err("Palette exceeds the 1 MiB input limit".into());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_PALETTE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    parse_palette(&bytes, ext)
+}
 pub fn parse_palette(bytes: &[u8], ext: &str) -> Result<Vec<Pixel>, String> {
+    if bytes.len() > MAX_PALETTE_BYTES {
+        return Err("Palette exceeds the 1 MiB input limit".into());
+    }
     let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     let mut p = vec![];
     match ext.to_ascii_lowercase().as_str() {
         "json" => {
-            let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-            p = serde_json::from_value(v.get("colors").unwrap_or(&v).clone())
-                .map_err(|e| e.to_string())?;
+            #[derive(serde::Deserialize)]
+            #[serde(untagged)]
+            enum Palette {
+                Wrapped { colors: Vec<Pixel> },
+                Colors(Vec<Pixel>),
+            }
+            p = match serde_json::from_slice::<Palette>(bytes).map_err(|e| e.to_string())? {
+                Palette::Wrapped { colors } | Palette::Colors(colors) => colors,
+            };
         }
         "hex" => {
             for line in text.lines() {
@@ -937,6 +964,9 @@ pub fn parse_palette(bytes: &[u8], ext: &str) -> Result<Vec<Pixel>, String> {
                         .map_err(|_| "Invalid hex color")?;
                 }
                 p.push(c);
+                if p.len() > 256 {
+                    return Err("Palette must contain 1–256 colors".into());
+                }
             }
         }
         "pal" => {
@@ -952,7 +982,13 @@ pub fn parse_palette(bytes: &[u8], ext: &str) -> Result<Vec<Pixel>, String> {
                 .trim()
                 .parse()
                 .map_err(|_| "Invalid palette count")?;
+            if n == 0 || n > 256 {
+                return Err("Palette must contain 1–256 colors".into());
+            }
             for line in lines.filter(|s| !s.trim().is_empty()) {
+                if p.len() == 256 {
+                    return Err("Palette must contain 1–256 colors".into());
+                }
                 p.push(parse_rgb(line)?);
             }
             if p.len() != n {
@@ -971,6 +1007,9 @@ pub fn parse_palette(bytes: &[u8], ext: &str) -> Result<Vec<Pixel>, String> {
                     || line.starts_with("Columns:")
                 {
                     continue;
+                }
+                if p.len() == 256 {
+                    return Err("Palette must contain 1–256 colors".into());
                 }
                 p.push(parse_rgb(line)?);
             }
@@ -994,6 +1033,9 @@ fn parse_rgb(s: &str) -> Result<Pixel, String> {
             .map_err(|_| "RGB values must be 0–255")?;
     }
     Ok(c)
+}
+pub fn save_palette(path: &Path, colors: &[Pixel], ext: &str) -> Result<(), String> {
+    mcp_io::write(path, write_palette(colors, ext)?).map_err(|e| e.to_string())
 }
 pub fn write_palette(p: &[Pixel], ext: &str) -> Result<Vec<u8>, String> {
     if p.is_empty() || p.len() > 256 {
@@ -1420,7 +1462,7 @@ pub fn tag_document(d: &Document, index: usize) -> Result<Document, String> {
     out.validate()?;
     Ok(out)
 }
-pub(crate) fn tag_export_paths(dir: &Path, d: &Document, gif: bool) -> Vec<PathBuf> {
+pub fn tag_export_paths(dir: &Path, d: &Document, gif: bool) -> Vec<PathBuf> {
     d.tags
         .iter()
         .enumerate()
@@ -1455,7 +1497,7 @@ pub fn batch_tags(
     batch_tags_with_previous(dir, dir, d, gif, options)
 }
 
-pub(crate) fn batch_tags_with_previous(
+pub fn batch_tags_with_previous(
     dir: &Path,
     previous_dir: &Path,
     d: &Document,
@@ -1469,7 +1511,7 @@ pub(crate) fn batch_tags_with_previous(
     let paths = tag_export_paths(dir, d, gif);
     for (i, (tag, path)) in d.tags.iter().zip(&paths).enumerate() {
         if gif {
-            formats::export_gif_frames(path, d, tag.repeat, tag_frames(tag))?;
+            formats::export_gif_frames_scaled(path, d, tag.repeat, tag_frames(tag), options.scale)?;
         } else {
             let previous = previous_dir.join(path.file_name().unwrap());
             interchange::export_sheet_with_previous(

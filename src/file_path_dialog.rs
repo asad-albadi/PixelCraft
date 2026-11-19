@@ -17,9 +17,11 @@ pub(super) struct FilePathDialog {
     pub(super) input: String,
     error: Option<String>,
     overwrite: Option<PathBuf>,
+    replace: bool,
     focus: bool,
     focus_requested: bool,
-    scale: Option<usize>,
+    pub(super) scale: Option<usize>,
+    target: Option<(u64, Option<u32>)>,
 }
 
 impl FilePathPurpose {
@@ -166,12 +168,19 @@ impl PixelCraft {
             .or_else(|| extensions::projects_directory().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         let scale = purpose.supports_scale().then_some(self.studio.sheet.scale);
+        let target = (!matches!(purpose, FilePathPurpose::Open)).then(|| {
+            let frame = matches!(purpose, FilePathPurpose::ImportLayer)
+                || matches!(&purpose, FilePathPurpose::Export {kind,..} if !matches!(kind.as_str(),"gif"|"mp4"|"fli"|"flc"|"png-sequence"|"baked-ase"|"sheet"));
+            (self.doc.editor_id.runtime_key(),frame.then(||self.doc.frame_export_id(self.frame)))
+        });
         self.file_path = Some(FilePathDialog {
             purpose,
+            target,
             directory,
             input,
             error: None,
             overwrite: None,
+            replace: false,
             focus: true,
             focus_requested: false,
             scale,
@@ -180,6 +189,14 @@ impl PixelCraft {
 
     pub(super) fn file_path_dialog(&mut self, ctx: &egui::Context) {
         let mut dialog = self.file_path.take().unwrap();
+        if dialog.target.is_some_and(|(document, frame)| {
+            document != self.doc.editor_id.runtime_key()
+                || frame.is_some_and(|frame| frame != self.doc.frame_export_id(self.frame))
+        }) {
+            self.pending = None;
+            self.status = "File dialog closed because the active document or frame changed".into();
+            return;
+        }
         let mut chosen = None;
         let mut cancelled = false;
         let title = dialog.purpose.title();
@@ -202,9 +219,11 @@ impl PixelCraft {
                             });
                             if replace.clicked() {
                                 chosen = dialog.overwrite.take();
+                                dialog.replace = true;
                                 true
                             } else if change.clicked() {
                                 dialog.overwrite = None;
+                                dialog.replace = false;
                                 dialog.focus = true;
                                 dialog.focus_requested = false;
                                 false
@@ -291,13 +310,16 @@ impl PixelCraft {
                     {
                         match dialog.validate(path.clone()) {
                             Ok(resolved)
-                                if resolved != path
-                                    && dialog.purpose.output_extension().is_some()
+                                if dialog.purpose.output_extension().is_some()
                                     && std::fs::symlink_metadata(&resolved).is_ok() =>
                             {
                                 dialog.overwrite = Some(resolved);
+                                dialog.replace = false;
                             }
-                            Ok(path) => chosen = Some(path),
+                            Ok(path) => {
+                                dialog.replace = false;
+                                chosen = Some(path);
+                            }
                             Err(error) => dialog.error = Some(error),
                         }
                     }
@@ -313,7 +335,7 @@ impl PixelCraft {
                 FilePathPurpose::Open => self.open_recent(path),
                 FilePathPurpose::ImportLayer => self.open_as_raster_layer(path),
                 FilePathPurpose::Save => {
-                    if self.save_to_path(path)
+                    if self.save_to_path_with_overwrite(path, dialog.replace)
                         && let Some(pending) = self.pending.take()
                     {
                         self.finish_pending(ctx, pending);
@@ -325,10 +347,11 @@ impl PixelCraft {
                     } else {
                         path
                     };
-                    self.start_export_with_scale(
+                    self.start_export_with_consent(
                         &kind,
                         path,
                         dialog.scale.unwrap_or(self.studio.sheet.scale),
+                        dialog.replace,
                     );
                 }
             }
@@ -393,7 +416,9 @@ mod scale_tests {
     }
     fn wait_export(app: &mut PixelCraft) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.export_job.is_some() && Instant::now() < deadline {
+        while (app.export_job.is_some() || app.export_preflight.is_some())
+            && Instant::now() < deadline
+        {
             app.poll_export();
             if app.export_job.is_some() {
                 std::thread::sleep(Duration::from_millis(5));
@@ -402,6 +427,76 @@ mod scale_tests {
         assert!(app.export_job.is_none(), "export worker did not finish");
         assert!(app.status.starts_with("Exported "), "{}", app.status);
     }
+    #[test]
+    fn cancelled_animation_scales_never_change_the_sheet_draft() {
+        for kind in ["gif", "mp4", "fli", "flc", "png-sequence"] {
+            for second_stage in [false, true] {
+                let ctx = egui::Context::default();
+                let mut app = PixelCraft::with_context(&ctx, None);
+                app.studio.sheet.scale = 4;
+                app.action(kind);
+                let output = settled(&mut app, &ctx);
+                frame(&mut app, &ctx, click(position(&output, "2×")));
+                let mut output = settled(&mut app, &ctx);
+                if second_stage {
+                    frame(
+                        &mut app,
+                        &ctx,
+                        click(position(&output, "Choose export location…")),
+                    );
+                    output = settled(&mut app, &ctx);
+                    assert_eq!(app.file_path.as_ref().unwrap().scale, Some(2));
+                }
+                frame(&mut app, &ctx, click(position(&output, "Cancel")));
+                assert_eq!(
+                    app.studio.sheet.scale, 4,
+                    "{kind}, second stage={second_stage}"
+                );
+                assert!(app.export_job.is_none());
+            }
+        }
+    }
+    #[test]
+    fn stale_save_confirmation_cannot_overwrite_with_another_document() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.replace(Document::new(2, 2), None);
+        app.doc.set_pixel(0, 0, 0, [10, 20, 30, 255]);
+        let path = std::env::temp_dir().join(format!(
+            "pixelcraft-stale-dialog-{}.pixel",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"keep original").unwrap();
+        app.action("saveas");
+        app.file_path.as_mut().unwrap().input = path.to_string_lossy().into_owned();
+        let output = settled(&mut app, &ctx);
+        frame(&mut app, &ctx, click(position(&output, "Save")));
+        let output = settled(&mut app, &ctx);
+        let replace = position(&output, "Replace file");
+        app.pending = Some(Pending::New);
+        app.open_document(Document::new(3, 3), None);
+        frame(&mut app, &ctx, click(replace));
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"keep original",
+            "stale confirmation overwrote the selected file"
+        );
+        assert!(app.file_path.is_none());
+        assert!(app.pending.is_none());
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn stale_animation_dialog_closes_before_selecting_an_output() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.action("gif");
+        settled(&mut app, &ctx);
+        app.open_document(Document::new(3, 3), None);
+        settled(&mut app, &ctx);
+        assert!(app.animation_export.is_none());
+        assert!(app.file_path.is_none());
+    }
+
     #[test]
     fn png_bmp_and_sequence_export_scale_is_selected_in_the_path_flow_and_preserved_on_repeat() {
         for kind in ["png", "bmp", "png-sequence"] {
@@ -441,7 +536,7 @@ mod scale_tests {
             assert!(Rect::from_min_size(Pos2::ZERO, Vec2::new(683., 384.)).contains(export));
             frame(&mut app, &ctx, click(export));
             assert!(
-                app.export_job.is_some(),
+                app.export_job.is_some() || app.export_preflight.is_some(),
                 "{kind} export click did not start worker: path_open={}, error={:?}, overwrite={:?}, status={}, click={export:?}",
                 app.file_path.is_some(),
                 app.file_path

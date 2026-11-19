@@ -752,8 +752,13 @@ struct PixelCraft {
     open_job: Option<FileOpenJob>,
     play_after_open: bool,
     export_job: Option<ExportJob>,
+    export_confirmation: Option<export_actions::ExportConfirmation>,
+    export_preflight: Option<export_actions::ExportPreflight>,
+    export_context: egui::Context,
     last_export: Option<ExportRecipe>,
     animation_export: Option<&'static str>,
+    animation_export_scale: usize,
+    animation_export_document: Option<u64>,
     file_path: Option<FilePathDialog>,
     sequence_name: String,
     save_job: Option<SaveJob>,
@@ -978,8 +983,13 @@ impl PixelCraft {
             open_job: None,
             play_after_open: false,
             export_job: None,
+            export_confirmation: None,
+            export_preflight: None,
+            export_context: ctx.clone(),
             last_export: None,
             animation_export: None,
+            animation_export_scale: 1,
+            animation_export_document: None,
             file_path: None,
             sequence_name: String::new(),
             save_job: None,
@@ -2323,18 +2333,31 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.start_rgba_conversion(ctx);
         }
         if add_group {
-            self.remember_action("New group");
-            match self.doc.add_group("Group") {
-                Ok(g) => self.layer = g,
-                Err(e) => self.status = e,
+            let mut candidate = self.doc.clone();
+            match candidate
+                .add_group("Group")
+                .and_then(|group| candidate.validate().map(|_| group))
+            {
+                Ok(group) => {
+                    self.remember_action("New group");
+                    self.doc = candidate;
+                    self.layer = group;
+                }
+                Err(error) => self.status = error,
             }
         }
         if add_tile {
-            self.remember_action("New tile layer");
-            if let Err(e) = self.doc.add_tile_layer(self.doc.tilesets.len() - 1) {
-                self.status = e;
-            } else {
-                self.layer = self.doc.layers.len() - 1;
+            let mut candidate = self.doc.clone();
+            match candidate
+                .add_tile_layer(candidate.tilesets.len() - 1)
+                .and_then(|_| candidate.validate())
+            {
+                Ok(()) => {
+                    self.remember_action("New tile layer");
+                    self.layer = candidate.layers.len() - 1;
+                    self.doc = candidate;
+                }
+                Err(error) => self.status = error,
             }
         }
         if capture && let Err(error) = self.capture_property_tile() {
@@ -2433,6 +2456,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.properties_open
             || self.grid_settings.is_some()
             || self.animation_export.is_some()
+            || self.export_dialog_open()
             || self.file_path.is_some()
             || self.shortcut_edit.is_some()
             || self.shortcut_settings_open
@@ -2809,7 +2833,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         false
     }
 
-    fn save_to_path(&mut self, mut path: PathBuf) -> bool {
+    fn save_to_path(&mut self, path: PathBuf) -> bool {
+        self.save_to_path_with_overwrite(path, true)
+    }
+    fn save_to_path_with_overwrite(&mut self, mut path: PathBuf, overwrite: bool) -> bool {
         if self.save_job.is_some() {
             self.status = "A save is already running".into();
             return false;
@@ -2840,20 +2867,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .show();
             match choice {
                 rfd::MessageDialogResult::Custom(label) if label == "Save as .pixel" => {
-                    let Some(pixel_path) = rfd::FileDialog::new()
-                        .add_filter("PixelCraft project", &["pixel"])
-                        .set_file_name(
-                            path.with_extension("pixel")
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy(),
-                        )
-                        .save_file()
-                    else {
-                        return false;
-                    };
-                    path = pixel_path;
-                    path.set_extension("pixel");
+                    self.begin_file_path(
+                        FilePathPurpose::Save,
+                        path.with_extension("pixel").to_string_lossy().into_owned(),
+                    );
+                    return false;
                 }
                 rfd::MessageDialogResult::Custom(label) if label == "Discard references" => {
                     saving.references.clear()
@@ -2862,12 +2880,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         if self.pending.is_some() || saving != self.doc {
-            return self.finish_save(path, saving);
+            return self.finish_save_with_overwrite(path, saving, overwrite);
         }
-        self.queue_save(path, saving);
+        self.queue_save(path, saving, overwrite);
         false
     }
-    fn queue_save(&mut self, path: PathBuf, saving: Document) {
+    fn queue_save(&mut self, path: PathBuf, saving: Document, overwrite: bool) {
         let (tx, rx) = std::sync::mpsc::channel();
         self.save_job = Some(SaveJob {
             tab: self.active_tab,
@@ -2878,7 +2896,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             path.file_name().unwrap_or_default().to_string_lossy()
         );
         std::thread::spawn(move || {
-            let result = formats::save(&path, &saving);
+            let result = formats::save_with_overwrite(&path, &saving, overwrite);
             let _ = tx.send((path, saving, result));
         });
     }
@@ -2919,8 +2937,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Err(_) => self.status = "Save worker stopped unexpectedly".into(),
         }
     }
+    #[cfg(test)]
     fn finish_save(&mut self, path: PathBuf, saving: Document) -> bool {
-        match formats::save(&path, &saving) {
+        self.finish_save_with_overwrite(path, saving, true)
+    }
+    fn finish_save_with_overwrite(
+        &mut self,
+        path: PathBuf,
+        saving: Document,
+        overwrite: bool,
+    ) -> bool {
+        match formats::save_with_overwrite(&path, &saving, overwrite) {
             Ok(()) => {
                 if self.doc != saving {
                     self.remember_action("Apply save format conversion");
@@ -2945,8 +2972,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
+    fn begin_animation_export(&mut self, kind: &'static str) {
+        self.animation_export = Some(kind);
+        self.animation_export_scale = self.studio.sheet.scale;
+        self.animation_export_document = Some(self.doc.editor_id.runtime_key());
+    }
     fn export(&mut self, kind: &str) {
-        if self.export_job.is_some() {
+        if self.export_busy() {
             self.status = "An export is already running".into();
             return;
         }
@@ -2983,8 +3015,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     #[cfg(test)]
     fn start_export(&mut self, kind: &str, path: PathBuf) {
         self.start_export_with_scale(kind, path, self.studio.sheet.scale);
+        self.wait_export_preflight();
     }
+    #[cfg(test)]
     fn start_export_with_scale(&mut self, kind: &str, path: PathBuf, scale: usize) {
+        self.start_export_with_consent(kind, path, scale, false);
+    }
+    fn start_export_with_consent(
+        &mut self,
+        kind: &str,
+        path: PathBuf,
+        scale: usize,
+        replace_primary: bool,
+    ) {
         let kind = match kind {
             "png-sequence" => ExportKind::Sequence { scale },
             "gif" => ExportKind::Animation {
@@ -3010,7 +3053,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 sheet: kind == "sheet",
             },
         };
-        self.start_export_recipe(ExportRecipe { path, kind }, false);
+        let confirmed = if replace_primary {
+            vec![path.clone()]
+        } else {
+            Vec::new()
+        };
+        self.request_export_recipe(
+            ExportRecipe {
+                published: Default::default(),
+                path,
+                kind,
+            },
+            false,
+            &confirmed,
+        );
     }
     fn copy(&mut self) {
         if self.uses_tilemap_clipboard() {
@@ -3485,12 +3541,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         || "sprite-frames".into(),
                         |stem| format!("{}-frames", stem.to_string_lossy()),
                     );
-                self.animation_export = Some("png-sequence");
+                self.begin_animation_export("png-sequence");
             }
-            "gif" => self.animation_export = Some("gif"),
-            "mp4" => self.animation_export = Some("mp4"),
-            "fli" => self.animation_export = Some("fli"),
-            "flc" => self.animation_export = Some("flc"),
+            "gif" => self.begin_animation_export("gif"),
+            "mp4" => self.begin_animation_export("mp4"),
+            "fli" => self.begin_animation_export("fli"),
+            "flc" => self.begin_animation_export("flc"),
             "undo" => self.undo(),
             "undo-history" => self.history_open = !self.history_open,
             "redo" => self.redo(),
@@ -6755,6 +6811,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.shortcut_edit_dialog(ctx);
             return;
         }
+        if self.export_dialog_open() {
+            self.export_confirmation_dialog(ctx);
+            return;
+        }
         if self.shortcut_settings_open {
             self.shortcut_settings_dialog(ctx);
             return;
@@ -6765,6 +6825,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.palette_conversion_dialog(ctx);
         self.document_profile_dialog(ctx);
         self.selection_tools_dialog(ctx);
+        if self.animation_export.is_some()
+            && self.animation_export_document != Some(self.doc.editor_id.runtime_key())
+        {
+            self.animation_export = None;
+            self.status = "Export dialog closed because the active document changed".into();
+        }
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let mut cancel = false;
@@ -6776,8 +6842,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 _ => "Export MP4 video",
             };
             let dismiss = fluent::modal_dialog(ctx, title, |ui| {
-                self.export_scale_ui(ui);
-                let scale = self.studio.sheet.scale;
+                Self::export_scale_value_ui(ui, &mut self.animation_export_scale);
+                let scale = self.animation_export_scale;
                 let width = self.doc.width.saturating_mul(scale);
                 let height = self.doc.height.saturating_mul(scale);
                 let dimensions = if kind == "mp4" {
@@ -6804,6 +6870,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.animation_export = None;
                 if accept {
                     self.export(kind);
+                    if let Some(dialog) = &mut self.file_path {
+                        dialog.scale = Some(self.animation_export_scale);
+                    }
                 }
             }
         }
@@ -7160,6 +7229,7 @@ impl PixelCraft {
         self.poll_save();
         if self.open_job.is_some()
             || self.export_job.is_some()
+            || self.export_preflight.is_some()
             || self.save_job.is_some()
             || self.used_colors_job.is_some()
         {
@@ -7252,7 +7322,14 @@ impl PixelCraft {
         if !self.dialog_open() {
             self.shortcuts(&ctx)
         }
-        if self.playing && self.command_search.open {
+        if self.playing
+            && (self.command_search.open
+                || self.properties_open
+                || self.animation_export.is_some()
+                || self.file_path.is_some()
+                || self.studio.sheet_open
+                || self.export_dialog_open())
+        {
             self.last_tick = Instant::now();
         } else if self.playing {
             self.refresh_frame_cache(&ctx);
@@ -7454,12 +7531,15 @@ impl PixelCraft {
         if self.tile_clipboard_work.is_some() || self.tile_paste_work.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
+        let export_modal = self.export_dialog_open();
         self.dialogs(&ctx);
-        self.history_panel(&ctx);
-        self.drawing_grid_dialog(&ctx);
-        self.workspace_recovery_dialog(&ctx);
-        self.studio_dialogs(&ctx);
-        self.power_dialogs(&ctx);
+        if !export_modal && !self.export_dialog_open() {
+            self.history_panel(&ctx);
+            self.drawing_grid_dialog(&ctx);
+            self.workspace_recovery_dialog(&ctx);
+            self.studio_dialogs(&ctx);
+            self.power_dialogs(&ctx);
+        }
         self.show_command_search(&ctx);
         self.poll_clipboard(&ctx);
         self.poll_bridge(&ctx);
@@ -10627,7 +10707,9 @@ mod tests {
     fn wait_for_export(editor: &mut PixelCraft) {
         use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(5);
-        while editor.export_job.is_some() && Instant::now() < deadline {
+        while (editor.export_job.is_some() || editor.export_preflight.is_some())
+            && Instant::now() < deadline
+        {
             editor.poll_export();
             if editor.export_job.is_some() {
                 std::thread::sleep(Duration::from_millis(5));
@@ -10673,7 +10755,7 @@ mod tests {
         editor.switch_tab(0);
         editor.action("repeat-export");
         assert!(
-            editor.export_job.is_some(),
+            editor.export_busy(),
             "repeat action did not start the worker"
         );
         wait_for_export(&mut editor);
@@ -10718,6 +10800,7 @@ mod tests {
             std::process::id()
         ));
         let recipe = ExportRecipe {
+            published: Default::default(),
             path: path.clone(),
             kind: ExportKind::Sheet {
                 options: Box::new(options),
@@ -10727,6 +10810,7 @@ mod tests {
             },
         };
         editor.start_export_recipe(recipe, false);
+        editor.wait_export_preflight();
         editor.open_document(Document::new(1, 1), None);
         wait_for_export(&mut editor);
         assert!(!editor.can_repeat_export());
