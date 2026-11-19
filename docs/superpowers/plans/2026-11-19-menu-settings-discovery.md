@@ -19,7 +19,7 @@ Use the existing Rust/egui Fluent UI, native window decorations, command dispatc
 - Existing document validation, history, permissions, live opt-in/revision checks and native CLI/MCP behavior own operations.
 - Old preferences load with defaults for new navigation metadata. Search query and focus are session UI state.
 - Rendering follows the available logical viewport and current DPI. Category navigation, Close and scale recovery stay reachable.
-- Implement and test in this worktree. Commit each reviewed batch. Push/PR/release are separate follow-up actions.
+- Implement and test in this worktree. Commit each reviewed batch. A draft PR supplies the required Windows/macOS CI after local verification; merging and releasing are separate follow-up actions.
 
 ## Review focus
 
@@ -87,15 +87,17 @@ Files are settings/menu routing, src/fluent.rs, shortcut handling and a macOS-on
 - [x] Add failing regressions for layout reset, scale recovery, confirmed reset scope and current-document preservation.
 - [x] Implement View layout recovery using existing Inspector/Preview/split-view state and stored configuration.
 - [x] Verify scale recovery through keyboard and settings at minimum logical sizes.
-- [ ] Implement the early-assessed native AppKit Settings adapter with retained target/menu ownership and bounded event delivery through the existing settings action.
-- [ ] Run relevant regressions and platform compilation/CI where available. Review/fix and commit.
+- [x] Implement the early-assessed native AppKit Settings adapter with retained target/menu ownership and bounded event delivery through the existing settings action.
+- [x] Run local regressions and independent native API/lifetime review; commit. Native execution/compilation results are tracked by the draft PR’s Windows/both-macOS checks.
 
 ## Batch 6 — Visual validation and final review
 
-- [ ] Run task paths for scale, recovery, onion defaults, document profile, fill tolerance, sprite-sheet import/export, asset management, assistant access and layout recovery.
-- [ ] Capture rendered UI at 1366×768 and 1920×1080, each at 100%, 125%, 150% and 200% display scaling. Exercise resizing, synthetic monitor-DPI changes, keyboard focus, hover/pressed/disabled/selected states and light/dark themes. Record physical monitor/hardware checks separately.
-- [ ] Visually inspect real rendered screenshots and fix clipping, oversized spacing, unreachable controls or inconsistent feedback.
-- [ ] Update README/navigation documentation and representative screenshots.
-- [ ] Run formatting, strict all-target Clippy, full suite, native CLI/MCP workflows, live bridge, clipboard and graphical startup checks.
-- [ ] Run independent whole-branch code/security and visual review, fix reproduced findings and re-review.
-- [ ] Reconcile every issue checkbox with actual evidence and report completed work and any genuine platform/hardware verification limits.
+- [x] Run task paths for scale, recovery, onion defaults, document profile, fill tolerance, sprite-sheet import/export, asset management, assistant access and layout recovery.
+- [x] Capture rendered UI at 1366×768 and 1920×1080, each at 100%, 125%, 150% and 200% display scaling. Exercise resizing, synthetic monitor-DPI changes, keyboard focus, hover/pressed/disabled/selected states and light/dark themes. Record physical monitor/hardware checks separately.
+- [x] Visually inspect real rendered screenshots and fix clipping, oversized spacing, unreachable controls or inconsistent feedback.
+- [x] Update README/navigation documentation and representative screenshots.
+- [x] Run formatting, strict all-target Clippy, full suite, native CLI/MCP workflows, live bridge, clipboard and graphical startup checks.
+- [x] Run independent whole-branch code/security and visual review, fix reproduced findings and re-review.
+- [x] Reconcile every issue checkbox with actual evidence and report completed work and any genuine platform/hardware verification limits.
+
+Final local evidence: 779 Linux tests pass, 16 opt-in tests ignored; three live-network tests pass separately; strict all-target Clippy, format, standalone and CLI/MCP checks pass. Native captures include 16 resolution/DPI/theme Settings cases and 36 Full HD task/editor cases. Independent review loops and visual findings are documented in [the validation report](../../menu-settings-validation-2026-11-19.md). Native platform CI results and the final issue checklist are maintained on the PR. Physical-monitor testing and external-user first-click observations remain explicitly outside the evidence.
