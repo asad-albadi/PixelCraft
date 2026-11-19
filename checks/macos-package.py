@@ -91,6 +91,13 @@ def smoke(archive, output, arch):
         with (output / f"{name}.log").open("wb") as log:
             run([str(executable), *args], env=env, cwd=relocation, stdout=log, stderr=subprocess.STDOUT)
     verify_snapshot(output / "startup.png")
+    with (output / "native-settings.log").open("wb") as log:
+        run([str(executable), "--screenshot", str(output / "native-settings.png")],
+            env={**env, "PIXELCRAFT_NATIVE_SETTINGS_CHECK": "1"}, cwd=relocation,
+            stdout=log, stderr=subprocess.STDOUT)
+    verify_snapshot(output / "native-settings.png")
+    if "Native Settings menu, shortcut binding and bounded delivery verified" not in (output / "native-settings.log").read_text():
+        raise ValueError("Native Settings menu was not exercised")
     print(f"macOS {arch} package and graphical startup passed")
 
 

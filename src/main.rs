@@ -16,6 +16,8 @@ mod file_path_dialog;
 mod fluent;
 mod freehand_stroke;
 mod menu_ui;
+#[cfg(target_os = "macos")]
+mod native_app_menu;
 mod recent_files;
 mod workspace_navigation;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
@@ -651,6 +653,8 @@ impl SubtagRun {
 }
 
 struct PixelCraft {
+    #[cfg(target_os = "macos")]
+    native_app_menu: Option<native_app_menu::AppMenu>,
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
     tabs: Vec<Option<SpriteTab>>,
@@ -818,6 +822,10 @@ impl PixelCraft {
     fn new(cc: &eframe::CreationContext<'_>, shot: Option<PathBuf>) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
         app.restore_workflow_preferences(extensions::config_directory().join("workflow.json"));
+        #[cfg(target_os = "macos")]
+        {
+            app.native_app_menu = native_app_menu::AppMenu::install(&cc.egui_ctx);
+        }
         app.theme_path = theme_path();
         app.restore_preview_settings(extensions::config_directory().join("preview.json"));
         let shortcuts_path = extensions::config_directory().join("shortcuts.json");
@@ -838,6 +846,13 @@ impl PixelCraft {
         cc.egui_ctx.set_zoom_factor(app.power.interface_scale());
         app.studio.recovery_enabled = true;
         app.restore_workspace();
+        #[cfg(target_os = "macos")]
+        if app.shot.is_some() && std::env::var_os("PIXELCRAFT_NATIVE_SETTINGS_CHECK").is_some() {
+            app.native_app_menu
+                .as_ref()
+                .expect("native application menu missing")
+                .verify_settings_command();
+        }
         app
     }
     fn restore_appearance(&mut self, ctx: &egui::Context, directory: &std::path::Path) {
@@ -1022,6 +1037,8 @@ impl PixelCraft {
             inspector_open: true,
             reset_scale_requested: false,
             reset_layout_requested: false,
+            #[cfg(target_os = "macos")]
+            native_app_menu: None,
         }
     }
     fn apply_theme(ctx: &egui::Context, dark: bool) {
@@ -7509,6 +7526,24 @@ impl eframe::App for PixelCraft {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if self
+            .native_app_menu
+            .as_ref()
+            .is_some_and(|menu| menu.settings_requested())
+        {
+            if !self.dialog_open() || self.settings_open {
+                self.action("settings");
+            }
+            if self.shot.is_some() && std::env::var_os("PIXELCRAFT_NATIVE_SETTINGS_CHECK").is_some()
+            {
+                assert!(
+                    self.settings_open,
+                    "native Settings event did not open Settings"
+                );
+                eprintln!("Native Settings menu, shortcut binding and bounded delivery verified");
+            }
+        }
         self.poll_display_profile(ui.ctx(), display_profiles::Surface::from_frame(frame));
         self.render(ui)
     }
