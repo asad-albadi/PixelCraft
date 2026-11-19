@@ -1713,9 +1713,18 @@ pub(crate) fn load_with_path_check(
     raster::load_static(path, &ext)
 }
 pub fn save(path: &Path, d: &Document) -> Result<(), String> {
-    save_with_overwrite(path, d, true)
+    save_authorized(path, d, true, false)
 }
+/// Save As uses a captured canonical destination when replacing an existing file.
 pub fn save_with_overwrite(path: &Path, d: &Document, overwrite: bool) -> Result<(), String> {
+    save_authorized(path, d, overwrite, overwrite)
+}
+fn save_authorized(
+    path: &Path,
+    d: &Document,
+    overwrite: bool,
+    confirmed: bool,
+) -> Result<(), String> {
     if path.extension().and_then(|s| s.to_str()) != Some("pixel") && d.has_frame_names() {
         return Err("Save As .pixel to keep frame names. Use Export baked ASE copy to export artwork for ASE interchange.".into());
     }
@@ -1732,17 +1741,25 @@ pub fn save_with_overwrite(path: &Path, d: &Document, overwrite: bool) -> Result
     } else {
         encode_ase(d)?
     };
-    write_project_bytes(path, bytes, overwrite)
+    write_project_bytes(path, bytes, overwrite, confirmed)
 }
 
 pub fn export_baked_ase(path: &Path, doc: &Document) -> Result<(), String> {
-    write_project_bytes(path, encode_ase(doc)?, true)
+    write_project_bytes(path, encode_ase(doc)?, true, false)
 }
 
-fn write_project_bytes(path: &Path, bytes: Vec<u8>, overwrite: bool) -> Result<(), String> {
-    crate::automation::write_editor_file(path, overwrite, |temporary| {
-        mcp_io::write(temporary, bytes).map_err(|e| e.to_string())
-    })
+fn write_project_bytes(
+    path: &Path,
+    bytes: Vec<u8>,
+    overwrite: bool,
+    confirmed: bool,
+) -> Result<(), String> {
+    crate::automation::write_editor_file_authorized(
+        path,
+        overwrite,
+        confirmed.then_some(path),
+        |temporary| mcp_io::write(temporary, bytes).map_err(|e| e.to_string()),
+    )
 }
 
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
@@ -2247,7 +2264,7 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
     if crate::automation::mcp_access::restricted() {
         // The staged PNG is already present. Replace it with a newly created
         // file so even a swapped hardlink cannot be opened for truncation.
-        write_project_bytes(path, out, true)
+        write_project_bytes(path, out, true, false)
     } else {
         mcp_io::write(path, out).map_err(|e| e.to_string())
     }

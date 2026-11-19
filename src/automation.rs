@@ -8,7 +8,7 @@ use crate::{
 };
 mod batch;
 mod editor_output;
-pub use editor_output::{EditorOutputPlan, write_editor_file};
+pub use editor_output::{EditorOutputPlan, write_editor_file, write_editor_file_authorized};
 pub(crate) mod mcp_access;
 mod mcp_files;
 pub(crate) mod mcp_io;

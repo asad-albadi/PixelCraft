@@ -2834,9 +2834,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn save_to_path(&mut self, path: PathBuf) -> bool {
-        self.save_to_path_with_overwrite(path, true)
+        self.save_to_path_authorized(path, true, false)
     }
-    fn save_to_path_with_overwrite(&mut self, mut path: PathBuf, overwrite: bool) -> bool {
+    fn save_to_path_with_overwrite(&mut self, path: PathBuf, overwrite: bool) -> bool {
+        self.save_to_path_authorized(path, overwrite, true)
+    }
+    fn save_to_path_authorized(
+        &mut self,
+        mut path: PathBuf,
+        overwrite: bool,
+        confirmed: bool,
+    ) -> bool {
         if self.save_job.is_some() {
             self.status = "A save is already running".into();
             return false;
@@ -2880,12 +2888,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         if self.pending.is_some() || saving != self.doc {
-            return self.finish_save_with_overwrite(path, saving, overwrite);
+            return self.finish_save_authorized(path, saving, overwrite, confirmed);
         }
-        self.queue_save(path, saving, overwrite);
+        self.queue_save(path, saving, overwrite, confirmed);
         false
     }
-    fn queue_save(&mut self, path: PathBuf, saving: Document, overwrite: bool) {
+    fn queue_save(&mut self, path: PathBuf, saving: Document, overwrite: bool, confirmed: bool) {
         let (tx, rx) = std::sync::mpsc::channel();
         self.save_job = Some(SaveJob {
             tab: self.active_tab,
@@ -2896,7 +2904,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             path.file_name().unwrap_or_default().to_string_lossy()
         );
         std::thread::spawn(move || {
-            let result = formats::save_with_overwrite(&path, &saving, overwrite);
+            let result = if confirmed || !overwrite {
+                formats::save_with_overwrite(&path, &saving, overwrite)
+            } else {
+                formats::save(&path, &saving)
+            };
             let _ = tx.send((path, saving, result));
         });
     }
@@ -2939,15 +2951,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
     #[cfg(test)]
     fn finish_save(&mut self, path: PathBuf, saving: Document) -> bool {
-        self.finish_save_with_overwrite(path, saving, true)
+        self.finish_save_authorized(path, saving, true, false)
     }
-    fn finish_save_with_overwrite(
+    fn finish_save_authorized(
         &mut self,
         path: PathBuf,
         saving: Document,
         overwrite: bool,
+        confirmed: bool,
     ) -> bool {
-        match formats::save_with_overwrite(&path, &saving, overwrite) {
+        let result = if confirmed || !overwrite {
+            formats::save_with_overwrite(&path, &saving, overwrite)
+        } else {
+            formats::save(&path, &saving)
+        };
+        match result {
             Ok(()) => {
                 if self.doc != saving {
                     self.remember_action("Apply save format conversion");

@@ -76,6 +76,28 @@ impl FilePathPurpose {
 }
 
 impl FilePathDialog {
+    fn stage_overwrite(&mut self, path: PathBuf) {
+        // Bind and display the physical parent before asking for consent. Keep
+        // the final component unresolved so symlink outputs still fail closed.
+        let resolved = (|| {
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            let name = path.file_name().ok_or("Invalid output filename")?;
+            parent
+                .canonicalize()
+                .map(|parent| parent.join(name))
+                .map_err(|error| error.to_string())
+        })();
+        match resolved {
+            Ok(path) => {
+                self.overwrite = Some(path);
+                self.replace = false;
+            }
+            Err(error) => self.error = Some(error),
+        }
+    }
     fn browse(&self) -> Option<PathBuf> {
         let picker = rfd::FileDialog::new().set_directory(&self.directory);
         match &self.purpose {
@@ -299,7 +321,7 @@ impl PixelCraft {
                                 if dialog.purpose.output_extension().is_some()
                                     && std::fs::symlink_metadata(&path).is_ok() =>
                             {
-                                dialog.overwrite = Some(path);
+                                dialog.stage_overwrite(path);
                             }
                             Ok(path) => chosen = Some(path),
                             Err(error) => dialog.error = Some(error),
@@ -313,8 +335,7 @@ impl PixelCraft {
                                 if dialog.purpose.output_extension().is_some()
                                     && std::fs::symlink_metadata(&resolved).is_ok() =>
                             {
-                                dialog.overwrite = Some(resolved);
-                                dialog.replace = false;
+                                dialog.stage_overwrite(resolved);
                             }
                             Ok(path) => {
                                 dialog.replace = false;
@@ -651,6 +672,110 @@ mod scale_tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn replace_consent_is_bound_to_the_displayed_physical_parent() {
+        use std::os::windows::process::CommandExt;
+        let junction = |alias: &Path, target: &Path| {
+            assert!(
+                std::process::Command::new("cmd.exe")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(alias)
+                    .arg(target)
+                    .creation_flags(0x08000000)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        };
+        // Stable alias, retargeted alias, then a replaced physical parent.
+        for (extension, action, submit) in [("png", "png", "Export"), ("pixel", "saveas", "Save")] {
+            for mode in 0..3 {
+                let root = std::env::temp_dir().join(format!(
+                    "pixelcraft-consent-parent-{}-{extension}-{mode}",
+                    std::process::id()
+                ));
+                let file = format!("art.{extension}");
+                let physical = root.join("physical");
+                let other = root.join("other");
+                let alias = root.join("alias");
+                std::fs::create_dir_all(&physical).unwrap();
+                std::fs::create_dir_all(&other).unwrap();
+                std::fs::write(physical.join(&file), b"original").unwrap();
+                std::fs::write(other.join(&file), b"unapproved").unwrap();
+                junction(&alias, &physical);
+                let ctx = egui::Context::default();
+                let mut app = PixelCraft::with_context(&ctx, None);
+                app.replace(Document::new(3, 2), None);
+                app.action(action);
+                settled(&mut app, &ctx);
+                frame(
+                    &mut app,
+                    &ctx,
+                    vec![egui::Event::Text(alias.join(&file).display().to_string())],
+                );
+                let output = settled(&mut app, &ctx);
+                frame(&mut app, &ctx, click(position(&output, submit)));
+                let output = settled(&mut app, &ctx);
+                assert_eq!(
+                    app.file_path.as_ref().unwrap().overwrite.as_ref().unwrap(),
+                    &physical.canonicalize().unwrap().join(&file)
+                );
+                if mode == 1 {
+                    std::fs::remove_dir(&alias).unwrap();
+                    junction(&alias, &other);
+                }
+                if mode == 2 {
+                    std::fs::rename(&physical, root.join("moved")).unwrap();
+                    junction(&physical, &other);
+                }
+                frame(&mut app, &ctx, click(position(&output, "Replace file")));
+                if extension == "pixel" {
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while app.save_job.is_some() {
+                        app.poll_save();
+                        assert!(Instant::now() < deadline);
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    if mode == 2 {
+                        assert!(
+                            app.status.contains("destination changed"),
+                            "Save As must reject a changed parent: {}",
+                            app.status
+                        );
+                    } else {
+                        assert!(app.status.starts_with("Saved "), "{}", app.status);
+                        assert_eq!(formats::load(&physical.join(&file)).unwrap().width, 3);
+                    }
+                } else if mode == 2 {
+                    app.wait_export_preflight();
+                    app.poll_export();
+                    assert!(
+                        app.export_confirmation.is_some(),
+                        "changed destination must ask again: {}",
+                        app.status
+                    );
+                } else {
+                    wait_export(&mut app);
+                    assert_eq!(image::open(physical.join(&file)).unwrap().width(), 3);
+                }
+                if mode == 2 {
+                    assert_eq!(
+                        std::fs::read(root.join("moved").join(&file)).unwrap(),
+                        b"original"
+                    );
+                }
+                assert_eq!(std::fs::read(other.join(&file)).unwrap(), b"unapproved");
+                drop(app);
+                std::fs::remove_dir(&alias).unwrap();
+                if mode == 2 {
+                    std::fs::remove_dir(&physical).unwrap();
+                }
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
     #[test]
     fn typed_image_export_confirms_overwrite_and_keeps_the_selected_local_scale() {
         let ctx = egui::Context::default();

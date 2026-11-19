@@ -20,7 +20,7 @@ Reviewed the latest `feature/discoverable-menus-searchable-settings` head (`ac39
 ## Verification
 
 - Formatting and strict all-target Clippy pass.
-- Windows all-target suite: **802 passed, 0 failed, 17 opt-in tests ignored**. Added regressions reproduced reported failures before fixes where applicable.
+- Windows all-target suite: **803 passed, 0 failed, 17 opt-in tests ignored**. Added regressions reproduced reported failures before fixes where applicable.
 - Rendered UI checks: four pass, with 64 saved captures. Settings covers 1366×768 and 1920×1080 at 100%, 125%, 150% and 200% in light/dark; 12 focused destinations cover Full HD/100% and 1366×768/200%, both themes. Representative saved images were inspected visually.
 - Normal Windows GPU startup and forced software OpenGL fallback both render successfully; their actual executable captures were visually inspected.
 - Fresh Windows executable passes the isolated single-executable portable check, the no-Lua payload check, native client workflow, and headless CLI/MCP checks (grid import, revision-checked editing, Unity metadata, atlas, palette conversion, tag sheets, PNG render and disabled live tools).
@@ -34,7 +34,9 @@ Cross-platform CI must validate gated Linux/macOS code; Windows results do not s
 
 ## CI follow-up
 
-Hosted CI exposed a macOS-only strict-Clippy return warning, corrected without changing exclusive publication behavior. Hosted Windows also exposed two GUI test wait helpers that were insufficient for asynchronous preflight: they now sleep while pending, allow a bounded 30-second wall-clock wait, and assert preflight is finished before decoding output. The local full suite is rerun after these changes; final CI status is recorded on the PR.
+Hosted CI exposed a macOS-only strict-Clippy return warning, corrected without changing exclusive publication behavior. Hosted Windows and macOS also exposed duplicate confirmation caused by comparing a selected temporary-directory alias with the canonical export destination. Overwrite prompts now capture and display the physical parent before Replace; exact manifest comparison remains case-sensitive. Save As additionally requires that captured destination to equal the anchored writer destination. The rendered Windows regression covers PNG export and native Save As across stable aliases, retargeted aliases, and replacement of the physical parent itself. Changed destinations require fresh consent or fail without altering either file.
+
+GUI worker wait helpers also yield while preflight is pending and explicitly assert completion before reading output. The final full Windows suite uses a fresh temporary directory to avoid collisions with stale process-ID fixtures from prior local runs. Final hosted CI status is recorded on the PR.
 
 ## Scope limits
 

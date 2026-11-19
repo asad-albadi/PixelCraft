@@ -222,7 +222,19 @@ pub fn write_editor_file<T: Send>(
     overwrite: bool,
     encode: impl FnOnce(&Path) -> Result<T, String> + Send,
 ) -> Result<T, String> {
+    write_editor_file_authorized(path, overwrite, None, encode)
+}
+/// Confirmed Save As paths must retain the physical destination shown to the user.
+pub fn write_editor_file_authorized<T: Send>(
+    path: &Path,
+    overwrite: bool,
+    approved: Option<&Path>,
+    encode: impl FnOnce(&Path) -> Result<T, String> + Send,
+) -> Result<T, String> {
     let (output, root, access) = output_access(path, false)?;
+    if approved.is_some_and(|approved| approved != output) {
+        return Err("Save destination changed; choose the destination again".into());
+    }
     let operation = || {
         Files {
             root: root.as_deref(),
