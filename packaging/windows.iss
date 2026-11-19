@@ -34,7 +34,6 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
 Source: "..\target\release\pixelcraft.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\runtime\LUA-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\fonts\LICENSE"; DestDir: "{app}"; DestName: "FONT-LICENSE.txt"; Flags: ignoreversion
 Source: "..\runtime\webp\WEBP-*.txt"; DestDir: "{app}"; Flags: ignoreversion
 

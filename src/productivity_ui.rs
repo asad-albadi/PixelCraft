@@ -208,7 +208,7 @@ fn recent_file_label(path: &std::path::Path, paths: &[PathBuf]) -> String {
     let duplicated = paths
         .iter()
         .any(|other| other != path && other.file_name() == path.file_name());
-    let label = if duplicated {
+    if duplicated {
         let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
         let colliding_parent = paths.iter().any(|other| {
             other != path
@@ -227,11 +227,6 @@ fn recent_file_label(path: &std::path::Path, paths: &[PathBuf]) -> String {
         format!("{name} ({folder})")
     } else {
         name.into_owned()
-    };
-    if path.is_file() {
-        label
-    } else {
-        format!("{label} · Missing")
     }
 }
 
@@ -624,12 +619,16 @@ impl PixelCraft {
         });
         ui.small("Nearest-neighbor scaling for PNG, BMP, sprite sheets, GIF and MP4.");
     }
+    pub(super) fn set_editor_density(&mut self, comfortable: bool) {
+        self.power.preferences.comfortable = comfortable;
+        self.save_workflow_preferences();
+    }
     pub(super) fn density_options(&mut self, ui: &mut egui::Ui) {
         let before = self.power.preferences.comfortable;
         ui.selectable_value(&mut self.power.preferences.comfortable, false, "Compact");
         ui.selectable_value(&mut self.power.preferences.comfortable, true, "Comfortable");
         if before != self.power.preferences.comfortable {
-            self.save_workflow_preferences();
+            self.set_editor_density(self.power.preferences.comfortable);
         }
     }
     pub(super) fn settings_dialog(&mut self, ctx: &egui::Context) {
@@ -997,14 +996,28 @@ impl PixelCraft {
         self.power.ramp_to = remap[self.power.ramp_to];
         self.status = "Replaced palette span with ramp".into();
     }
-    pub(super) fn recent_file_entries(&self) -> Vec<(PathBuf, String)> {
+    pub(super) fn recent_file_entries(&self) -> Vec<(PathBuf, String, bool)> {
         let files = &self.power.preferences.recent;
         files
             .iter()
-            .map(|path| (path.clone(), recent_file_label(path, files)))
+            .map(|path| {
+                let label = recent_file_label(path, files);
+                let state = self.recent_files.availability(path);
+                let label = match state {
+                    recent_files::Availability::Checking => format!("{label} · Checking…"),
+                    recent_files::Availability::Missing => format!("{label} · Missing"),
+                    recent_files::Availability::Available => label,
+                };
+                (
+                    path.clone(),
+                    label,
+                    state == recent_files::Availability::Available,
+                )
+            })
             .collect()
     }
     pub(super) fn open_recent(&mut self, p: PathBuf) {
+        // The background loader revalidates the chosen file on activation; cached availability is only a UI hint.
         self.queue_file_open(p, OpenTarget::Tab);
     }
 
@@ -1064,7 +1077,7 @@ impl PixelCraft {
     }
 
     pub(super) fn poll_open_document(&mut self) {
-        if self.start.is_some() || self.script_job.is_some() {
+        if self.start.is_some() {
             return;
         }
         let Some(job) = &self.open_job else { return };
@@ -2022,7 +2035,7 @@ if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.sm
             });
         });
  ui.collapsing("Multi-file atlas", |ui| self.atlas_export_ui(ui));
- ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label) in self.recent_file_entries(){if ui.add_enabled_ui(path.is_file(),|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
+ ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label,available) in self.recent_file_entries(){if ui.add_enabled_ui(available,|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
 if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
 if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();if ui.pc_button("Keyboard shortcuts…").clicked(){self.action("shortcuts");}});
  ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{if let Some(progress)=self.power.bridge_export.take(){progress.cancel();}self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
@@ -2981,7 +2994,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     }
 
     fn live_busy(&self) -> bool {
-        self.start.is_some() || self.script_job.is_some() || self.power.reference_drag.is_some()
+        self.start.is_some() || self.power.reference_drag.is_some()
     }
 
     fn begin_live_request(
@@ -4494,15 +4507,9 @@ mod application_preferences_tests {
             PathBuf::from("art/items/idle.pixel"),
             PathBuf::from("art/items/run.pixel"),
         ];
-        assert_eq!(
-            recent_file_label(&paths[0], &paths),
-            "idle.pixel (heroes) · Missing"
-        );
-        assert_eq!(
-            recent_file_label(&paths[1], &paths),
-            "idle.pixel (items) · Missing"
-        );
-        assert_eq!(recent_file_label(&paths[2], &paths), "run.pixel · Missing");
+        assert_eq!(recent_file_label(&paths[0], &paths), "idle.pixel (heroes)");
+        assert_eq!(recent_file_label(&paths[1], &paths), "idle.pixel (items)");
+        assert_eq!(recent_file_label(&paths[2], &paths), "run.pixel");
     }
 }
 

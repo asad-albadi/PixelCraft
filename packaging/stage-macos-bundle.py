@@ -23,7 +23,6 @@ def stage(binary, icon, app, version, minimum, webp):
         resources / "pixelcraft.icns": icon,
         resources / "LICENSE": REPO / "LICENSE",
         resources / "FONT-LICENSE.txt": REPO / "assets/fonts/LICENSE",
-        resources / "LUA-LICENSE.txt": REPO / "runtime/LUA-LICENSE.txt",
     }
     for name in ("WEBP-COPYING.txt", "WEBP-PATENTS.txt", "WEBP-AUTHORS.txt"):
         files[resources / name] = webp / name

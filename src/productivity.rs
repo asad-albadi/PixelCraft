@@ -1522,6 +1522,7 @@ pub fn save_shortcuts(
 pub fn shortcut_preset(name: &str) -> std::collections::BTreeMap<String, String> {
     let mut m = std::collections::BTreeMap::new();
     for (k, a) in [
+        ("Ctrl+Shift+P", "command-search"),
         ("Ctrl+N", "new"),
         ("Ctrl+O", "open"),
         ("Ctrl+S", "save"),

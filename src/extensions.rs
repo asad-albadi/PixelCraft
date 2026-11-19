@@ -1,5 +1,4 @@
 //! Independent local extensions. Never discovers or launches another editor.
-use crate::{formats, model::Document};
 use serde::{Deserialize, Serialize};
 use std::{
     io::Read,
@@ -40,42 +39,7 @@ pub fn projects_directory() -> Result<PathBuf, String> {
     std::fs::create_dir_all(&p).map_err(|e| e.to_string())?;
     Ok(p)
 }
-pub fn run_source(
-    doc: &Document,
-    source: &str,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-) -> Result<Document, String> {
-    run_source_with_colors(doc, source, frame, layer, command, None)
-}
 
-/// Pass the editor color preferences as a snapshot to the isolated Lua worker.
-pub fn run_source_with_colors(
-    doc: &Document,
-    source: &str,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-    colors: Option<[[u8; 4]; 2]>,
-) -> Result<Document, String> {
-    let json = crate::lua::execute(doc, source, frame, layer, command, false, colors)?;
-    let mut edited: Document =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
-    edited.validate()?;
-    edited.set_color_mode(edited.color_mode);
-    Ok(edited)
-}
-pub fn run_lua(
-    doc: &Document,
-    path: &Path,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-) -> Result<Document, String> {
-    let source = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    run_source(doc, &source, frame, layer, command)
-}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Contribution {
     pub path: String,
@@ -97,6 +61,18 @@ pub struct Contributions {
     #[serde(default, rename = "ditheringMatrices")]
     pub dithering_matrices: Vec<Contribution>,
 }
+impl Contributions {
+    pub fn has_assets(&self) -> bool {
+        !self.themes.is_empty()
+            || !self.palettes.is_empty()
+            || !self.shortcuts.is_empty()
+            || !self.languages.is_empty()
+            || !self.dithering_matrices.is_empty()
+    }
+    pub fn script_warning(&self) -> Option<&'static str> {
+        (!self.scripts.is_empty()).then_some("Lua scripts are no longer supported; script contributions are ignored. Use native CLI/MCP workflows.")
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub name: String,
@@ -114,15 +90,7 @@ pub struct Installed {
     pub manifest: Manifest,
     pub enabled: bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginCommand {
-    pub id: String,
-    pub title: String,
-    #[serde(default)]
-    pub package: String,
-    #[serde(default)]
-    pub script: PathBuf,
-}
+
 #[derive(Clone, Debug)]
 pub struct Manager {
     pub root: PathBuf,
@@ -178,8 +146,8 @@ impl Manager {
             list.push(Installed {
                 id,
                 directory: directory.clone(),
+                enabled: manifest.contributes.has_assets() && !directory.join(".disabled").exists(),
                 manifest,
-                enabled: !directory.join(".disabled").exists(),
             });
         }
         list.sort_by(|a, b| a.id.cmp(&b.id));
@@ -189,6 +157,18 @@ impl Manager {
         let dir = self.extension_dir(id)?;
         if !dir.join("package.json").is_file() {
             return Err("Extension not installed".into());
+        }
+        if enabled {
+            let manifest: Manifest = serde_json::from_slice(
+                &std::fs::read(dir.join("package.json")).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            if !manifest.contributes.has_assets() {
+                return Err(
+                    "This package has no supported assets. Lua scripts are no longer supported"
+                        .into(),
+                );
+            }
         }
         let p = dir.join(".disabled");
         if enabled {
@@ -204,6 +184,12 @@ impl Manager {
         std::fs::remove_dir_all(self.extension_dir(id)?).map_err(|e| e.to_string())
     }
     pub fn install(&self, source: &Path) -> Result<String, String> {
+        if source
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("lua"))
+        {
+            return Err("Lua scripts are no longer supported; use native CLI/MCP workflows".into());
+        }
         let staging = self.root.join("extensions").join(format!(
             ".install-{}-{}",
             std::process::id(),
@@ -216,34 +202,20 @@ impl Manager {
         let result = (|| {
             if source.is_dir() {
                 copy_directory(source, &staging, 0, &mut 0usize)?;
-            } else if source.extension().and_then(|x| x.to_str()) == Some("lua") {
-                let name = source
-                    .file_stem()
-                    .and_then(|x| x.to_str())
-                    .ok_or("Invalid script filename")?;
-                if !valid_id(name) {
-                    return Err("Rename the script with letters, numbers or hyphens".into());
-                }
-                std::fs::copy(source, staging.join("main.lua")).map_err(|e| e.to_string())?;
-                std::fs::write(
-                    staging.join("package.json"),
-                    serde_json::to_vec(&Manifest {
-                        name: name.into(),
-                        display_name: name.into(),
-                        version: "1".into(),
-                        contributes: Contributions {
-                            scripts: vec![Contribution {
-                                path: "main.lua".into(),
-                                id: String::new(),
-                            }],
-                            ..Default::default()
-                        },
-                    })
-                    .map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
             } else {
-                unzip(&std::fs::read(source).map_err(|e| e.to_string())?, &staging)?;
+                const LIMIT: u64 = 64 * 1024 * 1024;
+                let file = std::fs::File::open(source).map_err(|e| e.to_string())?;
+                if file.metadata().map_err(|e| e.to_string())?.len() > LIMIT {
+                    return Err("Extension archive exceeds 64 MiB".into());
+                }
+                let mut bytes = Vec::new();
+                file.take(LIMIT + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| e.to_string())?;
+                if bytes.len() as u64 > LIMIT {
+                    return Err("Extension archive exceeds 64 MiB".into());
+                }
+                unzip(&bytes, &staging)?;
             }
             let manifest_path = if staging.join("package.json").is_file() {
                 staging.join("package.json")
@@ -275,9 +247,8 @@ impl Manager {
             let c = &manifest.contributes;
             let mut count = 0;
             for contribution in c
-                .scripts
+                .themes
                 .iter()
-                .chain(&c.themes)
                 .chain(&c.palettes)
                 .chain(&c.shortcuts)
                 .chain(&c.languages)
@@ -292,7 +263,7 @@ impl Manager {
             }
             if count == 0 {
                 return Err(
-                    "Package has no supported scripts, themes, palettes or shortcuts".into(),
+                    "Package has no supported assets. Lua scripts are no longer supported; use native CLI/MCP workflows".into(),
                 );
             }
             std::fs::rename(package_dir, &dest).map_err(|e| e.to_string())?;
@@ -301,46 +272,83 @@ impl Manager {
         let _ = std::fs::remove_dir_all(staging);
         result
     }
-    pub fn commands(&self) -> Result<Vec<PluginCommand>, String> {
-        let mut out = vec![];
-        for p in self.list()?.into_iter().filter(|p| p.enabled) {
-            for s in &p.manifest.contributes.scripts {
-                let script = p.directory.join(safe_path(&s.path)?);
-                let source = std::fs::read_to_string(&script).map_err(|e| e.to_string())?;
-                // Plain scripts can open dialogs immediately. A discovery-only
-                // failure must not hide them from the explicit Run action.
-                let json =
-                    crate::lua::execute(&Document::new(1, 1), &source, 0, 0, None, true, None)
-                        .unwrap_or_else(|_| "[]".into());
-                let mut commands: Vec<PluginCommand> =
-                    serde_json::from_str(&json).map_err(|e| e.to_string())?;
-                if commands.is_empty() {
-                    commands.push(PluginCommand {
-                        id: String::new(),
-                        title: script
-                            .file_stem()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned(),
-                        package: String::new(),
-                        script: PathBuf::new(),
-                    });
-                }
-                for command in &mut commands {
-                    command.package = p.id.clone();
-                    command.script = script.clone();
-                }
-                out.extend(commands);
+
+    /// Decode declarative palettes with the same package boundary for every sidecar.
+    pub fn load_palette_asset(
+        &self,
+        id: &str,
+        asset: &Contribution,
+    ) -> Result<Vec<crate::model::Pixel>, String> {
+        let path = self.asset(id, asset)?;
+        let palette = match path.extension().and_then(|x| x.to_str()) {
+            Some("json") => {
+                serde_json::from_slice(&std::fs::read(&path).map_err(|e| e.to_string())?)
+                    .map_err(|e| e.to_string())?
             }
+            Some("gpl") => std::fs::read_to_string(&path)
+                .map_err(|e| e.to_string())?
+                .lines()
+                .filter_map(|line| {
+                    let mut values = line.split_whitespace();
+                    Some([
+                        values.next()?.parse().ok()?,
+                        values.next()?.parse().ok()?,
+                        values.next()?.parse().ok()?,
+                        255,
+                    ])
+                })
+                .collect(),
+            _ => {
+                crate::formats::load_with_path_check(&path, &|dependency| {
+                    self.check_asset_path(id, dependency)
+                })?
+                .palette
+            }
+        };
+        if palette.is_empty() || palette.len() > 256 {
+            return Err("Palette must contain 1–256 colors".into());
         }
-        Ok(out)
+        Ok(palette)
+    }
+    pub fn check_asset_path(&self, id: &str, path: &Path) -> Result<(), String> {
+        let root = self.extension_dir(id)?;
+        // Reject lexical escapes before filesystem access; canonicalize also catches symlinks.
+        fn normalized(path: &Path) -> PathBuf {
+            let mut result = PathBuf::new();
+            for component in path.components() {
+                match component {
+                    Component::ParentDir => {
+                        result.pop();
+                    }
+                    Component::CurDir => {}
+                    other => result.push(other.as_os_str()),
+                }
+            }
+            result
+        }
+        let root = std::path::absolute(root).map_err(|e| e.to_string())?;
+        let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
+        if !normalized(&absolute).starts_with(normalized(&root)) {
+            return Err("Extension path must stay inside its package".into());
+        }
+        let root = root.canonicalize().map_err(|e| e.to_string())?;
+        if !path
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .starts_with(root)
+        {
+            return Err("Extension path must stay inside its package".into());
+        }
+        Ok(())
     }
     pub fn asset(&self, id: &str, asset: &Contribution) -> Result<PathBuf, String> {
         let dir = self.extension_dir(id)?;
         if dir.join(".disabled").exists() {
             return Err("Extension is disabled".into());
         }
-        Ok(dir.join(safe_path(&asset.path)?))
+        let path = dir.join(safe_path(&asset.path)?);
+        self.check_asset_path(id, &path)?;
+        Ok(path)
     }
 }
 fn copy_directory(
@@ -440,7 +448,8 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
                 .get(offset..offset + compressed)
                 .ok_or("Truncated ZIP data")?;
             let bytes = match method {
-                0 => encoded.to_vec(),
+                0 if encoded.len() == size => encoded.to_vec(),
+                0 => return Err("Invalid stored ZIP size".into()),
                 8 => {
                     let mut out = vec![];
                     flate2::read::DeflateDecoder::new(encoded)
@@ -472,122 +481,6 @@ pub(crate) fn unzip(b: &[u8], dest: &Path) -> Result<(), String> {
         p += 46 + name_len + extra + comment;
     }
     Ok(())
-}
-// Temporary internal sessions keep asynchronous edits isolated and undoable.
-#[derive(Clone, Debug)]
-pub struct Session {
-    pub directory: PathBuf,
-}
-impl Session {
-    pub fn new(doc: &Document) -> Result<Self, String> {
-        // Clock timestamps can repeat for concurrent calls on Windows.
-        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let directory = std::env::temp_dir().join(format!(
-            "pixelcraft-session-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| e.to_string())?
-                .as_nanos(),
-            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
-        let s = Self { directory };
-        formats::save(&s.input_path(), doc)?;
-        Ok(s)
-    }
-    pub fn input_path(&self) -> PathBuf {
-        self.directory.join("input.pixel")
-    }
-    pub fn result_path(&self) -> PathBuf {
-        self.directory.join("result.pixel")
-    }
-    pub fn load_result(&self) -> Result<Document, String> {
-        formats::load(&self.result_path())
-    }
-}
-
-/// Interactive hosts receive declarative widgets and validated document snapshots;
-/// Lua stays on its worker thread while the editor owns all UI operations.
-pub type ScriptHost = Box<dyn FnMut(serde_json::Value) -> Result<serde_json::Value, String> + Send>;
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Preserve the established public API"
-)]
-pub fn run_source_with_host(
-    doc: &Document,
-    source: &str,
-    frame: usize,
-    layer: usize,
-    command: Option<&str>,
-    colors: Option<[[u8; 4]; 2]>,
-    options: serde_json::Value,
-    host: ScriptHost,
-) -> Result<Document, String> {
-    let json = crate::lua::execute_with_host(
-        doc,
-        source,
-        frame,
-        layer,
-        command,
-        false,
-        colors,
-        options,
-        Some(host),
-    )?;
-    let mut edited: Document =
-        serde_json::from_str(&json).map_err(|e| format!("Invalid script result: {e}"))?;
-    edited.validate()?;
-    edited.set_color_mode(edited.color_mode);
-    Ok(edited)
-}
-
-/// Filesystem bridge used only by explicitly executed scripts. Relative filenames
-/// follow the script folder; it never searches Aseprite's installation or settings.
-pub fn script_file_request(
-    base: &Path,
-    request: &serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    use serde_json::json;
-    let path = base.join(request["path"].as_str().unwrap_or(""));
-    match request["op"].as_str().unwrap_or("") {
-        "open" => Ok(json!({"document":formats::load(&path)?})),
-        "readScript" => {
-            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-            if bytes.len() > 2 * 1024 * 1024 {
-                return Err("Lua module exceeds 2 MiB".into());
-            }
-            Ok(json!({"source":String::from_utf8(bytes).map_err(|e|e.to_string())?}))
-        }
-        "save" => {
-            let d: Document =
-                serde_json::from_value(request["document"].clone()).map_err(|e| e.to_string())?;
-            d.validate()?;
-            match path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_lowercase()
-                .as_str()
-            {
-                "png" => formats::export_png(&path, &d, 0, false)?,
-                "gif" => formats::export_gif(&path, &d)?,
-                _ => formats::save(&path, &d)?,
-            };
-            Ok(json!({}))
-        }
-        "isFile" => Ok(json!({"value":path.is_file()})),
-        "isDirectory" => Ok(json!({"value":path.is_dir()})),
-        "listFiles" => Ok(
-            json!({"value":std::fs::read_dir(path).map_err(|e|e.to_string())?.filter_map(Result::ok).map(|e|e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()}),
-        ),
-        "makeDirectory" => {
-            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
-            Ok(json!({"value":true}))
-        }
-        "close" => Ok(json!({})),
-        _ => Err("Unknown file operation".into()),
-    }
 }
 
 // Native clipboard metadata transfer, independent of the scripting runtime.

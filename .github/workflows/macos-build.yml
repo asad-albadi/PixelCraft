@@ -31,7 +31,7 @@ jobs:
         run: test "$(uname -m)" = "${{ matrix.arch }}"
       - name: Install Rust
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
-      - name: Build native Lua and WebP
+      - name: Build native WebP
         run: bash packaging/build-macos-runtime.sh "${{ matrix.arch }}"
       - name: Format, lint, and test
         env:
@@ -41,6 +41,7 @@ jobs:
           cargo +1.95.0 clippy --locked --all-targets -- -D warnings
           cargo +1.95.0 test --release --locked --all-targets
           cargo +1.95.0 build --release --locked
+          python3 checks/no-lua-runtime.py target/release/pixelcraft
       - name: Stage and archive the macOS application
         run: |
           if [[ "$GITHUB_REF_TYPE" == tag ]]; then
@@ -53,7 +54,7 @@ jobs:
             python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "pixelcraft"))')
           bash packaging/build-macos-bundle.sh target/release/pixelcraft dist "$version" "$cargo_version" "${{ matrix.arch }}"
           echo "MACOS_ARCHIVE=dist/PixelCraft-$version-macos-${{ matrix.arch }}.zip" >> "$GITHUB_ENV"
-      - name: Verify packaged Lua, WebP, and graphical startup
+      - name: Verify packaged native features, WebP, and graphical startup
         run: python3 checks/macos-package.py "$MACOS_ARCHIVE" "$RUNNER_TEMP/pixelcraft-macos-smoke" "${{ matrix.arch }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()

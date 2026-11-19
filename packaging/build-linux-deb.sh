@@ -43,7 +43,6 @@ install -D -m 644 packaging/pixelcraft.desktop "$package/usr/share/applications/
 install -D -m 644 packaging/pixelcraft.png "$package/usr/share/icons/hicolor/256x256/apps/pixelcraft.png"
 install -D -m 644 LICENSE "$package/usr/share/doc/pixelcraft/copyright"
 install -D -m 644 assets/fonts/LICENSE "$package/usr/share/doc/pixelcraft/FONT-LICENSE.txt"
-install -D -m 644 runtime/LUA-LICENSE.txt "$package/usr/share/doc/pixelcraft/LUA-LICENSE.txt"
 size=$(du -sk -- "$package/usr" | cut -f1)
 # Libraries opened at runtime are not visible to dpkg-shlibdeps.
 runtime='libwebpdemux2, libgl1, libegl1, libx11-6, libxcursor1, libxi6, libxrandr2, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libwayland-cursor0, libwayland-egl1'

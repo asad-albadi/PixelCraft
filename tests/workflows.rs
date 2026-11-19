@@ -98,29 +98,7 @@ fn gif_import_preserves_frame_timing_and_transparency() {
     assert_eq!(loaded.composite(1), d.composite(1));
     std::fs::remove_file(path).unwrap();
 }
-#[test]
-fn extension_flip_and_color_commands_are_transactional() {
-    let mut d = Document::new(3, 2);
-    d.set_pixel(0, 0, 0, [10, 20, 30, 255]);
-    let out = pixelcraft::extensions::run_source(
-        &d,
-        r#"
- app.command.Flip{target='mask',orientation='horizontal'}
- assert(app.pixelColor.rgbaR(app.activeImage:getPixel(2,0))==10)
- app.command.InvertColor{channels='rgb'}
- assert(app.pixelColor.rgbaR(app.activeImage:getPixel(2,0))==245)
- app.command.Undo()
- assert(app.pixelColor.rgbaR(app.activeImage:getPixel(2,0))==10)
- app.command.ReplaceColor{from=Color{r=10,g=20,b=30},to=Color{r=200,g=100,b=50},tolerance=0}
- "#,
-        0,
-        0,
-        None,
-    )
-    .unwrap();
-    assert_eq!(out.layers[0].cels[0][2], [200, 100, 50, 255]);
-    assert_eq!(out.layers[0].cels[0][0], CLEAR);
-}
+
 #[test]
 fn animated_png_and_webp_import_complete_canvases() {
     for name in ["animation.png", "animation.webp"] {

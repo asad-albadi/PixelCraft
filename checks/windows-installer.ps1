@@ -25,13 +25,13 @@ try {
     if ([BitConverter]::ToUInt32($image, $pe) -ne 0x4550) { throw 'Invalid PE signature' }
     $subsystem = [BitConverter]::ToUInt16($image, $pe + 24 + 68)
     if ($subsystem -ne 2) { throw "Expected Windows GUI subsystem (2), got $subsystem; this build would open a console" }
-    foreach ($notice in @('LICENSE', 'FONT-LICENSE.txt', 'LUA-LICENSE.txt', 'WEBP-COPYING.txt', 'WEBP-PATENTS.txt', 'WEBP-AUTHORS.txt')) {
+    foreach ($notice in @('LICENSE', 'FONT-LICENSE.txt', 'WEBP-COPYING.txt', 'WEBP-PATENTS.txt', 'WEBP-AUTHORS.txt')) {
         if (!(Test-Path (Join-Path $installDir $notice))) { throw "Missing license: $notice" }
     }
     # Exclude build tools and their DLLs from PATH/current directory.
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
     Set-Location $work
-    # Exercises WebP import, saves, exports, embedded Lua and extension lifecycle.
+    # Exercises WebP import, saves, exports, native commands and asset extension lifecycle.
     Invoke-Checked $app @('--standalone-check', "`"$work/results`"")
     # Repeat installation to exercise the upgrade path with the stable AppId.
     Invoke-Checked $installerPath @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', "/DIR=`"$installDir`"")

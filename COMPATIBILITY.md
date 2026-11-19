@@ -1,69 +1,9 @@
-> This branch keeps the Lua APIs already present on `main`. Later Lua workspace, console, plugin-event and native-buffer development is preserved only on `discarded-lua-updates`. Native editor, CLI and MCP improvements are developed separately.
+# Native automation and extension compatibility
 
-# Aseprite compatibility
+PixelCraft automation uses its native CLI and MCP interfaces. Lua scripting, Lua plugins, script dialogs and Lua compatibility APIs are no longer supported. There is no replacement in-process scripting engine.
 
-PixelCraft is independent software with partial Aseprite compatibility, not a drop-in implementation of the entire Aseprite API. No Aseprite executable, installation, settings, fonts, theme atlas, or other original assets are loaded by the app. Lua 5.4 is embedded; ICC conversion uses the pure Rust moxcms engine.
+Existing project artwork and supported ASE metadata remain readable. Removing Lua does not change native layers, frames, palettes, references or export identities.
 
-## Projects and rendering
+Asset packages may provide themes, palettes, shortcuts, language files and dithering matrices using the documented manifest contributions. Script-only packages cannot be installed/enabled. Mixed packages keep their independent assets and report unsupported script contributions; listing or enabling packages never evaluates scripts. Existing script files/preferences are left intact for manual recovery.
 
-Supported: .ase and .aseprite RGB, grayscale and indexed projects; raw, compressed and linked image cels; linked tilemap cels; 8-, 16- and 32-bit tile entries with ID and flip masks; legacy all-bits-set empty tiles; sparse tileset IDs; per-cel tilemap dimensions and signed pixel origins (including off-grid and off-canvas maps); embedded and external tilesets. Layer tileset references are ordinal indices, independently of tileset IDs. External ASE files resolve relative to the containing file and recursively by tileset ID, with cycle/depth checks and explicit missing-file errors. Saves embed resolved pixels, so reopening the saved project does not require its external source.
-
-Source pixels, cel bounds, tile IDs, groups, legacy pass-through group compositing, palette animation, frame durations, tags/repeats, layer UUIDs, opaque user data/properties, slices and profile bytes survive supported round trips. Save is semantically lossless for the tested projects, not byte-identical: chunks are reordered, supported image and tilemap links retain their identity, tileset encodings are normalized to 32-bit entries and compression is regenerated. Duplicate indexed colors inside tileset images and transparent off-canvas index identities are not guaranteed to retain their original slot. Future chunk semantics remain opaque. Rasterization of scaled reference cels / precise cel-extra bounds is not implemented.
-
-ICC RGB/grayscale matrix and LUT profiles and fixed-gamma sRGB convert to sRGB for the canvas, onion skin and frame previews. Alpha and editable source values remain unchanged; PNG retains the source profile. Invalid or unsupported profiles report an error in the editor and display unconverted values. Display calibration to a monitor-specific ICC profile and proofing intents are not implemented. GIF has no ICC output.
-
-## Lua objects and actions
-
-Supported on the active document: app sprite/layer/frame/cel/image/site/range/editor snapshots, parameters, foreground/background colors, Color RGB/HSV/HSL constructors and channel edits, gray/index/packed pixel access, Point/Size/Rectangle, image cloning/pixels/drawing, palette edits, layer/group creation and deletion, frame insertion, tags, cel movement/replacement (including outside-canvas pixels), selection masks and boolean operations, named/nested transactions with rollback, script-local Undo/Redo, plugin commands and preferences. Successful script results enter the editor as an undoable change.
-
-Commands: NewLayer (name/group parameters), NewFrame, NewEmptyFrame, RemoveLayer, Clear, SelectAll, DeselectMask, InvertMask, Undo, Redo, first/last/previous/next frame, ChangePixelFormat, SaveFile, SaveFileAs and SaveFileCopyAs. Unknown commands error. Lua methods and command parameters beyond this list are not universally implemented.
-
-File-backed editor sessions support app.open, saveAs/saveCopyAs, PNG/GIF export, path helpers, directory queries/creation and package-local require/dofile/loadfile. Relative paths start in the script folder. Process execution and unrestricted Lua io are unavailable; os exposes only clock/time/date/difftime. Preferences live in PixelCraft's own config folder and plugin preferences are keyed by script path. Scripts run with allocation and instruction limits. Opening a file replaces the worker's active document; multiple independent Sprite objects, closing editor tabs from Lua, full Aseprite preference schemas and exact object/userdata identity are not implemented. The editor passes its rectangular timeline selection into Lua as app.range. app.params is accepted by the host API; the Run Script UI does not yet provide a parameter editor.
-
-## Interactive extensions
-
-Real egui controls support Dialog label, entry, number, slider, check/radio, combobox, color, shades, separator, file and button widgets; data, modify, show, close, repaint and callback handling. Modal dialogs pause the worker; wait=false dialogs continue through the event pump. Unnamed button callbacks work. Timers run periodically from elapsed editor time; they can be started/stopped and retain their callbacks. app.events supports color/site changes, sprite.events supports change, and handlers can be removed. refresh previews edits in the editor. Stop extension exits the interactive pump. Editor-backed sessions remain active while they own dialogs, timers or subscribed events.
-
-Custom canvas/graphics-context widgets, exact original dialog layouts/tab groups, radio exclusivity, dialog bounds positioning, full editor mouse/paint events, hot-reloading and extension command menu placement are not implemented. Concurrent editor/script edits use document snapshots rather than independent per-operation history. Prefer finishing/stopping an extension before unrelated structural editing.
-
-## Contributions
-
-Install folders, ZIP and .aseprite-extension packages using original package.json contributions: scripts, themes, keys (also shortcuts), languages, palettes and ditheringMatrices. Leading ./ paths and theme directories with theme.xml are accepted. Package paths remain inside the package; extraction retains traversal, size, symlink and CRC checks.
-
-- Themes: JSON and original XML color definitions adapt to PixelCraft's native controls. User-supplied theme folders remain installed; original sprite atlases, dimensions and fonts do not replace the native widgets.
-- Shortcuts: original .aseprite-keys/XML command and tool bindings map supported actions. Unsupported commands/parameterized bindings are reported rather than silently assigned another action. Native JSON bindings also work.
-- Languages: original section/key INI files are parsed and stored; matching menu headings are translated. Full original UI strings do not all have a counterpart.
-- Dithering: original BMP/PNG matrix images load ordered thresholds and can be selected for subsequent indexed conversion. Palette quantization is PixelCraft's implementation; byte-for-byte Aseprite quantization is not claimed.
-
-## Reproducible evidence
-
-cargo test --offline runs without the original executable or network. tests/real_projects.rs opens ten upstream ASE projects (33 frames), compares every rendered pixel against checked-in RGBA reference sheets, checks tags/profile/opaque metadata, then saves/reopens ASE and native projects. Golden reference sheets were generated once with Aseprite 1.3.18.6-dev using RGB conversion before sheet export, to avoid indexed-PNG transparent-slot ambiguity. Running or testing PixelCraft does not regenerate them or invoke Aseprite. Source URLs, upstream Git blob IDs and SHA-256 hashes are recorded in tests/fixtures/upstream.json.
-
-The real corpus includes RGB/gray/indexed tilemaps, linked cels, nested groups, z order, animated slices, tag repeats and nested user properties: 2x2tilemap2x2tile, 2x3tilemap-indexed, 3x2tilemap-grayscale, 2f-index-3x3, groups3abc, link, file-tests-props, z-order, slices-moving and tags3x123reps from https://github.com/aseprite/aseprite/tree/main/tests/sprites . These are test data, not application assets.
-
-Four unchanged MIT-licensed scripts from https://github.com/aseprite/Aseprite-Script-Examples run in tests/real_extensions.rs: Random Palette, Random Pixels (RGB/gray/indexed), Move Cels (real dialog response and movement), and Wizard Example (three modeless dialog pages). Their license is retained beside the fixtures. Additional regression tests cover external file resolution/portable saves, compact tile encodings, legacy empty IDs, negative origins, ICC linear-light conversion and alpha, original contribution formats, dialogs/timers/events/parameters, file operations and failure rollback. The egui widget renderer is also exercised directly. This corpus is evidence for these features, not certification of arbitrary third-party extensions.
-
-Three unchanged community fixtures extend that corpus. Gaspar Capello’s **Duplicate Last Frame** preserves artwork and placement on multiple layers. Chris Anselmo’s **Middle Color** updates the editor’s foreground using its current colors. Pixeltica’s **Tile Index Overlay** uses a detached single-frame RGB `Sprite` to generate a numbered overlay and an optional contrast layer. The scratch sprite lives inside the script and does not create an editor tab. See the [pinned sources, licenses and test details](tests/fixtures/third-party-lua/README.md).
-
-The migration checks also reopened six PixelCraft-resaved upstream fixtures in Aseprite 1.3.18.6-dev. Frame timing and rendered pixels matched for linked cels, moving slices, indexed cels, indexed tilemaps, user properties and z-order. RGB values underneath fully transparent pixels were excluded from this visual comparison. The ASE slice reader and writer follow the [published ASE slice chunk](https://github.com/aseprite/aseprite/blob/main/docs/ase-file-specs.md#slice-chunk-0x2022). Sheet JSON includes slice keys and pivots.
-
-Build: cargo build --offline. Isolated runtime check: checks/standalone.sh, which mounts only the built binary and basic system libraries. Craft Anything rebuild_check additionally builds and captures the application window.
-
-## Expanded command and workflow coverage
-
-The following compatibility surfaces run in `cargo test --offline`. These are concrete tested cases, not a claim that every extension is compatible.
-
-| Surface | Tested behavior | Boundary |
-| --- | --- | --- |
-| `app.command.Flip` | Horizontal active-image flip and transactional undo; selection-aware implementation | `target="mask"`, horizontal/vertical only |
-| `app.command.InvertColor` | RGB inversion and Undo restoration | RGB channels; alpha retained |
-| `app.command.ReplaceColor` | Exact RGBA color replacement | Per-channel tolerance, active image/selection |
-| `app.command.Desaturate` | Uses the same selection-aware image command path | Luminance mode only |
-| Existing upstream script corpus | Random Palette, Random Pixels, Move Cels, Wizard Example | Unchanged upstream sources in `tests/fixtures/scripts`; existing tests cover dialogs, palettes, modes and event pumping |
-| Sprite sheets | Trimmed/padded export and JSON import restore pixels, durations and tag names | Unrotated frames; array/hash metadata with canvas dimensions |
-| Animated formats | GIF, APNG and lossless WebP: two frames, transparency and 70/230 ms durations | WebP requires libwebpdemux; platform availability is documented in README |
-| OpenRaster | Two named layers, stacking, alpha and opacity | Supported blend modes listed in README; 32 MiB ZIP extraction limit |
-| Tiled | Export/import of finite orthogonal maps, empty cells and flipped tiles | JSON array image tilesets, no objects/infinite maps |
-| Recovery/editor | Dirty tabs and saved baselines, active view, backup fallback, symmetry, selection clipping, pixel-perfect corners | 15-second backup interval; undo history is not restored |
-
-New workflow coverage is in `tests/workflows.rs` and `src/studio.rs`. Engine preset files are structurally tested. The separate [Godot 4.5.1 integration check](checks/godot-slice-pivots.py) authors slices, reopens ASE and native files, imports a trimmed, padded 2× export and compares rendered frames with their keyed pivots aligned. Unity was not used for that check. Unsupported Lua commands and command parameters continue to fail explicitly and leave the original editor document unchanged.
+Use [the migration guide and native workflow cookbook](docs/native-automation-migration.md) to replace automation workflows. Third-party editor scripting APIs and executable extension compatibility are not supported; declarative asset compatibility depends on the individual supported formats.

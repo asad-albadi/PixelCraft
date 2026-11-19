@@ -6,13 +6,21 @@ const BINDINGS: &str = "pixelcraft-ui-shortcuts";
 pub fn set_bindings(ctx: &egui::Context, bindings: &Bindings) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(BINDINGS), bindings.clone()));
 }
+fn canonical_action(action: &str) -> &str {
+    match action {
+        "rect" => "rectangle",
+        "select" => "selection",
+        "eyedropper" => "picker",
+        other => other,
+    }
+}
 pub fn shortcuts(bindings: &Bindings, action: &str) -> String {
     if action.is_empty() {
         return String::new();
     }
     bindings
         .iter()
-        .filter(|(_, a)| a.as_str() == action)
+        .filter(|(_, a)| canonical_action(a) == canonical_action(action))
         .map(|(k, _)| k.as_str())
         .collect::<Vec<_>>()
         .join(", ")
@@ -31,6 +39,7 @@ fn bindings(ctx: &egui::Context) -> Bindings {
 }
 pub fn icon_name(action: &str) -> &str {
     match action {
+        "command-search" => "keyboard",
         "new" => "file-new",
         "about" => "info",
         "transform-move" => "move",
@@ -80,6 +89,7 @@ pub fn icon_name(action: &str) -> &str {
 }
 pub fn action_label(action: &str) -> &str {
     match action {
+        "command-search" => "Search commands",
         "copy-merged" => "Copy Merged",
         "paste-as-sprite" => "Paste as New Sprite",
         "paste-as-layer" => "Paste as New Layer",
@@ -731,7 +741,6 @@ pub fn label_action(label: &str) -> &'static str {
         "Fit" => "fit",
         "Stop extension" => "stop",
         "Remove" => "trash",
-        "Run .lua…" => "terminal",
         "Install package…" | "Install folder…" => "install",
         "Check for updates" => "refresh",
         "Normal" => "brush",
