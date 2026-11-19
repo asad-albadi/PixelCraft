@@ -2,6 +2,12 @@
 use super::*;
 
 impl PixelCraft {
+    pub(super) fn settings_shortcut_available(&self) -> bool {
+        let settings = ShortcutChord::parse("Ctrl+Comma");
+        self.custom_shortcuts.iter().all(|(binding, target)| {
+            ShortcutChord::parse(binding) != settings || target == "settings"
+        })
+    }
     /// Opening a destination does not cancel an unfinished canvas operation.
     pub(super) fn navigation_action(&mut self, action: &str) -> bool {
         if self.open_settings_destination(action)
@@ -44,15 +50,19 @@ impl PixelCraft {
 
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
         // Recovery defaults must not steal a valid binding saved by an older
-        // version. AppKit's standard Settings shortcut is owned by the OS.
+        // version. AppKit uses the same override predicate as egui.
         let available = |chord: &str, action: &str| {
             self.custom_shortcuts.iter().all(|(binding, target)| {
                 ShortcutChord::parse(binding) != ShortcutChord::parse(chord) || target == action
             })
         };
         let recovery_available = available("Ctrl+Shift+0", "reset-interface-scale");
-        let settings_available = cfg!(target_os = "macos") || available("Ctrl+Comma", "settings");
+        let settings_available = self.settings_shortcut_available();
+        let exact_press = |chord: &str| {
+            ctx.input(|input| ShortcutChord::parse(chord).is_some_and(|chord| chord.matches(input)))
+        };
         if recovery_available
+            && exact_press("Ctrl+Shift+0")
             && ctx.input_mut(|input| {
                 input.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, Key::Num0)
             })
@@ -60,6 +70,7 @@ impl PixelCraft {
             self.reset_interface_scale(ctx);
         }
         if settings_available
+            && exact_press("Ctrl+Comma")
             && (!self.dialog_open() || self.settings_open)
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, Key::Comma))
         {
@@ -71,6 +82,54 @@ impl PixelCraft {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_defaults_do_not_steal_custom_chords_with_extra_modifiers() {
+        for (binding, key, modifiers) in [
+            (
+                "Ctrl+Alt+Comma",
+                Key::Comma,
+                egui::Modifiers::COMMAND | egui::Modifiers::ALT,
+            ),
+            (
+                "Ctrl+Shift+Comma",
+                Key::Comma,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            ),
+            (
+                "Ctrl+Alt+Shift+0",
+                Key::Num0,
+                egui::Modifiers::COMMAND | egui::Modifiers::ALT | egui::Modifiers::SHIFT,
+            ),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = PixelCraft::with_context(&ctx, None);
+            app.replace(Document::new(16, 16), None);
+            app.custom_shortcuts.insert(binding.into(), "frame".into());
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    app.navigation_shortcuts(ui.ctx());
+                    app.shortcuts(ui.ctx());
+                },
+            );
+            output.textures_delta.clear();
+            assert!(!app.settings_open, "navigation stole {binding}");
+            assert_eq!(app.doc.durations.len(), 2, "navigation stole {binding}");
+        }
+    }
 
     #[test]
     fn layout_recovery_restores_panels_without_editing_artwork_or_history() {
@@ -222,9 +281,6 @@ mod tests {
             ("Ctrl+Comma", Key::Comma, false, "layer"),
             ("Ctrl+Shift+0", Key::Num0, true, "frame"),
         ] {
-            if cfg!(target_os = "macos") && key == Key::Comma {
-                continue;
-            }
             let ctx = egui::Context::default();
             let mut app = PixelCraft::with_context(&ctx, None);
             app.replace(Document::new(16, 16), None);

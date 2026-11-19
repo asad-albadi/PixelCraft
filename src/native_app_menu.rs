@@ -84,6 +84,14 @@ impl AppMenu {
         self.receiver.try_recv().is_ok()
     }
 
+    pub(super) fn set_settings_shortcut_enabled(&self, enabled: bool) {
+        self.item.setKeyEquivalent(if enabled {
+            ns_string!(",")
+        } else {
+            ns_string!("")
+        });
+    }
+
     /// Called by the packaged graphical smoke test, on AppKit's main thread.
     pub(super) fn verify_settings_command(&self) {
         assert_eq!(self.item.title().to_string(), "Settings…");
@@ -98,6 +106,12 @@ impl AppMenu {
             NSEventType::KeyDown, NSPoint::new(0., 0.), NSEventModifierFlags::Command,
             0., 0, None, ns_string!(","), ns_string!(","), false, 43,
         ).expect("cannot construct native Command-Comma event");
+        self.set_settings_shortcut_enabled(false);
+        assert!(
+            !self.menu.performKeyEquivalent(&command_comma),
+            "native Settings stole an overridden shortcut"
+        );
+        self.set_settings_shortcut_enabled(true);
         assert!(
             self.menu.performKeyEquivalent(&command_comma),
             "native Command-Comma did not match Settings"

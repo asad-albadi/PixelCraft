@@ -2,6 +2,65 @@
 use super::*;
 use pixelcraft::productivity::{save_shortcuts, shortcut_preset};
 
+#[cfg(test)]
+mod shortcut_event_tests {
+    use super::*;
+
+    #[test]
+    fn quick_shortcut_taps_use_press_modifiers_even_after_release_in_the_same_frame() {
+        for (binding, key, modifiers, action) in [
+            (
+                "Ctrl+Shift+P",
+                Key::P,
+                egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                "command-search",
+            ),
+            ("Alt+R", Key::R, egui::Modifiers::ALT, "rectangle"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = PixelCraft::with_context(&ctx, None);
+            app.custom_shortcuts.insert(binding.into(), action.into());
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::ModifiersChanged(modifiers),
+                        egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        },
+                        egui::Event::Key {
+                            key,
+                            physical_key: None,
+                            pressed: false,
+                            repeat: false,
+                            modifiers,
+                        },
+                        egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                    ],
+                    ..Default::default()
+                },
+                |ui| app.shortcuts(ui.ctx()),
+            );
+            output.textures_delta.clear();
+            if action == "command-search" {
+                assert!(
+                    app.command_search.open,
+                    "fast {binding} did not open search"
+                );
+            } else {
+                assert!(
+                    app.tool == Tool::Rect,
+                    "fast custom {binding} did not select its tool"
+                );
+            }
+            assert!(app.undo.is_empty());
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) struct ShortcutChord {
     key: Key,
@@ -57,7 +116,10 @@ impl ShortcutChord {
     }
 
     pub(super) fn matches(self, input: &egui::InputState) -> bool {
-        input.key_pressed(self.key) && self == Self::new(self.key, input.modifiers)
+        input.events.iter().any(|event| {
+            matches!(event, egui::Event::Key {key, pressed: true, modifiers, ..}
+                if *key == self.key && self == Self::new(*key, *modifiers))
+        })
     }
 
     fn reserved(self) -> bool {
@@ -67,14 +129,6 @@ impl ShortcutChord {
         ) || (self.alt && self.key == Key::F4)
             || (cfg!(target_os = "macos") && self.command && self.key == Key::Q)
             || self.clipboard_action().is_some()
-            || (cfg!(target_os = "macos") && self.navigation_action().is_some())
-    }
-
-    fn navigation_action(self) -> Option<&'static str> {
-        match (self.key, self.command, self.shift, self.alt) {
-            (Key::Comma, true, false, false) => Some("settings"),
-            _ => None,
-        }
     }
 
     fn clipboard_action(self) -> Option<&'static str> {
@@ -92,7 +146,6 @@ impl ShortcutChord {
     pub(super) fn allowed_for(self, action: &str) -> bool {
         !self.reserved()
             || self.clipboard_action() == Some(action)
-            || self.navigation_action() == Some(action)
             || (self.key == Key::Escape
                 && !self.command
                 && !self.shift

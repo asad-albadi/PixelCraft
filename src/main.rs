@@ -834,6 +834,10 @@ impl PixelCraft {
                 .unwrap_or_else(|_| pixelcraft::productivity::shortcut_preset("PixelCraft"));
         }
         app.shortcuts_path = Some(shortcuts_path);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &app.native_app_menu {
+            menu.set_settings_shortcut_enabled(app.settings_shortcut_available());
+        }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
             app.translations = pixelcraft::contributions::language(&bytes).unwrap_or_default();
         }
@@ -7545,7 +7549,11 @@ impl eframe::App for PixelCraft {
             }
         }
         self.poll_display_profile(ui.ctx(), display_profiles::Surface::from_frame(frame));
-        self.render(ui)
+        self.render(ui);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &self.native_app_menu {
+            menu.set_settings_shortcut_enabled(self.settings_shortcut_available());
+        }
     }
 }
 fn color_image(p: &[Pixel], w: usize, h: usize) -> egui::ColorImage {

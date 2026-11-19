@@ -757,7 +757,7 @@ pub fn label_action(label: &str) -> &'static str {
         "Import PNG tilesheet…" | "Import palette…" | "Import PNG / JPEG overlay…" => {
             "import"
         }
-        "Export palette…" | "Export PNG + metadata…" => "export",
+        "Export" | "Export palette…" | "Export PNG + metadata…" => "export",
         "Export Tiled map…" => "tiledexport",
         "Capture selection as tile" | "Capture selection as stamp" => "stamp",
         "+ Tile layer from last tileset" => "layer-add",
