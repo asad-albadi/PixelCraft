@@ -161,3 +161,15 @@ pub(super) fn run<T: Send>(
         None => operation(),
     }
 }
+
+#[cfg(any(windows, target_os = "linux"))]
+pub(super) fn editor_project(path: &Path) -> Result<std::sync::Arc<Project>, String> {
+    #[cfg(windows)]
+    {
+        Project::new(path)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Project::new_editor(path)
+    }
+}

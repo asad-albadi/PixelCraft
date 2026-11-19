@@ -146,7 +146,7 @@ fn sheet_engines(preset: &str) -> &'static [SheetEngine] {
     }
 }
 
-pub(crate) fn sheet_output_paths(path: &Path, options: &SheetOptions) -> Vec<PathBuf> {
+pub fn sheet_output_paths(path: &Path, options: &SheetOptions) -> Vec<PathBuf> {
     let mut paths = vec![path.to_path_buf(), path.with_extension("json")];
     paths.extend(
         sheet_engines(&options.preset)
@@ -248,7 +248,7 @@ pub fn export_sheet_for_slice(
     export_sheet_for_slice_with_previous(path, path, doc, options, slice)
 }
 
-pub(crate) fn export_sheet_for_slice_with_previous(
+pub fn export_sheet_for_slice_with_previous(
     path: &Path,
     previous: &Path,
     doc: &Document,

@@ -2,6 +2,7 @@
 //! openat2 bounds preflight lookups to the selected directory descriptor.
 use std::{
     cell::RefCell,
+    ffi::CString,
     fs::File,
     io,
     os::{
@@ -49,7 +50,7 @@ thread_local! {
 pub(super) struct Project {
     path: PathBuf,
     dir: File,
-    rules: File,
+    rules: Option<File>,
     identity: (u64, u64),
 }
 
@@ -134,7 +135,25 @@ impl Project {
         Ok(Arc::new(Self {
             path: path.to_path_buf(),
             dir,
-            rules,
+            rules: Some(rules),
+            identity: (metadata.dev(), metadata.ino()),
+        }))
+    }
+
+    /// Trusted editor encoders need anchored file I/O, not a new kernel sandbox requirement.
+    pub(super) fn new_editor(path: &Path) -> Result<Arc<Self>, String> {
+        let dir = open(
+            libc::AT_FDCWD,
+            path,
+            libc::O_PATH | libc::O_DIRECTORY,
+            RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+        )
+        .map_err(|e| e.to_string())?;
+        let metadata = dir.metadata().map_err(|e| e.to_string())?;
+        Ok(Arc::new(Self {
+            path: path.to_path_buf(),
+            dir,
+            rules: None,
             identity: (metadata.dev(), metadata.ino()),
         }))
     }
@@ -196,18 +215,22 @@ impl Project {
             let worker = scope.spawn(move || {
                 // SAFETY: flags and the descriptor match the Linux syscalls.
                 // Both restrictions apply only to this new worker and its children.
-                unsafe {
-                    os_result(libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) as libc::c_long)
+                if let Some(rules) = &project.rules {
+                    unsafe {
+                        os_result(
+                            libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) as libc::c_long
+                        )
                         .and_then(|_| {
                             os_result(libc::syscall(
                                 libc::SYS_landlock_restrict_self,
-                                project.rules.as_raw_fd(),
+                                rules.as_raw_fd(),
                                 0u32,
                             ))
                         })
                         .map_err(|e| {
                             format!("Could not enable Linux restricted MCP filesystem access: {e}")
                         })?;
+                    }
                 }
                 ACTIVE.set(Some((project, sender)));
                 let result = operation();
@@ -224,6 +247,90 @@ impl Project {
                 .map_err(|_| "Restricted MCP worker stopped unexpectedly".to_string())?
         })
     }
+}
+
+fn anchored_parent(project: &Project, path: &Path) -> io::Result<(File, CString)> {
+    let relative = path.strip_prefix(&project.path).map_err(io::Error::other)?;
+    let name = relative
+        .file_name()
+        .ok_or_else(|| io::Error::other("Cannot mutate the project root"))?;
+    let parent = relative
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let directory = open(
+        project.dir.as_raw_fd(),
+        parent,
+        libc::O_PATH | libc::O_DIRECTORY,
+        RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+    )?;
+    Ok((
+        directory,
+        CString::new(name.as_bytes()).map_err(io::Error::other)?,
+    ))
+}
+pub(super) fn create_directory(path: &Path, mode: libc::mode_t) -> Option<io::Result<(u64, u64)>> {
+    ACTIVE.with_borrow(|active| {
+        let (project, _) = active.as_ref()?;
+        Some((|| {
+            let (parent, name) = anchored_parent(project, path)?;
+            os_result(
+                unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), mode) } as libc::c_long,
+            )?;
+            let directory = open(
+                parent.as_raw_fd(),
+                Path::new(std::ffi::OsStr::from_bytes(name.as_bytes())),
+                libc::O_PATH | libc::O_DIRECTORY,
+                RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+            )?;
+            let metadata = directory.metadata()?;
+            Ok((metadata.dev(), metadata.ino()))
+        })())
+    })
+}
+pub(super) fn ensure_directory(path: &Path) -> Option<io::Result<()>> {
+    ACTIVE.with_borrow(|active| {
+        let (project, _) = active.as_ref()?;
+        Some((|| {
+            let relative = path.strip_prefix(&project.path).map_err(io::Error::other)?;
+            let mut directory = project.dir.try_clone()?;
+            for component in relative.components() {
+                let std::path::Component::Normal(name) = component else {
+                    return Err(io::Error::other("Invalid directory component"));
+                };
+                let name = CString::new(name.as_bytes()).map_err(io::Error::other)?;
+                if unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o777) } != 0 {
+                    let error = io::Error::last_os_error();
+                    if error.kind() != io::ErrorKind::AlreadyExists {
+                        return Err(error);
+                    }
+                }
+                directory = open(
+                    directory.as_raw_fd(),
+                    Path::new(std::ffi::OsStr::from_bytes(name.as_bytes())),
+                    libc::O_PATH | libc::O_DIRECTORY,
+                    RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+                )?;
+            }
+            Ok(())
+        })())
+    })
+}
+pub(super) fn remove_entry(path: &Path, directory: bool) -> Option<io::Result<()>> {
+    ACTIVE.with_borrow(|active| {
+        let (project, _) = active.as_ref()?;
+        Some((|| {
+            let (parent, name) = anchored_parent(project, path)?;
+            os_result(unsafe {
+                libc::unlinkat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    if directory { libc::AT_REMOVEDIR } else { 0 },
+                )
+            } as libc::c_long)?;
+            Ok(())
+        })())
+    })
 }
 
 pub(super) fn open_read(path: &Path) -> Option<io::Result<File>> {
@@ -594,5 +701,79 @@ mod tests {
         assert!(!outside.join("result").exists());
         assert!(!outside.join("moved/direct").exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod editor_anchor_tests {
+    use super::*;
+    #[test]
+    fn editor_directory_operations_reject_a_replaced_parent() {
+        use std::os::unix::fs::symlink;
+        let fixture =
+            std::env::temp_dir().join(format!("pixelcraft-editor-dir-swap-{}", std::process::id()));
+        let root = fixture.join("project");
+        let outside = fixture.join("outside");
+        std::fs::create_dir_all(root.join("parent")).unwrap();
+        std::fs::create_dir_all(outside.join("keep")).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"untouched").unwrap();
+        let root = root.canonicalize().unwrap();
+        let editor = Project::new_editor(&root).unwrap();
+        std::fs::rename(root.join("parent"), root.join("old-parent")).unwrap();
+        symlink(&outside, root.join("parent")).unwrap();
+        editor
+            .run(|| {
+                assert!(
+                    create_directory(&root.join("parent/new"), 0o700)
+                        .unwrap()
+                        .is_err()
+                );
+                assert!(
+                    ensure_directory(&root.join("parent/new/nested"))
+                        .unwrap()
+                        .is_err()
+                );
+                assert!(
+                    remove_entry(&root.join("parent/keep"), true)
+                        .unwrap()
+                        .is_err()
+                );
+                assert!(
+                    remove_entry(&root.join("parent/keep.txt"), false)
+                        .unwrap()
+                        .is_err()
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            std::fs::read(outside.join("keep.txt")).unwrap(),
+            b"untouched"
+        );
+        assert!(outside.join("keep").is_dir());
+        assert!(!outside.join("new").exists());
+        drop(editor);
+        std::fs::remove_dir_all(fixture).unwrap();
+    }
+    #[test]
+    fn editor_anchor_does_not_require_or_disable_a_strict_mcp_ruleset() {
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-editor-anchor-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let editor = Project::new_editor(&root).unwrap();
+        assert!(editor.rules.is_none());
+        editor
+            .run(|| {
+                let output = root.join("owned.txt");
+                super::super::mcp_io::write(&output, b"owned").map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .unwrap();
+        let strict = Project::new(&root).unwrap();
+        assert!(strict.rules.is_some());
+        drop(editor);
+        drop(strict);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -7,6 +7,8 @@ use crate::{
     workflows::{self, SheetOptions},
 };
 mod batch;
+mod editor_output;
+pub use editor_output::{EditorOutputPlan, write_editor_file, write_editor_file_authorized};
 pub(crate) mod mcp_access;
 mod mcp_files;
 pub(crate) mod mcp_io;
@@ -931,10 +933,7 @@ fn file_operation_mode(
         "palette-convert" => {
             let input = input_path("input")?;
             let output = argument_path("output")?;
-            let p = parse_palette(
-                &mcp_io::read(&input).map_err(|e| e.to_string())?,
-                extension(&input),
-            )?;
+            let p = load_palette_with_extension(&input, extension(&input))?;
             write_operation_file(files, &output, |target| {
                 mcp_io::write(target, write_palette(&p, extension(target))?)
                     .map_err(|e| e.to_string())
@@ -1320,10 +1319,7 @@ fn file_operation_mode(
                 }
                 "palette-import" => {
                     let p = input_path("palette")?;
-                    let palette = parse_palette(
-                        &mcp_io::read(&p).map_err(|e| e.to_string())?,
-                        extension(&p),
-                    )?;
+                    let palette = load_palette_with_extension(&p, extension(&p))?;
                     d.import_palette(palette)?;
                     save(&argument_path("output")?, &d)?;
                     Ok(inspect(&d))
@@ -2180,6 +2176,22 @@ fn export_animation(kind: &str, output: &Path, doc: &Document, scale: usize) -> 
     }
 }
 
+/// Encode frames into a caller-owned staging folder; publication belongs to the caller.
+pub fn encode_editor_sequence(path: &Path, doc: &Document, scale: usize) -> Result<(), String> {
+    doc.validate()?;
+    formats::animation_dimensions(doc, scale)?;
+    mcp_io::create_dir_all(path).map_err(|e| e.to_string())?;
+    for frame in 0..doc.durations.len() {
+        formats::export_png_region(
+            &path.join(format!("frame-{:04}.png", frame + 1)),
+            doc,
+            frame,
+            [0, 0, doc.width, doc.height],
+            scale,
+        )?;
+    }
+    Ok(())
+}
 /// Save an editor sheet with its metadata and engine sidecars as one staged export.
 pub fn write_editor_sheet_export(
     output: &Path,

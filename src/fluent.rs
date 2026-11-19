@@ -54,6 +54,15 @@ pub(super) fn modal_dialog(
     title: &str,
     content: impl FnOnce(&mut egui::Ui) -> bool,
 ) -> bool {
+    modal_dialog_sized(ctx, title, 360., content)
+}
+
+pub(super) fn modal_dialog_sized(
+    ctx: &egui::Context,
+    title: &str,
+    preferred_width: f32,
+    content: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
     let id = egui::Id::new(("editor-dialog", title));
     let offset_id = id.with("offset");
     let offset = ctx.data(|data| data.get_temp::<Vec2>(offset_id).unwrap_or_default());
@@ -63,7 +72,7 @@ pub(super) fn modal_dialog(
         .frame(egui::Frame::window(&ctx.style_of(ctx.theme())))
         .backdrop_color(Color32::from_black_alpha(80))
         .show(ctx, |ui| {
-            ui.set_width(360_f32.min((ctx.content_rect().width() - 32.).max(100.)));
+            ui.set_width(preferred_width.min((ctx.content_rect().width() - 32.).max(100.)));
             let (header, _) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.), Sense::hover());
             let close_rect = Rect::from_min_size(
@@ -135,7 +144,25 @@ pub(super) fn modal_dialog(
         ctx.data_mut(|data| data.remove::<Vec2>(offset_id));
         ctx.request_repaint();
     }
-    dismiss
+    dismiss || content_closed
+}
+
+/// Call at the end of a scrolling body. Explicit exclusions identify fixed
+/// chrome, whose previous-pass rectangle may overlap the full content bounds.
+pub(super) fn reveal_focused_control(ui: &mut egui::Ui, excluded: &[egui::Id]) {
+    let Some(focus) = ui.ctx().memory(|memory| memory.focused()) else {
+        return;
+    };
+    if excluded.contains(&focus) {
+        return;
+    }
+    if let Some(response) = ui.ctx().read_response(focus)
+        && response.gained_focus()
+        && response.layer_id == ui.layer_id()
+        && ui.min_rect().contains_rect(response.rect)
+    {
+        ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+    }
 }
 
 fn heading(ui: &mut egui::Ui, text: &str) -> bool {
@@ -368,7 +395,7 @@ impl PixelCraft {
         }
         self.preview_settings_path = Some(path);
     }
-    fn save_preview_settings(&mut self) {
+    pub(super) fn save_preview_settings(&mut self) {
         if let Some(path) = &self.preview_settings_path {
             let result = std::fs::create_dir_all(path.parent().unwrap()).and_then(|()| {
                 std::fs::write(path, serde_json::to_vec(&self.preview_settings).unwrap())
@@ -612,7 +639,7 @@ impl PixelCraft {
                         });
                 });
             if ui.pc_small_button("Palette tools…").clicked() {
-                self.action("workflow");
+                self.action("palette-tools");
             }
         });
         if let Some((from, to)) = reorder {
@@ -985,7 +1012,7 @@ impl PixelCraft {
                 });
                 ui.add_space(8.);
                 if ui.pc_button("Properties & color mode…").clicked() {
-                    self.properties_open = true;
+                    self.action("properties");
                 }
             });
     }
@@ -1238,7 +1265,7 @@ impl PixelCraft {
             .on_hover_text("Advanced drawing tools")
             .clicked()
         {
-            self.power.open = true;
+            self.action("brushes");
         }
     }
 }

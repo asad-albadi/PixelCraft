@@ -1,4 +1,6 @@
 //! Rendered UI checks exercise the same widget tree without a display server.
+#[path = "ui_discovery_tests.rs"]
+mod discovery;
 use super::*;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -247,7 +249,7 @@ fn background_save_updates_only_the_originating_tab_and_keeps_new_edits_dirty() 
         "pixelcraft-background-save-{}.pixel",
         std::process::id()
     ));
-    app.queue_save(path.clone(), snapshot.clone());
+    app.queue_save(path.clone(), snapshot.clone(), true, false);
     app.doc.set_pixel(0, 0, 1, [80, 60, 40, 255]);
     app.open_document(Document::new(4, 4), None);
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -1557,14 +1559,8 @@ fn changing_default_sprite_width_preserves_the_current_pixel_grid() {
     app.grid = !app.power.default_grid();
     let current_grid = app.grid;
     let default_size = app.power.new_sprite_size();
-    app.settings_open = true;
+    assert!(app.open_settings_destination("settings-files"));
     for _ in 0..3 {
-        discard_frame(&mut app, &ctx, size, 1., vec![]);
-    }
-    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
-    let heading = text_position(&mut output, "New sprites");
-    discard_frame(&mut app, &ctx, size, 1., click(heading));
-    for _ in 0..8 {
         discard_frame(&mut app, &ctx, size, 1., vec![]);
     }
     let width = layout_rect(&ctx, "default-sprite-width").center();
@@ -2591,6 +2587,11 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
             1.,
             vec![egui::Event::Text(format!("\"{}\"", path.display()))],
         );
+        assert_eq!(
+            app.file_path.as_ref().unwrap().input,
+            format!("\"{}\"", path.display()),
+            "Typed {action} path did not reach the focused path field"
+        );
         let _ = text_position(&mut output, "Browse…");
         let accept = output
             .shapes
@@ -2606,14 +2607,24 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
         discard_frame(app, &ctx, size, 1., click(accept));
     };
     let poll = |app: &mut PixelCraft| {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while (app.open_job.is_some() || app.save_job.is_some() || app.export_job.is_some())
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while (app.open_job.is_some()
+            || app.save_job.is_some()
+            || app.export_job.is_some()
+            || app.export_preflight.is_some())
             && Instant::now() < deadline
         {
             discard_frame(app, &ctx, size, 1., vec![]);
-            std::thread::yield_now();
+            std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(app.open_job.is_none() && app.save_job.is_none() && app.export_job.is_none());
+        assert!(
+            app.open_job.is_none()
+                && app.save_job.is_none()
+                && app.export_job.is_none()
+                && app.export_preflight.is_none(),
+            "file operation/preflight timed out: {}",
+            app.status
+        );
     };
 
     app.action("open");
@@ -3135,13 +3146,17 @@ fn palette_ramp_controls_replace_span_and_undo_as_one_edit() {
     app.doc.import_palette(vec![red, blue, CLEAR]).unwrap();
     app.fg = blue;
     app.palette_index = 1;
-    app.action("workflow");
+    app.action("palette-tools");
     for _ in 0..3 {
         discard_frame(&mut app, &ctx, size, 1., vec![]);
     }
     let mut out = frame(&mut app, &ctx, size, 1., vec![]);
     let heading = text_position(&mut out, "Palette order & ramps");
     discard_frame(&mut app, &ctx, size, 1., click(heading));
+    // The centered modal settles after the collapsing section expands.
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
     let mut out = frame(&mut app, &ctx, size, 1., vec![]);
     let button = text_position(&mut out, "Replace selected span");
     discard_frame(&mut app, &ctx, size, 1., click(button));
@@ -4739,4 +4754,27 @@ fn tablet_pressure_controls_size_and_opacity_without_building_on_overlap() {
     app.action("pencil");
     discard_frame(&mut app, &ctx, size, 1., click(center(15)));
     assert_eq!(app.doc.layers[0].cels[0][105], app.fg);
+}
+
+#[test]
+fn advanced_drawing_toolbar_opens_brushes_after_an_unrelated_workflow() {
+    let ctx = egui::Context::default();
+    let size = Vec2::new(1180., 840.);
+    let mut app =
+        PixelCraft::with_context(&ctx, Some(PathBuf::from("unused-toolbar-workflow.png")));
+    app.open_workflow_destination("assistants");
+    app.power.open = false;
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    let advanced = text_position(&mut output, "…");
+    discard_frame(&mut app, &ctx, size, 1., click(advanced));
+    for _ in 0..3 {
+        discard_frame(&mut app, &ctx, size, 1., vec![]);
+    }
+    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
+    text_position(&mut output, "Brushes and selection");
+    assert!(app.power.open);
+    assert!(app.power.bridge.is_none());
 }

@@ -7,6 +7,8 @@ use pixelcraft::{
 };
 use serde::{Deserialize, Serialize};
 mod brush_library;
+pub(crate) mod settings;
+pub(super) mod workflow;
 use brush_library::BrushLibrary;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +124,7 @@ fn linked_reference_exists(root: &Path, source: &Path) -> bool {
 #[serde(default)]
 struct Preferences {
     recent: Vec<PathBuf>,
+    last_settings_page: String,
     onion: OnionOptions,
     rewind_on_stop: bool,
     preset: String,
@@ -152,6 +155,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             recent: vec![],
+            last_settings_page: "appearance".into(),
             onion: OnionOptions::default(),
             rewind_on_stop: false,
             preset: String::new(),
@@ -190,13 +194,9 @@ impl Preferences {
     }
 
     fn reset_settings(&mut self) {
-        let recent = std::mem::take(&mut self.recent);
-        let preset = std::mem::take(&mut self.preset);
-        *self = Self {
-            recent,
-            preset,
-            ..Self::default()
-        };
+        for page in settings::Page::ALL {
+            self.reset_settings_page(page);
+        }
     }
 }
 
@@ -232,6 +232,9 @@ fn recent_file_label(path: &std::path::Path, paths: &[PathBuf]) -> String {
 
 pub(super) struct PowerTools {
     pub open: bool,
+    workflow_page: workflow::WorkflowPage,
+    pub(super) property_page: workflow::PropertyPage,
+    pub(super) property_target: Option<(u64, u64, u32, usize, usize)>,
     pub mode: BrushMode,
     pub reverse: bool,
     pub stamp: Option<(usize, usize, Vec<Pixel>)>,
@@ -243,6 +246,8 @@ pub(super) struct PowerTools {
     pub(super) fill_global: bool,
     pub selection_op: SelectionOp,
     preferences: Preferences,
+    preferences_path: Option<PathBuf>,
+    settings: settings::SettingsState,
     brush_library: BrushLibrary,
     grid: GridImportOptions,
     grid_preview: Option<CachedGridPreview>,
@@ -276,12 +281,11 @@ pub(super) struct PowerTools {
 }
 impl Default for PowerTools {
     fn default() -> Self {
-        let preferences = std::fs::read(extensions::config_directory().join("workflow.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
         Self {
             open: false,
+            workflow_page: workflow::WorkflowPage::Index,
+            property_page: workflow::PropertyPage::Sprite,
+            property_target: None,
             mode: BrushMode::Normal,
             reverse: false,
             stamp: None,
@@ -292,7 +296,9 @@ impl Default for PowerTools {
             fill_tolerance: 0,
             fill_global: false,
             selection_op: SelectionOp::Replace,
-            preferences,
+            preferences: Preferences::default(),
+            preferences_path: None,
+            settings: settings::SettingsState::default(),
             brush_library: BrushLibrary::read(&brush_library::path()).unwrap_or_default(),
             grid: GridImportOptions::default(),
             grid_preview: None,
@@ -335,7 +341,7 @@ struct CachedGridPreview {
 struct AtlasPreview {
     inputs: Vec<PathBuf>,
     options: AtlasOptions,
-    packed: (image::RgbaImage, serde_json::Value),
+    packed: Arc<(image::RgbaImage, serde_json::Value)>,
     texture: egui::TextureHandle,
 }
 
@@ -606,13 +612,16 @@ impl PixelCraft {
         }
     }
     pub(super) fn export_scale_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        Self::export_scale_value_ui(ui, &mut self.studio.sheet.scale);
+    }
+    pub(super) fn export_scale_value_ui(ui: &mut egui::Ui, value: &mut usize) {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Export scale");
             for scale in [1, 2, 4] {
-                ui.pc_selectable_value(&mut self.studio.sheet.scale, scale, format!("{scale}×"));
+                ui.pc_selectable_value(value, scale, format!("{scale}×"));
             }
             ui.add(
-                egui::DragValue::new(&mut self.studio.sheet.scale)
+                egui::DragValue::new(value)
                     .range(1..=16384)
                     .prefix("Custom "),
             );
@@ -632,156 +641,11 @@ impl PixelCraft {
         }
     }
     pub(super) fn settings_dialog(&mut self, ctx: &egui::Context) {
-        if !self.settings_open {
-            return;
-        }
-        self.settings_open = !fluent::modal_dialog(ctx, "Settings", |ui| {
-            egui::ScrollArea::vertical()
-                .max_height((ctx.content_rect().height() - 130.).max(80.))
-                .show(ui, |ui| self.settings_ui(ui));
-            ui.pc_button("Done").clicked()
-        });
+        self.categorized_settings_dialog(ctx);
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        ui.collapsing("Color management", |ui| {
-            let mut display = self.power.preferences.display_profile.clone();
-            self.display_profile_ui(ui, &mut display);
-            if display != self.power.preferences.display_profile {
-                self.power.preferences.display_profile = display;
-                self.save_workflow_preferences();
-            }
-            use pixelcraft::color::ImportProfile;
-            let policy = &mut self.power.preferences.import_profile;
-            let before = *policy;
-            let label = |policy| match policy {
-                ImportProfile::Preserve => "Preserve embedded profile",
-                ImportProfile::ConvertToSrgb => "Convert to sRGB",
-                ImportProfile::AssignSrgb => "Assign sRGB",
-            };
-            egui::ComboBox::from_label("Image import profile")
-                .selected_text(label(*policy))
-                .show_ui(ui, |ui| {
-                    for value in [ImportProfile::Preserve, ImportProfile::ConvertToSrgb, ImportProfile::AssignSrgb] {
-                        ui.pc_selectable_value(policy, value, label(value));
-                    }
-                });
-            ui.small("Imported layers match the destination profile. Assign sRGB treats their source values as sRGB.");
-            if before != *policy {
-                self.save_workflow_preferences();
-            }
-        });
-        ui.collapsing("New sprites", |ui| {
-            let p = &mut self.power.preferences;
-            let before = (p.new_sprite_size(), p.default_grid);
-            ui.horizontal(|ui| {
-                ui.label("Default size");
-                let _width = ui.add(
-                    egui::DragValue::new(&mut p.new_sprite_width)
-                        .range(1..=MAX_DIMENSION)
-                        .suffix(" px"),
-                );
-                #[cfg(test)]
-                ui.ctx().data_mut(|d| {
-                    d.insert_temp(egui::Id::new("default-sprite-width"), _width.rect);
-                });
-                ui.label("×");
-                let height_limit =
-                    MAX_DIMENSION.min(MAX_PIXELS / p.new_sprite_width.clamp(1, MAX_DIMENSION));
-                ui.add(
-                    egui::DragValue::new(&mut p.new_sprite_height)
-                        .range(1..=height_limit)
-                        .suffix(" px"),
-                );
-            });
-            ui.pc_checkbox(&mut p.default_grid, "Show pixel grid by default");
-            if before != (p.new_sprite_size(), p.default_grid) {
-                self.save_workflow_preferences();
-            }
-        });
-        ui.collapsing("Updates", |ui| {
-            if ui
-                .pc_checkbox(
-                    &mut self.power.preferences.background_updates,
-                    "Download and verify updates in the background",
-                )
-                .changed()
-            {
-                self.background_update_attempt = None;
-                self.save_workflow_preferences();
-            }
-            ui.small("Install verified updates from Help → About.");
-        });
-        ui.collapsing("Onion skin defaults", |ui| {
-            let before = self.power.preferences.onion.clone();
-            let o = &mut self.power.preferences.onion;
-            ui.add(egui::Slider::new(&mut o.previous, 0..=8).text("Previous frames"));
-            ui.add(egui::Slider::new(&mut o.next, 0..=8).text("Next frames"));
-            ui.horizontal(|ui| {
-                ui.label("Previous tint");
-                ui.color_edit_button_srgb(&mut o.previous_tint);
-            });
-            ui.add(egui::Slider::new(&mut o.previous_opacity, 0..=255).text("Previous opacity"));
-            ui.horizontal(|ui| {
-                ui.label("Next tint");
-                ui.color_edit_button_srgb(&mut o.next_tint);
-            });
-            ui.add(egui::Slider::new(&mut o.next_opacity, 0..=255).text("Next opacity"));
-            if serde_json::to_value(before).ok() != serde_json::to_value(&*o).ok() {
-                self.save_workflow_preferences();
-            }
-        });
-        ui.collapsing("Export scaling", |ui| self.export_scale_ui(ui));
-        ui.collapsing("Interface & autosave", |ui| {
-            let before = serde_json::to_value(&self.power.preferences).ok();
-            let p = &mut self.power.preferences;
-            ui.horizontal(|ui| {
-                ui.label("Density");
-                ui.selectable_value(&mut p.comfortable, false, "Compact");
-                ui.selectable_value(&mut p.comfortable, true, "Comfortable");
-            });
-            ui.label("100% interface zoom follows system display scaling.");
-            ui.add(egui::Slider::new(&mut p.interface_scale, 0.5..=3.).text("Interface scale"));
-            ui.add(
-                egui::DragValue::new(&mut p.checker_size)
-                    .range(1..=64)
-                    .prefix("Checker size "),
-            );
-            let mut custom = p.checker_colors.is_some();
-            ui.pc_checkbox(&mut custom, "Custom checker colors");
-            if custom {
-                let colors = p
-                    .checker_colors
-                    .get_or_insert([[210, 202, 202], [184, 176, 182]]);
-                ui.horizontal(|ui| {
-                    ui.color_edit_button_srgb(&mut colors[0]);
-                    ui.color_edit_button_srgb(&mut colors[1]);
-                });
-            } else {
-                p.checker_colors = None;
-            }
-            ui.horizontal(|ui| {
-                ui.label("Pixel grid color and opacity");
-                ui.color_edit_button_srgba_unmultiplied(&mut p.pixel_grid_color);
-            });
-            ui.pc_checkbox(&mut p.pixel_grid_auto_opacity, "Fade pixel grid at low zoom");
-            ui.pc_checkbox(&mut p.whole_pixel_wheel_zoom, "Whole-pixel zoom")
-                .on_hover_text("Use whole-pixel or exact divisor scales for canvas wheel zoom and Preview Fit.");
-            ui.pc_checkbox(&mut p.autosave, "Enable recovery autosave");
-            if before != serde_json::to_value(&*p).ok() {
-                ui.ctx().set_zoom_factor(self.power.interface_scale());
-                self.save_workflow_preferences();
-            }
-        });
-        if ui.pc_button("Reset settings to defaults").clicked() {
-            self.power.preferences.reset_settings();
-            self.grid = self.power.default_grid();
-            self.studio.sheet.scale = 1;
-            self.background_update_attempt = None;
-            self.power.apply_density(ui.ctx());
-            ui.ctx().set_zoom_factor(self.power.interface_scale());
-            self.save_workflow_preferences();
-        }
+        self.categorized_settings_ui(ui);
     }
     pub(super) fn move_palette_swatch(&mut self, from: usize, to: usize) {
         if from == to {
@@ -1196,18 +1060,34 @@ impl PixelCraft {
             }
         }
     }
+    /// Native startup explicitly chooses preference storage. Headless editors
+    /// keep independent defaults until a caller supplies a storage path.
+    pub(super) fn restore_workflow_preferences(&mut self, path: PathBuf) {
+        self.power.preferences = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        self.power.preferences_path = Some(path);
+    }
     pub(super) fn save_workflow_preferences(&mut self) {
+        let Some(path) = &self.power.preferences_path else {
+            return;
+        };
         let result = (|| {
-            let dir = extensions::config_directory();
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            if let Some(directory) = path
+                .parent()
+                .filter(|directory| !directory.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+            }
             std::fs::write(
-                dir.join("workflow.json"),
+                path,
                 serde_json::to_vec_pretty(&self.power.preferences).map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())
         })();
-        if let Err(e) = result {
-            self.status = format!("Preferences could not be saved: {e}");
+        if let Err(error) = result {
+            self.status = format!("Preferences could not be saved: {error}");
         }
     }
     pub(super) fn add_recent(&mut self, path: PathBuf) {
@@ -2002,46 +1882,7 @@ impl PixelCraft {
         }
     }
     pub(super) fn power_dialogs(&mut self, ctx: &egui::Context) {
-        if !self.power.open {
-            return;
-        }
-        let mut open = true;
-        egui::Window::new("Workflow tools").open(&mut open).default_width(530.).default_height(650.).show(ctx,|ui|{egui::ScrollArea::vertical().show(ui,|ui|{
- self.palette_arrangement_ui(ui);
- ui.collapsing("Magic Wand & brushes",|ui|{if ui_icons::button(ui,"wand","Magic Wand",false,false).clicked(){self.tool=Tool::Wand;}ui.pc_checkbox(&mut self.power.contiguous,"Contiguous matching");ui.add(egui::Slider::new(&mut self.power.tolerance,0..=255).text("Color tolerance"));ui.horizontal(|ui|{for op in [SelectionOp::Replace,SelectionOp::Add,SelectionOp::Subtract]{ui.pc_selectable_value(&mut self.power.selection_op,op,format!("{op:?}"));}});ui.small("Shift-click adds; Ctrl/Cmd-click subtracts.");self.brush_mode_ui(ui);if ui.pc_button("Capture selection as stamp").clicked(){self.capture_stamp();}ui.pc_checkbox(&mut self.power.reverse,"Shade toward previous palette color");ui.small("Dither alternates active/alternate colors on the canvas grid. Shade changes each pixel once per stroke.");});
- ui.collapsing("Wraparound & palette",|ui|{let mut wrap=self.doc.wraparound;let mut snap=self.doc.palette_snap;ui.pc_checkbox(&mut wrap,"Wrap drawing & fill across canvas edges");ui.pc_checkbox(&mut snap,"Snap pencil, fill & shapes to palette in RGB mode");if wrap!=self.doc.wraparound||snap!=self.doc.palette_snap{self.remember_action("Change drawing options");self.doc.wraparound=wrap;self.doc.palette_snap=snap;}ui.small("The seamless canvas uses the axes selected under View.");ui.horizontal(|ui|{if ui.pc_button("Import palette…").clicked(){self.palette_file(false);}
-if ui.pc_button("Export palette…").clicked(){self.palette_file(true);}});ui.small("HEX supports RGBA. JASC PAL and GIMP GPL store RGB.");});
- ui.collapsing("Reference images", |ui| self.reference_controls(ui));
- ui.collapsing("Onion skin", |ui| { ui.pc_checkbox(&mut self.onion, "Enable onion skin"); ui.small("Set frame counts, tints, and opacity in Edit → Settings."); });
- ui.collapsing("Grid sprite-sheet import", |ui| self.grid_import_ui(ui));
-        ui.collapsing("Batch export animation tags", |ui| {
-            ui.small("One file per tag. Frame timing and forward/reverse/ping-pong order are preserved.");
-            egui::ComboBox::from_label("Sheet engine preset")
-                .selected_text(&self.studio.sheet.preset)
-                .show_ui(ui, |ui| {
-                    for preset in SheetOptions::PRESETS {
-                        ui.pc_selectable_value(&mut self.studio.sheet.preset, preset.into(), preset);
-                    }
-                });
-            ui.horizontal(|ui| {
-                for (gif, label) in [(true, "Export tag GIFs…"), (false, "Export tag sheets…")] {
-                    if ui.add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button(label)).inner.clicked()
-                        && let Some(path) = rfd::FileDialog::new().pick_folder()
-                    {
-                        let kind = ExportKind::Tags { gif, options: Box::new(self.studio.sheet.clone()) };
-                        self.start_export_recipe(ExportRecipe { path, kind }, false);
-                    }
-                }
-            });
-        });
- ui.collapsing("Multi-file atlas", |ui| self.atlas_export_ui(ui));
- ui.collapsing("Recent files & shortcuts",|ui|{let mut chosen=None;for (path,label,available) in self.recent_file_entries(){if ui.add_enabled_ui(available,|ui|ui_icons::button(ui,"open",&label,false,false)).inner.on_hover_text(path.display().to_string()).clicked(){chosen=Some(path);}}
-if let Some(p)=chosen{match formats::load(&p){Ok(d)=>{self.add_recent(p.clone());let editable=matches!(p.extension().and_then(|s|s.to_str()),Some("pixel"|"ase"|"aseprite"));self.open_document(d,editable.then_some(p));},Err(e)=>self.status=format!("Could not open: {e}")}}
-if ui.pc_button("Clear recent files").clicked(){self.power.preferences.recent.clear();self.save_workflow_preferences();}ui.separator();if ui.pc_button("Keyboard shortcuts…").clicked(){self.action("shortcuts");}});
- ui.collapsing("Assistants & headless tools",|ui|{ui.label("The MCP server and CLI can work on files without opening the editor.");ui.monospace("pixelcraft --help\npixelcraft --mcp");let mut enabled=self.power.bridge.is_some();if ui.pc_checkbox(&mut enabled,"Allow assistants to access this live editor").changed(){if enabled{let config=std::env::temp_dir().join(format!("pixelcraft-live-{}.json",std::process::id()));let wake=ctx.clone();match LiveBridge::start_with_wake(config,move || wake.request_repaint()){Ok(b)=>{self.power.bridge=Some(b);self.power.bridge_generation+=1;self.status="Live editor access enabled. Edits are undoable.".into();},Err(e)=>self.status=format!("Could not enable bridge: {e}")}}else{if let Some(progress)=self.power.bridge_export.take(){progress.cancel();}self.power.bridge=None;self.power.bridge_work=None;self.status="Live editor access disabled".into();}}
-if let Some(b)=&self.power.bridge{ui.label("Live access is active only while this checkbox is enabled.");ui.label("Use this MCP server command:");ui.monospace(format!("pixelcraft --mcp --live \"{}\"",b.config.display()));ui.small("The private bridge file contains an access token. Inspect returns a revision; stale edits are rejected. Ctrl+Z undoes assistant edits.");}});
- });});
-        self.power.open = open;
+        self.workflow_dialog(ctx);
     }
     fn grid_import_ui(&mut self, ui: &mut egui::Ui) {
         if ui.pc_button("Choose sprite sheet…").clicked()
@@ -2318,6 +2159,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
     }
 
     fn atlas_export_ui(&mut self, ui: &mut egui::Ui) {
+        let can_export = !self.export_busy();
         if ui.pc_button("Add sprites…").clicked()
             && let Some(paths) = rfd::FileDialog::new()
                 .add_filter("Sprites", ATLAS_EXTENSIONS)
@@ -2425,7 +2267,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                 Ok(AtlasPreview {
                     inputs,
                     options: options.clone(),
-                    packed,
+                    packed: Arc::new(packed),
                     texture,
                 })
             })();
@@ -2441,7 +2283,7 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                     .min(8.);
                 ui.add(egui::Image::new(&preview.texture).fit_to_exact_size(dimensions * scale));
                 if ui
-                    .add_enabled_ui(self.export_job.is_none(), |ui| ui.pc_button("Save atlas…"))
+                    .add_enabled_ui(can_export, |ui| ui.pc_button("Save atlas…"))
                     .inner
                     .clicked()
                     && let Some(path) = rfd::FileDialog::new()
@@ -2449,26 +2291,19 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
                         .set_file_name("atlas.png")
                         .save_file()
                 {
-                    self.status = match save_packed_atlas_with_metadata(
-                        &path,
-                        &preview.packed,
-                        options.metadata,
-                    ) {
-                        Ok(()) => {
-                            self.last_export = Some(ExportRecipe {
-                                path,
-                                kind: ExportKind::MultiAtlas {
-                                    inputs: preview.inputs.clone(),
-                                    options: AtlasOptions {
-                                        metadata: options.metadata,
-                                        ..preview.options.clone()
-                                    },
-                                },
-                            });
-                            "Exported multi-file atlas".into()
-                        }
-                        Err(error) => format!("Export failed: {error}"),
+                    let recipe = ExportRecipe {
+                        published: Default::default(),
+                        path: path.clone(),
+                        kind: ExportKind::MultiAtlas {
+                            packed: Some(preview.packed.clone()),
+                            inputs: preview.inputs.clone(),
+                            options: AtlasOptions {
+                                metadata: options.metadata,
+                                ..preview.options.clone()
+                            },
+                        },
                     };
+                    self.request_export_recipe(recipe, false, &[]);
                 }
             }
             Some(Err(error)) => {
@@ -2493,16 +2328,29 @@ if let Some(b)=&self.power.bridge{ui.label("Live access is active only while thi
         };
         if let Some(path) = path {
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("hex");
+            if export {
+                let kind = ExportKind::Palette {
+                    colors: self.doc.palette.clone(),
+                    extension: ext.into(),
+                };
+                self.start_export_recipe(
+                    ExportRecipe {
+                        path,
+                        kind,
+                        published: Default::default(),
+                    },
+                    false,
+                );
+                return;
+            }
             let result = (|| {
-                if export {
-                    std::fs::write(&path, write_palette(&self.doc.palette, ext)?)
-                        .map_err(|e| e.to_string())?;
-                } else {
-                    let p = parse_palette(&std::fs::read(&path).map_err(|e| e.to_string())?, ext)?;
-                    self.remember_action("Import palette");
-                    self.doc.import_palette(p)?;
-                    self.doc.palette_names.clear();
-                }
+                let palette = pixelcraft::productivity::load_palette(&path)?;
+                let mut candidate = self.doc.clone();
+                candidate.import_palette(palette)?;
+                candidate.palette_names.clear();
+                candidate.validate()?;
+                self.remember_action("Import palette");
+                self.doc = candidate;
                 Ok::<_, String>(())
             })();
             self.status = match result {
@@ -3628,7 +3476,7 @@ mod tests {
         assert!(!a.selected(0, 0));
     }
     #[test]
-    fn workflow_dialog_renders_all_sections() {
+    fn workflow_index_renders() {
         let ctx = egui::Context::default();
         let mut a = PixelCraft::with_context(&ctx, None);
         a.power.open = true;
@@ -3860,7 +3708,9 @@ mod bridge_tests {
         app.start_export("png-sequence", output.clone());
         app.doc.set_pixel(0, 1, 0, [255, 0, 0, 255]);
         let deadline = Instant::now() + Duration::from_secs(5);
-        while app.export_job.is_some() && Instant::now() < deadline {
+        while (app.export_job.is_some() || app.export_preflight.is_some())
+            && Instant::now() < deadline
+        {
             app.poll_export();
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -4767,5 +4617,67 @@ mod brush_library_tests {
         next.power.reverse = true;
         next.power_paint((2, 0), unrelated, 1);
         assert_eq!(next.doc.layers[0].cels[0][2], low);
+    }
+}
+
+#[cfg(test)]
+mod preference_storage_tests {
+    use super::*;
+    fn path(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "pixelcraft-preferences-{name}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root.join("workflow.json")
+    }
+    #[test]
+    fn explicit_preference_storage_roundtrips_without_affecting_headless_editors() {
+        let ctx = egui::Context::default();
+        let path = path("roundtrip");
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.restore_workflow_preferences(path.clone());
+        app.power.preferences.last_settings_page = "files".into();
+        app.power.preferences.interface_scale = 1.25;
+        app.power.preferences.default_grid = true;
+        app.power.preferences.sample_references = true;
+        app.power.preferences.autosave = false;
+        app.power.preferences.new_sprite_width = 48;
+        app.save_workflow_preferences();
+        let saved: Preferences = serde_json::from_slice(
+            &std::fs::read(&path).expect("injected preference file written"),
+        )
+        .unwrap();
+        assert_eq!(saved.last_settings_page, "files");
+        let mut fresh = PixelCraft::with_context(&egui::Context::default(), None);
+        assert!(!fresh.power.preferences.sample_references);
+        assert!(fresh.power.preferences.autosave);
+        assert_eq!(fresh.power.preferences.interface_scale, 1.);
+        fresh.restore_workflow_preferences(path.clone());
+        assert_eq!(
+            serde_json::to_value(&fresh.power.preferences).unwrap(),
+            serde_json::to_value(saved).unwrap()
+        );
+        assert!(fresh.power.bridge.is_none());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+    #[test]
+    fn preference_restore_keeps_old_fields_and_unknown_navigation_ids() {
+        let ctx = egui::Context::default();
+        let path = path("old-navigation");
+        std::fs::write(&path,br#"{"last_settings_page":"future-page","interface_scale":1.5,"autosave":false,"sample_references":true}"#).unwrap();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        app.restore_workflow_preferences(path.clone());
+        assert_eq!(app.power.preferences.last_settings_page, "future-page");
+        assert_eq!(app.power.preferences.interface_scale, 1.5);
+        assert!(!app.power.preferences.autosave);
+        assert!(app.power.preferences.sample_references);
+        assert_eq!(app.power.preferences.new_sprite_width, 32);
+        app.save_workflow_preferences();
+        let mut reopened = PixelCraft::with_context(&ctx, None);
+        reopened.restore_workflow_preferences(path.clone());
+        assert_eq!(reopened.power.preferences.last_settings_page, "future-page");
+        assert!(!reopened.power.preferences.autosave);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

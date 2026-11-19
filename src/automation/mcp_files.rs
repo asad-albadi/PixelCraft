@@ -187,15 +187,32 @@ impl Files<'_> {
         directory: bool,
         encode: impl FnOnce(&Path) -> Result<T, String>,
     ) -> Result<T, String> {
+        self.write_files_authorized(output, files, directory, None, encode)
+    }
+    pub(super) fn write_files_authorized<T>(
+        &self,
+        output: &Path,
+        files: &[PathBuf],
+        directory: bool,
+        approved: Option<&std::collections::HashSet<PathBuf>>,
+        encode: impl FnOnce(&Path) -> Result<T, String>,
+    ) -> Result<T, String> {
         self.check_write(output)?;
         let mut names = std::collections::HashSet::new();
         for file in files {
-            self.check_file(file)?;
+            Files {
+                root: self.root,
+                overwrite: approved.map_or(self.overwrite, |set| set.contains(file)),
+            }
+            .check_file(file)?;
             if !names.insert(file) {
                 return Err(format!("Duplicate output path: {}", file.display()));
             }
         }
-        if directory && let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if directory
+            && mcp_io::metadata(output).is_err_and(|error| error.kind() == ErrorKind::NotFound)
+            && let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty())
+        {
             mcp_io::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let staging_target =
@@ -213,13 +230,17 @@ impl Files<'_> {
         self.check_write(&prepared.staging)?;
         prepared.check_staging()?;
         for file in files {
-            self.check_file(file)?;
+            Files {
+                root: self.root,
+                overwrite: approved.map_or(self.overwrite, |set| set.contains(file)),
+            }
+            .check_file(file)?;
         }
         if directory {
             self.check_write(output)?;
             mcp_io::create_dir_all(output).map_err(|e| e.to_string())?;
         }
-        publish_files(&prepared, files, directory, self.overwrite)?;
+        publish_files_authorized(&prepared, files, directory, self.overwrite, approved)?;
         Ok(result)
     }
 }
@@ -230,12 +251,22 @@ pub(super) fn publish_files(
     directory: bool,
     replace: bool,
 ) -> Result<(), String> {
+    publish_files_authorized(prepared, files, directory, replace, None)
+}
+fn publish_files_authorized(
+    prepared: &PreparedExport,
+    files: &[PathBuf],
+    directory: bool,
+    replace: bool,
+    approved: Option<&std::collections::HashSet<PathBuf>>,
+) -> Result<(), String> {
+    let may_replace = |file: &Path| approved.map_or(replace, |set| set.contains(file));
     let staging = if directory {
         &prepared.temporary
     } else {
         &prepared.staging
     };
-    let mut backups = if replace && files.len() > 1 {
+    let mut backups = if files.len() > 1 && files.iter().any(|file| may_replace(file)) {
         Some(prepare_output_under(
             prepared.staging.clone(),
             true,
@@ -249,6 +280,9 @@ pub(super) fn publish_files(
     let mut previous = vec![None; files.len()];
     if let Some(backups) = &backups {
         for (index, file) in files.iter().enumerate() {
+            if !may_replace(file) {
+                continue;
+            }
             match mcp_io::metadata(file) {
                 Ok(metadata) if metadata.is_file() => {
                     let backup = backups.staging.join(index.to_string());
@@ -265,10 +299,10 @@ pub(super) fn publish_files(
     }
     for (index, file) in files.iter().enumerate() {
         let staged = staging.join(file.file_name().ok_or("Invalid output filename")?);
-        let written = if replace {
+        let written = if may_replace(file) {
             mcp_io::rename(&staged, file)
         } else {
-            mcp_io::hard_link(&staged, file)
+            mcp_io::publish_new(&staged, file)
         };
         if let Err(e) = written {
             let mut error = format!("Could not publish {}: {e}", file.display());

@@ -162,6 +162,10 @@ pub(crate) fn create_dir(path: &Path) -> io::Result<()> {
     if let Some(result) = super::mcp_access::windows(|guard| guard.create_dir(path)) {
         return result;
     }
+    #[cfg(target_os = "linux")]
+    if let Some(result) = super::mcp_linux::create_directory(path, 0o777) {
+        return result.map(|_| ());
+    }
     fs::create_dir(path)
 }
 
@@ -169,6 +173,10 @@ pub(super) fn create_staging_dir(path: &Path) -> io::Result<Option<FileIdentity>
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.create_directory_identity(path))
     {
+        return result.map(Some);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(result) = super::mcp_linux::create_directory(path, 0o700) {
         return result.map(Some);
     }
     #[cfg(unix)]
@@ -187,6 +195,10 @@ pub(super) fn create_staging_dir(path: &Path) -> io::Result<Option<FileIdentity>
 pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.ensure_directory(path)) {
+        return result;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(result) = super::mcp_linux::ensure_directory(path) {
         return result;
     }
     fs::create_dir_all(path)
@@ -253,12 +265,20 @@ pub(crate) fn remove_dir(path: &Path) -> io::Result<()> {
     if let Some(result) = super::mcp_access::windows(|guard| guard.remove_dir(path)) {
         return result;
     }
+    #[cfg(target_os = "linux")]
+    if let Some(result) = super::mcp_linux::remove_entry(path, true) {
+        return result;
+    }
     fs::remove_dir(path)
 }
 
 pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.remove_file(path)) {
+        return result;
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(result) = super::mcp_linux::remove_entry(path, false) {
         return result;
     }
     fs::remove_file(path)
@@ -297,10 +317,39 @@ pub(crate) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
         let identity = result?;
         return track_created(destination, || Ok(identity));
     }
+    #[cfg(windows)]
+    return super::mcp_windows::rename_new(source, destination);
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let source = std::ffi::CString::new(source.as_os_str().as_bytes())
+            .map_err(|_| io::Error::other("Invalid source path"))?;
+        let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())
+            .map_err(|_| io::Error::other("Invalid output path"))?;
+        // RENAME_EXCL publishes only if the destination is still absent.
+        if unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) }
+            == 0
+        {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     fs::hard_link(source, destination)
 }
 
+#[cfg(test)]
+thread_local! {static NO_HARD_LINKS:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
 pub(crate) fn hard_link(source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    if NO_HARD_LINKS.get() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "test filesystem has no hard links",
+        ));
+    }
+
     #[cfg(any(windows, target_os = "linux"))]
     let expected = expected_source(source)?;
     #[cfg(windows)]
@@ -371,4 +420,25 @@ pub(crate) fn write_image_as(
     pixels.write_to(&mut writer, format)?;
     writer.flush()?;
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod editor_publication_tests {
+    use super::*;
+    #[test]
+    fn new_editor_output_does_not_require_filesystem_hard_links() {
+        let root =
+            std::env::temp_dir().join(format!("pixelcraft-no-hardlinks-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = root.join("new.pixel");
+        NO_HARD_LINKS.set(true);
+        let result =
+            crate::formats::save_with_overwrite(&output, &crate::model::Document::new(2, 2), false);
+        NO_HARD_LINKS.set(false);
+        assert!(
+            result.is_ok(),
+            "new files must work without hard links: {result:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -15,7 +15,11 @@ mod export_actions;
 mod file_path_dialog;
 mod fluent;
 mod freehand_stroke;
+mod menu_ui;
+#[cfg(target_os = "macos")]
+mod native_app_menu;
 mod recent_files;
+mod workspace_navigation;
 use file_path_dialog::{FilePathDialog, FilePathPurpose};
 use freehand_stroke::{BrushDynamics, StrokeStabilizer};
 mod ui_icons;
@@ -649,6 +653,8 @@ impl SubtagRun {
 }
 
 struct PixelCraft {
+    #[cfg(target_os = "macos")]
+    native_app_menu: Option<native_app_menu::AppMenu>,
     studio: studio::Studio,
     power: productivity_ui::PowerTools,
     tabs: Vec<Option<SpriteTab>>,
@@ -746,8 +752,13 @@ struct PixelCraft {
     open_job: Option<FileOpenJob>,
     play_after_open: bool,
     export_job: Option<ExportJob>,
+    export_confirmation: Option<export_actions::ExportConfirmation>,
+    export_preflight: Option<export_actions::ExportPreflight>,
+    export_context: egui::Context,
     last_export: Option<ExportRecipe>,
     animation_export: Option<&'static str>,
+    animation_export_scale: usize,
+    animation_export_document: Option<u64>,
     file_path: Option<FilePathDialog>,
     sequence_name: String,
     save_job: Option<SaveJob>,
@@ -801,6 +812,8 @@ struct PixelCraft {
     shot_requested: bool,
     initial_view: u8,
     inspector_open: bool,
+    reset_scale_requested: bool,
+    reset_layout_requested: bool,
 }
 impl PixelCraft {
     fn native_selection_state(&self) -> NativeSelectionState {
@@ -813,6 +826,11 @@ impl PixelCraft {
 
     fn new(cc: &eframe::CreationContext<'_>, shot: Option<PathBuf>) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
+        app.restore_workflow_preferences(extensions::config_directory().join("workflow.json"));
+        #[cfg(target_os = "macos")]
+        {
+            app.native_app_menu = native_app_menu::AppMenu::install(&cc.egui_ctx);
+        }
         app.theme_path = theme_path();
         app.restore_preview_settings(extensions::config_directory().join("preview.json"));
         let shortcuts_path = extensions::config_directory().join("shortcuts.json");
@@ -821,6 +839,10 @@ impl PixelCraft {
                 .unwrap_or_else(|_| pixelcraft::productivity::shortcut_preset("PixelCraft"));
         }
         app.shortcuts_path = Some(shortcuts_path);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &app.native_app_menu {
+            menu.set_settings_shortcut_enabled(app.settings_shortcut_available());
+        }
         if let Ok(bytes) = std::fs::read(extensions::config_directory().join("language.ini")) {
             app.translations = pixelcraft::contributions::language(&bytes).unwrap_or_default();
         }
@@ -833,6 +855,13 @@ impl PixelCraft {
         cc.egui_ctx.set_zoom_factor(app.power.interface_scale());
         app.studio.recovery_enabled = true;
         app.restore_workspace();
+        #[cfg(target_os = "macos")]
+        if app.shot.is_some() && std::env::var_os("PIXELCRAFT_NATIVE_SETTINGS_CHECK").is_some() {
+            app.native_app_menu
+                .as_ref()
+                .expect("native application menu missing")
+                .verify_settings_command();
+        }
         app
     }
     fn restore_appearance(&mut self, ctx: &egui::Context, directory: &std::path::Path) {
@@ -954,8 +983,13 @@ impl PixelCraft {
             open_job: None,
             play_after_open: false,
             export_job: None,
+            export_confirmation: None,
+            export_preflight: None,
+            export_context: ctx.clone(),
             last_export: None,
             animation_export: None,
+            animation_export_scale: 1,
+            animation_export_document: None,
             file_path: None,
             sequence_name: String::new(),
             save_job: None,
@@ -1015,6 +1049,10 @@ impl PixelCraft {
             shot_requested: false,
             initial_view: 3,
             inspector_open: true,
+            reset_scale_requested: false,
+            reset_layout_requested: false,
+            #[cfg(target_os = "macos")]
+            native_app_menu: None,
         }
     }
     fn apply_theme(ctx: &egui::Context, dark: bool) {
@@ -2130,7 +2168,31 @@ impl PixelCraft {
         if !self.properties_open {
             return;
         }
-        let mut open = true;
+        use productivity_ui::workflow::PropertyPage;
+        let Some(target) = self.current_property_target() else {
+            self.properties_open = false;
+            self.power.property_target = None;
+            self.power.property_page = PropertyPage::Sprite;
+            return;
+        };
+        if self
+            .power
+            .property_target
+            .is_some_and(|opened| opened != target)
+        {
+            self.properties_open = false;
+            self.power.property_target = None;
+            self.power.property_page = PropertyPage::Sprite;
+            self.status = "Properties closed because the active document or object changed".into();
+            return;
+        }
+        self.power.property_target = Some(target);
+        let title = match self.power.property_page {
+            PropertyPage::Sprite => "Sprite properties",
+            PropertyPage::Layer => "Layer properties",
+            PropertyPage::Frame => "Frame and animation properties",
+            PropertyPage::Tileset => "Tileset tools",
+        };
         let mut edited = self.doc.clone();
         let mut import = false;
         let mut capture = false;
@@ -2140,7 +2202,17 @@ impl PixelCraft {
         let mut grayscale_conversion = false;
         let mut rgba_conversion = false;
         let mut remove_tag = None;
-        egui::Window::new("Sprite properties").open(&mut open).default_width(550.).max_height(660.).vscroll(true).show(ctx,|ui|{
+        let footer_key = egui::Id::new(("properties-footer-id", title));
+        let close = fluent::modal_dialog_sized(ctx, title, 550., |ui| {
+            let mut outside = vec![egui::Id::new(("editor-dialog", title)).with("close")];
+            if let Some(id) = ctx.data(|data| data.get_temp::<egui::Id>(footer_key)) {
+                outside.push(id);
+            }
+            let _scroll = egui::ScrollArea::vertical().id_salt(("properties",title))
+                .max_height((ctx.content_rect().height() - 145.).max(48.))
+                .show(ui, |ui| {
+            match self.power.property_page {
+                PropertyPage::Sprite => {
             ui.heading("Color & project");let mut mode=edited.color_mode;
             egui::ComboBox::from_label("Color mode").selected_text(format!("{:?}",mode)).show_ui(ui,|ui|{for value in [ColorMode::Rgba,ColorMode::Indexed,ColorMode::Grayscale]{ui.pc_selectable_value(&mut mode,value,format!("{:?}",value));}});if mode!=edited.color_mode{if mode==ColorMode::Indexed{indexed_options=true;}else if mode==ColorMode::Grayscale{grayscale_conversion=true;}else{rgba_conversion=true;}}
             if ui.pc_button("Palette and Color Conversion…").clicked(){indexed_options=true;}
@@ -2163,6 +2235,13 @@ impl PixelCraft {
                 }
             });
             ui.small(format!("Preserved: {} metadata chunks · {} profile bytes · {} off-canvas pixels",edited.metadata.len(),edited.color_profile.len(),edited.layers.iter().flat_map(|l|&l.cel_meta).map(|m|m.outside.len()).sum::<usize>()));
+            self.slice_controls(ui, &mut edited);
+
+                }
+                PropertyPage::Layer => {
+                    let editable = self.doc.layer_unlocked(self.layer);
+                    if !editable { ui.label("Unlock this layer and its parent groups to edit its properties."); }
+                    ui.add_enabled_ui(editable, |ui| {
             ui.separator();ui.heading("Active layer & cel");ui.label(&edited.layers[self.layer].name);
             let mut blend=edited.layers[self.layer].blend;
             egui::ComboBox::from_label("Blend mode").selected_text(format!("{:?}",blend)).show_ui(ui,|ui|{for v in BlendMode::ALL{ui.pc_selectable_value(&mut blend,v,format!("{:?}",v));}});edited.layers[self.layer].blend=blend;
@@ -2173,6 +2252,10 @@ impl PixelCraft {
             ui.add(egui::Slider::new(&mut edited.layers[self.layer].cel_meta[self.frame].opacity,0..=255).text("Cel opacity"));
             ui.add(egui::DragValue::new(&mut edited.layers[self.layer].cel_meta[self.frame].z_index).range(-32768..=32767).prefix("Cel order "));
             if ui.pc_button("+ New group").clicked(){add_group=true;}
+
+                    });
+                }
+                PropertyPage::Tileset => {
             ui.separator();ui.heading("Tilesets & tile layers");
             ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}
 if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
@@ -2191,12 +2274,39 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ui.pc_selectable_value(&mut self.tile_pixel_mode, Some(TilePixelEdit::CreateVariant), "Always create variant")
                     .on_hover_text("Create one independent tile for each changed placement in a stroke");
             });
-            self.slice_controls(ui, &mut edited);
+
+                }
+                PropertyPage::Frame => {
+                    ui.label(format!("Frame {}", self.frame + 1));
+                    ui.add(egui::DragValue::new(&mut edited.durations[self.frame]).range(1..=65535).prefix("Duration ").suffix(" ms"));
             ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{editor_id: Default::default(),name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
             for(i,t)in edited.tags.iter_mut().enumerate(){ui.horizontal(|ui|{ui.text_edit_singleline(&mut t.name);let mut from=t.from+1;let mut to=t.to+1;ui.add(egui::DragValue::new(&mut from).range(1..=edited.durations.len()).prefix("From "));ui.add(egui::DragValue::new(&mut to).range(from..=edited.durations.len()).prefix("To "));t.from=from-1;t.to=to.max(from)-1;if ui_icons::button(ui, "trash", "Remove range", false, false).clicked(){remove_tag=Some(i);}});ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("direction",i)).selected_text(["Forward","Reverse","Ping-pong","Ping-pong reverse"][t.direction as usize]).show_ui(ui,|ui|{for (d,name)in ["Forward","Reverse","Ping-pong","Ping-pong reverse"].iter().enumerate(){ui.pc_selectable_value(&mut t.direction,d as u8,*name);}});if ui_icons::button(ui,"tag","Use for playback",self.active_tag==Some(i),false).clicked(){self.active_tag=Some(i);self.frame=if t.direction==1||t.direction==3{t.to}else{t.from};self.playback_reverse=t.direction==3;}});}
             if ui.pc_button("Use all frames for playback").clicked(){self.active_tag=None;}ui.small("Range names, endpoints and playback direction are saved in the project.");
+                }
+            }
+
+                    fluent::reveal_focused_control(ui, &outside);
+                    #[cfg(test)] ctx.data_mut(|data| data.insert_temp(egui::Id::new("properties-body-clip"),ui.clip_rect()));
+                });
+            #[cfg(test)]
+            ctx.data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new("properties-body-offset"),
+                    _scroll.state.offset,
+                )
+            });
+            ui.separator();
+            let done = ui
+                .push_id(("properties-footer", title), |ui| ui.pc_button("Done"))
+                .inner;
+            ctx.data_mut(|data| data.insert_temp(footer_key, done.id));
+            done.clicked()
         });
-        self.properties_open = open;
+        if close {
+            self.properties_open = false;
+            self.power.property_target = None;
+            self.power.property_page = PropertyPage::Sprite;
+        }
         if let Some(i) = remove_tag {
             edited.remove_tag(i);
             self.active_tag = None;
@@ -2223,44 +2333,35 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.start_rgba_conversion(ctx);
         }
         if add_group {
-            self.remember_action("New group");
-            match self.doc.add_group("Group") {
-                Ok(g) => self.layer = g,
-                Err(e) => self.status = e,
+            let mut candidate = self.doc.clone();
+            match candidate
+                .add_group("Group")
+                .and_then(|group| candidate.validate().map(|_| group))
+            {
+                Ok(group) => {
+                    self.remember_action("New group");
+                    self.doc = candidate;
+                    self.layer = group;
+                }
+                Err(error) => self.status = error,
             }
         }
         if add_tile {
-            self.remember_action("New tile layer");
-            if let Err(e) = self.doc.add_tile_layer(self.doc.tilesets.len() - 1) {
-                self.status = e;
-            } else {
-                self.layer = self.doc.layers.len() - 1;
+            let mut candidate = self.doc.clone();
+            match candidate
+                .add_tile_layer(candidate.tilesets.len() - 1)
+                .and_then(|_| candidate.validate())
+            {
+                Ok(()) => {
+                    self.remember_action("New tile layer");
+                    self.layer = candidate.layers.len() - 1;
+                    self.doc = candidate;
+                }
+                Err(error) => self.status = error,
             }
         }
-        if capture {
-            let (x0, y0, x1, y1) = self.selection.unwrap_or((
-                0,
-                0,
-                self.tile_size.min(self.doc.width) as i32 - 1,
-                self.tile_size.min(self.doc.height) as i32 - 1,
-            ));
-            let (w, h) = ((x1 - x0 + 1) as usize, (y1 - y0 + 1) as usize);
-            let pixels = self.doc.layer_pixels(self.layer, self.frame);
-            let mut p = vec![];
-            for y in y0..=y1 {
-                for x in x0..=x1 {
-                    p.push(pixels[y as usize * self.doc.width + x as usize]);
-                }
-            }
-            self.remember_action("Capture selection as tile");
-            self.doc.tilesets.push(Tileset {
-                editor_id: Default::default(),
-                name: "Captured tile".into(),
-                width: w,
-                height: h,
-                tiles: vec![p.into()],
-            });
-            self.selected_tile = 1;
+        if capture && let Err(error) = self.capture_property_tile() {
+            self.status = error;
         }
         if import && let Err(e) = self.import_tileset() {
             self.status = format!("Could not import tileset: {e}");
@@ -2341,6 +2442,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.pending.is_some()
             || self.new_dialog
             || self.settings_open
+            || self.power.open
+            || self.about
             || self.rename.is_some()
             || self.replace_color.is_some()
             || self.editor_filter.is_some()
@@ -2353,6 +2456,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             || self.properties_open
             || self.grid_settings.is_some()
             || self.animation_export.is_some()
+            || self.export_dialog_open()
             || self.file_path.is_some()
             || self.shortcut_edit.is_some()
             || self.shortcut_settings_open
@@ -2729,7 +2833,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         false
     }
 
-    fn save_to_path(&mut self, mut path: PathBuf) -> bool {
+    fn save_to_path(&mut self, path: PathBuf) -> bool {
+        self.save_to_path_authorized(path, true, false)
+    }
+    fn save_to_path_with_overwrite(&mut self, path: PathBuf, overwrite: bool) -> bool {
+        self.save_to_path_authorized(path, overwrite, true)
+    }
+    fn save_to_path_authorized(
+        &mut self,
+        mut path: PathBuf,
+        overwrite: bool,
+        confirmed: bool,
+    ) -> bool {
         if self.save_job.is_some() {
             self.status = "A save is already running".into();
             return false;
@@ -2760,20 +2875,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 .show();
             match choice {
                 rfd::MessageDialogResult::Custom(label) if label == "Save as .pixel" => {
-                    let Some(pixel_path) = rfd::FileDialog::new()
-                        .add_filter("PixelCraft project", &["pixel"])
-                        .set_file_name(
-                            path.with_extension("pixel")
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy(),
-                        )
-                        .save_file()
-                    else {
-                        return false;
-                    };
-                    path = pixel_path;
-                    path.set_extension("pixel");
+                    self.begin_file_path(
+                        FilePathPurpose::Save,
+                        path.with_extension("pixel").to_string_lossy().into_owned(),
+                    );
+                    return false;
                 }
                 rfd::MessageDialogResult::Custom(label) if label == "Discard references" => {
                     saving.references.clear()
@@ -2782,12 +2888,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
         if self.pending.is_some() || saving != self.doc {
-            return self.finish_save(path, saving);
+            return self.finish_save_authorized(path, saving, overwrite, confirmed);
         }
-        self.queue_save(path, saving);
+        self.queue_save(path, saving, overwrite, confirmed);
         false
     }
-    fn queue_save(&mut self, path: PathBuf, saving: Document) {
+    fn queue_save(&mut self, path: PathBuf, saving: Document, overwrite: bool, confirmed: bool) {
         let (tx, rx) = std::sync::mpsc::channel();
         self.save_job = Some(SaveJob {
             tab: self.active_tab,
@@ -2798,7 +2904,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             path.file_name().unwrap_or_default().to_string_lossy()
         );
         std::thread::spawn(move || {
-            let result = formats::save(&path, &saving);
+            let result = if confirmed || !overwrite {
+                formats::save_with_overwrite(&path, &saving, overwrite)
+            } else {
+                formats::save(&path, &saving)
+            };
             let _ = tx.send((path, saving, result));
         });
     }
@@ -2839,8 +2949,23 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             Err(_) => self.status = "Save worker stopped unexpectedly".into(),
         }
     }
+    #[cfg(test)]
     fn finish_save(&mut self, path: PathBuf, saving: Document) -> bool {
-        match formats::save(&path, &saving) {
+        self.finish_save_authorized(path, saving, true, false)
+    }
+    fn finish_save_authorized(
+        &mut self,
+        path: PathBuf,
+        saving: Document,
+        overwrite: bool,
+        confirmed: bool,
+    ) -> bool {
+        let result = if confirmed || !overwrite {
+            formats::save_with_overwrite(&path, &saving, overwrite)
+        } else {
+            formats::save(&path, &saving)
+        };
+        match result {
             Ok(()) => {
                 if self.doc != saving {
                     self.remember_action("Apply save format conversion");
@@ -2865,8 +2990,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
     }
+    fn begin_animation_export(&mut self, kind: &'static str) {
+        self.animation_export = Some(kind);
+        self.animation_export_scale = self.studio.sheet.scale;
+        self.animation_export_document = Some(self.doc.editor_id.runtime_key());
+    }
     fn export(&mut self, kind: &str) {
-        if self.export_job.is_some() {
+        if self.export_busy() {
             self.status = "An export is already running".into();
             return;
         }
@@ -2900,8 +3030,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             suggested,
         );
     }
+    #[cfg(test)]
     fn start_export(&mut self, kind: &str, path: PathBuf) {
-        let scale = self.studio.sheet.scale;
+        self.start_export_with_scale(kind, path, self.studio.sheet.scale);
+        self.wait_export_preflight();
+    }
+    #[cfg(test)]
+    fn start_export_with_scale(&mut self, kind: &str, path: PathBuf, scale: usize) {
+        self.start_export_with_consent(kind, path, scale, false);
+    }
+    fn start_export_with_consent(
+        &mut self,
+        kind: &str,
+        path: PathBuf,
+        scale: usize,
+        replace_primary: bool,
+    ) {
         let kind = match kind {
             "png-sequence" => ExportKind::Sequence { scale },
             "gif" => ExportKind::Animation {
@@ -2927,7 +3071,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 sheet: kind == "sheet",
             },
         };
-        self.start_export_recipe(ExportRecipe { path, kind }, false);
+        let confirmed = if replace_primary {
+            vec![path.clone()]
+        } else {
+            Vec::new()
+        };
+        self.request_export_recipe(
+            ExportRecipe {
+                published: Default::default(),
+                path,
+                kind,
+            },
+            false,
+            &confirmed,
+        );
     }
     fn copy(&mut self) {
         if self.uses_tilemap_clipboard() {
@@ -3359,6 +3516,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn action(&mut self, s: &str) {
+        if self.navigation_action(s) {
+            return;
+        }
         if s == "command-search" {
             self.open_command_search();
             return;
@@ -3399,12 +3559,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         || "sprite-frames".into(),
                         |stem| format!("{}-frames", stem.to_string_lossy()),
                     );
-                self.animation_export = Some("png-sequence");
+                self.begin_animation_export("png-sequence");
             }
-            "gif" => self.animation_export = Some("gif"),
-            "mp4" => self.animation_export = Some("mp4"),
-            "fli" => self.animation_export = Some("fli"),
-            "flc" => self.animation_export = Some("flc"),
+            "gif" => self.begin_animation_export("gif"),
+            "mp4" => self.begin_animation_export("mp4"),
+            "fli" => self.begin_animation_export("fli"),
+            "flc" => self.begin_animation_export("flc"),
             "undo" => self.undo(),
             "undo-history" => self.history_open = !self.history_open,
             "redo" => self.redo(),
@@ -3746,111 +3906,89 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     RichText::new(translated)
                 };
                 ui.menu_button(title_text, |ui| {
-                    if title == "File" {
-                        ui_icons::submenu(ui, "history", "Recent files", |ui| {
-                            let entries = self.recent_file_entries();
-                            if entries.is_empty() {
-                                ui.label("No recent files yet");
-                            }
-                            for (path, label, available) in entries {
-                                let response = ui
-                                    .add_enabled_ui(available, |ui| {
-                                        ui_icons::button(ui, "open", &label, false, true)
-                                    })
-                                    .inner
-                                    .on_hover_text(path.display().to_string());
-                                if response.clicked() {
-                                    self.open_recent(path);
-                                    ui.close();
-                                }
-                            }
-                        });
-                        ui.separator();
-                    }
-                    if title == "View" {
-                        let open = self.inspector_open;
-                        if ui
-                            .button(if open {
-                                "Hide inspector"
-                            } else {
-                                "Show inspector"
-                            })
-                            .clicked()
-                        {
-                            self.inspector_open = !open;
-                            ui.close();
-                        }
-                        if ui
-                            .button(if self.preview_settings.visible {
-                                "Hide Preview"
-                            } else {
-                                "Show Preview"
-                            })
-                            .clicked()
-                        {
-                            self.toggle_preview_visibility();
-                            ui.close();
-                        }
-                        ui.menu_button("Density", |ui| {
-                            self.density_options(ui);
-                        });
-                        ui_icons::submenu(ui, "theme", "Theme", |ui| {
-                            for (label, preference) in [
-                                ("System", egui::ThemePreference::System),
-                                ("Light", egui::ThemePreference::Light),
-                                ("Dark", egui::ThemePreference::Dark),
-                            ] {
-                                if ui_icons::button(
-                                    ui,
-                                    "theme",
-                                    label,
-                                    self.theme_preference == preference,
-                                    false,
-                                )
-                                .clicked()
-                                {
-                                    self.set_theme_preference(ui.ctx(), preference);
-                                    self.save_theme();
-                                    ui.close();
-                                }
-                            }
-                        });
-                        ui.separator();
-                    }
-                    for &(label, a) in items {
-                        if ["closetab", "deletelayer", "deleteframe", "clear"].contains(&a) {
+                    menu_ui::scroll_menu(ui, |ui| {
+                        if title == "File" {
+                            ui_icons::submenu(ui, "history", "Recent files", |ui| {
+                                menu_ui::scroll_menu(ui, |ui| {
+                                    let entries = self.recent_file_entries();
+                                    if entries.is_empty() {
+                                        ui.label("No recent files yet");
+                                    }
+                                    for (path, label, available) in entries {
+                                        let response = ui
+                                            .add_enabled_ui(available, |ui| {
+                                                ui_icons::button(ui, "open", &label, false, true)
+                                            })
+                                            .inner
+                                            .on_hover_text(path.display().to_string())
+                                            .on_disabled_hover_text(format!(
+                                                "This recent file is unavailable: {}",
+                                                path.display()
+                                            ));
+                                        if response.gained_focus() {
+                                            response.scroll_to_me(None);
+                                        }
+                                        if response.clicked() {
+                                            self.open_recent(path);
+                                            ui.close();
+                                        }
+                                    }
+                                })
+                            });
                             ui.separator();
                         }
-                        let label = label.split("   ").next().unwrap_or(label);
-                        let selected = match a {
-                            "grid" => self.grid,
-                            "split-canvas" => self.split_canvas.is_some(),
-                            "drawing-grid" => self.show_drawing_grid,
-                            "snap-to-grid" => self.snap_to_grid,
-                            "onion" => self.onion,
-                            "rewind-on-stop" => self.rewind_on_stop(),
-                            "play" => self.playing,
-                            "seamless" => self.studio.seamless == WrapAxes::BOTH,
-                            "seamless-horizontal" => self.studio.seamless == WrapAxes::HORIZONTAL,
-                            "seamless-vertical" => self.studio.seamless == WrapAxes::VERTICAL,
-                            _ => false,
-                        };
-                        let icon = if a == "play" && self.playing {
-                            "stop"
-                        } else {
-                            a
-                        };
-                        let enabled = self.native_action_enabled(a);
-                        let response = ui
-                            .add_enabled_ui(enabled, |ui| {
-                                ui_icons::button_as(ui, icon, a, label, selected, true)
-                            })
-                            .inner;
-                        if response.clicked() {
-                            action = Some(a);
-                            ui.close();
+                        if title == "View" {
+                            let open = self.inspector_open;
+                            if ui
+                                .button(if open {
+                                    "Hide inspector"
+                                } else {
+                                    "Show inspector"
+                                })
+                                .clicked()
+                            {
+                                self.inspector_open = !open;
+                                ui.close();
+                            }
+                            if ui
+                                .button(if self.preview_settings.visible {
+                                    "Hide Preview"
+                                } else {
+                                    "Show Preview"
+                                })
+                                .clicked()
+                            {
+                                self.toggle_preview_visibility();
+                                ui.close();
+                            }
+                            ui.menu_button("Density", |ui| {
+                                self.density_options(ui);
+                            });
+                            ui_icons::submenu(ui, "theme", "Theme", |ui| {
+                                for (label, preference) in [
+                                    ("System", egui::ThemePreference::System),
+                                    ("Light", egui::ThemePreference::Light),
+                                    ("Dark", egui::ThemePreference::Dark),
+                                ] {
+                                    if ui_icons::button(
+                                        ui,
+                                        "theme",
+                                        label,
+                                        self.theme_preference == preference,
+                                        false,
+                                    )
+                                    .clicked()
+                                    {
+                                        self.set_theme_preference(ui.ctx(), preference);
+                                        self.save_theme();
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.separator();
                         }
-                    }
+                        self.menu_items(ui, items, &mut action);
+                    })
                 });
             }
             let menus_right = ui.cursor().left();
@@ -5239,7 +5377,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             ui.pc_checkbox(&mut self.onion, "Onion skin");
             if ui.pc_button("Properties & ranges…").clicked() {
-                self.properties_open = true;
+                self.action("frame-properties");
                 ui.close();
             }
             if ui.pc_small_button("Rename").clicked() {
@@ -6691,6 +6829,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.shortcut_edit_dialog(ctx);
             return;
         }
+        if self.export_dialog_open() {
+            self.export_confirmation_dialog(ctx);
+            return;
+        }
         if self.shortcut_settings_open {
             self.shortcut_settings_dialog(ctx);
             return;
@@ -6701,6 +6843,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.palette_conversion_dialog(ctx);
         self.document_profile_dialog(ctx);
         self.selection_tools_dialog(ctx);
+        if self.animation_export.is_some()
+            && self.animation_export_document != Some(self.doc.editor_id.runtime_key())
+        {
+            self.animation_export = None;
+            self.status = "Export dialog closed because the active document changed".into();
+        }
         if let Some(kind) = self.animation_export {
             let mut accept = false;
             let mut cancel = false;
@@ -6712,8 +6860,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 _ => "Export MP4 video",
             };
             let dismiss = fluent::modal_dialog(ctx, title, |ui| {
-                self.export_scale_ui(ui);
-                let scale = self.studio.sheet.scale;
+                Self::export_scale_value_ui(ui, &mut self.animation_export_scale);
+                let scale = self.animation_export_scale;
                 let width = self.doc.width.saturating_mul(scale);
                 let height = self.doc.height.saturating_mul(scale);
                 let dimensions = if kind == "mp4" {
@@ -6740,6 +6888,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.animation_export = None;
                 if accept {
                     self.export(kind);
+                    if let Some(dialog) = &mut self.file_path {
+                        dialog.scale = Some(self.animation_export_scale);
+                    }
                 }
             }
         }
@@ -7056,6 +7207,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 }
 impl PixelCraft {
     fn render(&mut self, ui: &mut egui::Ui) {
+        self.navigation_shortcuts(ui.ctx());
+        if std::mem::take(&mut self.reset_layout_requested) {
+            ui.ctx().data_mut(|data| {
+                for panel in ["palette_panel", "timeline"] {
+                    data.remove::<egui::containers::panel::PanelState>(egui::Id::new(panel));
+                }
+            });
+        }
+        if std::mem::take(&mut self.reset_scale_requested) {
+            self.reset_interface_scale(ui.ctx());
+        }
         self.canvas_pixels_per_point = ui.ctx().pixels_per_point();
         ui_icons::set_bindings(ui.ctx(), &self.custom_shortcuts);
         self.dark_mode = ui.ctx().theme() == egui::Theme::Dark;
@@ -7085,6 +7247,7 @@ impl PixelCraft {
         self.poll_save();
         if self.open_job.is_some()
             || self.export_job.is_some()
+            || self.export_preflight.is_some()
             || self.save_job.is_some()
             || self.used_colors_job.is_some()
         {
@@ -7177,7 +7340,14 @@ impl PixelCraft {
         if !self.dialog_open() {
             self.shortcuts(&ctx)
         }
-        if self.playing && self.command_search.open {
+        if self.playing
+            && (self.command_search.open
+                || self.properties_open
+                || self.animation_export.is_some()
+                || self.file_path.is_some()
+                || self.studio.sheet_open
+                || self.export_dialog_open())
+        {
             self.last_tick = Instant::now();
         } else if self.playing {
             self.refresh_frame_cache(&ctx);
@@ -7379,12 +7549,15 @@ impl PixelCraft {
         if self.tile_clipboard_work.is_some() || self.tile_paste_work.is_some() {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
+        let export_modal = self.export_dialog_open();
         self.dialogs(&ctx);
-        self.history_panel(&ctx);
-        self.drawing_grid_dialog(&ctx);
-        self.workspace_recovery_dialog(&ctx);
-        self.studio_dialogs(&ctx);
-        self.power_dialogs(&ctx);
+        if !export_modal && !self.export_dialog_open() {
+            self.history_panel(&ctx);
+            self.drawing_grid_dialog(&ctx);
+            self.workspace_recovery_dialog(&ctx);
+            self.studio_dialogs(&ctx);
+            self.power_dialogs(&ctx);
+        }
         self.show_command_search(&ctx);
         self.poll_clipboard(&ctx);
         self.poll_bridge(&ctx);
@@ -7455,8 +7628,30 @@ impl eframe::App for PixelCraft {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if self
+            .native_app_menu
+            .as_ref()
+            .is_some_and(|menu| menu.settings_requested())
+        {
+            if !self.dialog_open() || self.settings_open {
+                self.action("settings");
+            }
+            if self.shot.is_some() && std::env::var_os("PIXELCRAFT_NATIVE_SETTINGS_CHECK").is_some()
+            {
+                assert!(
+                    self.settings_open,
+                    "native Settings event did not open Settings"
+                );
+                eprintln!("Native Settings menu, shortcut binding and bounded delivery verified");
+            }
+        }
         self.poll_display_profile(ui.ctx(), display_profiles::Surface::from_frame(frame));
-        self.render(ui)
+        self.render(ui);
+        #[cfg(target_os = "macos")]
+        if let Some(menu) = &self.native_app_menu {
+            menu.set_settings_shortcut_enabled(self.settings_shortcut_available());
+        }
     }
 }
 fn color_image(p: &[Pixel], w: usize, h: usize) -> egui::ColorImage {
@@ -10530,7 +10725,9 @@ mod tests {
     fn wait_for_export(editor: &mut PixelCraft) {
         use std::time::{Duration, Instant};
         let deadline = Instant::now() + Duration::from_secs(5);
-        while editor.export_job.is_some() && Instant::now() < deadline {
+        while (editor.export_job.is_some() || editor.export_preflight.is_some())
+            && Instant::now() < deadline
+        {
             editor.poll_export();
             if editor.export_job.is_some() {
                 std::thread::sleep(Duration::from_millis(5));
@@ -10576,7 +10773,7 @@ mod tests {
         editor.switch_tab(0);
         editor.action("repeat-export");
         assert!(
-            editor.export_job.is_some(),
+            editor.export_busy(),
             "repeat action did not start the worker"
         );
         wait_for_export(&mut editor);
@@ -10621,6 +10818,7 @@ mod tests {
             std::process::id()
         ));
         let recipe = ExportRecipe {
+            published: Default::default(),
             path: path.clone(),
             kind: ExportKind::Sheet {
                 options: Box::new(options),
@@ -10630,6 +10828,7 @@ mod tests {
             },
         };
         editor.start_export_recipe(recipe, false);
+        editor.wait_export_preflight();
         editor.open_document(Document::new(1, 1), None);
         wait_for_export(&mut editor);
         assert!(!editor.can_repeat_export());

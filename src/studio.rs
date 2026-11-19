@@ -19,6 +19,7 @@ pub(super) struct Studio {
     pub(super) collapsed_groups: std::collections::HashSet<String>,
     pub open: bool,
     pub sheet_open: bool,
+    sheet_document: Option<u64>,
     pub tiles_open: bool,
     tileset_atlas_export: Option<TilesetAtlasDialog>,
     tile_browser_set: usize,
@@ -242,6 +243,7 @@ impl Default for Studio {
             collapsed_groups: std::collections::HashSet::new(),
             open: false,
             sheet_open: false,
+            sheet_document: None,
             tiles_open: false,
             tileset_atlas_export: None,
             tile_browser_set: 0,
@@ -891,7 +893,10 @@ impl PixelCraft {
     pub(super) fn studio_action(&mut self, s: &str) -> bool {
         match s {
             "studio" => self.studio.open = true,
-            "sheet" => self.studio.sheet_open = true,
+            "sheet" => {
+                self.studio.sheet_open = true;
+                self.studio.sheet_document = Some(self.doc.editor_id.runtime_key());
+            }
             "tiles" => {
                 self.studio.tile_browser_set = self.doc.layers[self.layer].tileset.unwrap_or(0);
                 self.studio.tiles_open = true;
@@ -1055,7 +1060,14 @@ impl PixelCraft {
                     let kind = ExportKind::Tiled {
                         frame_id: self.doc.frame_export_id(self.frame),
                     };
-                    self.start_export_recipe(ExportRecipe { path, kind }, false);
+                    self.start_export_recipe(
+                        ExportRecipe {
+                            published: Default::default(),
+                            path,
+                            kind,
+                        },
+                        false,
+                    );
                 }
             }
             "savepalette" => {
@@ -1659,7 +1671,14 @@ impl PixelCraft {
             columns: options.columns,
             layers,
         };
-        self.start_export_recipe(ExportRecipe { path, kind }, false);
+        self.start_export_recipe(
+            ExportRecipe {
+                published: Default::default(),
+                path,
+                kind,
+            },
+            false,
+        );
     }
 
     fn tileset_atlas_dialog(&mut self, ctx: &egui::Context) {
@@ -2112,18 +2131,42 @@ impl PixelCraft {
             layers,
             tag,
         };
-        self.start_export_recipe(ExportRecipe { path, kind }, false);
+        self.start_export_recipe(
+            ExportRecipe {
+                path,
+                kind,
+                published: Default::default(),
+            },
+            false,
+        );
     }
 
     fn sprite_sheet_dialog(&mut self, ctx: &egui::Context) {
         if !self.studio.sheet_open {
             return;
         }
-        let mut open = true;
-        egui::Window::new("Export sprite sheet")
-            .open(&mut open)
-            .default_width(390.)
-            .show(ctx, |ui| {
+        if self
+            .studio
+            .sheet_document
+            .is_some_and(|id| id != self.doc.editor_id.runtime_key())
+        {
+            self.studio.sheet_open = false;
+            self.studio.sheet_document = None;
+            self.status = "Sheet export closed because the active document changed".into();
+            return;
+        }
+        self.studio.sheet_document = Some(self.doc.editor_id.runtime_key());
+        let title = "Export sprite sheet";
+        let footer_key = egui::Id::new("sheet-export-footer");
+        let close = fluent::modal_dialog_sized(ctx, title, 390., |ui| {
+            let mut outside = vec![egui::Id::new(("editor-dialog", title)).with("close")];
+            if let Some(id) = ctx.data(|data| data.get_temp::<egui::Id>(footer_key)) {
+                outside.push(id);
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("sheet-export-options")
+                .max_height((ctx.content_rect().height()-145.).max(48.))
+                .show(ui,|ui| {
                 self.export_scale_ui(ui);
                 let layout = &mut self.studio.sheet.layout;
                 egui::ComboBox::from_label("Layout")
@@ -2315,8 +2358,18 @@ impl PixelCraft {
                         ui.label(error);
                     }
                 }
+                fluent::reveal_focused_control(ui,&outside);
             });
-        self.studio.sheet_open = open;
+            ui.separator();
+            let done = ui
+                .push_id("sheet-export-footer", |ui| ui.pc_button("Done"))
+                .inner;
+            ctx.data_mut(|data| data.insert_temp(footer_key, done.id));
+            done.clicked()
+        });
+        if close {
+            self.studio.sheet_open = false;
+        }
     }
 
     pub(super) fn stroke_line(&mut self, a: (i32, i32), b: (i32, i32), color: Pixel) {
@@ -3261,6 +3314,7 @@ mod tests {
             std::process::id()
         ));
         editor.start_tileset_atlas_export(path.clone(), options);
+        editor.wait_export_preflight();
         let (output, result) = editor
             .export_job
             .take()
@@ -3301,6 +3355,7 @@ mod tests {
             std::process::id()
         ));
         editor.start_sprite_sheet_export(path.clone());
+        editor.wait_export_preflight();
         let (output, result) = editor
             .export_job
             .take()
@@ -3356,6 +3411,7 @@ mod tests {
             std::process::id()
         ));
         editor.start_sprite_sheet_export(path.clone());
+        editor.wait_export_preflight();
         let (_, result) = editor
             .export_job
             .take()
