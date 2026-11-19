@@ -13,23 +13,28 @@ Reviewed the latest `feature/discoverable-menus-searchable-settings` head (`ac39
 - Every export output, including sheet/atlas metadata, engine sidecars and sequence members, is planned before publication. Existing destinations require explicit application confirmation; a native picker result does not grant blanket overwrite permission. Files appearing later cannot be silently replaced.
 - Repeat authorizes only the last successful output manifest. Newly added tag outputs require confirmation; Windows filename case is preserved so case-sensitive directories cannot merge two approvals.
 - The first atlas export writes its accepted preview. Repeat reloads sources. Filesystem preflight/atlas preparation runs off the UI thread, supports cancellation, and bounds pending work; long confirmation lists are virtualized.
+- Sheet/tag exports read previous metadata from the canonical destination in the output plan, so directory aliases work inside the native guard and preserve existing Unity GUIDs. A Windows junction regression injects a distinct GUID and verifies it survives re-export.
 - New file publication does not require hard-link support. Existing drive roots are valid directory export destinations. PNG sequences validate their document once, rather than once per frame.
 - Native Windows/Linux output guards anchor writes and cleanup. Linux directory creation/removal uses directory descriptors; strict MCP Landlock rules remain enabled. macOS without the native guard accepts private output trees and rejects shared writable ancestors/ACLs rather than pretending shared folders are protected.
 
 ## Verification
 
 - Formatting and strict all-target Clippy pass.
-- Windows all-target suite: **801 passed, 0 failed, 17 opt-in tests ignored**. Added regressions reproduced reported failures before fixes where applicable.
+- Windows all-target suite: **802 passed, 0 failed, 17 opt-in tests ignored**. Added regressions reproduced reported failures before fixes where applicable.
 - Rendered UI checks: four pass, with 64 saved captures. Settings covers 1366×768 and 1920×1080 at 100%, 125%, 150% and 200% in light/dark; 12 focused destinations cover Full HD/100% and 1366×768/200%, both themes. Representative saved images were inspected visually.
 - Normal Windows GPU startup and forced software OpenGL fallback both render successfully; their actual executable captures were visually inspected.
 - Fresh Windows executable passes the isolated single-executable portable check, the no-Lua payload check, native client workflow, and headless CLI/MCP checks (grid import, revision-checked editing, Unity metadata, atlas, palette conversion, tag sheets, PNG render and disabled live tools).
-- Four rounds of independent source-only code/security review; final reviewers reported no remaining actionable findings in the reviewed fixes. These reviews are not runtime penetration testing.
+- Repeated independent source-only code/security reviews, including the later canonical-path fix; final reviewers reported no remaining actionable findings in the reviewed fixes. These reviews are not runtime penetration testing.
 
 - Both original Autumn Breeze projects passed optimized native load, all-frame render, native save/reopen equality, PNG/GIF/MP4 export and ASE save/reopen frame equality. Day: 23 layers, 24 frames; night: 34 layers, 24 frames; both 480×270. Native saves took 1.72/2.54 seconds and ASE saves 0.62/0.80 seconds on this run. These are observations under concurrent test load, not performance guarantees.
 - Both projects completed two ordered loops / 48 frame presentations through the real GUI playback cache. The cache test drives frame advancement; it does not measure physical-screen frame pacing or claim a human-observed playback capture.
 - Original SHA-256 values remain `5bb6660d7440de4181de4ae0ba54f45ff047991a621b6dd276d9e2eef990d0ff` (day) and `a21a70ec2cb5e1f7aa87118cf1fe4f5ef88e72d9ce6c51214a14d0fed3aa0689` (night). All acceptance outputs are disposable copies.
 
 Cross-platform CI must validate gated Linux/macOS code; Windows results do not substitute for those runs.
+
+## CI follow-up
+
+Hosted CI exposed a macOS-only strict-Clippy return warning, corrected without changing exclusive publication behavior. Hosted Windows also exposed two GUI test wait helpers that were insufficient for asynchronous preflight: they now sleep while pending, allow a bounded 30-second wall-clock wait, and assert preflight is finished before decoding output. The local full suite is rerun after these changes; final CI status is recorded on the PR.
 
 ## Scope limits
 

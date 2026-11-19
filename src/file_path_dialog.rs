@@ -415,16 +415,19 @@ mod scale_tests {
         frame(app, ctx, vec![])
     }
     fn wait_export(app: &mut PixelCraft) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while (app.export_job.is_some() || app.export_preflight.is_some())
             && Instant::now() < deadline
         {
             app.poll_export();
-            if app.export_job.is_some() {
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            // Yield while preflight is pending too; busy polling can starve the
+            // filesystem worker on loaded Windows CI hosts.
+            std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(app.export_job.is_none(), "export worker did not finish");
+        assert!(
+            app.export_job.is_none() && app.export_preflight.is_none(),
+            "export/preflight worker did not finish"
+        );
         assert!(app.status.starts_with("Exported "), "{}", app.status);
     }
     #[test]

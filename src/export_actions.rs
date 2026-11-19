@@ -171,10 +171,13 @@ impl ExportRecipe {
     }
     #[cfg(test)]
     fn write(&self, doc: &Document, confirmed: bool) -> Result<(), String> {
-        self.output_plan(doc)?
-            .write(confirmed, |temporary| self.encode(temporary, doc))
+        let plan = self.output_plan(doc)?;
+        let previous = plan.output().to_owned();
+        plan.write(confirmed, |temporary| {
+            self.encode(temporary, doc, &previous)
+        })
     }
-    fn encode(&self, path: &Path, doc: &Document) -> Result<(), String> {
+    fn encode(&self, path: &Path, doc: &Document, previous: &Path) -> Result<(), String> {
         use pixelcraft::{automation, interchange};
         let prepare = |args: serde_json::Value| {
             automation::prepare_live_export(doc, 0, &args, "")
@@ -229,7 +232,7 @@ impl ExportRecipe {
                 }
                 interchange::export_sheet_for_slice_with_previous(
                     path,
-                    &self.path,
+                    previous,
                     doc,
                     &options,
                     slice.as_deref(),
@@ -251,7 +254,7 @@ impl ExportRecipe {
             }
             ExportKind::Tags { gif, options } => {
                 pixelcraft::productivity::batch_tags_with_previous(
-                    path, &self.path, doc, *gif, options,
+                    path, previous, doc, *gif, options,
                 )
                 .map(|_| ())
             }
@@ -489,8 +492,10 @@ impl PixelCraft {
             recipe: recipe.clone(),
             receiver,
         });
+        let previous = plan.output().to_owned();
         std::thread::spawn(move || {
-            let _ = tx.send(plan.write(true, |temporary| recipe.encode(temporary, &doc)));
+            let _ =
+                tx.send(plan.write(true, |temporary| recipe.encode(temporary, &doc, &previous)));
         });
     }
     pub(super) fn export_confirmation_dialog(&mut self, ctx: &egui::Context) {
@@ -602,6 +607,60 @@ mod review_tests {
             kind,
             published: Default::default(),
         }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn sheet_metadata_survives_export_through_a_directory_alias() {
+        use std::os::windows::process::CommandExt;
+        let root = root("sheet-alias");
+        let physical = root.join("physical");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&physical).unwrap();
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/c", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&physical)
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        assert!(status.status.success());
+        let mut doc = Document::new(2, 2);
+        let export = recipe(
+            alias.join("sheet.png"),
+            ExportKind::Sheet {
+                options: Box::new(SheetOptions {
+                    preset: "Unity".into(),
+                    ..Default::default()
+                }),
+                slice: None,
+                layers: None,
+                tag: None,
+            },
+        );
+        let first = export.write(&doc, false);
+        if let Err(error) = first {
+            std::fs::remove_dir(&alias).unwrap();
+            std::fs::remove_dir_all(&root).unwrap();
+            panic!("alias export failed: {error}");
+        }
+        let meta_path = physical.join("sheet.png.meta");
+        let generated = std::fs::read_to_string(&meta_path).unwrap();
+        let guid_line = generated
+            .lines()
+            .find(|line| line.starts_with("guid: "))
+            .unwrap();
+        let previous = generated.replace(guid_line, "guid: 1234567890abcdef1234567890abcdef");
+        assert_ne!(previous, generated);
+        std::fs::write(&meta_path, &previous).unwrap();
+        doc.set_pixel(0, 0, 0, [255, 0, 0, 255]);
+        export.write(&doc, true).unwrap();
+        assert_eq!(
+            std::fs::read(physical.join("sheet.png.meta")).unwrap(),
+            previous.as_bytes(),
+            "Unity identity must survive an alias re-export"
+        );
+        std::fs::remove_dir(&alias).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[cfg(windows)]
     #[test]

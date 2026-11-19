@@ -159,6 +159,9 @@ impl EditorOutputPlan {
             access,
         })
     }
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
     pub fn existing(&self) -> &[PathBuf] {
         &self.existing
     }

@@ -2607,7 +2607,7 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
         discard_frame(app, &ctx, size, 1., click(accept));
     };
     let poll = |app: &mut PixelCraft| {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while (app.open_job.is_some()
             || app.save_job.is_some()
             || app.export_job.is_some()
@@ -2615,9 +2615,16 @@ fn file_menu_accepts_typed_paths_and_confirms_export_overwrite() {
             && Instant::now() < deadline
         {
             discard_frame(app, &ctx, size, 1., vec![]);
-            std::thread::yield_now();
+            std::thread::sleep(Duration::from_millis(5));
         }
-        assert!(app.open_job.is_none() && app.save_job.is_none() && app.export_job.is_none());
+        assert!(
+            app.open_job.is_none()
+                && app.save_job.is_none()
+                && app.export_job.is_none()
+                && app.export_preflight.is_none(),
+            "file operation/preflight timed out: {}",
+            app.status
+        );
     };
 
     app.action("open");
