@@ -252,16 +252,15 @@ Themes accept original XML color definitions or JSON with `dark`, `panel`, `text
 
 ### Native automation and asset compatibility
 
-- `app.activeSprite`, `activeLayer`, `activeFrame`, `activeCel`, `activeImage`, `sprites`, `params`, `apiVersion`, `isUIAvailable`, `transaction(fn)`, `refresh()`, `alert()`.
-- Sprite width/height/layers/frames/cels/palettes/colorMode, `newCel`, `deleteCel`, `newLayer`, `newGroup`, `newFrame`, `newEmptyFrame`, `newTag`.
-- Layer name/opacity/visibility/editability/blendMode/parent/group/cels and `cel(frame)`; frame number/duration; cel image/opacity/frame/layer. Frame API durations are seconds.
-- `Image(width,height)` or `Image(image)`, `drawPixel`, `getPixel`, `clear`, `clone`, `drawImage` (source-over), and `pixels()` iterators.
-- `Color`, `Point`, `Size`, `Rectangle`, `ColorMode`, `BlendMode`, `AniDir`, packed RGBA functions under `app.pixelColor`.
-- `init(plugin)`, `plugin:newCommand{id,title,onclick}`, menu grouping/separator declarations. Supported command calls: `NewLayer`, `NewFrame`, `NewEmptyFrame`. Additional selection, undo, file and interactive APIs are listed in [COMPATIBILITY.md](COMPATIBILITY.md). Unlisted commands return errors.
+Use `pixelcraft --help` to discover CLI operations, or connect an external client with `pixelcraft --mcp`. Typed native requests create and inspect documents, edit pixels, apply command batches, manage layers/frames/tags, convert palettes, and export artwork. File tools support revision checks. MCP file tools additionally enforce explicit overwrite permission and can be restricted with `--project-root`.
+
+For an open editor, enable live assistant access in Workflow tools and use the displayed connection command. Refresh the document revision and target IDs after edits or structural changes. Live command batches support preview and commit as a single Undo step. Expired or disconnected live requests are discarded before commit.
+
+See [supported interfaces and asset formats](COMPATIBILITY.md) and the [native automation guide and runnable example](docs/native-automation-migration.md) for request examples and limits.
 
 ## Verification
 
-Pull requests targeting main run formatting, strict Clippy, and Rust tests on Linux and Windows. The Windows check opens the application and verifies that it renders. Tagged builds run the separate release packaging workflow.
+Pull requests run formatting, strict Clippy, and Rust tests on Linux, Windows, and both macOS architectures. Windows and macOS checks also verify graphical startup and standalone or packaged operation. Tagged builds run the separate release packaging workflow and test the downloadable packages.
 
 
 
