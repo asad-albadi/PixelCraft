@@ -55,14 +55,16 @@ Verification: isolated staged snapshot passed 18 command-search tests, 4 rendere
 
 Files are src/productivity_ui.rs and a focused src/productivity_ui/settings.rs module. Reuse the existing Preferences struct and preference read/write helpers.
 
-- [ ] Add failing tests for finding recovery via autosave, opening the exact page/control, persistence, navigation and old-preference loading.
-- [ ] Add eight page destinations from the issue. Page/control metadata includes stable IDs, labels, synonyms and ownership. Persist the last page as a tolerant string ID.
-- [ ] Replace the accordion list with responsive category navigation and results. Search labels, descriptions and aliases using metadata. Open and reveal the matching control.
-- [ ] Render existing controls in their assigned pages, including theme/density, canvas/navigation, onion defaults, color/import policies, new-document/recovery defaults and update preferences.
-- [ ] Reuse shortcut, asset and About destinations with explicit navigation. Live assistant access remains scoped to the active editor.
-- [ ] Add per-page reset and confirmed app-preference reset with precise scope. Provide immediate reachable interface-scale recovery.
-- [ ] Add setting/page entries to command search and Command-Comma settings access on macOS.
-- [ ] Run state-persistence, focus, keyboard, pointer, small-viewport and search regressions. Review and fix. Commit.
+- [x] Add failing tests for finding recovery via autosave, opening the exact page/control, persistence, navigation and old-preference loading.
+- [x] Add eight page destinations from the issue. Page/control metadata includes stable IDs, labels, synonyms and ownership. Persist the last page as a tolerant string ID.
+- [x] Replace the accordion list with responsive category navigation and results. Search labels, descriptions and aliases using metadata. Open and reveal the matching control.
+- [x] Render existing controls in their assigned pages, including theme/density, canvas/navigation, onion defaults, color/import policies, new-document/recovery defaults and update preferences.
+- [x] Reuse shortcut, asset and About destinations with explicit navigation. Live assistant access remains scoped to the active editor.
+- [x] Add per-page reset and confirmed app-preference reset with precise scope. Provide immediate reachable interface-scale recovery.
+- [x] Add setting/page entries to command search with aliases and precise ID ranking. Command-Comma access completes with Batch 5’s native adapter.
+- [x] Run state-persistence, focus, keyboard, pointer, small-viewport and search regressions. Review and fix. Commit.
+
+Verification: the isolated Settings-only staged snapshot passed all 345 binary tests (9 ignored), formatting and strict all-target Clippy. This includes 15 focused Settings tests, actual filesystem preference reload/legacy loading, existing recovery and color-picking tests, exact control focus, small-window reset confirmation, compound-color accessibility and keyboard scrolling. Independent code/security review approved reset/storage scope and navigation preservation. Settings links use the existing Workflow destination until the focused routing commit follows. Screenshot and integrated platform checks remain in Batch 6.
 
 ## Batch 4 — Focused workflow and property destinations
 

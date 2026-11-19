@@ -814,6 +814,7 @@ impl PixelCraft {
 
     fn new(cc: &eframe::CreationContext<'_>, shot: Option<PathBuf>) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, shot);
+        app.restore_workflow_preferences(extensions::config_directory().join("workflow.json"));
         app.theme_path = theme_path();
         app.restore_preview_settings(extensions::config_directory().join("preview.json"));
         let shortcuts_path = extensions::config_directory().join("shortcuts.json");
@@ -2342,6 +2343,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.pending.is_some()
             || self.new_dialog
             || self.settings_open
+            || self.power.open
+            || self.about
             || self.rename.is_some()
             || self.replace_color.is_some()
             || self.editor_filter.is_some()
@@ -3360,6 +3363,30 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn action(&mut self, s: &str) {
+        if self.open_settings_destination(s) {
+            return;
+        }
+        if s == "settings" {
+            self.settings_open = true;
+            return;
+        }
+        if s == "workflow" {
+            self.power.open = true;
+            return;
+        }
+        if s == "shortcuts" {
+            self.shortcut_settings_open = true;
+            return;
+        }
+        if s == "extensions" {
+            self.refresh_extensions();
+            self.extensions_open = true;
+            return;
+        }
+        if s == "about" {
+            self.about = true;
+            return;
+        }
         if s == "command-search" {
             self.open_command_search();
             return;

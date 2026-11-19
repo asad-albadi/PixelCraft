@@ -44,7 +44,17 @@ fn matches_query(label: &str, id: &str, query: &str) -> bool {
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-    let searchable = format!("{label} {id} {aliases}").to_lowercase();
+    let setting_aliases = id
+        .strip_prefix("action:")
+        .and_then(|action| {
+            productivity_ui::settings::SETTINGS_ENTRIES
+                .iter()
+                .find(|entry| entry.id == action)
+        })
+        .map_or_else(String::new, |entry| {
+            format!("{} {}", entry.description, entry.aliases)
+        });
+    let searchable = format!("{label} {id} {aliases} {setting_aliases}").to_lowercase();
     query
         .split_whitespace()
         .all(|word| searchable.contains(&word.to_lowercase()))
@@ -131,6 +141,18 @@ impl PixelCraft {
         }
         for &(group, items) in MENU_GROUPS {
             append(&mut entries, &mut seen, self, group, items);
+        }
+        for setting in productivity_ui::settings::SETTINGS_ENTRIES {
+            let id = format!("action:{}", setting.id);
+            if seen.insert(id.clone()) {
+                entries.push(Entry {
+                    id,
+                    label: setting.path(),
+                    shortcut: String::new(),
+                    enabled: true,
+                    target: Target::Action(setting.id),
+                });
+            }
         }
         for (action, label) in [
             ("swap", "Swap colors"),
@@ -353,10 +375,17 @@ impl PixelCraft {
             ctx.data_mut(|data| {
                 data.insert_temp(egui::Id::new("command-query-bounds"), query.rect)
             });
-            let filtered: Vec<_> = entries
+            let mut filtered: Vec<_> = entries
                 .iter()
                 .filter(|entry| matches_query(&entry.label, &entry.id, &self.command_search.query))
                 .collect();
+            // Stable IDs remain precise even when a new command shares their
+            // prefix (for example layer and layer-properties).
+            filtered.sort_by_key(|entry| {
+                !entry
+                    .id
+                    .eq_ignore_ascii_case(self.command_search.query.trim())
+            });
             if focus || query.changed() {
                 self.command_search.selected = filtered
                     .iter()
@@ -501,6 +530,47 @@ mod tests {
         );
         output.textures_delta.clear();
         output
+    }
+
+    #[test]
+    fn settings_aliases_route_search_to_the_actual_control_without_changing_artwork() {
+        for (query, control) in [
+            ("autosave", "settings-recovery"),
+            ("transparency background", "settings-checkerboard"),
+            ("next tint", "settings-onion-next-tint"),
+        ] {
+            let ctx = egui::Context::default();
+            let mut editor = editor_with_context(&ctx);
+            let before = editor.doc.clone();
+            let id = format!("action:{control}");
+            let entry = editor
+                .command_catalog()
+                .into_iter()
+                .find(|entry| entry.id == id)
+                .unwrap();
+            assert!(
+                matches_query(&entry.label, &entry.id, query),
+                "{query} cannot find {control}"
+            );
+            editor.open_command_search();
+            assert!(editor.execute_catalog_command(&ctx, &id));
+            assert!(editor.settings_open);
+            assert!(!editor.command_search.open);
+            for _ in 0..3 {
+                draw(&mut editor, &ctx, vec![]);
+            }
+            let rect = ctx
+                .data(|data| data.get_temp::<Rect>(egui::Id::new(control)))
+                .unwrap();
+            assert!(ctx.content_rect().contains_rect(rect));
+            let focus = ctx
+                .data(|data| data.get_temp::<egui::Id>(egui::Id::new((control, "focus-id"))))
+                .unwrap();
+            assert_eq!(ctx.memory(|memory| memory.focused()), Some(focus));
+            assert_eq!(editor.doc, before);
+            assert!(editor.undo.is_empty());
+            assert!(editor.power.bridge.is_none());
+        }
     }
 
     #[test]

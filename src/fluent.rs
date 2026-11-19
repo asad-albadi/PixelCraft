@@ -54,6 +54,15 @@ pub(super) fn modal_dialog(
     title: &str,
     content: impl FnOnce(&mut egui::Ui) -> bool,
 ) -> bool {
+    modal_dialog_sized(ctx, title, 360., content)
+}
+
+pub(super) fn modal_dialog_sized(
+    ctx: &egui::Context,
+    title: &str,
+    preferred_width: f32,
+    content: impl FnOnce(&mut egui::Ui) -> bool,
+) -> bool {
     let id = egui::Id::new(("editor-dialog", title));
     let offset_id = id.with("offset");
     let offset = ctx.data(|data| data.get_temp::<Vec2>(offset_id).unwrap_or_default());
@@ -63,7 +72,7 @@ pub(super) fn modal_dialog(
         .frame(egui::Frame::window(&ctx.style_of(ctx.theme())))
         .backdrop_color(Color32::from_black_alpha(80))
         .show(ctx, |ui| {
-            ui.set_width(360_f32.min((ctx.content_rect().width() - 32.).max(100.)));
+            ui.set_width(preferred_width.min((ctx.content_rect().width() - 32.).max(100.)));
             let (header, _) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), 34.), Sense::hover());
             let close_rect = Rect::from_min_size(
@@ -135,7 +144,7 @@ pub(super) fn modal_dialog(
         ctx.data_mut(|data| data.remove::<Vec2>(offset_id));
         ctx.request_repaint();
     }
-    dismiss
+    dismiss || content_closed
 }
 
 fn heading(ui: &mut egui::Ui, text: &str) -> bool {

@@ -1557,14 +1557,8 @@ fn changing_default_sprite_width_preserves_the_current_pixel_grid() {
     app.grid = !app.power.default_grid();
     let current_grid = app.grid;
     let default_size = app.power.new_sprite_size();
-    app.settings_open = true;
+    assert!(app.open_settings_destination("settings-files"));
     for _ in 0..3 {
-        discard_frame(&mut app, &ctx, size, 1., vec![]);
-    }
-    let mut output = frame(&mut app, &ctx, size, 1., vec![]);
-    let heading = text_position(&mut output, "New sprites");
-    discard_frame(&mut app, &ctx, size, 1., click(heading));
-    for _ in 0..8 {
         discard_frame(&mut app, &ctx, size, 1., vec![]);
     }
     let width = layout_rect(&ctx, "default-sprite-width").center();
