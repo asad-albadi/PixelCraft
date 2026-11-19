@@ -327,14 +327,13 @@ pub(crate) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
         let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())
             .map_err(|_| io::Error::other("Invalid output path"))?;
         // RENAME_EXCL publishes only if the destination is still absent.
-        return if unsafe {
-            libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL)
-        } == 0
+        if unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) }
+            == 0
         {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
-        };
+        }
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     fs::hard_link(source, destination)
