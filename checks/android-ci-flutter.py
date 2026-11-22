@@ -11,13 +11,13 @@ from urllib.request import urlopen
 
 VERSION = "3.47.9"
 DART_VERSION = "3.13.7"
-ORIGIN = "https://storage.googleapis.com/flutter_infra_release/flutter"
+ORIGIN = "https://storage.googleapis.com/flutter_infra_release/releases"
 
 
 def main():
     destination = Path(sys.argv[1]).resolve()
     destination.mkdir(parents=True, exist_ok=True)
-    with urlopen(f"{ORIGIN}/releases/releases_linux.json", timeout=120) as response:
+    with urlopen(f"{ORIGIN}/releases_linux.json", timeout=120) as response:
         releases = json.load(response)["releases"]
     matches = [r for r in releases if r["version"] == VERSION and r.get("dart_sdk_arch", "x64") == "x64"]
     if not matches:
