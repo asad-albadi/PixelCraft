@@ -83,7 +83,7 @@ impl PixelCraft {
                     contrast: 0,
                 },
                 scope: Scope::CurrentCel,
-                selection_only: self.selection.is_some(),
+                selection_only: self.session.selection.is_some(),
                 channels: [true, true, true, false],
             },
             show_preview: true,
@@ -108,16 +108,18 @@ impl PixelCraft {
     }
 
     fn filter_targets(&self, scope: Scope) -> Vec<(usize, usize)> {
-        let frames = self.doc.durations.len();
-        let layers = self.doc.layers.len();
+        let frames = self.session.doc.durations.len();
+        let layers = self.session.doc.layers.len();
         let candidates: Box<dyn Iterator<Item = (usize, usize)>> = match scope {
-            Scope::CurrentCel => Box::new(std::iter::once((self.layer, self.frame))),
-            Scope::SelectedCels => self.selected_cels.as_ref().map_or_else(
+            Scope::CurrentCel => {
+                Box::new(std::iter::once((self.session.layer, self.session.frame)))
+            }
+            Scope::SelectedCels => self.session.selected_cels.as_ref().map_or_else(
                 || Box::new(std::iter::empty()) as Box<dyn Iterator<Item = _>>,
                 CelSelection::cells,
             ),
-            Scope::ActiveLayer => Box::new((0..frames).map(|frame| (self.layer, frame))),
-            Scope::CurrentFrame => Box::new((0..layers).map(|layer| (layer, self.frame))),
+            Scope::ActiveLayer => Box::new((0..frames).map(|frame| (self.session.layer, frame))),
+            Scope::CurrentFrame => Box::new((0..layers).map(|layer| (layer, self.session.frame))),
             Scope::AllCels => {
                 Box::new((0..layers).flat_map(|layer| (0..frames).map(move |frame| (layer, frame))))
             }
@@ -125,9 +127,9 @@ impl PixelCraft {
         candidates
             .filter(|&(layer, frame)| {
                 frame < frames
-                    && self.doc.editable(layer)
-                    && self.doc.layers[layer].tileset.is_none()
-                    && self.doc.layers[layer].adjustment.is_none()
+                    && self.session.doc.editable(layer)
+                    && self.session.doc.layers[layer].tileset.is_none()
+                    && self.session.doc.layers[layer].adjustment.is_none()
             })
             .collect()
     }
@@ -157,7 +159,7 @@ impl PixelCraft {
         if dialog.result.is_some() {
             return;
         }
-        let source = self.doc.clone();
+        let source = self.session.doc.clone();
         let targets = self.filter_targets(dialog.settings.scope);
         let (width, height) = (source.width as i32, source.height as i32);
         let (bounds, mask) = if dialog.settings.selection_only {
@@ -169,14 +171,14 @@ impl PixelCraft {
                     x.saturating_add(w).clamp(0, width),
                     y.saturating_add(h).clamp(0, height),
                 ],
-                self.studio.mask.clone(),
+                self.session.mask.clone(),
             )
         } else {
             ([0, 0, width, height], None)
         };
         let settings = dialog.settings.clone();
         let submitted = settings.clone();
-        let frame = self.frame;
+        let frame = self.session.frame;
         let display = Arc::clone(&self.display_profile.bytes);
         let ctx = ctx.clone();
         let (tx, rx) = mpsc::channel();
@@ -234,7 +236,8 @@ impl PixelCraft {
                                 Scope::AllCels,
                             ] {
                                 ui.add_enabled_ui(
-                                    scope != Scope::SelectedCels || self.selected_cels.is_some(),
+                                    scope != Scope::SelectedCels
+                                        || self.session.selected_cels.is_some(),
                                     |ui| {
                                         ui.pc_selectable_value(
                                             &mut dialog.settings.scope,
@@ -245,7 +248,7 @@ impl PixelCraft {
                                 );
                             }
                         });
-                    ui.add_enabled_ui(self.selection.is_some(), |ui| {
+                    ui.add_enabled_ui(self.session.selection.is_some(), |ui| {
                         ui.pc_checkbox(&mut dialog.settings.selection_only, "Limit to selection")
                     });
                     ui.horizontal(|ui| {
@@ -296,7 +299,7 @@ impl PixelCraft {
             if let Some(Ok(result)) = dialog.result.take() {
                 let label = filter_name(&dialog.settings.filter);
                 self.remember_action(label);
-                self.doc = result.document;
+                self.session.doc = result.document;
                 self.status = format!("Applied {label}");
             }
         } else if !close && !cancel {

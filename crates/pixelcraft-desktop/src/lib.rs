@@ -34,9 +34,8 @@ mod palette_conversion;
 mod productivity_ui;
 mod retouch_tool;
 
-mod selection_mask;
 mod selection_tools;
-use selection_mask::SelectionMask;
+use pixelcraft_core::editor::{HistoryEntry, SelectionMask, TimelineHeaders};
 mod shortcut_editor;
 mod spray_tool;
 mod sprite_text;
@@ -426,24 +425,6 @@ impl Clipboard {
     }
 }
 
-#[derive(Clone, Default)]
-struct TimelineHeaders {
-    anchor: Option<usize>,
-    selected: Vec<usize>,
-}
-
-impl TimelineHeaders {
-    fn toggle(&mut self, index: usize) {
-        match self.selected.binary_search(&index) {
-            Ok(position) => {
-                self.selected.remove(position);
-            }
-            Err(position) => self.selected.insert(position, index),
-        }
-        self.anchor = Some(index);
-    }
-}
-
 struct LayerHeaderDrag {
     layers: Vec<usize>,
     grabbed: usize,
@@ -479,21 +460,6 @@ impl CelDrag {
     }
 }
 
-#[derive(Clone)]
-struct HistoryEntry {
-    label: &'static str,
-    doc: Document,
-    selection: Option<(i32, i32, i32, i32)>,
-    mask: Option<SelectionMask>,
-    polygon: Vec<(i32, i32)>,
-    layer: usize,
-    frame: usize,
-    selected_tile: u32,
-    timeline_anchor: Option<(usize, usize)>,
-    selected_cels: Option<CelSelection>,
-    timeline_frames: TimelineHeaders,
-    timeline_layers: TimelineHeaders,
-}
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 enum CanvasPane {
     #[default]
@@ -659,6 +625,7 @@ impl SubtagRun {
 }
 
 struct PixelCraft {
+    session: pixelcraft_core::editor::EditorSession,
     #[cfg(target_os = "macos")]
     native_app_menu: Option<native_app_menu::AppMenu>,
     studio: studio::Studio,
@@ -670,13 +637,9 @@ struct PixelCraft {
     theme_path: Option<PathBuf>,
     system_theme_rx: Option<std::sync::mpsc::Receiver<Option<egui::Theme>>>,
     system_theme: Option<Option<egui::Theme>>,
-    doc: Document,
-    saved: Document,
     path: Option<PathBuf>,
     live_save_root: Option<PathBuf>,
     live_save_root_identity: Option<(u64, u64)>,
-    layer: usize,
-    frame: usize,
     tool: Tool,
     fg: Pixel,
     bg: Pixel,
@@ -705,10 +668,7 @@ struct PixelCraft {
     playback_speed: u16,
     playback_waiting_for_frame: bool,
     playback_run: Option<PlaybackRun>,
-    undo: Vec<HistoryEntry>,
     history_open: bool,
-    redo: Vec<HistoryEntry>,
-    selection: Option<(i32, i32, i32, i32)>,
     replace_color: Option<ReplaceColor>,
     editor_filter: Option<editor_filters::FilterDialog>,
     canvas_transform: Option<canvas_transform::CanvasTransform>,
@@ -748,10 +708,6 @@ struct PixelCraft {
     render_snapshot: Option<Document>,
     frame_textures: Vec<Option<egui::TextureHandle>>,
     frame_prefetch: Option<FramePrefetch>,
-    timeline_anchor: Option<(usize, usize)>,
-    selected_cels: Option<CelSelection>,
-    timeline_frames: TimelineHeaders,
-    timeline_layers: TimelineHeaders,
     timeline_duration: u16,
     timeline_destination: Option<(usize, usize)>,
     cel_occupied: Vec<Vec<bool>>,
@@ -774,7 +730,6 @@ struct PixelCraft {
     palette_index: usize,
     secondary_palette_index: Option<usize>,
     tile_size: usize,
-    selected_tile: u32,
     tile_pixel_mode: Option<TilePixelEdit>,
     active_tag: Option<usize>,
     tag_name: String,
@@ -822,11 +777,38 @@ struct PixelCraft {
     reset_layout_requested: bool,
 }
 impl PixelCraft {
+    fn remember_action(&mut self, label: &'static str) {
+        self.power.bridge_generation += 1;
+        self.session.remember_action(label);
+    }
+    fn push_undo(&mut self, doc: Document, label: &'static str) {
+        self.session.push_undo(doc, label);
+    }
+    fn jump_history(&mut self, position: usize) -> bool {
+        if position == self.session.undo.len()
+            || position > self.session.undo.len() + self.session.redo.len()
+        {
+            return false;
+        }
+        self.power.bridge_generation += 1;
+        self.stop_playback(false);
+        self.cancel_gesture();
+        let active_tag = &mut self.active_tag;
+        let changed = self.session.jump_history_with(position, |doc| {
+            if active_tag.is_some_and(|i| i >= doc.tags.len()) {
+                *active_tag = None;
+            }
+        });
+        self.timeline_destination = None;
+        self.power.reference_edit = None;
+        changed
+    }
+
     fn native_selection_state(&self) -> NativeSelectionState {
         NativeSelectionState {
-            bounds: self.selection,
-            mask: self.studio.mask.clone(),
-            polygon: self.studio.polygon.clone(),
+            bounds: self.session.selection,
+            mask: self.session.mask.clone(),
+            polygon: self.session.polygon.clone(),
         }
     }
 
@@ -892,6 +874,11 @@ impl PixelCraft {
         ctx.set_theme(egui::ThemePreference::System);
         let doc = Document::demo();
         Self {
+            session: pixelcraft_core::editor::EditorSession {
+                layer: 1,
+                selected_tile: 1,
+                ..pixelcraft_core::editor::EditorSession::new(doc)
+            },
             studio: studio::Studio::default(),
             power: productivity_ui::PowerTools::default(),
             tabs: vec![None],
@@ -901,13 +888,9 @@ impl PixelCraft {
             theme_path: None,
             system_theme_rx: None,
             system_theme: None,
-            saved: doc.clone(),
-            doc,
             path: None,
             live_save_root: None,
             live_save_root_identity: None,
-            layer: 1,
-            frame: 0,
             tool: Tool::Pencil,
             fg: DEFAULT_FG,
             bg: DEFAULT_BG,
@@ -936,10 +919,7 @@ impl PixelCraft {
             playback_speed: 100,
             playback_waiting_for_frame: false,
             playback_run: None,
-            undo: vec![],
             history_open: false,
-            redo: vec![],
-            selection: None,
             replace_color: None,
             editor_filter: None,
             canvas_transform: None,
@@ -979,10 +959,6 @@ impl PixelCraft {
             render_snapshot: None,
             frame_textures: vec![],
             frame_prefetch: None,
-            timeline_anchor: None,
-            selected_cels: None,
-            timeline_frames: TimelineHeaders::default(),
-            timeline_layers: TimelineHeaders::default(),
             timeline_duration: DEFAULT_DURATION,
             timeline_destination: None,
             cel_occupied: vec![],
@@ -1005,7 +981,6 @@ impl PixelCraft {
             palette_index: 0,
             secondary_palette_index: None,
             tile_size: 16,
-            selected_tile: 1,
             tile_pixel_mode: None,
             active_tag: None,
             tag_name: "Animation".into(),
@@ -1168,17 +1143,19 @@ impl PixelCraft {
         }
     }
     fn dirty(&self) -> bool {
-        self.doc.differs_from_saved(&self.saved)
+        self.session.doc.differs_from_saved(&self.session.saved)
     }
     fn try_frame_texture(&mut self, ctx: &egui::Context, f: usize) -> Option<egui::TextureHandle> {
         self.refresh_frame_cache(ctx);
-        if self.frame_textures[f].is_none() && self.doc.width * self.doc.height > 2_000_000 {
+        if self.frame_textures[f].is_none()
+            && self.session.doc.width * self.session.doc.height > 2_000_000
+        {
             // One in-flight canvas job bounds work during rapid scrubbing. Never
             // show another frame as the editable current frame while it runs.
             if self.frame_prefetch.is_none() {
                 self.frame_prefetch = Some(FramePrefetch::start(
                     ctx,
-                    &self.doc,
+                    &self.session.doc,
                     f,
                     Arc::clone(&self.display_profile.bytes),
                 ));
@@ -1187,7 +1164,7 @@ impl PixelCraft {
         }
         if self.frame_textures[f].is_none() {
             let (image, error) =
-                Self::compose_frame_image(&self.doc, f, &self.display_profile.bytes);
+                Self::compose_frame_image(&self.session.doc, f, &self.display_profile.bytes);
             self.store_frame_texture(ctx, f, image, error);
         }
         let texture = self.frame_textures[f].as_ref().unwrap().clone();
@@ -1198,7 +1175,7 @@ impl PixelCraft {
         {
             self.frame_prefetch = Some(FramePrefetch::start(
                 ctx,
-                &self.doc,
+                &self.session.doc,
                 frame,
                 Arc::clone(&self.display_profile.bytes),
             ));
@@ -1217,7 +1194,7 @@ impl PixelCraft {
         let ready = self
             .poll_preview_prefetch()
             .filter(|(completed, _, _)| *completed == frame);
-        if frame == self.frame {
+        if frame == self.session.frame {
             self.preview = self.try_frame_texture(ctx, frame);
             self.preview_frame = self.preview.as_ref().map(|_| frame);
         } else if let Some(texture) = &self.frame_textures[frame] {
@@ -1227,9 +1204,12 @@ impl PixelCraft {
             // Retain one detached display texture outside the canvas cache, and
             // compose large misses in a worker so repainting can continue.
             const ASYNC_PREVIEW_PIXELS: usize = 2_000_000;
-            if self.doc.width * self.doc.height <= ASYNC_PREVIEW_PIXELS {
-                let (image, error) =
-                    Self::compose_frame_image(&self.doc, frame, &self.display_profile.bytes);
+            if self.session.doc.width * self.session.doc.height <= ASYNC_PREVIEW_PIXELS {
+                let (image, error) = Self::compose_frame_image(
+                    &self.session.doc,
+                    frame,
+                    &self.display_profile.bytes,
+                );
                 self.preview_frame = Some(frame);
                 self.preview = Some(self.load_frame_texture(ctx, frame, image, error));
                 return;
@@ -1238,7 +1218,7 @@ impl PixelCraft {
             {
                 self.preview_prefetch = Some(FramePrefetch::start(
                     ctx,
-                    &self.doc,
+                    &self.session.doc,
                     frame,
                     Arc::clone(&self.display_profile.bytes),
                 ));
@@ -1262,8 +1242,8 @@ impl PixelCraft {
         };
         let job = self.preview_prefetch.take().unwrap();
         if let Ok((image, error)) = result
-            && job.frame < self.doc.durations.len()
-            && self.doc.same_frame_pixels(&job.snapshot, job.frame)
+            && job.frame < self.session.doc.durations.len()
+            && self.session.doc.same_frame_pixels(&job.snapshot, job.frame)
         {
             return Some((job.frame, image, error));
         }
@@ -1277,16 +1257,16 @@ impl PixelCraft {
             let current = self
                 .doc
                 .layers
-                .get(self.layer)
-                .and_then(|layer| layer.cels.get(self.frame));
+                .get(self.session.layer)
+                .and_then(|layer| layer.cels.get(self.session.frame));
             let old = previous
                 .layers
-                .get(self.layer)
-                .and_then(|layer| layer.cels.get(self.frame));
+                .get(self.session.layer)
+                .and_then(|layer| layer.cels.get(self.session.frame));
             current
                 .zip(old)
                 .is_some_and(|(current, old)| !current.shares_storage(old))
-                || self.doc != *previous
+                || self.session.doc != *previous
         });
         if dirty {
             let preview_shared_texture = self
@@ -1294,7 +1274,8 @@ impl PixelCraft {
                 .and_then(|frame| self.frame_textures.get(frame)?.as_ref())
                 .zip(self.preview.as_ref())
                 .is_some_and(|(frame, preview)| frame.id() == preview.id());
-            self.frame_textures.resize(self.doc.durations.len(), None);
+            self.frame_textures
+                .resize(self.session.doc.durations.len(), None);
             let mut color_error = None;
             for (frame, texture) in self.frame_textures.iter_mut().enumerate() {
                 let Some(cached) = texture else {
@@ -1304,10 +1285,12 @@ impl PixelCraft {
                     *texture = None;
                     continue;
                 };
-                if frame == self.frame && cached.size() == [self.doc.width, self.doc.height] {
-                    if let Some(patches) = self.doc.frame_pixel_damage(previous, frame) {
+                if frame == self.session.frame
+                    && cached.size() == [self.session.doc.width, self.session.doc.height]
+                {
+                    if let Some(patches) = self.session.doc.frame_pixel_damage(previous, frame) {
                         let error = Self::upload_frame_patches(
-                            &self.doc,
+                            &self.session.doc,
                             frame,
                             &patches,
                             &self.display_profile.bytes,
@@ -1317,7 +1300,7 @@ impl PixelCraft {
                     } else {
                         *texture = None;
                     }
-                } else if !self.doc.same_frame_pixels(previous, frame) {
+                } else if !self.session.doc.same_frame_pixels(previous, frame) {
                     *texture = None;
                 }
             }
@@ -1327,7 +1310,7 @@ impl PixelCraft {
                 } else {
                     self.render_snapshot
                         .as_ref()
-                        .is_none_or(|previous| !self.doc.same_frame_pixels(previous, frame))
+                        .is_none_or(|previous| !self.session.doc.same_frame_pixels(previous, frame))
                 }
             }) {
                 self.preview_frame = None;
@@ -1344,7 +1327,7 @@ impl PixelCraft {
                 .layers
                 .iter()
                 .map(|l| {
-                    (0..self.doc.durations.len())
+                    (0..self.session.doc.durations.len())
                         .map(|f| {
                             l.group
                                 || l.tile_cels[f].iter().any(|v| *v != 0)
@@ -1355,7 +1338,7 @@ impl PixelCraft {
                         .collect()
                 })
                 .collect();
-            self.render_snapshot = Some(self.doc.clone());
+            self.render_snapshot = Some(self.session.doc.clone());
         }
         self.poll_frame_prefetch(ctx);
     }
@@ -1445,12 +1428,12 @@ impl PixelCraft {
         }
         let job = self.frame_prefetch.take().unwrap();
         if let Ok((image, error)) = result
-            && (self.playing || job.frame == self.frame)
+            && (self.playing || job.frame == self.session.frame)
             && self
                 .frame_textures
                 .get(job.frame)
                 .is_some_and(Option::is_none)
-            && self.doc.same_frame_pixels(&job.snapshot, job.frame)
+            && self.session.doc.same_frame_pixels(&job.snapshot, job.frame)
         {
             self.store_frame_texture(ctx, job.frame, image, error);
         }
@@ -1463,13 +1446,13 @@ impl PixelCraft {
         image: egui::ColorImage,
         error: Option<String>,
     ) {
-        let frame_bytes = self.doc.width * self.doc.height * 4;
+        let frame_bytes = self.session.doc.width * self.session.doc.height * 4;
         let capacity = (64 * 1024 * 1024 / frame_bytes).max(if self.playing { 2 } else { 1 });
         while self.frame_texture_order.len() >= capacity {
             let oldest = self
                 .frame_texture_order
                 .iter()
-                .position(|&cached| !self.playing || cached != self.frame)
+                .position(|&cached| !self.playing || cached != self.session.frame)
                 .expect("Playback reserves room for the current and upcoming frames");
             let old = self.frame_texture_order.remove(oldest).unwrap();
             self.frame_textures[old] = None;
@@ -1496,7 +1479,7 @@ impl PixelCraft {
     }
     fn drawing_axes(&self) -> WrapAxes {
         if self.studio.seamless == WrapAxes::NONE {
-            self.doc.wraparound.into()
+            self.session.doc.wraparound.into()
         } else {
             self.studio.seamless
         }
@@ -1521,13 +1504,13 @@ impl PixelCraft {
     fn canvas_fit_scale(&self, viewport: Option<Vec2>) -> f32 {
         let view = viewport.unwrap_or(Vec2::splat(512.)) - Vec2::splat(32.);
         let size = Vec2::new(
-            self.doc.width as f32
+            self.session.doc.width as f32
                 * if self.studio.seamless.horizontal {
                     3.
                 } else {
                     1.
                 },
-            self.doc.height as f32
+            self.session.doc.height as f32
                 * if self.studio.seamless.vertical {
                     3.
                 } else {
@@ -1539,7 +1522,7 @@ impl PixelCraft {
     }
 
     fn pixel_aspect_scale(&self) -> Vec2 {
-        let [width, height] = self.doc.pixel_aspect();
+        let [width, height] = self.session.doc.pixel_aspect();
         Vec2::new(f32::from(width), f32::from(height))
     }
 
@@ -1553,7 +1536,10 @@ impl PixelCraft {
     }
 
     fn sprite_display_size(&self) -> Vec2 {
-        Vec2::new(self.doc.width as f32, self.doc.height as f32) * self.pixel_aspect_scale()
+        Vec2::new(
+            self.session.doc.width as f32,
+            self.session.doc.height as f32,
+        ) * self.pixel_aspect_scale()
     }
 
     fn paint_at(&mut self, p: (i32, i32), color: Pixel) {
@@ -1561,17 +1547,21 @@ impl PixelCraft {
     }
 
     fn paint_at_force(&mut self, p: (i32, i32), color: Pixel, force: f32) {
-        self.doc.drawing_index = self.drawing_palette_index(color);
-        if let Some(ti) = self.doc.layers[self.layer].tileset {
+        self.session.doc.drawing_index = self.drawing_palette_index(color);
+        if let Some(ti) = self.session.doc.layers[self.session.layer].tileset {
             let p = self
                 .studio
                 .seamless
-                .position((self.doc.width, self.doc.height), p)
+                .position((self.session.doc.width, self.session.doc.height), p)
                 .unwrap_or(p);
-            let t = &self.doc.tilesets[ti];
-            let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
+            let t = &self.session.doc.tilesets[ti];
+            let Some((geometry, x, y)) =
+                self.session
+                    .doc
+                    .tile_at_point(self.session.layer, self.session.frame, p)
+            else {
                 self.status = "Point is outside this tilemap cel".into();
-                self.doc.drawing_index = None;
+                self.session.doc.drawing_index = None;
                 return;
             };
             if let Some(mut mode) = self.tile_pixel_mode {
@@ -1587,7 +1577,8 @@ impl PixelCraft {
                 {
                     // This stroke owns the fresh IDs it appended. Keep editing
                     // the placement's new tile until the pointer is released.
-                    let cel = &self.doc.layers[self.layer].tile_cels[self.frame];
+                    let cel =
+                        &self.session.doc.layers[self.session.layer].tile_cels[self.session.frame];
                     let id = (cel[y * geometry.columns + x] & TILE_ID_MASK) as usize;
                     if id > before_stroke.tiles.len() {
                         mode = TilePixelEdit::Shared;
@@ -1598,21 +1589,29 @@ impl PixelCraft {
                 } else {
                     color
                 };
-                if let Err(error) =
-                    self.doc
-                        .paint_tile_pixel(self.layer, self.frame, (x, y), pixel, color, mode)
-                {
+                if let Err(error) = self.session.doc.paint_tile_pixel(
+                    self.session.layer,
+                    self.session.frame,
+                    (x, y),
+                    pixel,
+                    color,
+                    mode,
+                ) {
                     self.status = error;
                 }
-                self.doc.drawing_index = None;
+                self.session.doc.drawing_index = None;
                 return;
             }
             let id = if self.tool == Tool::Eraser {
                 0
             } else {
-                self.selected_tile
+                self.session.selected_tile
             };
-            if let Err(e) = self.doc.paint_tile(self.layer, self.frame, x, y, id) {
+            if let Err(e) =
+                self.session
+                    .doc
+                    .paint_tile(self.session.layer, self.session.frame, x, y, id)
+            {
                 self.status = e;
             }
         } else {
@@ -1643,7 +1642,7 @@ impl PixelCraft {
                 }
             }
         }
-        self.doc.drawing_index = None;
+        self.session.doc.drawing_index = None;
     }
     fn update_playback_clock(&mut self, now: Instant) -> Duration {
         let duration = |app: &Self| {
@@ -1715,26 +1714,26 @@ impl PixelCraft {
             self.stop_playback(true);
             return;
         };
-        (self.frame, self.playback_reverse) = next;
+        (self.session.frame, self.playback_reverse) = next;
         if let Some(run) = &mut self.playback_run
             && let Some(subtags) = &mut run.subtags
         {
             subtags.prepare_next(run.once);
         }
-        self.timeline_anchor = None;
-        self.selected_cels = None;
-        self.timeline_frames = TimelineHeaders::default();
-        self.timeline_layers = TimelineHeaders::default();
+        self.session.timeline_anchor = None;
+        self.session.selected_cels = None;
+        self.session.timeline_frames = TimelineHeaders::default();
+        self.session.timeline_layers = TimelineHeaders::default();
         self.timeline_destination = None;
     }
 
     fn start_playback(&mut self, selected: bool, once: bool) {
-        let origin = self.frame;
+        let origin = self.session.frame;
         let frames = selected.then(|| {
-            if !self.timeline_frames.selected.is_empty() {
-                return self.timeline_frames.selected.clone();
+            if !self.session.timeline_frames.selected.is_empty() {
+                return self.session.timeline_frames.selected.clone();
             }
-            if let Some(CelSelection::Individual(cels)) = &self.selected_cels {
+            if let Some(CelSelection::Individual(cels)) = &self.session.selected_cels {
                 let mut frames: Vec<_> = cels.iter().map(|&(_, frame)| frame).collect();
                 frames.sort_unstable();
                 frames.dedup();
@@ -1744,10 +1743,10 @@ impl PixelCraft {
             (bounds.first_frame..=bounds.last_frame).collect()
         });
         if let Some(first) = frames.as_ref().and_then(|frames| frames.first()) {
-            self.frame = *first;
-        } else if let Some(tag) = self.active_tag.and_then(|i| self.doc.tags.get(i)) {
-            if once || !(tag.from..=tag.to).contains(&self.frame) {
-                self.frame = if matches!(tag.direction, 1 | 3) {
+            self.session.frame = *first;
+        } else if let Some(tag) = self.active_tag.and_then(|i| self.session.doc.tags.get(i)) {
+            if once || !(tag.from..=tag.to).contains(&self.session.frame) {
+                self.session.frame = if matches!(tag.direction, 1 | 3) {
                     tag.to
                 } else {
                     tag.from
@@ -1755,7 +1754,7 @@ impl PixelCraft {
             }
             self.playback_reverse = matches!(tag.direction, 1 | 3);
         } else if once {
-            self.frame = 0;
+            self.session.frame = 0;
         }
         self.begin_playback_run(PlaybackRun {
             origin,
@@ -1766,10 +1765,13 @@ impl PixelCraft {
     }
 
     fn start_subtag_playback(&mut self, once: bool) {
-        let origin = self.frame;
-        let frame_count = self.doc.durations.len();
-        let mut cursor =
-            subtag_playback::SubtagFrames::new(frame_count, &self.doc.tags, self.active_tag);
+        let origin = self.session.frame;
+        let frame_count = self.session.doc.durations.len();
+        let mut cursor = subtag_playback::SubtagFrames::new(
+            frame_count,
+            &self.session.doc.tags,
+            self.active_tag,
+        );
         let Some(first) = cursor.next() else { return };
         let mut run = SubtagRun {
             cursor,
@@ -1777,7 +1779,7 @@ impl PixelCraft {
             frame_count,
         };
         run.prepare_next(once);
-        self.frame = first;
+        self.session.frame = first;
         self.playback_reverse = false;
         self.begin_playback_run(PlaybackRun {
             origin,
@@ -1800,7 +1802,7 @@ impl PixelCraft {
             && allow_rewind
             && self.rewind_on_stop()
         {
-            self.frame = run.origin.min(self.doc.durations.len() - 1);
+            self.session.frame = run.origin.min(self.session.doc.durations.len() - 1);
         }
         self.playing = false;
         self.playback_waiting_for_frame = false;
@@ -1814,7 +1816,7 @@ impl PixelCraft {
         {
             return subtags
                 .following
-                .filter(|_| subtags.frame_count == self.doc.durations.len())
+                .filter(|_| subtags.frame_count == self.session.doc.durations.len())
                 .map(|frame| (frame, false));
         }
         let once = self.playback_run.as_ref().is_some_and(|run| run.once);
@@ -1823,27 +1825,29 @@ impl PixelCraft {
             .as_ref()
             .and_then(|run| run.frames.as_deref())
         {
-            let count = self.doc.durations.len();
+            let count = self.session.doc.durations.len();
             let frames = &frames[..frames.partition_point(|&frame| frame < count)];
-            let next_index = frames.partition_point(|&frame| frame <= self.frame);
+            let next_index = frames.partition_point(|&frame| frame <= self.session.frame);
             return frames
                 .get(next_index)
                 .or_else(|| if once { None } else { frames.first() })
                 .map(|&frame| (frame, false));
         }
-        let Some(tag) = self.active_tag.and_then(|i| self.doc.tags.get(i)) else {
-            return (!once || self.frame + 1 < self.doc.durations.len()).then(|| {
-                (
-                    (self.frame + 1) % self.doc.durations.len(),
-                    self.playback_reverse,
-                )
-            });
+        let Some(tag) = self.active_tag.and_then(|i| self.session.doc.tags.get(i)) else {
+            return (!once || self.session.frame + 1 < self.session.doc.durations.len()).then(
+                || {
+                    (
+                        (self.session.frame + 1) % self.session.doc.durations.len(),
+                        self.playback_reverse,
+                    )
+                },
+            );
         };
         let reached_end = match tag.direction {
-            1 => self.frame <= tag.from,
-            2 => self.frame <= tag.from && self.playback_reverse,
-            3 => self.frame >= tag.to && !self.playback_reverse,
-            _ => self.frame >= tag.to,
+            1 => self.session.frame <= tag.from,
+            2 => self.session.frame <= tag.from && self.playback_reverse,
+            3 => self.session.frame >= tag.to && !self.playback_reverse,
+            _ => self.session.frame >= tag.to,
         };
         if once && (tag.from == tag.to || reached_end) {
             return None;
@@ -1858,15 +1862,15 @@ impl PixelCraft {
             _ => false,
         };
         if reverse {
-            if self.frame > tag.from {
-                (self.frame - 1, self.playback_reverse)
+            if self.session.frame > tag.from {
+                (self.session.frame - 1, self.playback_reverse)
             } else if tag.direction >= 2 {
                 ((tag.from + 1).min(tag.to), false)
             } else {
                 (tag.to, self.playback_reverse)
             }
-        } else if self.frame < tag.to {
-            (self.frame + 1, self.playback_reverse)
+        } else if self.session.frame < tag.to {
+            (self.session.frame + 1, self.playback_reverse)
         } else if tag.direction >= 2 {
             (tag.to.saturating_sub(1).max(tag.from), true)
         } else {
@@ -1949,7 +1953,7 @@ impl PixelCraft {
                     return Err("Palette must contain 1–256 colors".into());
                 }
                 self.remember_action("Install palette");
-                self.doc.import_palette(palette)?;
+                self.session.doc.import_palette(palette)?;
                 self.palette_index = 0;
             }
             "theme" => {
@@ -2005,7 +2009,7 @@ impl PixelCraft {
             "dither" => {
                 let matrix = crate::api::contributions::DitheringMatrix::load(&path)?;
                 self.remember_action("Install dithering pattern");
-                self.doc.dithering = Some(matrix);
+                self.session.doc.dithering = Some(matrix);
                 self.status =
                     "Dithering matrix selected; use Indexed color mode to apply it".into();
             }
@@ -2015,15 +2019,15 @@ impl PixelCraft {
         Ok(())
     }
     fn apply_tile_definition_edit(&mut self, tileset: usize, edit: TileDefinitionEdit) {
-        let id = self.selected_tile & TILE_ID_MASK;
-        let mut next = self.doc.clone();
+        let id = self.session.selected_tile & TILE_ID_MASK;
+        let mut next = self.session.doc.clone();
         let result = next.edit_tile_definition(tileset, id, edit);
         match result {
             Ok(next_id) => {
                 let selected = if matches!(edit, TileDefinitionEdit::Delete) {
                     next_id
                 } else {
-                    (self.selected_tile & !TILE_ID_MASK) | next_id
+                    (self.session.selected_tile & !TILE_ID_MASK) | next_id
                 };
                 let label = match edit {
                     TileDefinitionEdit::Duplicate => "Duplicate tile",
@@ -2031,7 +2035,7 @@ impl PixelCraft {
                     TileDefinitionEdit::MoveTo(_) => "Reorder tiles",
                 };
                 self.apply_document_edit(label, Ok(Some(next)));
-                self.selected_tile = selected;
+                self.session.selected_tile = selected;
             }
             Err(error) => self.status = error,
         }
@@ -2061,8 +2065,8 @@ impl PixelCraft {
                     for x in 0..size {
                         p.push(convert(
                             im.get_pixel((tx + x) as u32, (ty + y) as u32).0,
-                            self.doc.color_mode,
-                            &self.doc.palette,
+                            self.session.doc.color_mode,
+                            &self.session.doc.palette,
                         ));
                     }
                 }
@@ -2070,7 +2074,7 @@ impl PixelCraft {
             }
         }
         self.remember_action("Import tileset");
-        self.doc.tilesets.push(Tileset {
+        self.session.doc.tilesets.push(Tileset {
             editor_id: Default::default(),
             name: path
                 .file_stem()
@@ -2081,9 +2085,11 @@ impl PixelCraft {
             height: size,
             tiles,
         });
-        self.doc.add_tile_layer(self.doc.tilesets.len() - 1)?;
-        self.layer = self.doc.layers.len() - 1;
-        self.selected_tile = 1;
+        self.session
+            .doc
+            .add_tile_layer(self.session.doc.tilesets.len() - 1)?;
+        self.session.layer = self.session.doc.layers.len() - 1;
+        self.session.selected_tile = 1;
         Ok(())
     }
     fn slice_controls(&self, ui: &mut egui::Ui, doc: &mut Document) {
@@ -2094,7 +2100,7 @@ impl PixelCraft {
                     editor_id: Default::default(),
                     name: format!("Slice {}", doc.slices.len() + 1),
                     keys: vec![SliceKey {
-                        frame: self.frame,
+                        frame: self.session.frame,
                         bounds,
                         center: None,
                         pivot: None,
@@ -2113,7 +2119,7 @@ impl PixelCraft {
                     });
                     let position = slice
                         .keys
-                        .binary_search_by_key(&self.frame, |key| key.frame);
+                        .binary_search_by_key(&self.session.frame, |key| key.frame);
                     if let Ok(position) = position {
                         let key = &mut slice.keys[position];
                         ui.horizontal(|ui| {
@@ -2142,13 +2148,17 @@ impl PixelCraft {
                     } else if let Err(position) = position
                         && ui.pc_button("Add slice key at this frame").clicked()
                     {
-                        let mut key = slice.key_at(self.frame).cloned().unwrap_or(SliceKey {
-                            frame: self.frame,
-                            bounds: self.selection_bounds(),
-                            center: None,
-                            pivot: None,
-                        });
-                        key.frame = self.frame;
+                        let mut key =
+                            slice
+                                .key_at(self.session.frame)
+                                .cloned()
+                                .unwrap_or(SliceKey {
+                                    frame: self.session.frame,
+                                    bounds: self.selection_bounds(),
+                                    center: None,
+                                    pivot: None,
+                                });
+                        key.frame = self.session.frame;
                         slice.keys.insert(position, key);
                     }
                 });
@@ -2200,7 +2210,7 @@ impl PixelCraft {
             PropertyPage::Frame => "Frame and animation properties",
             PropertyPage::Tileset => "Tileset tools",
         };
-        let mut edited = self.doc.clone();
+        let mut edited = self.session.doc.clone();
         let mut import = false;
         let mut capture = false;
         let mut add_group = false;
@@ -2246,18 +2256,18 @@ impl PixelCraft {
 
                 }
                 PropertyPage::Layer => {
-                    let editable = self.doc.layer_unlocked(self.layer);
+                    let editable = self.session.doc.layer_unlocked(self.session.layer);
                     if !editable { ui.label("Unlock this layer and its parent groups to edit its properties."); }
                     ui.add_enabled_ui(editable, |ui| {
-            ui.separator();ui.heading("Active layer & cel");ui.label(&edited.layers[self.layer].name);
-            let mut blend=edited.layers[self.layer].blend;
-            egui::ComboBox::from_label("Blend mode").selected_text(format!("{:?}",blend)).show_ui(ui,|ui|{for v in BlendMode::ALL{ui.pc_selectable_value(&mut blend,v,format!("{:?}",v));}});edited.layers[self.layer].blend=blend;
-            let groups:Vec<_>=edited.layers.iter().enumerate().filter(|(i,l)|*i!=self.layer&&l.group).map(|(i,l)|(i,l.name.clone())).collect();
-            let mut parent=edited.layers[self.layer].parent;
+            ui.separator();ui.heading("Active layer & cel");ui.label(&edited.layers[self.session.layer].name);
+            let mut blend=edited.layers[self.session.layer].blend;
+            egui::ComboBox::from_label("Blend mode").selected_text(format!("{:?}",blend)).show_ui(ui,|ui|{for v in BlendMode::ALL{ui.pc_selectable_value(&mut blend,v,format!("{:?}",v));}});edited.layers[self.session.layer].blend=blend;
+            let groups:Vec<_>=edited.layers.iter().enumerate().filter(|(i,l)|*i!=self.session.layer&&l.group).map(|(i,l)|(i,l.name.clone())).collect();
+            let mut parent=edited.layers[self.session.layer].parent;
             egui::ComboBox::from_label("Group").selected_text(parent.and_then(|i|edited.layers.get(i)).map(|l|l.name.as_str()).unwrap_or("Root")).show_ui(ui,|ui|{ui.pc_selectable_value(&mut parent,None,"Root");for(i,name)in groups{ui.pc_selectable_value(&mut parent,Some(i),name);}});
-            edited.layers[self.layer].parent=parent;
-            ui.add(egui::Slider::new(&mut edited.layers[self.layer].cel_meta[self.frame].opacity,0..=255).text("Cel opacity"));
-            ui.add(egui::DragValue::new(&mut edited.layers[self.layer].cel_meta[self.frame].z_index).range(-32768..=32767).prefix("Cel order "));
+            edited.layers[self.session.layer].parent=parent;
+            ui.add(egui::Slider::new(&mut edited.layers[self.session.layer].cel_meta[self.session.frame].opacity,0..=255).text("Cel opacity"));
+            ui.add(egui::DragValue::new(&mut edited.layers[self.session.layer].cel_meta[self.session.frame].z_index).range(-32768..=32767).prefix("Cel order "));
             if ui.pc_button("+ New group").clicked(){add_group=true;}
 
                     });
@@ -2266,13 +2276,13 @@ impl PixelCraft {
             ui.separator();ui.heading("Tilesets & tile layers");
             ui.horizontal(|ui|{ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));if ui.pc_button("Import PNG tilesheet…").clicked(){import=true;}
 if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
-            if !edited.tilesets.is_empty(){ui.horizontal(|ui|{if ui.pc_button("+ Tile layer from last tileset").clicked(){add_tile=true;}let mut tile_id = self.selected_tile & TILE_ID_MASK;
-                    let tile_count = edited.layers[self.layer].tileset
+            if !edited.tilesets.is_empty(){ui.horizontal(|ui|{if ui.pc_button("+ Tile layer from last tileset").clicked(){add_tile=true;}let mut tile_id = self.session.selected_tile & TILE_ID_MASK;
+                    let tile_count = edited.layers[self.session.layer].tileset
                         .and_then(|index| edited.tilesets.get(index))
                         .or_else(|| edited.tilesets.last())
                         .map_or(1, |tileset| tileset.tiles.len().max(1));
                     if ui.add(egui::DragValue::new(&mut tile_id).range(1..=tile_count as u32).prefix("Paint tile ")).changed() {
-                        self.selected_tile = tile_id;
+                        self.session.selected_tile = tile_id;
                     }});}
             ui.horizontal_wrapped(|ui| {
                 ui.pc_selectable_value(&mut self.tile_pixel_mode, None, "Place tiles");
@@ -2284,10 +2294,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
                 }
                 PropertyPage::Frame => {
-                    ui.label(format!("Frame {}", self.frame + 1));
-                    ui.add(egui::DragValue::new(&mut edited.durations[self.frame]).range(1..=65535).prefix("Duration ").suffix(" ms"));
-            ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{editor_id: Default::default(),name:self.tag_name.clone(),from:self.frame,to:self.frame,direction:0, repeat:0,color:[110,170,220]});}});
-            for(i,t)in edited.tags.iter_mut().enumerate(){ui.horizontal(|ui|{ui.text_edit_singleline(&mut t.name);let mut from=t.from+1;let mut to=t.to+1;ui.add(egui::DragValue::new(&mut from).range(1..=edited.durations.len()).prefix("From "));ui.add(egui::DragValue::new(&mut to).range(from..=edited.durations.len()).prefix("To "));t.from=from-1;t.to=to.max(from)-1;if ui_icons::button(ui, "trash", "Remove range", false, false).clicked(){remove_tag=Some(i);}});ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("direction",i)).selected_text(["Forward","Reverse","Ping-pong","Ping-pong reverse"][t.direction as usize]).show_ui(ui,|ui|{for (d,name)in ["Forward","Reverse","Ping-pong","Ping-pong reverse"].iter().enumerate(){ui.pc_selectable_value(&mut t.direction,d as u8,*name);}});if ui_icons::button(ui,"tag","Use for playback",self.active_tag==Some(i),false).clicked(){self.active_tag=Some(i);self.frame=if t.direction==1||t.direction==3{t.to}else{t.from};self.playback_reverse=t.direction==3;}});}
+                    ui.label(format!("Frame {}", self.session.frame + 1));
+                    ui.add(egui::DragValue::new(&mut edited.durations[self.session.frame]).range(1..=65535).prefix("Duration ").suffix(" ms"));
+            ui.separator();ui.heading("Named animation ranges");ui.horizontal(|ui|{ui.text_edit_singleline(&mut self.tag_name);if ui.pc_button("+ Range").clicked(){edited.tags.push(FrameTag{editor_id: Default::default(),name:self.tag_name.clone(),from:self.session.frame,to:self.session.frame,direction:0, repeat:0,color:[110,170,220]});}});
+            for(i,t)in edited.tags.iter_mut().enumerate(){ui.horizontal(|ui|{ui.text_edit_singleline(&mut t.name);let mut from=t.from+1;let mut to=t.to+1;ui.add(egui::DragValue::new(&mut from).range(1..=edited.durations.len()).prefix("From "));ui.add(egui::DragValue::new(&mut to).range(from..=edited.durations.len()).prefix("To "));t.from=from-1;t.to=to.max(from)-1;if ui_icons::button(ui, "trash", "Remove range", false, false).clicked(){remove_tag=Some(i);}});ui.horizontal(|ui|{egui::ComboBox::from_id_salt(("direction",i)).selected_text(["Forward","Reverse","Ping-pong","Ping-pong reverse"][t.direction as usize]).show_ui(ui,|ui|{for (d,name)in ["Forward","Reverse","Ping-pong","Ping-pong reverse"].iter().enumerate(){ui.pc_selectable_value(&mut t.direction,d as u8,*name);}});if ui_icons::button(ui,"tag","Use for playback",self.active_tag==Some(i),false).clicked(){self.active_tag=Some(i);self.session.frame=if t.direction==1||t.direction==3{t.to}else{t.from};self.playback_reverse=t.direction==3;}});}
             if ui.pc_button("Use all frames for playback").clicked(){self.active_tag=None;}ui.small("Range names, endpoints and playback direction are saved in the project.");
                 }
             }
@@ -2318,11 +2328,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             edited.remove_tag(i);
             self.active_tag = None;
         }
-        if edited != self.doc {
+        if edited != self.session.doc {
             match edited.validate() {
                 Ok(()) => {
                     self.remember_action("Edit sprite properties");
-                    self.doc = edited;
+                    self.session.doc = edited;
                 }
                 Err(e) => self.status = e,
             }
@@ -2340,29 +2350,29 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.start_rgba_conversion(ctx);
         }
         if add_group {
-            let mut candidate = self.doc.clone();
+            let mut candidate = self.session.doc.clone();
             match candidate
                 .add_group("Group")
                 .and_then(|group| candidate.validate().map(|_| group))
             {
                 Ok(group) => {
                     self.remember_action("New group");
-                    self.doc = candidate;
-                    self.layer = group;
+                    self.session.doc = candidate;
+                    self.session.layer = group;
                 }
                 Err(error) => self.status = error,
             }
         }
         if add_tile {
-            let mut candidate = self.doc.clone();
+            let mut candidate = self.session.doc.clone();
             match candidate
                 .add_tile_layer(candidate.tilesets.len() - 1)
                 .and_then(|_| candidate.validate())
             {
                 Ok(()) => {
                     self.remember_action("New tile layer");
-                    self.layer = candidate.layers.len() - 1;
-                    self.doc = candidate;
+                    self.session.layer = candidate.layers.len() - 1;
+                    self.session.doc = candidate;
                 }
                 Err(error) => self.status = error,
             }
@@ -2377,72 +2387,6 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     #[cfg(test)]
     fn remember(&mut self) {
         self.remember_action("Edit");
-    }
-
-    fn remember_action(&mut self, label: &'static str) {
-        self.power.bridge_generation += 1;
-        self.redo.clear();
-        self.push_undo(self.doc.clone(), label);
-    }
-
-    fn push_undo(&mut self, d: Document, label: &'static str) {
-        self.undo.push(self.history_entry(d, label));
-        while self.undo.len() > 1 && (self.undo.len() > 64 || self.history_bytes() > 192_000_000) {
-            self.undo.remove(0);
-        }
-    }
-
-    fn history_bytes(&self) -> usize {
-        Self::history_document_bytes(
-            self.undo
-                .iter()
-                .map(|entry| &entry.doc)
-                .chain(self.redo.iter().map(|entry| &entry.doc))
-                .chain(std::iter::once(&self.doc))
-                .chain(std::iter::once(&self.saved)),
-        )
-    }
-
-    fn history_document_bytes<'a>(documents: impl Iterator<Item = &'a Document>) -> usize {
-        let mut seen = std::collections::HashSet::new();
-        let mut bytes = 0usize;
-        for d in documents {
-            for l in &d.layers {
-                for p in l.cels.iter().chain(l.mask.iter()) {
-                    bytes = bytes.saturating_add(p.unique_allocation_pixels(&mut seen) * 4);
-                }
-                if !l.mask_outside.is_empty()
-                    && seen.insert(std::sync::Arc::as_ptr(&l.mask_outside) as usize)
-                {
-                    bytes = bytes
-                        .saturating_add(l.mask_outside.len() * std::mem::size_of::<OutsidePixel>());
-                }
-                for m in &l.cel_meta {
-                    if let Some(p) = &m.indices
-                        && seen.insert(std::sync::Arc::as_ptr(p) as usize)
-                    {
-                        bytes = bytes.saturating_add(p.len());
-                    }
-                    bytes =
-                        bytes.saturating_add(m.outside.len() * std::mem::size_of::<OutsidePixel>());
-                }
-                for cells in &l.tile_cels {
-                    if !cells.is_empty() && seen.insert(cells.backing_id()) {
-                        bytes = bytes.saturating_add(cells.len() * 4);
-                    }
-                }
-            }
-            for t in &d.tilesets {
-                for p in &t.tiles {
-                    bytes = bytes.saturating_add(p.pixels.unique_allocation_pixels(&mut seen) * 4);
-                }
-            }
-            for r in &d.references {
-                bytes = bytes.saturating_add(r.pixels.unique_allocation_pixels(&mut seen) * 4);
-            }
-            bytes = bytes.saturating_add(d.metadata.iter().map(|m| m.data.len()).sum::<usize>());
-        }
-        bytes
     }
 
     fn dialog_open(&self) -> bool {
@@ -2492,88 +2436,27 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn clamp(&mut self) {
-        if self.active_tag.is_some_and(|i| i >= self.doc.tags.len()) {
+        if self
+            .active_tag
+            .is_some_and(|i| i >= self.session.doc.tags.len())
+        {
             self.active_tag = None;
         }
-        self.layer = self.layer.min(self.doc.layers.len() - 1);
-        self.frame = self.frame.min(self.doc.durations.len() - 1);
-        self.timeline_anchor = None;
-        self.selected_cels = None;
-        self.timeline_frames = TimelineHeaders::default();
-        self.timeline_layers = TimelineHeaders::default();
+        self.session.layer = self.session.layer.min(self.session.doc.layers.len() - 1);
+        self.session.frame = self.session.frame.min(self.session.doc.durations.len() - 1);
+        self.session.timeline_anchor = None;
+        self.session.selected_cels = None;
+        self.session.timeline_frames = TimelineHeaders::default();
+        self.session.timeline_layers = TimelineHeaders::default();
         self.timeline_destination = None;
-        self.selection = None;
-        self.studio.mask = None;
+        self.session.selection = None;
+        self.session.mask = None;
         self.power.reference_edit = None;
-        self.studio.polygon.clear();
-    }
-    fn history_entry(&self, doc: Document, label: &'static str) -> HistoryEntry {
-        HistoryEntry {
-            label,
-            doc,
-            selection: self.selection,
-            mask: self.studio.mask.clone(),
-            polygon: self.studio.polygon.clone(),
-            layer: self.layer,
-            frame: self.frame,
-            selected_tile: self.selected_tile,
-            timeline_anchor: self.timeline_anchor,
-            selected_cels: self.selected_cels.clone(),
-            timeline_frames: self.timeline_frames.clone(),
-            timeline_layers: self.timeline_layers.clone(),
-        }
-    }
-    fn restore_history(&mut self, mut entry: HistoryEntry) -> HistoryEntry {
-        self.cancel_gesture();
-        entry.doc.retain_frame_export_id_counter(&self.doc);
-        let previous = std::mem::replace(&mut self.doc, entry.doc);
-        let current = self.history_entry(previous, entry.label);
-        self.clamp();
-        self.layer = entry.layer.min(self.doc.layers.len() - 1);
-        self.frame = entry.frame.min(self.doc.durations.len() - 1);
-        self.selected_tile = entry.selected_tile;
-        self.timeline_anchor = entry.timeline_anchor;
-        self.selected_cels = entry.selected_cels;
-        self.timeline_frames = entry.timeline_frames;
-        self.timeline_layers = entry.timeline_layers;
-        self.selection = entry.selection;
-        self.studio.mask = entry.mask;
-        self.studio.polygon = entry.polygon;
-        current
-    }
-
-    fn history_label(&self, position: usize) -> Option<&'static str> {
-        if position == 0 {
-            Some("Oldest retained state")
-        } else if position <= self.undo.len() {
-            self.undo.get(position - 1).map(|entry| entry.label)
-        } else {
-            let index = (self.undo.len() + self.redo.len()).checked_sub(position)?;
-            self.redo.get(index).map(|entry| entry.label)
-        }
-    }
-
-    fn jump_history(&mut self, position: usize) -> bool {
-        if position == self.undo.len() || position > self.undo.len() + self.redo.len() {
-            return false;
-        }
-        self.power.bridge_generation += 1;
-        self.stop_playback(false);
-        while self.undo.len() > position {
-            let entry = self.undo.pop().expect("history target is valid");
-            let previous = self.restore_history(entry);
-            self.redo.push(previous);
-        }
-        while self.undo.len() < position {
-            let entry = self.redo.pop().expect("history target is valid");
-            let previous = self.restore_history(entry);
-            self.undo.push(previous);
-        }
-        true
+        self.session.polygon.clear();
     }
 
     fn undo(&mut self) {
-        if self.jump_history(self.undo.len().saturating_sub(1)) {
+        if self.jump_history(self.session.undo.len().saturating_sub(1)) {
             self.status = "Undo".into();
         } else {
             self.power.bridge_generation += 1;
@@ -2581,7 +2464,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn redo(&mut self) {
-        if self.jump_history(self.undo.len() + 1) {
+        if self.jump_history(self.session.undo.len() + 1) {
             self.status = "Redo".into();
         } else {
             self.power.bridge_generation += 1;
@@ -2595,8 +2478,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let mut open = true;
         let mut jump = None;
         let can_jump = !self.dialog_open();
-        let current = self.undo.len();
-        let total = current + self.redo.len();
+        let current = self.session.undo.len();
+        let total = current + self.session.redo.len();
         egui::Window::new("Undo History")
             .open(&mut open)
             .default_width(275.)
@@ -2654,27 +2537,27 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.palette_index = 0;
         self.render_snapshot = None;
         self.last_export = None;
-        self.doc = d;
-        self.saved = self.doc.clone();
+        self.session.doc = d;
+        self.session.saved = self.session.doc.clone();
         self.path = path;
         self.live_save_root = None;
         self.live_save_root_identity = None;
-        self.layer = 0;
-        self.frame = 0;
-        self.selected_tile = 1;
-        self.timeline_anchor = None;
-        self.selected_cels = None;
-        self.timeline_frames = TimelineHeaders::default();
-        self.timeline_layers = TimelineHeaders::default();
+        self.session.layer = 0;
+        self.session.frame = 0;
+        self.session.selected_tile = 1;
+        self.session.timeline_anchor = None;
+        self.session.selected_cels = None;
+        self.session.timeline_frames = TimelineHeaders::default();
+        self.session.timeline_layers = TimelineHeaders::default();
         self.timeline_destination = None;
-        self.undo.clear();
-        self.redo.clear();
-        self.selection = None;
-        self.studio.mask = None;
+        self.session.undo.clear();
+        self.session.redo.clear();
+        self.session.selection = None;
+        self.session.mask = None;
         self.studio.symmetry_axes = [None; 2];
         self.selection_tools.previous = None;
         self.power.reference_edit = None;
-        self.studio.polygon.clear();
+        self.session.polygon.clear();
         self.pan = Vec2::ZERO;
         let display = self.sprite_display_size();
         self.zoom = (480. / display.x.max(display.y)).floor().clamp(1., 16.);
@@ -2683,31 +2566,31 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn open_document(&mut self, doc: Document, path: Option<PathBuf>) {
         self.cancel_gesture();
         let tab = SpriteTab {
-            doc: self.doc.clone(),
+            doc: self.session.doc.clone(),
             last_export: self.last_export.take(),
-            saved: self.saved.clone(),
+            saved: self.session.saved.clone(),
             path: self.path.clone(),
             live_save_root: self.live_save_root.clone(),
             live_save_root_identity: self.live_save_root_identity,
-            layer: self.layer,
-            frame: self.frame,
-            selected_tile: self.selected_tile,
-            undo: self.undo.clone(),
-            redo: self.redo.clone(),
+            layer: self.session.layer,
+            frame: self.session.frame,
+            selected_tile: self.session.selected_tile,
+            undo: self.session.undo.clone(),
+            redo: self.session.redo.clone(),
             zoom: self.zoom,
             pan: self.pan,
             split_canvas: self.split_canvas,
             active_canvas: self.active_canvas,
-            selection: self.selection,
+            selection: self.session.selection,
             palette_index: self.palette_index,
             secondary_palette_index: self.secondary_palette_index,
             active_tag: self.active_tag,
-            timeline_anchor: self.timeline_anchor,
-            selected_cels: self.selected_cels.clone(),
-            timeline_frames: self.timeline_frames.clone(),
-            timeline_layers: self.timeline_layers.clone(),
-            polygon: self.studio.polygon.clone(),
-            mask: self.studio.mask.clone(),
+            timeline_anchor: self.session.timeline_anchor,
+            selected_cels: self.session.selected_cels.clone(),
+            timeline_frames: self.session.timeline_frames.clone(),
+            timeline_layers: self.session.timeline_layers.clone(),
+            polygon: self.session.polygon.clone(),
+            mask: self.session.mask.clone(),
             symmetry_axes: self.studio.symmetry_axes,
             previous_selection: self.selection_tools.previous.take(),
         };
@@ -2723,27 +2606,27 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.cancel_gesture();
         self.power.bridge_generation += 1;
         let mut tab = self.tabs[index].take().unwrap();
-        std::mem::swap(&mut self.doc, &mut tab.doc);
+        std::mem::swap(&mut self.session.doc, &mut tab.doc);
         std::mem::swap(&mut self.last_export, &mut tab.last_export);
-        std::mem::swap(&mut self.saved, &mut tab.saved);
+        std::mem::swap(&mut self.session.saved, &mut tab.saved);
         std::mem::swap(&mut self.path, &mut tab.path);
         std::mem::swap(&mut self.live_save_root, &mut tab.live_save_root);
         std::mem::swap(
             &mut self.live_save_root_identity,
             &mut tab.live_save_root_identity,
         );
-        std::mem::swap(&mut self.layer, &mut tab.layer);
-        std::mem::swap(&mut self.frame, &mut tab.frame);
-        std::mem::swap(&mut self.selected_tile, &mut tab.selected_tile);
-        std::mem::swap(&mut self.undo, &mut tab.undo);
-        std::mem::swap(&mut self.redo, &mut tab.redo);
+        std::mem::swap(&mut self.session.layer, &mut tab.layer);
+        std::mem::swap(&mut self.session.frame, &mut tab.frame);
+        std::mem::swap(&mut self.session.selected_tile, &mut tab.selected_tile);
+        std::mem::swap(&mut self.session.undo, &mut tab.undo);
+        std::mem::swap(&mut self.session.redo, &mut tab.redo);
         std::mem::swap(&mut self.zoom, &mut tab.zoom);
         std::mem::swap(&mut self.pan, &mut tab.pan);
         std::mem::swap(&mut self.split_canvas, &mut tab.split_canvas);
         std::mem::swap(&mut self.active_canvas, &mut tab.active_canvas);
-        std::mem::swap(&mut self.selection, &mut tab.selection);
-        std::mem::swap(&mut self.studio.polygon, &mut tab.polygon);
-        std::mem::swap(&mut self.studio.mask, &mut tab.mask);
+        std::mem::swap(&mut self.session.selection, &mut tab.selection);
+        std::mem::swap(&mut self.session.polygon, &mut tab.polygon);
+        std::mem::swap(&mut self.session.mask, &mut tab.mask);
         std::mem::swap(&mut self.studio.symmetry_axes, &mut tab.symmetry_axes);
         std::mem::swap(
             &mut self.selection_tools.previous,
@@ -2756,10 +2639,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             &mut tab.secondary_palette_index,
         );
         std::mem::swap(&mut self.active_tag, &mut tab.active_tag);
-        std::mem::swap(&mut self.timeline_anchor, &mut tab.timeline_anchor);
-        std::mem::swap(&mut self.selected_cels, &mut tab.selected_cels);
-        std::mem::swap(&mut self.timeline_frames, &mut tab.timeline_frames);
-        std::mem::swap(&mut self.timeline_layers, &mut tab.timeline_layers);
+        std::mem::swap(&mut self.session.timeline_anchor, &mut tab.timeline_anchor);
+        std::mem::swap(&mut self.session.selected_cels, &mut tab.selected_cels);
+        std::mem::swap(&mut self.session.timeline_frames, &mut tab.timeline_frames);
+        std::mem::swap(&mut self.session.timeline_layers, &mut tab.timeline_layers);
         self.timeline_destination = None;
         self.tabs[self.active_tab] = Some(tab);
         self.active_tab = index;
@@ -2788,7 +2671,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             Pending::Demo => {
                 self.open_document(Document::demo(), None);
-                self.layer = 1;
+                self.session.layer = 1;
             }
             Pending::Open => self.begin_file_path(FilePathPurpose::Open, String::new()),
             Pending::CloseTab => {
@@ -2867,7 +2750,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 return false;
             }
         }
-        let mut saving = self.doc.clone();
+        let mut saving = self.session.doc.clone();
         if !saving.has_frame_names()
             && !saving.references.is_empty()
             && matches!(
@@ -2894,7 +2777,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 _ => return false,
             }
         }
-        if self.pending.is_some() || saving != self.doc {
+        if self.pending.is_some() || saving != self.session.doc {
             return self.finish_save_authorized(path, saving, overwrite, confirmed);
         }
         self.queue_save(path, saving, overwrite, confirmed);
@@ -2942,7 +2825,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         self.live_save_root_identity = None;
                     }
                     self.path = Some(path);
-                    self.saved = saving;
+                    self.session.saved = saving;
                 } else if let Some(Some(tab)) = self.tabs.get_mut(tab) {
                     if tab.path.as_ref() != Some(&path) {
                         tab.live_save_root = None;
@@ -2974,9 +2857,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         };
         match result {
             Ok(()) => {
-                if self.doc != saving {
+                if self.session.doc != saving {
                     self.remember_action("Apply save format conversion");
-                    self.doc = saving;
+                    self.session.doc = saving;
                 }
                 self.status = format!(
                     "Saved {}",
@@ -2988,7 +2871,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     self.live_save_root_identity = None;
                 }
                 self.path = Some(path);
-                self.saved = self.doc.clone();
+                self.session.saved = self.session.doc.clone();
                 true
             }
             Err(e) => {
@@ -3000,7 +2883,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn begin_animation_export(&mut self, kind: &'static str) {
         self.animation_export = Some(kind);
         self.animation_export_scale = self.studio.sheet.scale;
-        self.animation_export_document = Some(self.doc.editor_id.runtime_key());
+        self.animation_export_document = Some(self.session.doc.editor_id.runtime_key());
     }
     fn export(&mut self, kind: &str) {
         if self.export_busy() {
@@ -3073,7 +2956,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             },
             "baked-ase" => ExportKind::BakedAse,
             _ => ExportKind::Raster {
-                frame_id: self.doc.frame_export_id(self.frame),
+                frame_id: self.session.doc.frame_export_id(self.session.frame),
                 scale,
                 sheet: kind == "sheet",
             },
@@ -3104,54 +2987,66 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn selection_clipboard(&self, merged: bool) -> Option<Clipboard> {
-        let (x0, y0, x1, y1) =
-            self.selection
-                .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
+        let (x0, y0, x1, y1) = self.session.selection.unwrap_or((
+            0,
+            0,
+            self.session.doc.width as i32 - 1,
+            self.session.doc.height as i32 - 1,
+        ));
         let (x0, y0, x1, y1) = (
             x0.min(x1).max(0),
             y0.min(y1).max(0),
-            x0.max(x1).min(self.doc.width as i32 - 1),
-            y0.max(y1).min(self.doc.height as i32 - 1),
+            x0.max(x1).min(self.session.doc.width as i32 - 1),
+            y0.max(y1).min(self.session.doc.height as i32 - 1),
         );
         if x0 > x1 || y0 > y1 {
             return None;
         }
-        let composite = merged.then(|| self.doc.composite(self.frame));
+        let composite = merged.then(|| self.session.doc.composite(self.session.frame));
         let w = (x1 - x0 + 1) as usize;
         let h = (y1 - y0 + 1) as usize;
         let mut pixels = Vec::with_capacity(w * h);
-        let layer = &self.doc.layers[self.layer];
-        let effective_palette =
-            (!merged && self.doc.color_mode == ColorMode::Indexed && layer.tileset.is_none())
-                .then(|| self.doc.editing_palette(self.layer, self.frame));
+        let layer = &self.session.doc.layers[self.session.layer];
+        let effective_palette = (!merged
+            && self.session.doc.color_mode == ColorMode::Indexed
+            && layer.tileset.is_none())
+        .then(|| {
+            self.session
+                .doc
+                .editing_palette(self.session.layer, self.session.frame)
+        });
         let mut indexed = effective_palette.as_ref().map(|_| ClipboardIndices {
             slots: Vec::with_capacity(w * h),
-            transparent: self.doc.transparent_index as u8,
+            transparent: self.session.doc.transparent_index as u8,
         });
-        let mut selected_pixels =
-            Vec::with_capacity(if self.selection.is_some() { w * h } else { 0 });
+        let mut selected_pixels = Vec::with_capacity(if self.session.selection.is_some() {
+            w * h
+        } else {
+            0
+        });
         for y in y0..=y1 {
             for x in x0..=x1 {
                 let selected = self.selected(x, y);
-                if self.selection.is_some() {
+                if self.session.selection.is_some() {
                     selected_pixels.push(selected);
                 }
                 let color = if !selected {
                     CLEAR
                 } else if let Some(composite) = &composite {
-                    composite[y as usize * self.doc.width + x as usize]
+                    composite[y as usize * self.session.doc.width + x as usize]
                 } else {
-                    self.doc
-                        .sample_layer(self.layer, self.frame, x, y)
+                    self.session
+                        .doc
+                        .sample_layer(self.session.layer, self.session.frame, x, y)
                         .unwrap_or(CLEAR)
                 };
                 pixels.push(color);
                 if let (Some(indexed), Some(palette)) = (&mut indexed, &effective_palette) {
-                    let index = y as usize * self.doc.width + x as usize;
+                    let index = y as usize * self.session.doc.width + x as usize;
                     let slot = if !selected {
                         indexed.transparent
                     } else {
-                        layer.cel_meta[self.frame]
+                        layer.cel_meta[self.session.frame]
                             .indices
                             .as_ref()
                             .and_then(|slots| slots.get(index).copied())
@@ -3168,7 +3063,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
         }
-        if self.selection.is_some() && !selected_pixels.contains(&true) {
+        if self.session.selection.is_some() && !selected_pixels.contains(&true) {
             return None;
         }
         Some(Clipboard::new(crate::ClipboardData {
@@ -3177,11 +3072,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             pixels,
             cells: None,
             indexed,
-            selection: self.selection.map(|_| ClipboardMask {
+            selection: self.session.selection.map(|_| ClipboardMask {
                 origin: [x0, y0],
                 selected: selected_pixels,
             }),
-            palette: Some(self.doc.palette_for(self.frame).to_vec()),
+            palette: Some(self.session.doc.palette_for(self.session.frame).to_vec()),
             tileset: None,
         }))
     }
@@ -3225,7 +3120,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.status = "Paste queued until the tile copy is ready".into();
             return;
         }
-        if mode == PasteMode::InPlace && !self.doc.editable(self.layer) {
+        if mode == PasteMode::InPlace && !self.session.doc.editable(self.session.layer) {
             return;
         }
         if self.shot.is_none() && !cfg!(test) {
@@ -3249,11 +3144,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             mode,
             tab: self.active_tab,
             generation: self.power.bridge_generation,
-            layer: self.layer,
-            frame: self.frame,
-            selection: self.selection,
-            mask: self.studio.mask.clone(),
-            polygon: self.studio.polygon.clone(),
+            layer: self.session.layer,
+            frame: self.session.frame,
+            selection: self.session.selection,
+            mask: self.session.mask.clone(),
+            polygon: self.session.polygon.clone(),
         }
     }
     fn poll_clipboard(&mut self, ctx: &egui::Context) {
@@ -3376,12 +3271,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             return;
         }
-        let (x, y, _, _) = self.selection.unwrap_or((0, 0, 0, 0));
+        let (x, y, _, _) = self.session.selection.unwrap_or((0, 0, 0, 0));
         match mode {
             PasteMode::InPlace => {
-                if self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none() {
+                if self.session.doc.editable(self.session.layer)
+                    && self.session.doc.layers[self.session.layer]
+                        .tileset
+                        .is_none()
+                {
                     self.remember_action("Paste");
-                    Self::paste_raster(&mut self.doc, self.layer, self.frame, (x, y), clip);
+                    Self::paste_raster(
+                        &mut self.session.doc,
+                        self.session.layer,
+                        self.session.frame,
+                        (x, y),
+                        clip,
+                    );
                     self.status = "Pasted pixels".into();
                 }
             }
@@ -3431,22 +3336,22 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.open_derived_sprite(doc, "Pasted as a new sprite");
             }
             PasteMode::Layer => {
-                if !self.doc.can_add_layer() {
+                if !self.session.doc.can_add_layer() {
                     self.status = "Layer limit reached for this canvas size".into();
                     return;
                 }
-                let mut next = self.doc.clone();
+                let mut next = self.session.doc.clone();
                 next.add_layer();
                 let layer = next.layers.len() - 1;
                 next.layers[layer].name = "Pasted layer".into();
-                Self::paste_raster(&mut next, layer, self.frame, (x, y), clip);
+                Self::paste_raster(&mut next, layer, self.session.frame, (x, y), clip);
                 if let Err(error) = next.validate() {
                     self.status = error;
                     return;
                 }
                 self.remember_action("Paste as new layer");
-                self.doc = next;
-                self.layer = layer;
+                self.session.doc = next;
+                self.session.layer = layer;
                 self.status = "Pasted as a new layer".into();
             }
             PasteMode::Reference => {
@@ -3460,12 +3365,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     fn open_derived_sprite(&mut self, doc: Document, status: &str) {
         let blank = Document::new(doc.width, doc.height);
         self.open_document(doc, None);
-        self.saved = blank;
+        self.session.saved = blank;
         self.status = status.into();
     }
 
     fn new_sprite_from_selection(&mut self) {
-        let Some(clip) = self.selection.and_then(|_| self.selection_clipboard(false)) else {
+        let Some(clip) = self
+            .session
+            .selection
+            .and_then(|_| self.selection_clipboard(false))
+        else {
             self.status = "Select pixels to create a sprite".into();
             return;
         };
@@ -3473,12 +3382,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let mut doc = Document::new(clip.w, clip.h);
         doc.palette = clip.palette.unwrap_or_else(default_palette);
         doc.layers[0].cels[0] = clip.pixels.into();
-        doc.color_profile.clone_from(&self.doc.color_profile);
-        doc.pixel_aspect = self.doc.pixel_aspect;
-        let source = &self.doc.layers[self.layer];
-        if self.doc.color_mode == ColorMode::Indexed && !source.background {
-            doc.transparent_index = self.doc.transparent_index;
-            if let Some(indices) = &source.cel_meta[self.frame].indices {
+        doc.color_profile
+            .clone_from(&self.session.doc.color_profile);
+        doc.pixel_aspect = self.session.doc.pixel_aspect;
+        let source = &self.session.doc.layers[self.session.layer];
+        if self.session.doc.color_mode == ColorMode::Indexed && !source.background {
+            doc.transparent_index = self.session.doc.transparent_index;
+            if let Some(indices) = &source.cel_meta[self.session.frame].indices {
                 let mask = clip.selection.unwrap();
                 let [x, y] = mask.origin;
                 doc.layers[0].cel_meta[0].indices = Some(
@@ -3487,7 +3397,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         .enumerate()
                         .map(|(i, selected)| {
                             if *selected {
-                                indices[(y as usize + i / clip.w) * self.doc.width
+                                indices[(y as usize + i / clip.w) * self.session.doc.width
                                     + x as usize
                                     + i % clip.w]
                             } else {
@@ -3499,25 +3409,34 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 );
             }
             doc.set_color_mode(ColorMode::Indexed);
-        } else if self.doc.color_mode == ColorMode::Grayscale {
+        } else if self.session.doc.color_mode == ColorMode::Grayscale {
             doc.color_mode = ColorMode::Grayscale;
         }
         self.open_derived_sprite(doc, "Created a sprite from the selection");
     }
     fn clear(&mut self) {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             return;
         }
         self.remember_action("Clear pixels");
-        let (x0, y0, x1, y1) =
-            self.selection
-                .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
+        let (x0, y0, x1, y1) = self.session.selection.unwrap_or((
+            0,
+            0,
+            self.session.doc.width as i32 - 1,
+            self.session.doc.height as i32 - 1,
+        ));
         for y in y0..=y1 {
             for x in x0..=x1 {
                 if self.selected(x, y)
-                    && let Some(i) = self.doc.index(x, y)
+                    && let Some(i) = self.session.doc.index(x, y)
                 {
-                    self.doc.set_pixel(self.layer, self.frame, i, CLEAR);
+                    self.session
+                        .doc
+                        .set_pixel(self.session.layer, self.session.frame, i, CLEAR);
                 }
             }
         }
@@ -3603,13 +3522,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     replacement: self.bg,
                     all_layers: false,
                     all_frames: false,
-                    selection_only: self.selection.is_some(),
+                    selection_only: self.session.selection.is_some(),
                 });
             }
             "selectall" => {
-                self.studio.mask = None;
-                self.studio.polygon.clear();
-                self.selection = Some((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1))
+                self.session.mask = None;
+                self.session.polygon.clear();
+                self.session.selection = Some((
+                    0,
+                    0,
+                    self.session.doc.width as i32 - 1,
+                    self.session.doc.height as i32 - 1,
+                ))
             }
             "deselect" => {
                 self.deselect_and_remember();
@@ -3621,62 +3545,66 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "import-selection-mask" => self.import_selection_mask(),
             "export-selection-mask" => self.export_selection_mask(),
             "layer" => {
-                if self.doc.can_add_layer() {
+                if self.session.doc.can_add_layer() {
                     self.remember_action("New layer");
-                    self.doc.add_layer();
-                    self.layer = self.doc.layers.len() - 1;
-                    self.timeline_anchor = None;
-                    self.selected_cels = None;
-                    self.timeline_frames = TimelineHeaders::default();
-                    self.timeline_layers = TimelineHeaders::default();
+                    self.session.doc.add_layer();
+                    self.session.layer = self.session.doc.layers.len() - 1;
+                    self.session.timeline_anchor = None;
+                    self.session.selected_cels = None;
+                    self.session.timeline_frames = TimelineHeaders::default();
+                    self.session.timeline_layers = TimelineHeaders::default();
                     self.timeline_destination = None;
                 } else {
                     self.status = "Layer limit reached for this canvas size".into()
                 }
             }
-            "deletelayer" if self.doc.layers.len() > 1 => {
+            "deletelayer" if self.session.doc.layers.len() > 1 => {
                 self.remember_action("Delete layer");
-                self.doc.remove_layer(self.layer);
+                self.session.doc.remove_layer(self.session.layer);
                 self.clamp();
             }
             "deletelayer" => {}
             "up" | "down" => {
                 let to = if s == "up" {
-                    (self.layer + 1).min(self.doc.layers.len() - 1)
+                    (self.session.layer + 1).min(self.session.doc.layers.len() - 1)
                 } else {
-                    self.layer.saturating_sub(1)
+                    self.session.layer.saturating_sub(1)
                 };
-                if to != self.layer {
+                if to != self.session.layer {
                     self.remember_action("Move layer");
-                    self.doc.swap_layers(self.layer, to);
-                    self.layer = to;
-                    self.timeline_layers = TimelineHeaders::default();
-                    self.selected_cels = None;
-                    self.timeline_anchor = None;
+                    self.session.doc.swap_layers(self.session.layer, to);
+                    self.session.layer = to;
+                    self.session.timeline_layers = TimelineHeaders::default();
+                    self.session.selected_cels = None;
+                    self.session.timeline_anchor = None;
                     self.timeline_destination = None;
                 }
             }
             "frame" | "blank" => {
-                if self.doc.can_add_frame(self.frame, s == "frame") {
+                if self
+                    .session
+                    .doc
+                    .can_add_frame(self.session.frame, s == "frame")
+                {
                     self.remember_action(if s == "frame" {
                         "Duplicate frame"
                     } else {
                         "New empty frame"
                     });
-                    self.doc.add_frame(self.frame, s == "frame");
-                    self.frame += 1;
-                    self.timeline_anchor = None;
-                    self.selected_cels = None;
-                    self.timeline_frames = TimelineHeaders::default();
-                    self.timeline_layers = TimelineHeaders::default();
+                    self.session.doc.add_frame(self.session.frame, s == "frame");
+                    self.session.frame += 1;
+                    self.session.timeline_anchor = None;
+                    self.session.selected_cels = None;
+                    self.session.timeline_frames = TimelineHeaders::default();
+                    self.session.timeline_layers = TimelineHeaders::default();
                     self.timeline_destination = None;
                 } else {
                     self.status = "Frame limit reached for this canvas size".into()
                 }
             }
-            "deleteframe" if self.doc.durations.len() > 1 => {
+            "deleteframe" if self.session.doc.durations.len() > 1 => {
                 self.remember_action("Delete frame");
-                self.doc.remove_frame(self.frame);
+                self.session.doc.remove_frame(self.session.frame);
                 self.clamp();
             }
             "deleteframe" => {}
@@ -3690,12 +3618,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             "play-subtags-once" => self.start_subtag_playback(true),
             "rewind-on-stop" => self.toggle_rewind_on_stop(),
             "prev" | "next" => {
-                let count = self.doc.durations.len();
+                let count = self.session.doc.durations.len();
                 let offset = if s == "next" { 1 } else { count - 1 };
-                self.frame = (self.frame + offset) % count;
-                self.timeline_frames = TimelineHeaders::default();
-                self.timeline_layers = TimelineHeaders::default();
-                self.selected_cels = None;
+                self.session.frame = (self.session.frame + offset) % count;
+                self.session.timeline_frames = TimelineHeaders::default();
+                self.session.timeline_layers = TimelineHeaders::default();
+                self.session.selected_cels = None;
             }
             "flipx" | "flipy" => {
                 self.remember_action(if s == "flipx" {
@@ -3703,17 +3631,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 } else {
                     "Flip vertically"
                 });
-                self.doc.flip(self.layer, self.frame, s == "flipx")
+                self.session
+                    .doc
+                    .flip(self.session.layer, self.session.frame, s == "flipx")
             }
             "settings" => self.settings_open = true,
             "grid" => self.grid = !self.grid,
             "drawing-grid" => self.show_drawing_grid = !self.show_drawing_grid,
             "snap-to-grid" => self.snap_to_grid = !self.snap_to_grid,
-            "drawing-grid-settings" => self.grid_settings = Some(self.doc.drawing_grid()),
+            "drawing-grid-settings" => self.grid_settings = Some(self.session.doc.drawing_grid()),
             "grid-from-selection" => {
-                if self.selection.is_some()
+                if self.session.selection.is_some()
                     && self
-                        .studio
+                        .session
                         .mask
                         .as_ref()
                         .is_none_or(|mask| mask.iter().any(|&pixel| pixel))
@@ -4065,7 +3995,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.fg = color;
         if let Some(index) = self
             .doc
-            .palette_for(self.frame)
+            .palette_for(self.session.frame)
             .iter()
             .position(|p| *p == color)
         {
@@ -4103,7 +4033,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             match job.try_recv() {
                 Ok((snapshot, colors)) => {
                     self.used_colors_job = None;
-                    if same_color_artwork(&snapshot, &self.doc) {
+                    if same_color_artwork(&snapshot, &self.session.doc) {
                         self.used_colors_snapshot = Some(snapshot);
                         self.used_colors = colors;
                     }
@@ -4115,10 +4045,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if !self
             .used_colors_snapshot
             .as_ref()
-            .is_some_and(|old| same_color_artwork(old, &self.doc))
+            .is_some_and(|old| same_color_artwork(old, &self.session.doc))
         {
-            if self.doc.stored_pixels() > 1_000_000 {
-                let snapshot = self.doc.clone();
+            if self.session.doc.stored_pixels() > 1_000_000 {
+                let snapshot = self.session.doc.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.used_colors_job = Some(rx);
                 std::thread::spawn(move || {
@@ -4127,8 +4057,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 });
                 return self.used_colors.clone();
             }
-            self.used_colors = Self::compute_sprite_colors(&self.doc);
-            self.used_colors_snapshot = Some(self.doc.clone());
+            self.used_colors = Self::compute_sprite_colors(&self.session.doc);
+            self.used_colors_snapshot = Some(self.session.doc.clone());
         }
         self.used_colors.clone()
     }
@@ -4190,7 +4120,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         groups.into_iter().map(|(pixel, _)| pixel).collect()
     }
     fn drawing_palette_index(&self, color: Pixel) -> Option<usize> {
-        let palette = self.doc.palette_for(self.frame);
+        let palette = self.session.doc.palette_for(self.session.frame);
         let preferred = if self.secondary_stroke() {
             self.secondary_palette_index
         } else {
@@ -4244,34 +4174,37 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
     }
     fn timeline_range(&self) -> CelRange {
-        let active = (self.layer, self.frame);
-        CelRange::between(self.timeline_anchor.unwrap_or(active), active)
+        let active = (self.session.layer, self.session.frame);
+        CelRange::between(self.session.timeline_anchor.unwrap_or(active), active)
     }
 
     fn timeline_select(&mut self, layer: usize, frame: usize, extend: bool) {
-        self.timeline_frames = TimelineHeaders::default();
-        self.timeline_layers = TimelineHeaders::default();
-        self.selected_cels = None;
+        self.session.timeline_frames = TimelineHeaders::default();
+        self.session.timeline_layers = TimelineHeaders::default();
+        self.session.selected_cels = None;
         if extend {
-            self.timeline_anchor.get_or_insert((self.layer, self.frame));
+            self.session
+                .timeline_anchor
+                .get_or_insert((self.session.layer, self.session.frame));
         } else {
-            self.timeline_anchor = None;
-            self.timeline_duration = self.doc.durations[frame];
+            self.session.timeline_anchor = None;
+            self.timeline_duration = self.session.doc.durations[frame];
         }
-        self.layer = layer;
-        self.frame = frame;
+        self.session.layer = layer;
+        self.session.frame = frame;
         self.timeline_destination = None;
         self.stop_playback(false);
     }
 
     fn timeline_cel_selection(&self) -> CelSelection {
-        self.selected_cels
+        self.session
+            .selected_cels
             .clone()
             .unwrap_or_else(|| CelSelection::Rectangle(self.timeline_range()))
     }
 
     fn toggle_cel_selection(&mut self, layer: usize, frame: usize) {
-        let mut cells = match self.selected_cels.take() {
+        let mut cells = match self.session.selected_cels.take() {
             Some(CelSelection::Individual(cells)) => cells,
             _ => Arc::new(
                 CelSelection::Rectangle(self.timeline_range())
@@ -4289,7 +4222,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         };
         self.timeline_select(active.0, active.1, false);
         if !cells.is_empty() {
-            self.selected_cels = Some(CelSelection::Individual(cells));
+            self.session.selected_cels = Some(CelSelection::Individual(cells));
         }
     }
 
@@ -4313,8 +4246,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             },
             next,
         ) {
-            let active = if selection.contains(self.layer, self.frame) {
-                (self.layer, self.frame)
+            let active = if selection.contains(self.session.layer, self.session.frame) {
+                (self.session.layer, self.session.frame)
             } else {
                 (bounds.first_layer, bounds.first_frame)
             };
@@ -4324,34 +4257,34 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     target.1 + frame - bounds.first_frame,
                 )
             };
-            let anchor = self.timeline_anchor.unwrap_or(active);
-            (self.layer, self.frame) = translate(active);
+            let anchor = self.session.timeline_anchor.unwrap_or(active);
+            (self.session.layer, self.session.frame) = translate(active);
             match selection {
                 CelSelection::Rectangle(_) => {
-                    self.timeline_anchor = selection
+                    self.session.timeline_anchor = selection
                         .contains(anchor.0, anchor.1)
                         .then(|| translate(anchor));
-                    self.selected_cels = None;
+                    self.session.selected_cels = None;
                 }
                 CelSelection::Individual(cells) => {
-                    self.timeline_anchor = None;
-                    self.selected_cels = Some(CelSelection::Individual(Arc::new(
+                    self.session.timeline_anchor = None;
+                    self.session.selected_cels = Some(CelSelection::Individual(Arc::new(
                         cells.iter().copied().map(translate).collect(),
                     )));
                 }
             }
-            self.timeline_duration = self.doc.durations[self.frame];
-            self.timeline_frames = TimelineHeaders::default();
-            self.timeline_layers = TimelineHeaders::default();
+            self.timeline_duration = self.session.doc.durations[self.session.frame];
+            self.session.timeline_frames = TimelineHeaders::default();
+            self.session.timeline_layers = TimelineHeaders::default();
             self.timeline_destination = None;
             self.stop_playback(false);
         }
     }
 
     fn select_layer_header(&mut self, layer: usize, modifiers: egui::Modifiers, visible: &[usize]) {
-        let mut layers = std::mem::take(&mut self.timeline_layers);
+        let mut layers = std::mem::take(&mut self.session.timeline_layers);
         if modifiers.shift {
-            let anchor = *layers.anchor.get_or_insert(self.layer);
+            let anchor = *layers.anchor.get_or_insert(self.session.layer);
             let target = visible
                 .iter()
                 .position(|&index| index == layer)
@@ -4373,28 +4306,30 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         } else {
             layers.selected.last().copied().unwrap_or(layer)
         };
-        self.timeline_select(active, self.frame, false);
-        self.timeline_layers = layers;
+        self.timeline_select(active, self.session.frame, false);
+        self.session.timeline_layers = layers;
     }
 
     fn drop_layers(&mut self, drag: &LayerHeaderDrag, drop: LayerDrop) {
-        match self.doc.with_layers_restacked(&drag.layers, drop) {
+        match self.session.doc.with_layers_restacked(&drag.layers, drop) {
             Ok(Some((next, positions))) => {
                 if self.apply_document_edit("Restack layers", Ok(Some(next))) {
-                    let active = if drag.layers.binary_search(&self.layer).is_ok() {
-                        self.layer
+                    let active = if drag.layers.binary_search(&self.session.layer).is_ok() {
+                        self.session.layer
                     } else {
                         drag.grabbed
                     };
-                    self.timeline_select(positions[active], self.frame, false);
-                    self.timeline_layers.anchor = Some(self.layer);
-                    self.timeline_layers.selected =
+                    self.timeline_select(positions[active], self.session.frame, false);
+                    self.session.timeline_layers.anchor = Some(self.session.layer);
+                    self.session.timeline_layers.selected =
                         drag.layers.iter().map(|&layer| positions[layer]).collect();
-                    self.timeline_layers.selected.sort_unstable();
+                    self.session.timeline_layers.selected.sort_unstable();
                     if let LayerDrop::Into(target) = drop {
-                        self.studio
-                            .collapsed_groups
-                            .remove(&self.doc.layers[positions[target]].editor_id.to_string());
+                        self.studio.collapsed_groups.remove(
+                            &self.session.doc.layers[positions[target]]
+                                .editor_id
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -4404,27 +4339,31 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn select_frame_header(&mut self, frame: usize, modifiers: egui::Modifiers) {
-        let selected = &mut self.timeline_frames.selected;
+        let selected = &mut self.session.timeline_frames.selected;
         if modifiers.shift {
-            let anchor = *self.timeline_frames.anchor.get_or_insert(self.frame);
+            let anchor = *self
+                .session
+                .timeline_frames
+                .anchor
+                .get_or_insert(self.session.frame);
             *selected = (anchor.min(frame)..=anchor.max(frame)).collect();
         } else if modifiers.command {
-            self.timeline_frames.toggle(frame);
+            self.session.timeline_frames.toggle(frame);
         } else {
             *selected = vec![frame];
-            self.timeline_frames.anchor = Some(frame);
+            self.session.timeline_frames.anchor = Some(frame);
         }
-        self.frame = frame;
-        self.timeline_layers = TimelineHeaders::default();
-        self.timeline_duration = self.doc.durations[frame];
-        self.timeline_anchor = None;
-        self.selected_cels = None;
+        self.session.frame = frame;
+        self.session.timeline_layers = TimelineHeaders::default();
+        self.timeline_duration = self.session.doc.durations[frame];
+        self.session.timeline_anchor = None;
+        self.session.selected_cels = None;
         self.timeline_destination = None;
         self.stop_playback(false);
     }
 
     fn reorder_timeline_frames(&mut self, from: usize, before: usize) {
-        let frames = &self.timeline_frames.selected;
+        let frames = &self.session.timeline_frames.selected;
         let selected = if frames.binary_search(&from).is_ok() {
             frames.clone()
         } else {
@@ -4434,29 +4373,30 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             doc.move_frames(&selected, before).map(|_| ())
         }) {
             let insertion = before - selected.partition_point(|&frame| frame < before);
-            let active = selected.binary_search(&self.frame).unwrap_or(0);
-            self.frame = insertion + active;
-            self.timeline_frames.selected = (insertion..insertion + selected.len()).collect();
-            self.timeline_frames.anchor = Some(self.frame);
-            self.timeline_layers = TimelineHeaders::default();
-            self.timeline_anchor = None;
-            self.selected_cels = None;
+            let active = selected.binary_search(&self.session.frame).unwrap_or(0);
+            self.session.frame = insertion + active;
+            self.session.timeline_frames.selected =
+                (insertion..insertion + selected.len()).collect();
+            self.session.timeline_frames.anchor = Some(self.session.frame);
+            self.session.timeline_layers = TimelineHeaders::default();
+            self.session.timeline_anchor = None;
+            self.session.selected_cels = None;
             self.timeline_destination = None;
-            self.timeline_duration = self.doc.durations[self.frame];
+            self.timeline_duration = self.session.doc.durations[self.session.frame];
             self.stop_playback(false);
         }
     }
 
     fn reverse_timeline_frames(&mut self) {
-        let selected = if self.timeline_frames.selected.is_empty() {
-            (0..self.doc.durations.len()).collect()
+        let selected = if self.session.timeline_frames.selected.is_empty() {
+            (0..self.session.doc.durations.len()).collect()
         } else {
-            self.timeline_frames.selected.clone()
+            self.session.timeline_frames.selected.clone()
         };
         if self.edit_timeline("Reverse frames", |doc| {
             doc.reverse_frames(&selected).map(|_| ())
         }) {
-            self.timeline_duration = self.doc.durations[self.frame];
+            self.timeline_duration = self.session.doc.durations[self.session.frame];
             self.stop_playback(false);
         }
     }
@@ -4466,7 +4406,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         label: &'static str,
         edit: impl FnOnce(&mut Document) -> Result<(), String>,
     ) -> bool {
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         let result = edit(&mut next)
             .and_then(|()| next.validate())
             .map(|()| Some(next));
@@ -4479,10 +4419,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         next: Result<Option<Document>, String>,
     ) -> bool {
         match next {
-            Ok(Some(next)) if next != self.doc || !next.same_editor_targets(&self.doc) => {
+            Ok(Some(next))
+                if next != self.session.doc || !next.same_editor_targets(&self.session.doc) =>
+            {
                 self.power.bridge_generation += 1;
-                let previous = std::mem::replace(&mut self.doc, next);
-                self.redo.clear();
+                let previous = std::mem::replace(&mut self.session.doc, next);
+                self.session.redo.clear();
                 self.push_undo(previous, label);
                 true
             }
@@ -4495,20 +4437,20 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn set_tag_repeat(&mut self, tag: usize, repeat: u16) {
-        if self.doc.tags[tag].repeat != repeat {
+        if self.session.doc.tags[tag].repeat != repeat {
             self.remember_action("Change tag repeats");
-            self.doc.tags[tag].repeat = repeat;
+            self.session.doc.tags[tag].repeat = repeat;
         }
     }
 
     fn timeline_tag_controls(&mut self, ui: &mut egui::Ui) {
-        if self.doc.tags.is_empty() {
+        if self.session.doc.tags.is_empty() {
             return;
         }
         let mut changed = None;
         ui.menu_button("Tags", |ui| {
             ui.small("0 repeats loops indefinitely in exports.");
-            for (index, tag) in self.doc.tags.iter().enumerate() {
+            for (index, tag) in self.session.doc.tags.iter().enumerate() {
                 ui.push_id(index, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(format!("{} · {}–{}", tag.name, tag.from + 1, tag.to + 1));
@@ -4534,9 +4476,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
 
     fn start_rename_frame(&mut self, frame: usize) {
         self.rename_frame = Some((
-            self.doc.editor_id,
-            self.doc.frame_export_id(frame),
-            self.doc.frame_name(frame).unwrap_or_default().into(),
+            self.session.doc.editor_id,
+            self.session.doc.frame_export_id(frame),
+            self.session
+                .doc
+                .frame_name(frame)
+                .unwrap_or_default()
+                .into(),
         ));
     }
 
@@ -4545,11 +4491,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         if self.studio.collapsed_groups.is_empty() {
             return collapsed;
         }
-        while let Some(parent) = self.doc.layers[layer].parent {
+        while let Some(parent) = self.session.doc.layers[layer].parent {
             if self
                 .studio
                 .collapsed_groups
-                .contains(&self.doc.layers[parent].editor_id.to_string())
+                .contains(&self.session.doc.layers[parent].editor_id.to_string())
             {
                 collapsed = Some(parent);
             }
@@ -4559,24 +4505,24 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn toggle_timeline_group(&mut self, layer: usize) {
-        let id = self.doc.layers[layer].editor_id.to_string();
+        let id = self.session.doc.layers[layer].editor_id.to_string();
         if !self.studio.collapsed_groups.remove(&id) {
             self.studio.collapsed_groups.insert(id);
-            if let Some(visible) = self.collapsed_parent(self.layer) {
-                self.timeline_select(visible, self.frame, false);
+            if let Some(visible) = self.collapsed_parent(self.session.layer) {
+                self.timeline_select(visible, self.session.frame, false);
                 self.timeline_destination = None;
             }
         }
     }
 
     fn timeline(&mut self, ui: &mut egui::Ui) {
-        let visible_rows: Vec<_> = (0..self.doc.layers.len())
+        let visible_rows: Vec<_> = (0..self.session.doc.layers.len())
             .rev()
             .filter(|&layer| self.collapsed_parent(layer).is_none())
             .collect();
         // The timeline must not composite every frame when a single cel changes.
         // Show thumbnails for frames the canvas or playback has already rendered.
-        let _ = self.try_frame_texture(ui.ctx(), self.frame);
+        let _ = self.try_frame_texture(ui.ctx(), self.session.frame);
         let mut a = None;
         let wide = ui.available_width() > 1100.;
         let narrow = ui.available_width() < 700.;
@@ -4656,21 +4602,21 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             ui.separator();
             ui.label(format!(
                 "Frame {} / {}",
-                self.frame + 1,
-                self.doc.durations.len()
+                self.session.frame + 1,
+                self.session.doc.durations.len()
             ));
-            if let Some(name) = self.doc.frame_name(self.frame) {
+            if let Some(name) = self.session.doc.frame_name(self.session.frame) {
                 ui.add(egui::Label::new(name).truncate())
                     .on_hover_text(name);
             }
-            let mut ms = self.doc.durations[self.frame];
+            let mut ms = self.session.doc.durations[self.session.frame];
             if !narrow
                 && ui
                     .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
                     .changed()
             {
                 self.remember_action("Change frame duration");
-                self.doc.durations[self.frame] = ms;
+                self.session.doc.durations[self.session.frame] = ms;
             }
             ui.separator();
             if !narrow && ui.pc_command_button("frame", "+ Frame").clicked() {
@@ -4704,7 +4650,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             .timeline_destination
             .and_then(|_| cel_selection.bounds());
         let destination = self.timeline_destination.and_then(|(layer, frame)| {
-            self.doc
+            self.session
+                .doc
                 .cel_selection_destination(&cel_selection, layer, frame)
                 .ok()
         });
@@ -4722,7 +4669,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         ui.allocate_ui(Vec2::new(label_width, header_height), |ui| {
                             ui.label("");
                         });
-                        for f in 0..self.doc.durations.len() {
+                        for f in 0..self.session.doc.durations.len() {
                             let button = if let Some(Some(texture)) = self.frame_textures.get(f) {
                                 egui::Button::image_and_text(
                                     egui::Image::new((texture.id(), Vec2::splat(20.))),
@@ -4731,8 +4678,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                             } else {
                                 egui::Button::new((f + 1).to_string())
                             };
-                            let selected = f == self.frame
-                                || self.timeline_frames.selected.binary_search(&f).is_ok();
+                            let selected = f == self.session.frame
+                                || self
+                                    .session
+                                    .timeline_frames
+                                    .selected
+                                    .binary_search(&f)
+                                    .is_ok();
                             let response = ui.add_sized(
                                 [cell_width, header_height],
                                 button
@@ -4785,7 +4737,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                 }
                                 if ui
                                     .add_enabled(
-                                        self.timeline_frames.selected.len() > 1
+                                        self.session.timeline_frames.selected.len() > 1
                                             && self
                                                 .timeline_frames
                                                 .selected
@@ -4805,7 +4757,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                 .iter()
                                 .filter(|tag| (tag.from..=tag.to).contains(&f))
                                 .collect();
-                            let mut description = match self.doc.frame_name(f) {
+                            let mut description = match self.session.doc.frame_name(f) {
                                 Some(name) => format!("Frame {}: {name}", f + 1),
                                 None => format!("Select frame {}", f + 1),
                             };
@@ -4839,7 +4791,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         let cel_drag_active =
                             egui::DragAndDrop::has_payload_of_type::<CelDrag>(ui.ctx());
                         for (row, &li) in visible_rows.iter().enumerate() {
-                            let l = &self.doc.layers[li];
+                            let l = &self.session.doc.layers[li];
                             ui.horizontal(|ui| {
                                 if ui_icons::local_icon_button(
                                     ui,
@@ -4923,7 +4875,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     )
                                     .image_tint_follows_text_color(true)
                                     .selected(
-                                        li == self.layer
+                                        li == self.session.layer
                                             || self
                                                 .timeline_layers
                                                 .selected
@@ -4948,13 +4900,17 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     rename = Some(l.name.clone());
                                 }
                                 if response.drag_started_by(egui::PointerButton::Primary) {
-                                    let layers =
-                                        if self.timeline_layers.selected.binary_search(&li).is_ok()
-                                        {
-                                            self.timeline_layers.selected.clone()
-                                        } else {
-                                            vec![li]
-                                        };
+                                    let layers = if self
+                                        .session
+                                        .timeline_layers
+                                        .selected
+                                        .binary_search(&li)
+                                        .is_ok()
+                                    {
+                                        self.session.timeline_layers.selected.clone()
+                                    } else {
+                                        vec![li]
+                                    };
                                     response.dnd_set_drag_payload(LayerHeaderDrag {
                                         layers,
                                         grabbed: li,
@@ -4977,7 +4933,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     } else {
                                         LayerDrop::Below(li)
                                     };
-                                    if self.doc.can_restack_layers(&drag.layers, target) {
+                                    if self.session.doc.can_restack_layers(&drag.layers, target) {
                                         let stroke =
                                             Stroke::new(2., ui.visuals().selection.stroke.color);
                                         match target {
@@ -5007,7 +4963,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                     }
                                 }
                             });
-                            for f in 0..self.doc.durations.len() {
+                            for f in 0..self.session.doc.durations.len() {
                                 let occupied = self.cel_occupied[li][f];
                                 let description = format!(
                                     "Layer {}, frame {}: {}",
@@ -5053,11 +5009,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                         && drag.tab == self.active_tab
                                         && drag.generation == self.power.bridge_generation
                                         && let Some(target) = drag.destination((li, f))
-                                        && let Ok(preview) = self.doc.cel_selection_destination(
-                                            &drag.selection,
-                                            target.0,
-                                            target.1,
-                                        )
+                                        && let Ok(preview) =
+                                            self.session.doc.cel_selection_destination(
+                                                &drag.selection,
+                                                target.0,
+                                                target.1,
+                                            )
                                     {
                                         if response.dnd_release_payload::<CelDrag>().is_some() {
                                             cel_drop = Some((drag.clone(), target));
@@ -5122,7 +5079,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                                         let frame = self
                                             .frame
                                             .saturating_add_signed(navigation.1 as isize)
-                                            .min(self.doc.durations.len() - 1);
+                                            .min(self.session.doc.durations.len() - 1);
                                         selection = Some((layer, frame, true));
                                     }
                                 }
@@ -5197,7 +5154,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             }
             if ui.pc_button("Rename current frame…").clicked() {
-                self.start_rename_frame(self.frame);
+                self.start_rename_frame(self.session.frame);
                 ui.close();
             }
             let selection = self.timeline_cel_selection();
@@ -5250,8 +5207,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     .unwrap_or((range.first_layer, range.first_frame));
                 let layer_span = range.last_layer - range.first_layer;
                 let frame_span = range.last_frame - range.first_frame;
-                let max_layer = self.doc.layers.len() - layer_span;
-                let max_frame = self.doc.durations.len() - frame_span;
+                let max_layer = self.session.doc.layers.len() - layer_span;
+                let max_frame = self.session.doc.durations.len() - frame_span;
                 let (mut first_layer, mut first_frame) = (target.0 + 1, target.1 + 1);
                 ui.horizontal(|ui| {
                     ui.add(
@@ -5285,8 +5242,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 }
             });
             ui.menu_button("Position and opacity keyframe", |ui| {
-                let (layer, frame) = (self.layer, self.frame);
-                let mut key = self.doc.sampled_cel_key(layer, frame);
+                let (layer, frame) = (self.session.layer, self.session.frame);
+                let mut key = self.session.doc.sampled_cel_key(layer, frame);
                 let mut changed = false;
                 ui.horizontal(|ui| {
                     changed |= ui
@@ -5315,7 +5272,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         doc.set_cel_keyframe(layer, frame, Some(key))
                     });
                 }
-                if self.doc.layers[layer].cel_meta[frame].keyframe.is_some()
+                if self.session.doc.layers[layer].cel_meta[frame]
+                    .keyframe
+                    .is_some()
                     && ui.pc_button("Remove keyframe").clicked()
                 {
                     self.edit_timeline("Remove cel keyframe", |doc| {
@@ -5323,23 +5282,24 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     });
                 }
             });
-            let mut onion_included = !self.doc.layers[self.layer].exclude_from_onion;
+            let mut onion_included =
+                !self.session.doc.layers[self.session.layer].exclude_from_onion;
             if ui
                 .pc_checkbox(&mut onion_included, "Include layer in onion skin")
                 .changed()
             {
                 self.remember_action("Change onion-skin layer visibility");
-                self.doc.layers[self.layer].exclude_from_onion = !onion_included;
+                self.session.doc.layers[self.session.layer].exclude_from_onion = !onion_included;
             }
 
             if narrow {
-                let mut ms = self.doc.durations[self.frame];
+                let mut ms = self.session.doc.durations[self.session.frame];
                 if ui
                     .add(egui::DragValue::new(&mut ms).range(1..=65535).suffix(" ms"))
                     .changed()
                 {
                     self.remember_action("Change frame duration");
-                    self.doc.durations[self.frame] = ms;
+                    self.session.doc.durations[self.session.frame] = ms;
                 }
                 for (command, label) in [("frame", "+ Frame"), ("layer", "+ Layer")] {
                     if ui.pc_command_button(command, label).clicked() {
@@ -5348,35 +5308,43 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                 }
             }
-            let mut link_duplicates = self.doc.layers[self.layer].link_duplicates;
+            let mut link_duplicates = self.session.doc.layers[self.session.layer].link_duplicates;
             if ui
                 .pc_checkbox(&mut link_duplicates, "Link duplicated cels")
                 .changed()
             {
                 self.remember_action("Change cel linking preference");
-                self.doc.layers[self.layer].link_duplicates = link_duplicates;
+                self.session.doc.layers[self.session.layer].link_duplicates = link_duplicates;
             }
-            if self.doc.editable(self.layer) {
+            if self.session.doc.editable(self.session.layer) {
                 ui.menu_button("Link cel to frame", |ui| {
-                    for frame in 0..self.doc.durations.len() {
-                        if frame != self.frame
+                    for frame in 0..self.session.doc.durations.len() {
+                        if frame != self.session.frame
                             && ui.pc_button(format!("Frame {}", frame + 1)).clicked()
                         {
                             self.remember_action("Link cel");
-                            if let Err(error) = self.doc.link_cel(self.layer, self.frame, frame) {
+                            if let Err(error) = self.session.doc.link_cel(
+                                self.session.layer,
+                                self.session.frame,
+                                frame,
+                            ) {
                                 self.status = error;
                             }
                             ui.close();
                         }
                     }
                 });
-                if self.doc.layers[self.layer].cel_meta[self.frame]
+                if self.session.doc.layers[self.session.layer].cel_meta[self.session.frame]
                     .artwork_link
                     .is_some()
                     && ui.pc_button("Unlink cel").clicked()
                 {
                     self.remember_action("Unlink cel");
-                    if let Err(error) = self.doc.unlink_cel(self.layer, self.frame) {
+                    if let Err(error) = self
+                        .session
+                        .doc
+                        .unlink_cel(self.session.layer, self.session.frame)
+                    {
                         self.status = error;
                     }
                     ui.close();
@@ -5388,7 +5356,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 ui.close();
             }
             if ui.pc_small_button("Rename").clicked() {
-                rename = Some(self.doc.layers[self.layer].name.clone());
+                rename = Some(self.session.doc.layers[self.session.layer].name.clone());
                 ui.close();
             }
             for (command, label) in [
@@ -5405,11 +5373,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         });
         if let Some(li) = toggle {
             self.remember_action("Change layer visibility");
-            self.doc.layers[li].visible = !self.doc.layers[li].visible
+            self.session.doc.layers[li].visible = !self.session.doc.layers[li].visible
         }
         if let Some(li) = lock {
             self.remember_action("Change layer lock");
-            self.doc.layers[li].locked = !self.doc.layers[li].locked
+            self.session.doc.layers[li].locked = !self.session.doc.layers[li].locked
         }
         if let Some(s) = rename {
             self.rename = Some(s)
@@ -5423,24 +5391,24 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let before = self
             .selection
             .filter(|_| !ink.blends())
-            .map(|_| self.doc.layers[self.layer].cels[self.frame].clone());
-        let old_indices = self.doc.layers[self.layer].cel_meta[self.frame]
+            .map(|_| self.session.doc.layers[self.session.layer].cels[self.session.frame].clone());
+        let old_indices = self.session.doc.layers[self.session.layer].cel_meta[self.session.frame]
             .indices
             .clone();
-        self.doc.drawing_index = self.drawing_palette_index(c);
-        let l = self.layer;
-        let f = self.frame;
+        self.session.doc.drawing_index = self.drawing_palette_index(c);
+        let l = self.session.layer;
+        let f = self.session.frame;
         let (x0, y0, x1, y1) = (a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
         let axes = self.drawing_axes();
         let mut coverage = ink.blends().then(|| {
-            let mut mask = Document::new(self.doc.width, self.doc.height);
-            mask.brush_shape = self.doc.brush_shape;
+            let mut mask = Document::new(self.session.doc.width, self.session.doc.height);
+            mask.brush_shape = self.session.doc.brush_shape;
             mask
         });
         let (target, cel, color) = if let Some(mask) = &mut coverage {
             (mask, (0, 0), [255; 4])
         } else {
-            (&mut self.doc, (l, f), c)
+            (&mut self.session.doc, (l, f), c)
         };
         match self.tool {
             Tool::Line => target.line_on_axes(cel, a, b, color, self.brush, axes),
@@ -5466,33 +5434,38 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             _ => {}
         }
         if let Some(mask) = coverage {
-            let original = self.doc.layers[l].cels[f].clone();
-            let color = self.doc.snapped_color(f, c);
+            let original = self.session.doc.layers[l].cels[f].clone();
+            let color = self.session.doc.snapped_color(f, c);
             mask.layers[0].cels[0].visit_nonclear(|i, _| {
-                if self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
-                    ink.draw(&mut self.doc, (l, f), i, original[i], color);
+                if self.selected(
+                    (i % self.session.doc.width) as i32,
+                    (i / self.session.doc.width) as i32,
+                ) {
+                    ink.draw(&mut self.session.doc, (l, f), i, original[i], color);
                 }
             });
         }
         if let Some(before) = before {
-            let implicit_slot = (self.doc.color_mode == ColorMode::Indexed
-                && !self.doc.layers[l].background)
-                .then_some(self.doc.transparent_index as u8);
+            let implicit_slot = (self.session.doc.color_mode == ColorMode::Indexed
+                && !self.session.doc.layers[l].background)
+                .then_some(self.session.doc.transparent_index as u8);
             for i in 0..before.len() {
                 let old_slot = old_indices.as_ref().map(|old| old[i]);
-                let current_slot = self.doc.layers[l].cel_meta[f]
+                let current_slot = self.session.doc.layers[l].cel_meta[f]
                     .indices
                     .as_ref()
                     .map(|p| p[i]);
-                if !self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32)
-                    && (self.doc.layers[l].cels[f][i] != before[i]
-                        || current_slot.or(implicit_slot) != old_slot.or(implicit_slot))
+                if !self.selected(
+                    (i % self.session.doc.width) as i32,
+                    (i / self.session.doc.width) as i32,
+                ) && (self.session.doc.layers[l].cels[f][i] != before[i]
+                    || current_slot.or(implicit_slot) != old_slot.or(implicit_slot))
                 {
-                    self.doc.restore_pixel(l, f, i, before[i], old_slot);
+                    self.session.doc.restore_pixel(l, f, i, before[i], old_slot);
                 }
             }
         }
-        self.doc.drawing_index = None;
+        self.session.doc.drawing_index = None;
     }
     fn whole_pixel_wheel_scale(&mut self, ctx: &egui::Context) -> f32 {
         // A point-based wheel gesture (for example, a trackpad swipe) has
@@ -5564,9 +5537,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn set_drawing_grid(&mut self, grid: DrawingGrid) {
-        if self.doc.drawing_grid() != grid && grid.valid() {
+        if self.session.doc.drawing_grid() != grid && grid.valid() {
             self.remember_action("Set drawing grid");
-            self.doc.drawing_grid = Some(grid);
+            self.session.doc.drawing_grid = Some(grid);
         }
         self.show_drawing_grid = true;
     }
@@ -5614,11 +5587,15 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn snapped_canvas_point(&self, point: (i32, i32), repeats: WrapAxes) -> (i32, i32) {
-        if !self.snap_to_grid || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.snap_to_grid
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             return point;
         }
-        let w = self.doc.width as i32;
-        let h = self.doc.height as i32;
+        let w = self.session.doc.width as i32;
+        let h = self.session.doc.height as i32;
         let offset = (
             if repeats.horizontal {
                 point.0.div_euclid(w) * w
@@ -5632,12 +5609,16 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             },
         );
         let local = (point.0 - offset.0, point.1 - offset.1);
-        let snapped = self.doc.drawing_grid().snap(local, (0, w - 1, 0, h - 1));
+        let snapped = self
+            .session
+            .doc
+            .drawing_grid()
+            .snap(local, (0, w - 1, 0, h - 1));
         (snapped.0 + offset.0, snapped.1 + offset.1)
     }
 
     fn paint_drawing_grid(&self, painter: &egui::Painter, board: Rect, view: Rect) {
-        let grid = self.doc.drawing_grid();
+        let grid = self.session.doc.drawing_grid();
         let visible = view.intersect(board);
         let size = self.canvas_pixel_size();
         for (axis, from, to, base, pixel_extent) in [
@@ -5690,14 +5671,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 visible.x_range(),
                 board.left(),
                 pixel_size.x,
-                self.doc.width,
+                self.session.doc.width,
             ),
             (
                 1,
                 visible.y_range(),
                 board.top(),
                 pixel_size.y,
-                self.doc.height,
+                self.session.doc.height,
             ),
         ] {
             let spacing = spacing * step as f32;
@@ -5906,7 +5887,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
     }
 
     fn symmetry_axis(&self, index: usize) -> i32 {
-        let extent = [self.doc.width, self.doc.height][index] as i32;
+        let extent = [self.session.doc.width, self.session.doc.height][index] as i32;
         self.studio.symmetry_axes[index]
             .unwrap_or(extent)
             .clamp(0, 2 * extent)
@@ -5968,7 +5949,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     || response.drag_stopped_by(egui::PointerButton::Primary))
                     && let Some(pointer) = response.interact_pointer_pos()
                 {
-                    let extent = [self.doc.width, self.doc.height][index] as i32;
+                    let extent = [self.session.doc.width, self.session.doc.height][index] as i32;
                     let offset = ((pointer[index] - board.min[index]) * 2. / step[index]).round();
                     self.studio.symmetry_axes[index] = Some((offset as i32).clamp(0, 2 * extent));
                     ui.ctx().request_repaint();
@@ -6133,12 +6114,12 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.draw_references_pass(ui, board, true, false);
         if self.onion && !self.playing && pane == CanvasPane::Primary {
             let pixels = crate::api::productivity::onion_pixels(
-                &self.doc,
-                self.frame,
+                &self.session.doc,
+                self.session.frame,
                 &self.power.preferences_onion(),
             );
-            let pixels = self.display_artwork(&self.doc.color_profile, pixels);
-            let im = color_image(&pixels, self.doc.width, self.doc.height);
+            let pixels = self.display_artwork(&self.session.doc.color_profile, pixels);
+            let im = color_image(&pixels, self.session.doc.width, self.session.doc.height);
             if let Some(t) = &mut self.onion_texture {
                 t.set(im, egui::TextureOptions::NEAREST);
             } else {
@@ -6147,7 +6128,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
             self.texture = self.onion_texture.clone();
         } else if !self.onion || self.playing {
-            self.texture = self.try_frame_texture(&ctx, self.frame);
+            self.texture = self.try_frame_texture(&ctx, self.session.frame);
         }
         let rotation_preview = self.rotation_preview(ui, board);
         if let Some(t) = self
@@ -6212,13 +6193,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             })
         };
         let pos = pointer.and_then(canvas_point);
-        let w = self.doc.width as i32;
-        let h = self.doc.height as i32;
+        let w = self.session.doc.width as i32;
+        let h = self.session.doc.height as i32;
         let limits = (-rx * w, (rx + 1) * w - 1, -ry * h, (ry + 1) * h - 1);
         let on_canvas = pos.filter(|&(x, y)| {
             (limits.0..=limits.1).contains(&x) && (limits.2..=limits.3).contains(&y)
         });
-        let hover = on_canvas.and_then(|p| repeats.position((self.doc.width, self.doc.height), p));
+        let hover = on_canvas
+            .and_then(|p| repeats.position((self.session.doc.width, self.session.doc.height), p));
         if pointer.is_some_and(|p| r.contains(p)) {
             self.hover = hover;
         }
@@ -6248,7 +6230,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             && response.hovered()
             && !over_symmetry_handle
             && let Some(raw) = on_canvas
-            && (accepts_copies || self.doc.index(raw.0, raw.1).is_some())
+            && (accepts_copies || self.session.doc.index(raw.0, raw.1).is_some())
             && self.tool != Tool::Hand
         {
             self.stop_playback(false);
@@ -6313,14 +6295,14 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.start = Some(p);
                 self.last = Some(p);
             } else if self.tool == Tool::Lasso {
-                self.studio.mask = None;
+                self.session.mask = None;
                 self.gesture_canvas = Some(pane);
                 self.gesture_button = Some(button);
                 self.start = Some(p);
-                self.studio.polygon.clear();
-                self.studio.polygon.push(p);
-                self.selection = Some((p.0, p.1, p.0, p.1));
-            } else if !self.doc.editable(self.layer) {
+                self.session.polygon.clear();
+                self.session.polygon.push(p);
+                self.session.selection = Some((p.0, p.1, p.0, p.1));
+            } else if !self.session.doc.editable(self.session.layer) {
                 self.status = "This layer is locked. Unlock it in the timeline to draw.".into();
             } else {
                 self.remember_action(match self.tool {
@@ -6338,18 +6320,18 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 self.gesture_button = Some(button);
                 self.start = Some(p);
                 self.last = Some(p);
-                self.stroke_base = Some(self.doc.clone());
+                self.stroke_base = Some(self.session.doc.clone());
                 self.studio.stroke.clear();
                 self.studio.stroke_force = None;
                 self.power.shade_seen.clear();
-                self.studio.selection_origin = self.selection;
+                self.studio.selection_origin = self.session.selection;
                 self.studio.move_mask = if self.tool == Tool::Move {
                     Some(
-                        (0..self.doc.width * self.doc.height)
+                        (0..self.session.doc.width * self.session.doc.height)
                             .map(|i| {
                                 self.selected(
-                                    (i % self.doc.width) as i32,
-                                    (i / self.doc.width) as i32,
+                                    (i % self.session.doc.width) as i32,
+                                    (i / self.session.doc.width) as i32,
                                 )
                             })
                             .collect(),
@@ -6358,9 +6340,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     None
                 };
                 if self.tool == Tool::Fill {
-                    self.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
+                    self.session.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
                     self.power_fill(p, self.stroke_color);
-                    self.doc.drawing_index = None;
+                    self.session.doc.drawing_index = None;
                     self.cancel_gesture();
                 } else if matches!(self.tool, Tool::Pencil | Tool::Eraser) {
                     let color = if self.tool == Tool::Eraser {
@@ -6368,7 +6350,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     } else {
                         self.stroke_color
                     };
-                    if self.doc.layers[self.layer].tileset.is_none() {
+                    if self.session.doc.layers[self.session.layer]
+                        .tileset
+                        .is_none()
+                    {
                         self.stroke_stabilizer =
                             Some(StrokeStabilizer::new(p, self.brush_dynamics().stabilizer));
                         self.studio.stroke.push((p, self.studio.force));
@@ -6399,7 +6384,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let b = (x.clamp(0, w - 1), y.clamp(0, h - 1));
             if self.last != Some(b) {
                 if let Some(base) = &self.stroke_base {
-                    self.doc = base.clone();
+                    self.session.doc = base.clone();
                 }
                 self.gradient(a, b);
                 self.last = Some(b);
@@ -6410,7 +6395,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                 if draws && repeats != WrapAxes::NONE {
                     b.0 = b.0.clamp(limits.0, limits.1);
                     b.1 = b.1.clamp(limits.2, limits.3);
-                } else if !draws || !self.doc.wraparound {
+                } else if !draws || !self.session.doc.wraparound {
                     b.0 = b.0.clamp(0, w - 1);
                     b.1 = b.1.clamp(0, h - 1);
                 }
@@ -6421,11 +6406,11 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     Tool::BlurBrush | Tool::JumbleBrush => self.extend_retouch(b),
                     Tool::Contour => self.contour_point(b),
                     Tool::Lasso => {
-                        if self.studio.polygon.last() != Some(&b) {
-                            self.studio.polygon.push(b);
+                        if self.session.polygon.last() != Some(&b) {
+                            self.session.polygon.push(b);
                         }
-                        let points = &self.studio.polygon;
-                        self.selection = Some((
+                        let points = &self.session.polygon;
+                        self.session.selection = Some((
                             points.iter().map(|p| p.0).min().unwrap(),
                             points.iter().map(|p| p.1).min().unwrap(),
                             points.iter().map(|p| p.0).max().unwrap(),
@@ -6434,30 +6419,29 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                     Tool::Move => {
                         if let Some(base) = &self.stroke_base {
-                            self.doc = base.clone();
+                            self.session.doc = base.clone();
                         }
                         self.last = Some(b);
-                        self.selection = self.studio.selection_origin;
+                        self.session.selection = self.studio.selection_origin;
                         let bounds = self.selection_bounds();
-                        let mask =
-                            self.studio.move_mask.clone().unwrap_or_else(|| {
-                                vec![true; self.doc.width * self.doc.height].into()
-                            });
+                        let mask = self.studio.move_mask.clone().unwrap_or_else(|| {
+                            vec![true; self.session.doc.width * self.session.doc.height].into()
+                        });
                         if let Ok(r) = crate::api::workflows::transform(
-                            &mut self.doc,
-                            self.layer,
-                            self.frame,
+                            &mut self.session.doc,
+                            self.session.layer,
+                            self.session.frame,
                             bounds,
                             Some(&mask),
                             crate::api::workflows::Transform::Move(b.0 - a.0, b.1 - a.1),
                         ) {
                             let moved = crate::api::workflows::transform_mask(
-                                &self.doc,
+                                &self.session.doc,
                                 bounds,
                                 &mask,
                                 crate::api::workflows::Transform::Move(b.0 - a.0, b.1 - a.1),
                             );
-                            self.studio.polygon.clear();
+                            self.session.polygon.clear();
                             self.set_selection_mask(moved);
                             let _ = r;
                         }
@@ -6471,7 +6455,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                         };
                         if self.stroke_stabilizer.is_some() {
                             self.extend_freehand(Some(b), false, color);
-                        } else if self.doc.layers[self.layer].tileset.is_some()
+                        } else if self.session.doc.layers[self.session.layer]
+                            .tileset
+                            .is_some()
                             && self.tile_pixel_mode != Some(TilePixelEdit::CreateVariant)
                         {
                             self.paint_at(b, color);
@@ -6483,7 +6469,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                     Tool::Line | Tool::Rect | Tool::Ellipse => {
                         if let Some(base) = &self.stroke_base {
-                            self.doc = base.clone();
+                            self.session.doc = base.clone();
                         }
                         self.shape(a, b, self.stroke_color)
                     }
@@ -6562,19 +6548,19 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             if self.tool == Tool::Move
                 && let (Some(a), Some(b)) = (self.start, self.last)
             {
-                for p in &mut self.studio.polygon {
+                for p in &mut self.session.polygon {
                     p.0 += b.0 - a.0;
                     p.1 += b.1 - a.1;
                 }
             }
             self.cancel_gesture();
         }
-        if !transforming && self.studio.polygon.len() > 1 {
+        if !transforming && self.session.polygon.len() > 1 {
             let points: Vec<_> = self
-                .studio
+                .session
                 .polygon
                 .iter()
-                .chain(self.studio.polygon.first())
+                .chain(self.session.polygon.first())
                 .map(|p| board.min + Vec2::new(p.0 as f32 + 0.5, p.1 as f32 + 0.5) * pixel_size)
                 .collect();
             painter.add(egui::Shape::line(points, Stroke::new(1., Color32::WHITE)));
@@ -6584,7 +6570,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         }
         if !transforming && self.tool == Tool::Curve {
             let preview = on_canvas
-                .filter(|&(x, y)| self.doc.index(x, y).is_some())
+                .filter(|&(x, y)| self.session.doc.index(x, y).is_some())
                 .map(|point| self.snapped_canvas_point(point, repeats));
             self.draw_curve_draft(&painter, board, pane, preview);
         }
@@ -6610,7 +6596,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         };
         let rectangular_selection = self
             .selection
-            .filter(|_| !transforming && self.studio.mask.is_none());
+            .filter(|_| !transforming && self.session.mask.is_none());
         for (index, bounds) in [rectangular_selection, candidate].into_iter().enumerate() {
             let Some((x0, y0, x1, y1)) = bounds else {
                 continue;
@@ -6700,29 +6686,32 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         painter.text(
             r.min + Vec2::new(14., 12.),
             egui::Align2::LEFT_TOP,
-            format!("{} × {} px   /   RGBA", self.doc.width, self.doc.height),
+            format!(
+                "{} × {} px   /   RGBA",
+                self.session.doc.width, self.session.doc.height
+            ),
             egui::FontId::proportional(12.),
             self.colors().ink,
         );
     }
     fn apply_replace_color(&mut self, request: ReplaceColor) {
         if request.source == request.replacement
-            || (request.selection_only && self.selection.is_none())
+            || (request.selection_only && self.session.selection.is_none())
         {
             return;
         }
         let layers = if request.all_layers {
-            0..self.doc.layers.len()
+            0..self.session.doc.layers.len()
         } else {
-            self.layer..self.layer + 1
+            self.session.layer..self.session.layer + 1
         };
         let frames = if request.all_frames {
-            0..self.doc.durations.len()
+            0..self.session.doc.durations.len()
         } else {
-            self.frame..self.frame + 1
+            self.session.frame..self.session.frame + 1
         };
-        let width = self.doc.width;
-        let height = self.doc.height;
+        let width = self.session.doc.width;
+        let height = self.session.doc.height;
         let region = if request.selection_only {
             let [x, y, w, h] = self.selection_bounds();
             [
@@ -6737,7 +6726,9 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let [left, top, right, bottom] = region;
         let area = (right - left) * (bottom - top);
         let targets = layers
-            .filter(|&layer| self.doc.editable(layer) && self.doc.layers[layer].tileset.is_none())
+            .filter(|&layer| {
+                self.session.doc.editable(layer) && self.session.doc.layers[layer].tileset.is_none()
+            })
             .flat_map(|layer| frames.clone().map(move |frame| (layer, frame)));
 
         // Bound both the scan and the copy-on-write backing kept alive by Undo.
@@ -6745,7 +6736,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         let mut work = 0;
         let mut allocation = 0;
         for (layer, frame) in targets.clone() {
-            let (cel_work, cel_allocation) = self.doc.color_replacement_cost(
+            let (cel_work, cel_allocation) = self.session.doc.color_replacement_cost(
                 layer,
                 frame,
                 request.source,
@@ -6761,7 +6752,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             }
         }
 
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         let mut count = 0;
         for (layer, frame) in targets {
             count += next.replace_color_in_cel(
@@ -6782,7 +6773,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             self.status = error;
         } else {
             self.remember_action("Replace color");
-            self.doc = next;
+            self.session.doc = next;
             self.status = format!("Replaced color in {count} pixels");
         }
     }
@@ -6806,11 +6797,13 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             ui.label("Scope");
             ui.pc_checkbox(&mut request.all_layers, "All unlocked image layers");
             ui.pc_checkbox(&mut request.all_frames, "All frames");
-            ui.add_enabled_ui(self.selection.is_some(), |ui| {
+            ui.add_enabled_ui(self.session.selection.is_some(), |ui| {
                 ui.pc_checkbox(&mut request.selection_only, "Limit to selection");
             });
-            let editable =
-                self.doc.editable(self.layer) && self.doc.layers[self.layer].tileset.is_none();
+            let editable = self.session.doc.editable(self.session.layer)
+                && self.session.doc.layers[self.session.layer]
+                    .tileset
+                    .is_none();
             if !request.all_layers && !editable {
                 ui.small("Choose an unlocked image layer or change the scope.");
             }
@@ -6851,7 +6844,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
         self.document_profile_dialog(ctx);
         self.selection_tools_dialog(ctx);
         if self.animation_export.is_some()
-            && self.animation_export_document != Some(self.doc.editor_id.runtime_key())
+            && self.animation_export_document != Some(self.session.doc.editor_id.runtime_key())
         {
             self.animation_export = None;
             self.status = "Export dialog closed because the active document changed".into();
@@ -6869,8 +6862,8 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             let dismiss = fluent::modal_dialog(ctx, title, |ui| {
                 Self::export_scale_value_ui(ui, &mut self.animation_export_scale);
                 let scale = self.animation_export_scale;
-                let width = self.doc.width.saturating_mul(scale);
-                let height = self.doc.height.saturating_mul(scale);
+                let width = self.session.doc.width.saturating_mul(scale);
+                let height = self.session.doc.height.saturating_mul(scale);
                 let dimensions = if kind == "mp4" {
                     ui.small("60 fps. Transparency is composited onto black. Requires FFmpeg with libx264 on PATH.");
                     (width.next_multiple_of(2), height.next_multiple_of(2))
@@ -6881,7 +6874,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     "{} × {} · {} animation frames",
                     dimensions.0,
                     dimensions.1,
-                    self.doc.durations.len()
+                    self.session.doc.durations.len()
                 ));
                 if ui.pc_button("Choose export location…").clicked() {
                     accept = true;
@@ -6929,7 +6922,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
                     }
                     if ui.pc_button("Discard changes").clicked() {
                         let p = self.pending.take().unwrap();
-                        self.doc = self.saved.clone();
+                        self.session.doc = self.session.saved.clone();
                         self.finish_pending(ctx, p);
                     }
                     if ui.pc_button("Cancel").clicked() {
@@ -6997,7 +6990,7 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             if done {
                 if !name.trim().is_empty() {
                     self.remember_action("Rename layer");
-                    self.doc.layers[self.layer].name = name;
+                    self.session.doc.layers[self.session.layer].name = name;
                 }
                 self.rename = None;
             } else if cancel || dismissed {
@@ -7008,9 +7001,10 @@ if ui.pc_button("Capture selection as tile").clicked(){capture=true;}});
             return;
         }
         if let Some((document, frame_id, mut name)) = self.rename_frame.take() {
-            let Some(frame) = (self.doc.editor_id.runtime_key() == document.runtime_key())
+            let Some(frame) = (self.session.doc.editor_id.runtime_key() == document.runtime_key())
                 .then(|| {
-                    (0..self.doc.durations.len()).find(|&f| self.doc.frame_export_id(f) == frame_id)
+                    (0..self.session.doc.durations.len())
+                        .find(|&f| self.session.doc.frame_export_id(f) == frame_id)
                 })
                 .flatten()
             else {
@@ -7490,7 +7484,10 @@ impl PixelCraft {
                         if let Some((x, y)) = self.hover {
                             ui.monospace(format!("{x}, {y}"));
                         }
-                        ui.small(format!("{} × {}", self.doc.width, self.doc.height));
+                        ui.small(format!(
+                            "{} × {}",
+                            self.session.doc.width, self.session.doc.height
+                        ));
                     });
                 });
             });
@@ -7923,6 +7920,18 @@ pub fn run() -> eframe::Result {
     }
 }
 
+impl std::ops::Deref for PixelCraft {
+    type Target = pixelcraft_core::editor::EditorSession;
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+impl std::ops::DerefMut for PixelCraft {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.session
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7944,9 +7953,12 @@ mod tests {
         });
         doc.add_tile_layer(0).unwrap();
         let snapshot = doc.clone();
-        let one = PixelCraft::history_document_bytes(std::iter::once(&doc));
+        let one =
+            pixelcraft_core::editor::EditorSession::history_document_bytes(std::iter::once(&doc));
         assert_eq!(
-            PixelCraft::history_document_bytes([&doc, &snapshot].into_iter()),
+            pixelcraft_core::editor::EditorSession::history_document_bytes(
+                [&doc, &snapshot].into_iter()
+            ),
             one,
             "unchanged tile map snapshot was charged twice"
         );
@@ -8373,7 +8385,7 @@ mod tests {
         }
         a.doc.layers[2].locked = true;
         a.selection = Some((0, 0, 2, 0));
-        a.studio.mask = Some((vec![true, false, true]).into());
+        a.session.mask = Some((vec![true, false, true]).into());
         let before = a.doc.clone();
         a.apply_replace_color(ReplaceColor {
             source,
@@ -8604,7 +8616,7 @@ mod tests {
         editor.replace(Document::new(1024, 1024), None);
         editor.set_selection_mask(vec![true; 1024 * 1024]);
         let target = editor.clipboard_destination(PasteMode::InPlace);
-        let pointer = editor.studio.mask.as_ref().unwrap().as_ptr();
+        let pointer = editor.session.mask.as_ref().unwrap().as_ptr();
         assert_eq!(
             target.mask.as_ref().unwrap().as_ptr(),
             pointer,
@@ -8616,12 +8628,12 @@ mod tests {
             pointer,
             "History capture copied the entire selection mask"
         );
-        editor.studio.mask.as_mut().unwrap()[1048575] = false;
+        editor.session.mask.as_mut().unwrap()[1048575] = false;
         assert!(target.mask.as_ref().unwrap()[1048575]);
         assert!(editor.undo.last().unwrap().mask.as_ref().unwrap()[1048575]);
         assert!(target != editor.clipboard_destination(PasteMode::InPlace));
         editor.undo();
-        assert!(editor.studio.mask.as_ref().unwrap()[1048575]);
+        assert!(editor.session.mask.as_ref().unwrap()[1048575]);
     }
 
     #[test]
@@ -8731,7 +8743,7 @@ mod tests {
         assert!(invalid.validate(MAX_DOCUMENT_PIXELS).is_err());
 
         editor.selection = Some((3, 0, 3, 0));
-        editor.studio.mask = None;
+        editor.session.mask = None;
         editor.paste_image(PasteMode::InPlace, &clip);
         let slots = editor.doc.layers[0].cel_meta[0].indices.as_ref().unwrap();
         assert_eq!(&slots[3..], &[2, 0, 1]);
@@ -8935,9 +8947,9 @@ mod tests {
         editor.replace(source.clone(), None);
         editor.layer = 1;
         editor.selection = Some((0, 0, 63, 63));
-        editor.studio.polygon = vec![(0, 0), (63, 0), (63, 63)];
+        editor.session.polygon = vec![(0, 0), (63, 0), (63, 63)];
         editor.action("cut");
-        editor.studio.polygon = vec![(0, 0), (0, 63), (63, 63)];
+        editor.session.polygon = vec![(0, 0), (0, 63), (63, 63)];
         finish_tile_clipboard_work(&mut editor, &ctx);
         assert_eq!(editor.doc, source);
         assert!(editor.clipboard.is_none());
@@ -9023,7 +9035,7 @@ mod tests {
                 editor.remember_action("Newer pixel edit");
                 editor.doc.set_pixel(0, 0, 0, [1, 2, 3, 255]);
             } else {
-                editor.studio.polygon = vec![(0, 0), (63, 0), (63, 63)];
+                editor.session.polygon = vec![(0, 0), (63, 0), (63, 63)];
             }
             let expected = editor.doc.clone();
             finish_tile_clipboard_work(&mut editor, &ctx);
@@ -9662,7 +9674,7 @@ mod tests {
         editor.replace(source.clone(), None);
         editor.layer = 1;
         editor.selection = Some((0, 0, 5, 0));
-        editor.studio.mask = Some((vec![true, false, false, false, true, false]).into());
+        editor.session.mask = Some((vec![true, false, false, false, true, false]).into());
         editor.action("cut");
         assert_eq!(editor.doc.layers[1].tile_cels, vec![vec![0, 1, 0]; 2]);
         let clip = editor.clipboard.as_ref().unwrap();
@@ -11296,8 +11308,9 @@ mod tests {
         editor.remember_action("Paint one pixel");
         let replacement = [47, 139, 209, 0];
         editor.doc.set_pixel(0, 0, len - 1, replacement);
-        let history =
-            PixelCraft::history_document_bytes([&editor.undo[0].doc, &editor.doc].into_iter());
+        let history = pixelcraft_core::editor::EditorSession::history_document_bytes(
+            [&editor.undo[0].doc, &editor.doc].into_iter(),
+        );
         assert!(
             history < len * 4 + 4096,
             "one dense edit retained {history} bytes"
@@ -11862,7 +11875,7 @@ mod merge_regressions {
             std::thread::yield_now();
         }
         assert_eq!((a.doc.width, a.doc.height), (2, 2), "{}", a.status);
-        assert!(a.studio.mask.is_none());
+        assert!(a.session.mask.is_none());
         a.copy();
         assert_eq!(
             a.clipboard.as_ref().unwrap().pixels,
@@ -11969,19 +11982,19 @@ mod selection_history_expansion {
         a.replace(Document::new(4, 2), None);
         let mask = vec![true, false, true, false, false, false, false, false];
         a.selection = Some((0, 0, 2, 0));
-        a.studio.mask = Some((mask.clone()).into());
+        a.session.mask = Some((mask.clone()).into());
         a.remember();
         a.doc.add_frame(0, false);
         a.frame = 1;
         a.selection = Some((1, 1, 2, 1));
-        a.studio.mask = None;
+        a.session.mask = None;
         a.undo();
         assert_eq!(a.selection, Some((0, 0, 2, 0)));
-        assert_eq!(a.studio.mask.as_deref(), Some(mask.as_slice()));
+        assert_eq!(a.session.mask.as_deref(), Some(mask.as_slice()));
         assert_eq!(a.frame, 0);
         a.redo();
         assert_eq!(a.selection, Some((1, 1, 2, 1)));
-        assert_eq!(a.studio.mask, None);
+        assert_eq!(a.session.mask, None);
         assert_eq!(a.frame, 1);
     }
 }
@@ -12030,5 +12043,40 @@ mod native_paste_expansion {
                 .iter()
                 .any(|e| matches!(e, egui::Event::Paste(_)))
         );
+    }
+}
+
+#[cfg(test)]
+mod session_extraction_regressions {
+    use super::*;
+    #[test]
+    fn desktop_session_preserves_initial_tile_selection() {
+        let ctx = egui::Context::default();
+        let app = PixelCraft::with_context(&ctx, None);
+        assert_eq!(app.session.selected_tile, 1);
+        assert_eq!(app.session.layer, 1);
+    }
+    #[test]
+    fn history_jump_clears_a_tag_missing_from_an_intermediate_state() {
+        let ctx = egui::Context::default();
+        let mut app = PixelCraft::with_context(&ctx, None);
+        let tag = FrameTag {
+            editor_id: Default::default(),
+            name: "Idle".into(),
+            from: 0,
+            to: 0,
+            direction: 0,
+            repeat: 0,
+            color: [0; 3],
+        };
+        app.session.doc.tags = vec![tag.clone()];
+        app.remember_action("Before remove");
+        app.session.doc.tags.clear();
+        app.remember_action("Before restore");
+        app.session.doc.tags.push(tag);
+        app.active_tag = Some(0);
+        assert!(app.jump_history(0));
+        assert_eq!(app.session.doc.tags.len(), 1);
+        assert_eq!(app.active_tag, None);
     }
 }

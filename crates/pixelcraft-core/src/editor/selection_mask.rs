@@ -7,7 +7,7 @@ use std::{
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(transparent)]
-pub(super) struct SelectionMask(Arc<Vec<bool>>);
+pub struct SelectionMask(Arc<Vec<bool>>);
 
 impl PartialEq for SelectionMask {
     fn eq(&self, other: &Self) -> bool {

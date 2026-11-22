@@ -213,8 +213,9 @@ fn near_limit_document_survives_edits_and_playback() {
         app.frame = step % 4;
         if step % 5 == 0 {
             app.remember();
-            app.doc
-                .set_pixel(step % 15, app.frame, step, [22, 140, 90, 255]);
+            app.session
+                .doc
+                .set_pixel(step % 15, app.session.frame, step, [22, 140, 90, 255]);
         }
         let start = Instant::now();
         let mut out = frame(&mut app, &ctx, Vec2::new(1180., 840.), 1., vec![]);
@@ -2346,7 +2347,7 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
         vec![egui::Event::PointerMoved(from), pointer(from, true, shift)],
     );
     render(&mut app, shift, vec![egui::Event::PointerMoved(to)]);
-    assert_eq!(app.studio.mask.as_deref(), Some(original.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(original.as_slice()));
     render(
         &mut app,
         egui::Modifiers::NONE,
@@ -2356,7 +2357,7 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
     for index in [2, 3, 8, 9, 10] {
         added[index] = true;
     }
-    assert_eq!(app.studio.mask.as_deref(), Some(added.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(added.as_slice()));
 
     let command = egui::Modifiers::COMMAND;
     let from = pixel(3., 1.);
@@ -2376,12 +2377,12 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
     );
     let mut subtracted = added.clone();
     subtracted[9..=10].fill(false);
-    assert_eq!(app.studio.mask.as_deref(), Some(subtracted.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(subtracted.as_slice()));
     assert_eq!(app.undo.len(), 2);
     app.undo();
-    assert_eq!(app.studio.mask.as_deref(), Some(added.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(added.as_slice()));
     app.redo();
-    assert_eq!(app.studio.mask.as_deref(), Some(subtracted.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(subtracted.as_slice()));
 
     let intersection = shift | command;
     let from = pixel(1., 0.);
@@ -2406,7 +2407,7 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
     for index in [2, 3, 8] {
         intersected[index] = true;
     }
-    assert_eq!(app.studio.mask.as_deref(), Some(intersected.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(intersected.as_slice()));
     let history = app.undo.len();
     render(
         &mut app,
@@ -2422,7 +2423,7 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
         egui::Modifiers::NONE,
         vec![pointer(to, false, egui::Modifiers::NONE)],
     );
-    assert_eq!(app.studio.mask.as_deref(), Some(intersected.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(intersected.as_slice()));
     assert_eq!(app.undo.len(), history);
 
     render(
@@ -2435,7 +2436,7 @@ fn marquee_drag_modifiers_preserve_mask_holes_and_history() {
         ],
     );
     assert_eq!(app.selection, Some((3, 1, 3, 1)));
-    assert!(app.studio.mask.is_none());
+    assert!(app.session.mask.is_none());
 }
 
 #[test]
@@ -3382,7 +3383,7 @@ fn canvas_rotation_handle_rotates_selected_cels_and_mask_with_one_undo() {
     app.undo();
     assert_eq!(app.doc.layers[0].cels[0][2 * 12 + 2], red);
     assert_eq!(app.doc.layers[0].cels[1][4 * 12 + 3], green);
-    assert_eq!(app.studio.mask.as_deref(), Some(mask.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(mask.as_slice()));
 }
 
 #[test]
@@ -4148,7 +4149,7 @@ fn canvas_rotsprite_rotation_preserves_selected_links_and_detaches_partial_links
             );
         }
     }
-    assert_eq!(app.studio.mask.as_deref(), Some(coverage.as_slice()));
+    assert_eq!(app.session.mask.as_deref(), Some(coverage.as_slice()));
     assert!(app.doc.layers[0].cel_meta[0].artwork_link.is_some());
     assert_eq!(
         app.doc.layers[0].cel_meta[0].artwork_link,

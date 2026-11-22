@@ -34,7 +34,7 @@ Preserve executable/test discovery; run headless checks through the root binary.
   `run_cli` and parsing to CLI; JSON-RPC/live bridge to MCP. Preserve public root
   automation reexports and existing wire schemas. Run full file/live/headless
   automation regression suite. Review security boundary changes.
-- [ ] Desktop and editing: move GUI modules into desktop; root launcher calls its
+- [x] Desktop and editing: move GUI modules into desktop; root launcher calls its
   entry point. Extract shared selection, stroke and history state/operations with
   regressions; desktop must use them. Run all desktop UI tests and history checks.
 - [ ] Integration: update CI test targets, build scripts and embedded asset paths;
@@ -70,3 +70,11 @@ Batch desktop relocation: all 806 tests pass (16 opt-in ignores), strict workspa
 Clippy and normal root build pass. Dependency boundary check is green. CLI help
 remains byte-identical. Review fixed author metadata and release-specific test
 selectors so native/UI checks cannot silently select the empty launcher target.
+
+Batch shared editing: EditorSession owns active document/saved state, history,
+selection and timeline targets; desktop delegates history and uses shared state.
+SelectionMask and exact emath stroke calculations moved to core. 811 workspace
+tests pass, 16 opt-in ignores; strict all-target Clippy and normal build pass.
+New headless session tests were red before the API existed, then green. Review
+found and fixed initial tile selection and intermediate active-tag invalidation;
+the tag regression was observed failing before the observer fix, then passed.

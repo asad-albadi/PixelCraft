@@ -35,8 +35,6 @@ pub(super) struct Studio {
     pub sheet: SheetOptions,
     sheet_use_timeline_layers: bool,
     sheet_slice: Option<String>,
-    pub polygon: Vec<(i32, i32)>,
-    pub mask: Option<SelectionMask>,
     pub move_mask: Option<SelectionMask>,
     pub stroke: Vec<((i32, i32), f32)>,
     pub stroke_force: Option<f32>,
@@ -117,8 +115,8 @@ impl RotationSelection {
     fn still_current(&self, editor: &PixelCraft) -> bool {
         (self.layer, self.frame) == (editor.layer, editor.frame)
             && self.before.bounds == editor.selection
-            && self.before.mask == editor.studio.mask
-            && self.before.polygon == editor.studio.polygon
+            && self.before.mask == editor.session.mask
+            && self.before.polygon == editor.session.polygon
     }
 }
 
@@ -178,8 +176,8 @@ impl RotationPreviewRequest {
             && self.pivot == pivot
             && self.bounds == bounds
             && (self.layer, self.frame) == (editor.layer, editor.frame)
-            && self.mask == editor.studio.mask
-            && self.polygon == editor.studio.polygon
+            && self.mask == editor.session.mask
+            && self.polygon == editor.session.polygon
             && self.display == editor.display_profile.bytes
             && self.source == editor.doc
     }
@@ -258,8 +256,6 @@ impl Default for Studio {
             sheet: SheetOptions::default(),
             sheet_use_timeline_layers: false,
             sheet_slice: None,
-            polygon: vec![],
-            mask: None,
             move_mask: None,
             stroke: vec![],
             stroke_force: None,
@@ -367,19 +363,19 @@ impl PixelCraft {
                     }
                 } else {
                     StoredTab {
-                        doc: self.doc.clone(),
-                        saved: self.saved.clone(),
+                        doc: self.session.doc.clone(),
+                        saved: self.session.saved.clone(),
                         path: self.path.clone(),
                         raw_recovery: false,
                         live_save_root: self.live_save_root.clone(),
                         live_save_root_identity: self.live_save_root_identity,
-                        layer: self.layer,
-                        frame: self.frame,
+                        layer: self.session.layer,
+                        frame: self.session.frame,
                         zoom: self.zoom,
                         pan: [self.pan.x, self.pan.y],
-                        selection: self.selection,
-                        polygon: self.studio.polygon.clone(),
-                        mask: self.studio.mask.clone(),
+                        selection: self.session.selection,
+                        polygon: self.session.polygon.clone(),
+                        mask: self.session.mask.clone(),
                         symmetry_axes: self.studio.symmetry_axes,
                     }
                 }
@@ -527,7 +523,7 @@ impl PixelCraft {
             Ok(Ok(doc)) => {
                 let baseline = Document::new(doc.width, doc.height);
                 self.open_document(doc, None);
-                self.saved = baseline;
+                self.session.saved = baseline;
                 self.status = "Opened recovered images as a new sprite".into();
             }
             Ok(Err(error)) => self.status = format!("Could not recover images: {error}"),
@@ -764,13 +760,16 @@ impl PixelCraft {
         self.status = format!("Restored {restored_count} open tabs");
     }
     pub(super) fn selection_bounds(&self) -> [i32; 4] {
-        let (x, y, x1, y1) =
-            self.selection
-                .unwrap_or((0, 0, self.doc.width as i32 - 1, self.doc.height as i32 - 1));
+        let (x, y, x1, y1) = self.session.selection.unwrap_or((
+            0,
+            0,
+            self.session.doc.width as i32 - 1,
+            self.session.doc.height as i32 - 1,
+        ));
         [x.min(x1), y.min(y1), (x1 - x).abs() + 1, (y1 - y).abs() + 1]
     }
     pub(super) fn selected(&self, x: i32, y: i32) -> bool {
-        if let Some(mask) = &self.studio.mask {
+        if let Some(mask) = &self.session.mask {
             return self
                 .doc
                 .index(x, y)
@@ -781,8 +780,8 @@ impl PixelCraft {
             && y >= b[1]
             && x < b[0] + b[2]
             && y < b[1] + b[3]
-            && (self.studio.polygon.is_empty()
-                || workflows::inside_polygon(&self.studio.polygon, x, y))
+            && (self.session.polygon.is_empty()
+                || workflows::inside_polygon(&self.session.polygon, x, y))
     }
     pub(super) fn transform_selection(&mut self, t: Transform) {
         let b = self.selection_bounds();
@@ -790,7 +789,7 @@ impl PixelCraft {
             && self.studio.rotation_rotsprite
             && !workflows::rotsprite_live_preview_fits(b[2] as usize, b[3] as usize, degrees)
         {
-            let (layer, frame) = (self.layer, self.frame);
+            let (layer, frame) = (self.session.layer, self.session.frame);
             let before = self.native_selection_state();
             self.start_document_job("Rotate selection", move |source| {
                 let mut doc = source.clone();
@@ -813,18 +812,23 @@ impl PixelCraft {
             });
             return;
         }
-        let mask: Vec<bool> = (0..self.doc.width * self.doc.height)
-            .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
+        let mask: Vec<bool> = (0..self.session.doc.width * self.session.doc.height)
+            .map(|i| {
+                self.selected(
+                    (i % self.session.doc.width) as i32,
+                    (i / self.session.doc.width) as i32,
+                )
+            })
             .collect();
         let original_bounds = b;
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         let result = if let Transform::RotateAround { degrees, pivot } = t
             && self.studio.rotation_rotsprite
         {
             workflows::transform_rotsprite(
                 &mut next,
-                self.layer,
-                self.frame,
+                self.session.layer,
+                self.session.frame,
                 b,
                 Some(&mask),
                 degrees,
@@ -832,28 +836,35 @@ impl PixelCraft {
             )
             .map(|(bounds, selection)| (bounds, Some(selection)))
         } else {
-            workflows::transform(&mut next, self.layer, self.frame, b, Some(&mask), t)
-                .map(|bounds| (bounds, None))
+            workflows::transform(
+                &mut next,
+                self.session.layer,
+                self.session.frame,
+                b,
+                Some(&mask),
+                t,
+            )
+            .map(|bounds| (bounds, None))
         };
         match result {
             Ok((b, rotated_selection)) => {
                 self.remember_action("Rotate selection");
-                self.doc = next;
-                self.selection = Some((
+                self.session.doc = next;
+                self.session.selection = Some((
                     b[0].max(0),
                     b[1].max(0),
-                    (b[0] + b[2] - 1).min(self.doc.width as i32 - 1),
-                    (b[1] + b[3] - 1).min(self.doc.height as i32 - 1),
+                    (b[0] + b[2] - 1).min(self.session.doc.width as i32 - 1),
+                    (b[1] + b[3] - 1).min(self.session.doc.height as i32 - 1),
                 ));
-                if b[0] >= self.doc.width as i32
-                    || b[1] >= self.doc.height as i32
+                if b[0] >= self.session.doc.width as i32
+                    || b[1] >= self.session.doc.height as i32
                     || b[0] + b[2] <= 0
                     || b[1] + b[3] <= 0
                 {
-                    self.selection = None
+                    self.session.selection = None
                 }
                 let [ox, oy, ow, oh] = original_bounds;
-                for p in &mut self.studio.polygon {
+                for p in &mut self.session.polygon {
                     let (x, y) = (p.0 - ox, p.1 - oy);
                     *p = match t {
                         Transform::Move(dx, dy) => (p.0 + dx, p.1 + dy),
@@ -870,7 +881,7 @@ impl PixelCraft {
                         ),
                     };
                 }
-                if self.studio.mask.is_some()
+                if self.session.mask.is_some()
                     || matches!(
                         t,
                         Transform::RotateAround { .. }
@@ -880,9 +891,9 @@ impl PixelCraft {
                     )
                 {
                     let mask = rotated_selection.unwrap_or_else(|| {
-                        workflows::transform_mask(&self.doc, original_bounds, &mask, t)
+                        workflows::transform_mask(&self.session.doc, original_bounds, &mask, t)
                     });
-                    self.studio.polygon.clear();
+                    self.session.polygon.clear();
                     self.set_selection_mask(mask);
                 }
                 self.status = "Transformed selection".into()
@@ -895,10 +906,12 @@ impl PixelCraft {
             "studio" => self.studio.open = true,
             "sheet" => {
                 self.studio.sheet_open = true;
-                self.studio.sheet_document = Some(self.doc.editor_id.runtime_key());
+                self.studio.sheet_document = Some(self.session.doc.editor_id.runtime_key());
             }
             "tiles" => {
-                self.studio.tile_browser_set = self.doc.layers[self.layer].tileset.unwrap_or(0);
+                self.studio.tile_browser_set = self.session.doc.layers[self.session.layer]
+                    .tileset
+                    .unwrap_or(0);
                 self.studio.tiles_open = true;
             }
             "seamless" | "seamless-horizontal" | "seamless-vertical" => {
@@ -921,24 +934,24 @@ impl PixelCraft {
             "selectionflipy" => self.transform_selection(Transform::FlipY),
             "resizecanvas" | "spritesize" => {
                 self.studio.canvas_resize = Some(CanvasResize {
-                    document: self.doc.editor_id.to_string(),
+                    document: self.session.doc.editor_id.to_string(),
                     resample: s == "spritesize",
                     method: Default::default(),
-                    size: [self.doc.width, self.doc.height],
+                    size: [self.session.doc.width, self.session.doc.height],
                     anchor: 4,
                     offset: [0, 0],
                     trim: self.trim_canvas_content(),
                 });
             }
             "duplicatesprite" => {
-                let duplicate = workflows::duplicate_sprite(&self.doc);
+                let duplicate = workflows::duplicate_sprite(&self.session.doc);
                 let baseline = Document::new(duplicate.width, duplicate.height);
                 self.open_document(duplicate, None);
-                self.saved = baseline;
+                self.session.saved = baseline;
                 self.status = "Opened a duplicate sprite".into();
             }
             "layer-duplicate" | "layer-merge" => {
-                let layer = self.layer;
+                let layer = self.session.layer;
                 let duplicate = s == "layer-duplicate";
                 let title = if duplicate {
                     "Duplicate layer"
@@ -972,14 +985,14 @@ impl PixelCraft {
                 });
             }
             "layer-via-copy" | "layer-via-cut" => {
-                let layer = self.layer;
-                let frame = self.frame;
+                let layer = self.session.layer;
+                let frame = self.session.frame;
                 let cut = s == "layer-via-cut";
-                let mask: Vec<_> = (0..self.doc.width * self.doc.height)
+                let mask: Vec<_> = (0..self.session.doc.width * self.session.doc.height)
                     .map(|index| {
                         self.selected(
-                            (index % self.doc.width) as i32,
-                            (index / self.doc.width) as i32,
+                            (index % self.session.doc.width) as i32,
+                            (index / self.session.doc.width) as i32,
                         )
                     })
                     .collect();
@@ -1004,7 +1017,9 @@ impl PixelCraft {
             }
             "convert-tilemap" => {
                 self.studio.tile_conversion = Some(TileConversionDialog {
-                    layer: self.doc.layers[self.layer].editor_id.to_string(),
+                    layer: self.session.doc.layers[self.session.layer]
+                        .editor_id
+                        .to_string(),
                     width: self.tile_size,
                     height: self.tile_size,
                 });
@@ -1043,9 +1058,9 @@ impl PixelCraft {
                 }
             }
             "tileset-atlas" => {
-                let layer = &self.doc.layers[self.layer];
+                let layer = &self.session.doc.layers[self.session.layer];
                 self.studio.tileset_atlas_export = Some(TilesetAtlasDialog {
-                    visible: self.timeline_layers.selected.is_empty()
+                    visible: self.session.timeline_layers.selected.is_empty()
                         && !layer.group
                         && layer.tileset.is_none(),
                     ..TilesetAtlasDialog::default()
@@ -1058,7 +1073,7 @@ impl PixelCraft {
                     .save_file()
                 {
                     let kind = ExportKind::Tiled {
-                        frame_id: self.doc.frame_export_id(self.frame),
+                        frame_id: self.session.doc.frame_export_id(self.session.frame),
                     };
                     self.start_export_recipe(
                         ExportRecipe {
@@ -1113,20 +1128,29 @@ impl PixelCraft {
         true
     }
     pub(super) fn effects(&mut self, kind: &'static str) {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             self.status = "Select an unlocked image layer".into();
             return;
         }
         if kind == "Outline" || kind == "Drop shadow" {
-            let mask = (0..self.doc.width * self.doc.height)
-                .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
+            let mask = (0..self.session.doc.width * self.session.doc.height)
+                .map(|i| {
+                    self.selected(
+                        (i % self.session.doc.width) as i32,
+                        (i / self.session.doc.width) as i32,
+                    )
+                })
                 .collect::<Vec<_>>();
-            let mut next = self.doc.clone();
+            let mut next = self.session.doc.clone();
             let result = if kind == "Drop shadow" {
                 workflows::spatial_effect(
                     &mut next,
-                    self.layer,
-                    self.frame,
+                    self.session.layer,
+                    self.session.frame,
                     &mask,
                     self.fg,
                     Some((self.studio.dx, self.studio.dy)),
@@ -1134,8 +1158,8 @@ impl PixelCraft {
             } else {
                 workflows::spatial_outline(
                     &mut next,
-                    self.layer,
-                    self.frame,
+                    self.session.layer,
+                    self.session.frame,
                     &mask,
                     self.fg,
                     self.studio.outline_corners,
@@ -1144,7 +1168,7 @@ impl PixelCraft {
             match result {
                 Ok(()) => {
                     self.remember_action(kind);
-                    self.doc = next;
+                    self.session.doc = next;
                     self.status = format!("Applied {kind}");
                 }
                 Err(e) => self.status = e,
@@ -1152,11 +1176,14 @@ impl PixelCraft {
             return;
         }
         self.remember_action(kind);
-        for i in 0..self.doc.width * self.doc.height {
-            if !self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
+        for i in 0..self.session.doc.width * self.session.doc.height {
+            if !self.selected(
+                (i % self.session.doc.width) as i32,
+                (i / self.session.doc.width) as i32,
+            ) {
                 continue;
             }
-            let mut p = self.doc.layers[self.layer].cels[self.frame][i];
+            let mut p = self.session.doc.layers[self.session.layer].cels[self.session.frame][i];
             if p[3] == 0 {
                 continue;
             }
@@ -1170,7 +1197,9 @@ impl PixelCraft {
                     _ => c.saturating_sub(16),
                 }
             }
-            self.doc.set_pixel(self.layer, self.frame, i, p);
+            self.session
+                .doc
+                .set_pixel(self.session.layer, self.session.frame, i, p);
         }
         self.status = format!("Applied {kind}");
     }
@@ -1240,7 +1269,9 @@ impl PixelCraft {
         } else {
             None
         };
-        if !self.rotation_preview_active() || self.doc.width * self.doc.height > 4_194_304 {
+        if !self.rotation_preview_active()
+            || self.session.doc.width * self.session.doc.height > 4_194_304
+        {
             self.clear_rotation_preview_cache();
             return None;
         }
@@ -1295,12 +1326,12 @@ impl PixelCraft {
             }
         }
         let request = Arc::new(RotationPreviewRequest {
-            source: self.doc.clone(),
-            layer: self.layer,
-            frame: self.frame,
+            source: self.session.doc.clone(),
+            layer: self.session.layer,
+            frame: self.session.frame,
             bounds,
-            mask: self.studio.mask.clone(),
-            polygon: self.studio.polygon.clone(),
+            mask: self.session.mask.clone(),
+            polygon: self.session.polygon.clone(),
             degrees,
             pivot,
             display: Arc::clone(&self.display_profile.bytes),
@@ -1335,11 +1366,14 @@ impl PixelCraft {
 
     fn adjustment_controls(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Masks and adjustments", |ui| {
-            let layer = self.layer;
+            let layer = self.session.layer;
             if ui.pc_button("Mask from selection").clicked() {
-                let mut mask = Pixels::empty(self.doc.width * self.doc.height);
+                let mut mask = Pixels::empty(self.session.doc.width * self.session.doc.height);
                 for i in 0..mask.len() {
-                    if self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32) {
+                    if self.selected(
+                        (i % self.session.doc.width) as i32,
+                        (i / self.session.doc.width) as i32,
+                    ) {
                         mask.set(i, [0, 0, 0, 255]);
                     }
                 }
@@ -1353,7 +1387,7 @@ impl PixelCraft {
             let mut adjustment = self.studio.adjustment_input.clone();
             ui.horizontal(|ui| {
                 if ui.pc_button("Edit current adjustment").clicked()
-                    && let Some(current) = &self.doc.layers[layer].adjustment
+                    && let Some(current) = &self.session.doc.layers[layer].adjustment
                 {
                     adjustment = current.clone();
                 }
@@ -1414,7 +1448,7 @@ impl PixelCraft {
                     doc.set_adjustment(layer, Some(adjustment))
                 });
             }
-            if self.doc.layers[layer].adjustment.is_some()
+            if self.session.doc.layers[layer].adjustment.is_some()
                 && ui.pc_button("Remove adjustment").clicked()
             {
                 self.edit_timeline("Remove adjustment", |doc| doc.set_adjustment(layer, None));
@@ -1428,7 +1462,7 @@ impl PixelCraft {
             self.status = "A sprite operation is already running".into();
             return;
         }
-        let old = [self.doc.width, self.doc.height];
+        let old = [self.session.doc.width, self.session.doc.height];
         let offset = resize.offset_from(old);
         if resize.size == old && offset == [0, 0] && !resize.trim {
             self.remember_canvas_trim(resize.trim);
@@ -1446,11 +1480,11 @@ impl PixelCraft {
     fn apply_sprite_geometry(&mut self, label: &'static str, doc: Document) {
         self.cancel_gesture();
         self.remember_action(label);
-        self.doc = doc;
-        self.selection = None;
-        self.studio.mask = None;
+        self.session.doc = doc;
+        self.session.selection = None;
+        self.session.mask = None;
         self.studio.move_mask = None;
-        self.studio.polygon.clear();
+        self.session.polygon.clear();
     }
 
     fn start_sprite_job(
@@ -1477,7 +1511,7 @@ impl PixelCraft {
             return;
         }
         self.cancel_gesture();
-        let source = self.doc.clone();
+        let source = self.session.doc.clone();
         let snapshot = source.clone();
         let worker = std::thread::spawn(move || operation(&snapshot));
         self.studio.sprite_job = Some(SpriteJob {
@@ -1504,9 +1538,9 @@ impl PixelCraft {
                 layer,
                 rotation,
             })) => {
-                if !self.doc.same_editor_targets(&job.source)
-                    || !self.doc.same_cel_image_ids(&job.source)
-                    || self.doc.differs_from_saved(&job.source)
+                if !self.session.doc.same_editor_targets(&job.source)
+                    || !self.session.doc.same_cel_image_ids(&job.source)
+                    || self.session.doc.differs_from_saved(&job.source)
                     || rotation
                         .as_ref()
                         .is_some_and(|selection| !selection.still_current(self))
@@ -1517,25 +1551,27 @@ impl PixelCraft {
                     );
                 } else {
                     if rotation.is_some()
-                        || self.doc.differs_from_saved(&doc)
-                        || !self.doc.same_cel_image_ids(&doc)
+                        || self.session.doc.differs_from_saved(&doc)
+                        || !self.session.doc.same_cel_image_ids(&doc)
                     {
                         self.apply_sprite_geometry(job.title, doc);
                         if let Some(selection) = rotation {
                             self.set_selection_mask(selection.after);
                         }
                         if let Some(layer) = layer {
-                            self.layer = layer;
-                            self.timeline_anchor = None;
-                            self.selected_cels = None;
-                            self.timeline_frames = TimelineHeaders::default();
-                            self.timeline_layers = TimelineHeaders::default();
+                            self.session.layer = layer;
+                            self.session.timeline_anchor = None;
+                            self.session.selected_cels = None;
+                            self.session.timeline_frames = TimelineHeaders::default();
+                            self.session.timeline_layers = TimelineHeaders::default();
                             self.timeline_destination = None;
                         }
                     }
                     if let Some(resize) = job.canvas_resize {
-                        self.status =
-                            format!("Canvas resized to {} × {}", self.doc.width, self.doc.height);
+                        self.status = format!(
+                            "Canvas resized to {} × {}",
+                            self.session.doc.width, self.session.doc.height
+                        );
                         self.remember_canvas_trim(resize.trim);
                     } else {
                         self.status = format!("{} complete", job.title);
@@ -1544,7 +1580,7 @@ impl PixelCraft {
             }
             Ok(Err(error)) => {
                 if let Some(resize) = job.canvas_resize
-                    && resize.document == self.doc.editor_id.to_string()
+                    && resize.document == self.session.doc.editor_id.to_string()
                     && self.studio.canvas_resize.is_none()
                 {
                     self.studio.canvas_resize = Some(resize);
@@ -1559,10 +1595,10 @@ impl PixelCraft {
         let Some(mut resize) = self.studio.canvas_resize.take() else {
             return;
         };
-        if resize.document != self.doc.editor_id.to_string() {
+        if resize.document != self.session.doc.editor_id.to_string() {
             return;
         }
-        let old = [self.doc.width, self.doc.height];
+        let old = [self.session.doc.width, self.session.doc.height];
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
@@ -1642,7 +1678,7 @@ impl PixelCraft {
     }
 
     fn start_layer_conversion(&mut self, conversion: LayerConversion) {
-        let layer = self.layer;
+        let layer = self.session.layer;
         self.start_document_job("Convert layer", move |source| {
             let mut doc = source.clone();
             let layer = doc.convert_layer(layer, conversion)?;
@@ -1656,10 +1692,10 @@ impl PixelCraft {
 
     fn start_tileset_atlas_export(&mut self, path: PathBuf, options: TilesetAtlasDialog) {
         let layers = (!options.visible).then(|| {
-            let selected = &self.timeline_layers.selected;
-            let current = [self.layer];
+            let selected = &self.session.timeline_layers.selected;
+            let current = [self.session.layer];
             export_layer_ids(
-                &self.doc,
+                &self.session.doc,
                 if selected.is_empty() {
                     &current
                 } else {
@@ -1730,7 +1766,7 @@ impl PixelCraft {
                     if ui.pc_button("Import PNG tilesheet…").clicked() {
                         match self.import_tileset() {
                             Ok(()) => {
-                                if let Some(index) = self.doc.layers[self.layer].tileset {
+                                if let Some(index) = self.session.doc.layers[self.session.layer].tileset {
                                     self.studio.tile_browser_set = index;
                                 }
                             }
@@ -1739,23 +1775,23 @@ impl PixelCraft {
                     }
                     ui.add(egui::DragValue::new(&mut self.tile_size).range(1..=256).prefix("Tile size "));
                 });
-                if self.doc.tilesets.is_empty() {
+                if self.session.doc.tilesets.is_empty() {
                     ui.label("Import a tilesheet to browse and paint tiles.");
                     return;
                 }
-                self.studio.tile_browser_set = self.studio.tile_browser_set.min(self.doc.tilesets.len() - 1);
+                self.studio.tile_browser_set = self.studio.tile_browser_set.min(self.session.doc.tilesets.len() - 1);
                 egui::ComboBox::from_label("Tileset")
-                    .selected_text(&self.doc.tilesets[self.studio.tile_browser_set].name)
+                    .selected_text(&self.session.doc.tilesets[self.studio.tile_browser_set].name)
                     .show_ui(ui, |ui| {
-                        for (index, set) in self.doc.tilesets.iter().enumerate() {
+                        for (index, set) in self.session.doc.tilesets.iter().enumerate() {
                             ui.pc_selectable_value(&mut self.studio.tile_browser_set, index, &set.name);
                         }
                     });
                 let tileset = self.studio.tile_browser_set;
-                let set = &self.doc.tilesets[tileset];
+                let set = &self.session.doc.tilesets[tileset];
                 let count = set.tiles.len();
-                let active_set = self.doc.layers[self.layer].tileset == Some(tileset);
-                let selected = self.selected_tile & TILE_ID_MASK;
+                let active_set = self.session.doc.layers[self.session.layer].tileset == Some(tileset);
+                let selected = self.session.selected_tile & TILE_ID_MASK;
                 let thumb_size = 32.;
                 let row_height = 46.;
                 let columns = (ui.available_width() / row_height).floor().max(1.) as usize;
@@ -1771,9 +1807,9 @@ impl PixelCraft {
                                     // Sample at thumbnail size without expanding sparse or oversized tiles.
                                     let preview_w = set.width.min(thumb_size as usize);
                                     let preview_h = set.height.min(thumb_size as usize);
-                                    let placement = if active_set && selected == id { self.selected_tile } else { id };
-                                    let doc = &self.doc;
-                                    let frame = self.frame;
+                                    let placement = if active_set && selected == id { self.session.selected_tile } else { id };
+                                    let doc = &self.session.doc;
+                                    let frame = self.session.frame;
                                     let pixels = (0..preview_h).flat_map(|row| {
                                         (0..preview_w).map(move |col| {
                                             doc.tile_placement_pixel(set, placement, [col * set.width / preview_w, row * set.height / preview_h], frame)
@@ -1795,20 +1831,20 @@ impl PixelCraft {
                     });
                 if let Some(id) = clicked {
                     if !active_set {
-                        let layer = self.doc.layers.iter().position(|layer| layer.tileset == Some(tileset));
+                        let layer = self.session.doc.layers.iter().position(|layer| layer.tileset == Some(tileset));
                         if let Some(layer) = layer {
-                            self.timeline_select(layer, self.frame, false);
+                            self.timeline_select(layer, self.session.frame, false);
                         } else if self.edit_timeline("New tile layer", |doc| doc.add_tile_layer(tileset)) {
-                            self.timeline_select(self.doc.layers.len() - 1, self.frame, false);
+                            self.timeline_select(self.session.doc.layers.len() - 1, self.session.frame, false);
                         }
                     }
-                    if self.doc.layers[self.layer].tileset == Some(tileset) {
+                    if self.session.doc.layers[self.session.layer].tileset == Some(tileset) {
                         self.tool = Tool::Pencil;
-                        self.selected_tile = id;
+                        self.session.selected_tile = id;
                     }
                 }
-                let selected = self.selected_tile & TILE_ID_MASK;
-                if self.doc.layers[self.layer].tileset == Some(tileset)
+                let selected = self.session.selected_tile & TILE_ID_MASK;
+                if self.session.doc.layers[self.session.layer].tileset == Some(tileset)
                     && selected > 0
                     && selected as usize <= count
                 {
@@ -1819,7 +1855,7 @@ impl PixelCraft {
                             ("Flip vertically", TileTransform::FlipVertical),
                             ("Rotate clockwise", TileTransform::RotateClockwise),
                         ] {
-                            let transformed = transform.apply(self.selected_tile, &self.doc.tilesets[tileset]);
+                            let transformed = transform.apply(self.session.selected_tile, &self.session.doc.tilesets[tileset]);
                             let tooltip = match &transformed {
                                 Ok(_) => "Change tile brush orientation",
                                 Err(reason) => reason,
@@ -1828,7 +1864,7 @@ impl PixelCraft {
                                 .on_hover_text(tooltip).clicked()
                                 && let Ok(placement) = transformed
                             {
-                                self.selected_tile = placement;
+                                self.session.selected_tile = placement;
                             }
                         }
                     });
@@ -1887,11 +1923,14 @@ impl PixelCraft {
     }
 
     pub(super) fn paint_tile_indices(&self, painter: &egui::Painter, board: Rect) {
-        let layer = &self.doc.layers[self.layer];
+        let layer = &self.session.doc.layers[self.session.layer];
         if !self.studio.show_tile_indices || self.playing || !layer.visible {
             return;
         }
-        let Some(set) = layer.tileset.and_then(|set| self.doc.tilesets.get(set)) else {
+        let Some(set) = layer
+            .tileset
+            .and_then(|set| self.session.doc.tilesets.get(set))
+        else {
             return;
         };
         let pixel_size = self.canvas_pixel_size();
@@ -1900,9 +1939,9 @@ impl PixelCraft {
         if step.x < digits * 7. + 6. || step.y < 18. {
             return;
         }
-        let geometry = layer.cel_meta[self.frame].tilemap.as_ref();
-        let columns = geometry.map_or(self.doc.width.div_ceil(set.width), |g| g.columns);
-        let rows = geometry.map_or(self.doc.height.div_ceil(set.height), |g| g.rows);
+        let geometry = layer.cel_meta[self.session.frame].tilemap.as_ref();
+        let columns = geometry.map_or(self.session.doc.width.div_ceil(set.width), |g| g.columns);
+        let rows = geometry.map_or(self.session.doc.height.div_ceil(set.height), |g| g.rows);
         let origin = board.min
             + geometry.map_or(Vec2::ZERO, |g| {
                 Vec2::new(g.x as f32, g.y as f32) * pixel_size
@@ -1913,7 +1952,7 @@ impl PixelCraft {
         }
         let first = (clip.min - origin) / step;
         let end = (clip.max - origin) / step;
-        let placements = &layer.tile_cels[self.frame];
+        let placements = &layer.tile_cels[self.session.frame];
         let font = egui::FontId::monospace(11.);
         for y in (first.y.floor() as usize).min(rows)..(end.y.ceil() as usize).min(rows) {
             for x in (first.x.floor() as usize).min(columns)..(end.x.ceil() as usize).min(columns) {
@@ -1934,7 +1973,11 @@ impl PixelCraft {
         let Some(mut dialog) = self.studio.tile_conversion.take() else {
             return;
         };
-        if self.doc.layers[self.layer].editor_id.to_string() != dialog.layer {
+        if self.session.doc.layers[self.session.layer]
+            .editor_id
+            .to_string()
+            != dialog.layer
+        {
             return;
         }
         let mut open = true;
@@ -2106,10 +2149,10 @@ impl PixelCraft {
     fn sprite_sheet_options(&self) -> SheetOptions {
         let mut options = self.studio.sheet.clone();
         if self.studio.sheet_use_timeline_layers {
-            options.layers = Some(if self.timeline_layers.selected.is_empty() {
-                vec![self.layer]
+            options.layers = Some(if self.session.timeline_layers.selected.is_empty() {
+                vec![self.session.layer]
             } else {
-                self.timeline_layers.selected.clone()
+                self.session.timeline_layers.selected.clone()
             });
         }
         options
@@ -2120,10 +2163,10 @@ impl PixelCraft {
         let layers = options
             .layers
             .take()
-            .map(|indices| export_layer_ids(&self.doc, &indices));
+            .map(|indices| export_layer_ids(&self.session.doc, &indices));
         let tag = options
             .tag
-            .and_then(|index| self.doc.tags.get(index))
+            .and_then(|index| self.session.doc.tags.get(index))
             .map(|tag| tag.name.clone());
         let kind = ExportKind::Sheet {
             options: Box::new(options),
@@ -2148,14 +2191,14 @@ impl PixelCraft {
         if self
             .studio
             .sheet_document
-            .is_some_and(|id| id != self.doc.editor_id.runtime_key())
+            .is_some_and(|id| id != self.session.doc.editor_id.runtime_key())
         {
             self.studio.sheet_open = false;
             self.studio.sheet_document = None;
             self.status = "Sheet export closed because the active document changed".into();
             return;
         }
-        self.studio.sheet_document = Some(self.doc.editor_id.runtime_key());
+        self.studio.sheet_document = Some(self.session.doc.editor_id.runtime_key());
         let title = "Export sprite sheet";
         let footer_key = egui::Id::new("sheet-export-footer");
         let close = fluent::modal_dialog_sized(ctx, title, 390., |ui| {
@@ -2235,22 +2278,22 @@ impl PixelCraft {
                     "Align trim to drawing grid",
                 );
                 let tag = &mut self.studio.sheet.tag;
-                if tag.is_some_and(|index| index >= self.doc.tags.len()) {
+                if tag.is_some_and(|index| index >= self.session.doc.tags.len()) {
                     *tag = None;
                 }
                 egui::ComboBox::from_label("Tag")
                     .selected_text(
-                        tag.and_then(|i| self.doc.tags.get(i))
+                        tag.and_then(|i| self.session.doc.tags.get(i))
                             .map_or("All tags", |tag| tag.name.as_str()),
                     )
                     .show_ui(ui, |ui| {
                         ui.pc_selectable_value(tag, None, "All tags");
-                        for (index, value) in self.doc.tags.iter().enumerate() {
+                        for (index, value) in self.session.doc.tags.iter().enumerate() {
                             ui.pc_selectable_value(tag, Some(index), &value.name);
                         }
                     });
 
-                let max = self.doc.durations.len();
+                let max = self.session.doc.durations.len();
                 let mut limit_frames = self.studio.sheet.frame_range.is_some();
                 if ui
                     .pc_checkbox(&mut limit_frames, "Limit to frame range")
@@ -2281,7 +2324,7 @@ impl PixelCraft {
                     "Only selected timeline layers and groups",
                 );
                 if self.studio.sheet_use_timeline_layers {
-                    let count = self.timeline_layers.selected.len().max(1);
+                    let count = self.session.timeline_layers.selected.len().max(1);
                     ui.small(format!(
                         "{count} selected · groups include visible descendants"
                     ));
@@ -2300,16 +2343,16 @@ impl PixelCraft {
                 let slice = &mut self.studio.sheet_slice;
                 if slice
                     .as_ref()
-                    .is_some_and(|name| !self.doc.slices.iter().any(|item| item.name == *name))
+                    .is_some_and(|name| !self.session.doc.slices.iter().any(|item| item.name == *name))
                 {
                     *slice = None;
                 }
-                if !self.doc.slices.is_empty() {
+                if !self.session.doc.slices.is_empty() {
                     egui::ComboBox::from_label("Crop to slice")
                         .selected_text(slice.as_deref().unwrap_or("Whole sprite"))
                         .show_ui(ui, |ui| {
                             ui.pc_selectable_value(slice, None, "Whole sprite");
-                            for item in &self.doc.slices {
+                            for item in &self.session.doc.slices {
                                 ui.pc_selectable_value(slice, Some(item.name.clone()), &item.name);
                             }
                         });
@@ -2334,7 +2377,7 @@ impl PixelCraft {
                 });
                 let options = self.sprite_sheet_options();
                 let slice = self.studio.sheet_slice.as_deref();
-                let summary = interchange::sheet_export_summary(&self.doc, &options, slice)
+                let summary = interchange::sheet_export_summary(&self.session.doc, &options, slice)
                     .map(|(count, dimensions)| {
                         let count = format!("{count} samples");
                         match dimensions {
@@ -2412,7 +2455,7 @@ impl PixelCraft {
                 path.push((p, force));
             }
             if let Some(base) = &self.stroke_base {
-                self.doc = base.clone();
+                self.session.doc = base.clone();
             }
             self.power.shade_seen.clear();
             self.power.stroke_opacity.clear();

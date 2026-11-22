@@ -161,7 +161,7 @@ impl PixelCraft {
         }
         let brush = SavedBrush {
             size: self.brush,
-            shape: self.doc.brush_shape,
+            shape: self.session.doc.brush_shape,
             mode,
             reverse: self.power.reverse,
             ink: self
@@ -193,9 +193,9 @@ impl PixelCraft {
         self.cancel_gesture();
         self.tool = Tool::Pencil;
         self.brush = brush.size;
-        if self.doc.brush_shape != brush.shape {
+        if self.session.doc.brush_shape != brush.shape {
             self.remember_action("Change brush shape");
-            self.doc.brush_shape = brush.shape;
+            self.session.doc.brush_shape = brush.shape;
         }
         self.power.mode = brush.mode;
         self.power.reverse = brush.reverse;
@@ -219,7 +219,7 @@ impl PixelCraft {
         to: usize,
     ) -> Result<(), String> {
         let name = name_key(name)?.to_owned();
-        let palette = self.doc.palette_for(self.frame);
+        let palette = self.session.doc.palette_for(self.session.frame);
         let mut range = palette
             .get(from.min(to)..=from.max(to))
             .ok_or("Choose swatches inside the current palette")?
@@ -271,7 +271,12 @@ impl PixelCraft {
 
             ui.separator();
             ui.label("Shading ramp from palette");
-            let last = self.doc.palette_for(self.frame).len().saturating_sub(1);
+            let last = self
+                .session
+                .doc
+                .palette_for(self.session.frame)
+                .len()
+                .saturating_sub(1);
             ui.horizontal(|ui| {
                 ui.add(
                     egui::DragValue::new(&mut self.power.ramp_from)

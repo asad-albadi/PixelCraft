@@ -23,20 +23,29 @@ impl PixelCraft {
     }
 
     pub(super) fn curve_click(&mut self, pane: CanvasPane, point: (i32, i32)) {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             self.status = "Choose an unlocked image layer for the curve".into();
             return;
         }
         let draft = self.curve_draft.get_or_insert_with(|| CurveDraft {
             pane,
-            layer: self.layer,
-            frame: self.frame,
+            layer: self.session.layer,
+            frame: self.session.frame,
             generation: self.power.bridge_generation,
             color: self.stroke_color,
             points: Vec::with_capacity(4),
         });
         if (draft.pane, draft.layer, draft.frame, draft.generation)
-            != (pane, self.layer, self.frame, self.power.bridge_generation)
+            != (
+                pane,
+                self.session.layer,
+                self.session.frame,
+                self.power.bridge_generation,
+            )
         {
             self.cancel_curve();
             return;
@@ -50,9 +59,9 @@ impl PixelCraft {
                 let color = draft.color;
                 self.curve_draft = None;
                 match cubic_coverage(
-                    (self.doc.width, self.doc.height),
+                    (self.session.doc.width, self.session.doc.height),
                     [start, first, second, end],
-                    (self.brush, self.doc.brush_shape),
+                    (self.brush, self.session.doc.brush_shape),
                     self.drawing_axes(),
                 ) {
                     Ok(pixels) => {
@@ -77,7 +86,12 @@ impl PixelCraft {
     ) {
         let Some(draft) = self.curve_draft.as_ref().filter(|draft| {
             (draft.pane, draft.layer, draft.frame, draft.generation)
-                == (pane, self.layer, self.frame, self.power.bridge_generation)
+                == (
+                    pane,
+                    self.session.layer,
+                    self.session.frame,
+                    self.power.bridge_generation,
+                )
         }) else {
             return;
         };

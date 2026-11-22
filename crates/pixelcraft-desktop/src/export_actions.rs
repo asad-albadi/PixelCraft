@@ -398,7 +398,7 @@ impl PixelCraft {
             self.status = "An export is already running".into();
             return;
         }
-        let snapshot = self.doc.clone();
+        let snapshot = self.session.doc.clone();
         let document = snapshot.editor_id.runtime_key();
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_cancelled = cancelled.clone();
@@ -436,7 +436,7 @@ impl PixelCraft {
         let Some(job) = &self.export_preflight else {
             return;
         };
-        if job.document != self.doc.editor_id.runtime_key() {
+        if job.document != self.session.doc.editor_id.runtime_key() {
             job.cancelled
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -514,7 +514,7 @@ impl PixelCraft {
         let Some(request) = self.export_confirmation.take() else {
             return;
         };
-        if request.snapshot.editor_id.runtime_key() != self.doc.editor_id.runtime_key() {
+        if request.snapshot.editor_id.runtime_key() != self.session.doc.editor_id.runtime_key() {
             self.status = "Export confirmation closed because the active document changed".into();
             return;
         }
@@ -566,7 +566,7 @@ impl PixelCraft {
                         .to_string_lossy()
                 );
                 if !matches!(job.recipe.kind, ExportKind::Palette { .. }) {
-                    if self.doc.editor_id.to_string() == job.origin {
+                    if self.session.doc.editor_id.to_string() == job.origin {
                         self.last_export = Some(job.recipe);
                     } else if let Some(tab) = self
                         .tabs

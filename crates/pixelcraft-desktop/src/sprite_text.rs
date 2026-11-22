@@ -176,9 +176,13 @@ pub(super) struct TextDraft {
 
 impl PixelCraft {
     pub(super) fn begin_sprite_text(&mut self, point: (i32, i32)) {
-        if !self.doc.editable(self.layer)
-            || self.doc.layers[self.layer].tileset.is_some()
-            || self.doc.layers[self.layer].adjustment.is_some()
+        if !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+            || self.session.doc.layers[self.session.layer]
+                .adjustment
+                .is_some()
         {
             self.status = "Choose an unlocked image layer for text".into();
             return;
@@ -186,7 +190,7 @@ impl PixelCraft {
         self.text_draft = Some(TextDraft {
             tab: self.active_tab,
             generation: self.power.bridge_generation,
-            cel: (self.layer, self.frame),
+            cel: (self.session.layer, self.session.frame),
             color: self.fg,
             settings: Settings {
                 contents: String::new(),
@@ -209,8 +213,8 @@ impl PixelCraft {
         }
         let [x, y] = state.settings.position;
         let available = [
-            self.doc.width.saturating_sub(x as usize),
-            self.doc.height.saturating_sub(y as usize),
+            self.session.doc.width.saturating_sub(x as usize),
+            self.session.doc.height.saturating_sub(y as usize),
         ];
         match rasterize(&state.settings, available, state.color) {
             Err(error) => state.error = Some(error),
@@ -225,7 +229,8 @@ impl PixelCraft {
                     state.error = Some("Text has no visible pixels in the selection".into());
                     return;
                 }
-                let pixels = self.display_artwork(&self.doc.color_profile, raster.pixels.clone());
+                let pixels =
+                    self.display_artwork(&self.session.doc.color_profile, raster.pixels.clone());
                 let max_side = ctx.input(|i| i.max_texture_side).max(1);
                 let mut tiles = Vec::new();
                 for top in (0..raster.size[1]).step_by(max_side) {
@@ -259,7 +264,7 @@ impl PixelCraft {
                 == (
                     self.active_tab,
                     self.power.bridge_generation,
-                    (self.layer, self.frame),
+                    (self.session.layer, self.session.frame),
                 )
         }) else {
             return;
@@ -283,7 +288,7 @@ impl PixelCraft {
         let [left, top] = state.settings.position.map(|value| value as usize);
         let stride = preview.raster.size[0];
         let (layer, frame) = state.cel;
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         next.drawing_index = self.drawing_palette_index(state.color);
         for (i, pixel) in preview.raster.pixels.into_iter().enumerate() {
             if pixel[3] != 0 {
@@ -293,9 +298,9 @@ impl PixelCraft {
             }
         }
         next.drawing_index = None;
-        if next != self.doc {
+        if next != self.session.doc {
             self.remember_action("Place text");
-            self.doc = next;
+            self.session.doc = next;
         }
         self.status = "Placed text".into();
     }
@@ -308,7 +313,7 @@ impl PixelCraft {
             != (
                 self.active_tab,
                 self.power.bridge_generation,
-                (self.layer, self.frame),
+                (self.session.layer, self.session.frame),
             )
         {
             self.status = "Text placement cancelled after the target cel changed".into();
@@ -347,14 +352,17 @@ impl PixelCraft {
                         .range(5..=96)
                         .suffix(" px"),
                 );
-                if self.doc.color_mode != ColorMode::Indexed {
+                if self.session.doc.color_mode != ColorMode::Indexed {
                     ui.pc_checkbox(&mut state.settings.smooth, "Antialiasing");
                 }
             });
             ui.horizontal(|ui| {
-                for (i, (label, limit)) in [("X", self.doc.width), ("Y", self.doc.height)]
-                    .into_iter()
-                    .enumerate()
+                for (i, (label, limit)) in [
+                    ("X", self.session.doc.width),
+                    ("Y", self.session.doc.height),
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     ui.label(label);
                     ui.add(

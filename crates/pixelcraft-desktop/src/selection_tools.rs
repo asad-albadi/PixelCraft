@@ -135,7 +135,11 @@ impl PixelCraft {
     }
 
     pub(super) fn begin_painted_polygon(&mut self, point: (i32, i32), pane: CanvasPane) -> bool {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             self.status = "Choose an unlocked image layer to draw this shape".into();
             return false;
         }
@@ -143,8 +147,8 @@ impl PixelCraft {
             points: vec![point],
             pane,
             action: PolygonAction::Paint {
-                layer: self.layer,
-                frame: self.frame,
+                layer: self.session.layer,
+                frame: self.session.frame,
                 generation: self.power.bridge_generation,
                 color: self.stroke_color,
             },
@@ -188,7 +192,11 @@ impl PixelCraft {
         let draft = self.selection_tools.polygon.take().unwrap();
         match draft.action {
             PolygonAction::Select(operation) => {
-                match polygon_mask(self.doc.width, self.doc.height, &draft.points) {
+                match polygon_mask(
+                    self.session.doc.width,
+                    self.session.doc.height,
+                    &draft.points,
+                ) {
                     Ok(hits) => {
                         let mut mask = self.canvas_selection_mask();
                         combine_selection(&mut mask, &hits, operation);
@@ -205,19 +213,23 @@ impl PixelCraft {
                 color,
             } => {
                 if (layer, frame, generation)
-                    != (self.layer, self.frame, self.power.bridge_generation)
-                    || !self.doc.editable(layer)
-                    || self.doc.layers[layer].tileset.is_some()
+                    != (
+                        self.session.layer,
+                        self.session.frame,
+                        self.power.bridge_generation,
+                    )
+                    || !self.session.doc.editable(layer)
+                    || self.session.doc.layers[layer].tileset.is_some()
                 {
                     self.status = "Shape cancelled after the target cel changed".into();
                     return;
                 }
                 let contour = self.tool == Tool::Contour;
                 let hits = match crate::api::workflows::polygon_coverage(
-                    (self.doc.width, self.doc.height),
+                    (self.session.doc.width, self.session.doc.height),
                     &draft.points,
                     contour || self.filled,
-                    (self.brush, self.doc.brush_shape),
+                    (self.brush, self.session.doc.brush_shape),
                     self.drawing_axes(),
                 ) {
                     Ok(hits) => hits,
@@ -253,20 +265,20 @@ impl PixelCraft {
         label: &'static str,
         visit: impl FnOnce(&mut dyn FnMut(usize)),
     ) {
-        let mut result = self.doc.clone();
+        let mut result = self.session.doc.clone();
         result.drawing_index = self.drawing_palette_index(color);
-        let (layer, frame, width) = (self.layer, self.frame, result.width);
+        let (layer, frame, width) = (self.session.layer, self.session.frame, result.width);
         let ink = self.tool_ink();
         visit(&mut |index| {
             if self.selected((index % width) as i32, (index / width) as i32) {
-                let original = self.doc.layers[layer].cels[frame][index];
+                let original = self.session.doc.layers[layer].cels[frame][index];
                 ink.draw(&mut result, (layer, frame), index, original, color);
             }
         });
         result.drawing_index = None;
-        if result != self.doc {
+        if result != self.session.doc {
             self.remember_action(label);
-            self.doc = result;
+            self.session.doc = result;
         }
     }
 
@@ -303,44 +315,44 @@ impl PixelCraft {
         painter.circle_stroke(points[0], 4., white);
     }
     pub(super) fn canvas_selection_mask(&self) -> Vec<bool> {
-        if self.selection.is_none() {
-            vec![false; self.doc.width * self.doc.height]
-        } else if let Some(mask) = &self.studio.mask {
+        if self.session.selection.is_none() {
+            vec![false; self.session.doc.width * self.session.doc.height]
+        } else if let Some(mask) = &self.session.mask {
             mask.to_vec()
         } else {
-            (0..self.doc.height as i32)
-                .flat_map(|y| (0..self.doc.width as i32).map(move |x| self.selected(x, y)))
+            (0..self.session.doc.height as i32)
+                .flat_map(|y| (0..self.session.doc.width as i32).map(move |x| self.selected(x, y)))
                 .collect()
         }
     }
 
     pub(super) fn commit_selection_mask(&mut self, mask: Vec<bool>, label: &'static str) {
-        let changed = self.selection.is_none()
+        let changed = self.session.selection.is_none()
             || mask.iter().enumerate().any(|(index, &selected)| {
                 selected
                     != self.selected(
-                        (index % self.doc.width) as i32,
-                        (index / self.doc.width) as i32,
+                        (index % self.session.doc.width) as i32,
+                        (index / self.session.doc.width) as i32,
                     )
             });
         if changed {
             self.remember_action(label);
-            self.studio.polygon.clear();
+            self.session.polygon.clear();
             self.set_selection_mask(mask);
         }
     }
 
     pub(super) fn deselect_and_remember(&mut self) {
-        if let Some(bounds) = self.selection.take() {
+        if let Some(bounds) = self.session.selection.take() {
             self.selection_tools.previous = Some(RememberedMask {
-                dimensions: (self.doc.width, self.doc.height),
+                dimensions: (self.session.doc.width, self.session.doc.height),
                 bounds,
-                mask: self.studio.mask.take(),
-                polygon: std::mem::take(&mut self.studio.polygon),
+                mask: self.session.mask.take(),
+                polygon: std::mem::take(&mut self.session.polygon),
             });
         } else {
-            self.studio.mask = None;
-            self.studio.polygon.clear();
+            self.session.mask = None;
+            self.session.polygon.clear();
         }
     }
 
@@ -349,7 +361,7 @@ impl PixelCraft {
             self.status = "No previous selection".into();
             return;
         };
-        if previous.dimensions != (self.doc.width, self.doc.height) {
+        if previous.dimensions != (self.session.doc.width, self.session.doc.height) {
             self.status = "The previous selection belongs to a different canvas size".into();
             return;
         }
@@ -358,14 +370,14 @@ impl PixelCraft {
             previous.mask.clone(),
             previous.polygon.clone(),
         );
-        if self.selection != Some(bounds)
-            || self.studio.mask != mask
-            || self.studio.polygon != polygon
+        if self.session.selection != Some(bounds)
+            || self.session.mask != mask
+            || self.session.polygon != polygon
         {
             self.remember_action("Reselect");
-            self.selection = Some(bounds);
-            self.studio.mask = mask;
-            self.studio.polygon = polygon;
+            self.session.selection = Some(bounds);
+            self.session.mask = mask;
+            self.session.polygon = polygon;
         }
     }
 
@@ -382,9 +394,9 @@ impl PixelCraft {
         (left, top, right, bottom): SelectionBounds,
         op: SelectionOp,
     ) {
-        let mut shape = Document::new(self.doc.width, self.doc.height);
+        let mut shape = Document::new(self.session.doc.width, self.session.doc.height);
         shape.ellipse(0, 0, (left, top), (right, bottom), [255; 4], true, 1);
-        let mut hits = vec![false; self.doc.width * self.doc.height];
+        let mut hits = vec![false; self.session.doc.width * self.session.doc.height];
         shape.layers[0].cels[0].visit_nonclear(|index, _| hits[index] = true);
         let mut mask = self.canvas_selection_mask();
         combine_selection(&mut mask, &hits, op);
@@ -392,14 +404,14 @@ impl PixelCraft {
     }
 
     fn modify_canvas_selection(&mut self, effect: MaskEffect) {
-        if self.selection.is_none() {
+        if self.session.selection.is_none() {
             self.status = "Choose a selection first".into();
             return;
         }
         match change_mask(
             &self.canvas_selection_mask(),
-            self.doc.width,
-            self.doc.height,
+            self.session.doc.width,
+            self.session.doc.height,
             self.selection_tools.radius,
             effect,
         ) {
@@ -417,9 +429,11 @@ impl PixelCraft {
 
     fn apply_color_range(&mut self) {
         let pixels = if self.selection_tools.merged {
-            self.doc.composite(self.frame)
+            self.session.doc.composite(self.session.frame)
         } else {
-            self.doc.layer_pixels(self.layer, self.frame)
+            self.session
+                .doc
+                .layer_pixels(self.session.layer, self.session.frame)
         };
         let hits = color_range(
             &pixels,
@@ -496,7 +510,7 @@ impl PixelCraft {
                                 .prefix("Radius ")
                                 .suffix(" px"),
                         );
-                        ui.add_enabled_ui(self.selection.is_some(), |ui| {
+                        ui.add_enabled_ui(self.session.selection.is_some(), |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 for (effect, label) in [
                                     (MaskEffect::Grow, "Grow"),
@@ -532,7 +546,7 @@ impl PixelCraft {
             .add_filter("PNG mask", &["png"])
             .pick_file()
         {
-            match read_mask_png(&path, self.doc.width, self.doc.height) {
+            match read_mask_png(&path, self.session.doc.width, self.session.doc.height) {
                 Ok(mask) => self.commit_selection_mask(mask, "Import selection mask"),
                 Err(error) => self.status = error,
             }
@@ -540,7 +554,7 @@ impl PixelCraft {
     }
 
     pub(super) fn export_selection_mask(&mut self) {
-        if self.selection.is_none() {
+        if self.session.selection.is_none() {
             self.status = "Choose a selection first".into();
             return;
         }
@@ -557,8 +571,8 @@ impl PixelCraft {
             self.status = match write_mask_png(
                 &path,
                 &self.canvas_selection_mask(),
-                self.doc.width,
-                self.doc.height,
+                self.session.doc.width,
+                self.session.doc.height,
             ) {
                 Ok(()) => "Exported selection mask".into(),
                 Err(error) => error,

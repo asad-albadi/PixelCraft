@@ -493,12 +493,12 @@ impl PixelCraft {
         first_header: Rect,
     ) {
         let options = self.power.preferences_onion();
-        let frame = self.frame;
+        let frame = self.session.frame;
         let prev = options.previous.min(8).min(frame);
         let next = options
             .next
             .min(8)
-            .min(self.doc.durations.len() - 1 - frame);
+            .min(self.session.doc.durations.len() - 1 - frame);
         let boundary = |index: usize| first_header.left() + index as f32 * first_header.width();
         let y = track.center().y;
         let painter = ui.painter();
@@ -528,7 +528,7 @@ impl PixelCraft {
                 false,
                 next,
                 frame + 1,
-                self.doc.durations.len() - 1 - frame,
+                self.session.doc.durations.len() - 1 - frame,
                 options.next_tint,
                 "Next onion frames",
             ),
@@ -651,13 +651,13 @@ impl PixelCraft {
         if from == to {
             return;
         }
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         if let Err(error) = next.reorder_palette(from, to) {
             self.status = error;
             return;
         }
         self.remember_action("Reorder palette");
-        self.doc = next;
+        self.session.doc = next;
         for slot in
             std::iter::once(&mut self.palette_index).chain(self.secondary_palette_index.iter_mut())
         {
@@ -675,8 +675,10 @@ impl PixelCraft {
             .palette_picks
             .as_ref()
             .filter(|(document, slots)| {
-                document.runtime_key() == self.doc.editor_id.runtime_key()
-                    && slots.iter().all(|&slot| slot < self.doc.palette.len())
+                document.runtime_key() == self.session.doc.editor_id.runtime_key()
+                    && slots
+                        .iter()
+                        .all(|&slot| slot < self.session.doc.palette.len())
             })
             .map_or(&[], |(_, slots)| slots)
     }
@@ -688,9 +690,9 @@ impl PixelCraft {
         modifiers: egui::Modifiers,
     ) {
         if modifiers.shift {
-            let anchor = self.palette_index.min(self.doc.palette.len() - 1);
+            let anchor = self.palette_index.min(self.session.doc.palette.len() - 1);
             let slots = (slot.min(anchor)..=slot.max(anchor)).collect();
-            self.power.palette_picks = Some((self.doc.editor_id, slots));
+            self.power.palette_picks = Some((self.session.doc.editor_id, slots));
         } else if modifiers.command || modifiers.ctrl {
             let mut slots = self.picked_swatches().to_vec();
             if let Some(index) = slots.iter().position(|&picked| picked == slot) {
@@ -698,7 +700,7 @@ impl PixelCraft {
             } else {
                 slots.push(slot);
             }
-            self.power.palette_picks = Some((self.doc.editor_id, slots));
+            self.power.palette_picks = Some((self.session.doc.editor_id, slots));
         } else {
             self.power.palette_picks = None;
             self.fg = color;
@@ -707,7 +709,7 @@ impl PixelCraft {
     }
 
     fn apply_palette_order(&mut self, reverse: bool) {
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         let selected = self.picked_swatches();
         let result = if reverse && selected.is_empty() {
             let (a, b) = (self.power.ramp_from, self.power.ramp_to);
@@ -715,7 +717,7 @@ impl PixelCraft {
         } else if reverse {
             next.reverse_palette_entries(selected)
         } else {
-            next.sort_palette_by_frame(selected, self.power.palette_sort, Some(self.frame))
+            next.sort_palette_by_frame(selected, self.power.palette_sort, Some(self.session.frame))
         };
         let remap = match result {
             Ok(remap) => remap,
@@ -724,7 +726,7 @@ impl PixelCraft {
                 return;
             }
         };
-        if next == self.doc {
+        if next == self.session.doc {
             return;
         }
         self.remember_action(if reverse {
@@ -732,7 +734,7 @@ impl PixelCraft {
         } else {
             "Sort palette swatches"
         });
-        self.doc = next;
+        self.session.doc = next;
         for slot in
             std::iter::once(&mut self.palette_index).chain(self.secondary_palette_index.iter_mut())
         {
@@ -744,7 +746,7 @@ impl PixelCraft {
 
     fn palette_arrangement_ui(&mut self, ui: &mut egui::Ui) {
         ui.collapsing("Palette order & ramps", |ui| {
-            let max = self.doc.palette.len() - 1;
+            let max = self.session.doc.palette.len() - 1;
             ui.add(
                 egui::DragValue::new(&mut self.power.ramp_from)
                     .range(0..=max)
@@ -799,7 +801,7 @@ impl PixelCraft {
             if ui.add_enabled_ui(self.power.ramp_steps >= 3, |ui| {
                 ui.pc_button("Add ramp between swatches").clicked()
             }).inner {
-                let mut next = self.doc.clone();
+                let mut next = self.session.doc.clone();
                 match next.palette_ramp_interpolated(
                     self.power.ramp_from,
                     self.power.ramp_to,
@@ -808,7 +810,7 @@ impl PixelCraft {
                 ) {
                     Ok(()) => {
                         self.remember_action("Add palette ramp");
-                        self.doc = next;
+                        self.session.doc = next;
                     }
                     Err(e) => self.status = e,
                 }
@@ -821,7 +823,7 @@ impl PixelCraft {
     }
 
     fn replace_palette_ramp(&mut self) {
-        let mut next = self.doc.clone();
+        let mut next = self.session.doc.clone();
         let remap = match next.replace_palette_span_interpolated(
             self.power.ramp_from,
             self.power.ramp_to,
@@ -836,15 +838,15 @@ impl PixelCraft {
         };
         let swatches = |doc: &Document| {
             if doc.color_mode == ColorMode::Indexed {
-                doc.editing_palette(self.layer, self.frame)
+                doc.editing_palette(self.session.layer, self.session.frame)
             } else {
-                doc.palette_for(self.frame).to_vec()
+                doc.palette_for(self.session.frame).to_vec()
             }
         };
-        let before = swatches(&self.doc);
+        let before = swatches(&self.session.doc);
         let after = swatches(&next);
         self.remember_action("Replace palette span with ramp");
-        self.doc = next;
+        self.session.doc = next;
         let update = |slot: usize, color: &mut Pixel| {
             let mapped = remap[slot.min(before.len() - 1)];
             if before.get(slot) == Some(color) {
@@ -889,8 +891,8 @@ impl PixelCraft {
         self.queue_file_open(
             p,
             OpenTarget::RasterLayer {
-                document: self.doc.editor_id,
-                frame_id: self.doc.frame_export_id(self.frame),
+                document: self.session.doc.editor_id,
+                frame_id: self.session.doc.frame_export_id(self.session.frame),
             },
         );
     }
@@ -957,10 +959,10 @@ impl PixelCraft {
         let target = self.open_job.take().unwrap().target;
         if let OpenTarget::RasterLayer { document, frame_id } = target {
             let result = result.and_then(|source| {
-                let frame = (self.doc.editor_id.runtime_key() == document.runtime_key())
+                let frame = (self.session.doc.editor_id.runtime_key() == document.runtime_key())
                     .then(|| {
-                        (0..self.doc.durations.len())
-                            .find(|&frame| self.doc.frame_export_id(frame) == frame_id)
+                        (0..self.session.doc.durations.len())
+                            .find(|&frame| self.session.doc.frame_export_id(frame) == frame_id)
                     })
                     .flatten()
                     .ok_or("The import target is no longer active")?;
@@ -1005,35 +1007,36 @@ impl PixelCraft {
                 || "Imported image".into(),
                 |stem| stem.to_string_lossy().into_owned(),
             );
-        let layer = prepare_raster_layer(&self.doc, source, frame, name)?;
+        let layer = prepare_raster_layer(&self.session.doc, source, frame, name)?;
         self.remember_action("Import as layer");
-        self.doc.layers.push(layer);
+        self.session.doc.layers.push(layer);
         self.stop_playback(false);
-        self.layer = self.doc.layers.len() - 1;
-        self.frame = frame;
-        self.timeline_anchor = None;
-        self.selected_cels = None;
-        self.timeline_frames = TimelineHeaders::default();
-        self.timeline_layers = TimelineHeaders::default();
+        self.session.layer = self.session.doc.layers.len() - 1;
+        self.session.frame = frame;
+        self.session.timeline_anchor = None;
+        self.session.selected_cels = None;
+        self.session.timeline_frames = TimelineHeaders::default();
+        self.session.timeline_layers = TimelineHeaders::default();
         self.timeline_destination = None;
         Ok(())
     }
     pub(super) fn draw_selection_mask(&self, painter: &egui::Painter, board: Rect, view: Rect) {
-        let Some(mask) = &self.studio.mask else {
+        let Some(mask) = &self.session.mask else {
             return;
         };
         let pixel_size = self.canvas_pixel_size();
         let step = (1. / pixel_size.x.max(pixel_size.y)).ceil().max(1.) as i32;
         let x0 = (((view.min.x - board.min.x) / pixel_size.x).floor() as i32)
-            .clamp(0, self.doc.width as i32);
+            .clamp(0, self.session.doc.width as i32);
         let y0 = (((view.min.y - board.min.y) / pixel_size.y).floor() as i32)
-            .clamp(0, self.doc.height as i32);
+            .clamp(0, self.session.doc.height as i32);
         let x1 = (((view.max.x - board.min.x) / pixel_size.x).ceil() as i32)
-            .clamp(0, self.doc.width as i32);
+            .clamp(0, self.session.doc.width as i32);
         let y1 = (((view.max.y - board.min.y) / pixel_size.y).ceil() as i32)
-            .clamp(0, self.doc.height as i32);
+            .clamp(0, self.session.doc.height as i32);
         let selected = |x, y| {
-            self.doc
+            self.session
+                .doc
                 .index(x, y)
                 .is_some_and(|i| mask.get(i) == Some(&true))
         };
@@ -1101,50 +1104,57 @@ impl PixelCraft {
     }
     pub(super) fn wand_at(&mut self, p: (i32, i32), op: SelectionOp) {
         let hits = flood_raster(
-            &self.doc,
-            (self.layer, self.frame),
+            &self.session.doc,
+            (self.session.layer, self.session.frame),
             p,
             (self.power.tolerance, self.power.contiguous),
             self.drawing_axes(),
             self.flood_options(true),
             |_| true,
         );
-        let mut mask = if self.selection.is_some() {
+        let mut mask = if self.session.selection.is_some() {
             (0..hits.len())
-                .map(|i| self.selected((i % self.doc.width) as i32, (i / self.doc.width) as i32))
+                .map(|i| {
+                    self.selected(
+                        (i % self.session.doc.width) as i32,
+                        (i / self.session.doc.width) as i32,
+                    )
+                })
                 .collect()
         } else {
             vec![false; hits.len()]
         };
         combine_selection(&mut mask, &hits, op);
-        self.studio.polygon.clear();
+        self.session.polygon.clear();
         self.set_selection_mask(mask);
     }
     pub(super) fn apply_marquee(&mut self, bounds: SelectionBounds, op: SelectionOp) {
-        if op == SelectionOp::Replace || (op == SelectionOp::Add && self.selection.is_none()) {
-            if self.selection != Some(bounds)
-                || self.studio.mask.is_some()
-                || !self.studio.polygon.is_empty()
+        if op == SelectionOp::Replace
+            || (op == SelectionOp::Add && self.session.selection.is_none())
+        {
+            if self.session.selection != Some(bounds)
+                || self.session.mask.is_some()
+                || !self.session.polygon.is_empty()
             {
                 self.remember_action("Marquee selection");
-                self.studio.mask = None;
-                self.studio.polygon.clear();
-                self.selection = Some(bounds);
+                self.session.mask = None;
+                self.session.polygon.clear();
+                self.session.selection = Some(bounds);
             }
             return;
         }
-        if self.selection.is_none() {
+        if self.session.selection.is_none() {
             return;
         }
 
-        let mut mask = self.studio.mask.clone().unwrap_or_else(|| {
-            (0..self.doc.height as i32)
-                .flat_map(|y| (0..self.doc.width as i32).map(move |x| (x, y)))
+        let mut mask = self.session.mask.clone().unwrap_or_else(|| {
+            (0..self.session.doc.height as i32)
+                .flat_map(|y| (0..self.session.doc.width as i32).map(move |x| (x, y)))
                 .map(|(x, y)| self.selected(x, y))
                 .collect()
         });
         let (left, top, right, bottom) = bounds;
-        let width = self.doc.width;
+        let width = self.session.doc.width;
         let mut changed = false;
         for (y, row) in mask.chunks_exact_mut(width).enumerate() {
             if op == SelectionOp::Intersect {
@@ -1163,30 +1173,31 @@ impl PixelCraft {
         }
         if changed {
             self.remember_action("Marquee selection");
-            self.studio.polygon.clear();
+            self.session.polygon.clear();
             self.set_selection_mask(mask);
         }
     }
 
     pub(super) fn set_selection_mask(&mut self, mask: impl Into<SelectionMask>) {
         let mask = mask.into();
-        let (mut x0, mut y0, mut x1, mut y1) = (self.doc.width, self.doc.height, 0, 0);
+        let (mut x0, mut y0, mut x1, mut y1) =
+            (self.session.doc.width, self.session.doc.height, 0, 0);
         let mut any = false;
         for (i, hit) in mask.iter().enumerate() {
             if *hit {
                 any = true;
-                x0 = x0.min(i % self.doc.width);
-                y0 = y0.min(i / self.doc.width);
-                x1 = x1.max(i % self.doc.width);
-                y1 = y1.max(i / self.doc.width);
+                x0 = x0.min(i % self.session.doc.width);
+                y0 = y0.min(i / self.session.doc.width);
+                x1 = x1.max(i % self.session.doc.width);
+                y1 = y1.max(i / self.session.doc.width);
             }
         }
-        self.selection = if any {
+        self.session.selection = if any {
             Some((x0 as i32, y0 as i32, x1 as i32, y1 as i32))
         } else {
             Some((0, 0, 0, 0))
         };
-        self.studio.mask = Some(mask);
+        self.session.mask = Some(mask);
     }
     pub(super) fn power_paint(&mut self, p: (i32, i32), color: Pixel, size: i32) {
         self.power_paint_opacity(p, color, size, None);
@@ -1201,10 +1212,10 @@ impl PixelCraft {
     ) {
         let axes = self.drawing_axes();
         let [left, top, width, height] = self.selection_bounds();
-        let stride = self.doc.width;
-        let mask = self.studio.mask.as_deref();
-        let polygon = &self.studio.polygon;
-        let has_selection = self.selection.is_some();
+        let stride = self.session.doc.width;
+        let mask = self.session.mask.as_deref();
+        let polygon = &self.session.polygon;
+        let has_selection = self.session.selection.is_some();
         let allows = |index| {
             if !has_selection {
                 return true;
@@ -1231,12 +1242,12 @@ impl PixelCraft {
         };
         if mode == BrushMode::Shade {
             o.mode = BrushMode::Normal;
-            let target = (self.layer, self.frame);
+            let target = (self.session.layer, self.session.frame);
             let reverse = self.power.reverse;
             let ramp = self.power.brush_library.active_ramp();
             let seen = &mut self.power.shade_seen;
             paint_brush_using(
-                &mut self.doc,
+                &mut self.session.doc,
                 (target.0, target.1, axes),
                 p,
                 color,
@@ -1257,7 +1268,7 @@ impl PixelCraft {
             );
         } else {
             let ink = self.tool_ink();
-            let target = (self.layer, self.frame);
+            let target = (self.session.layer, self.session.frame);
             let original = self
                 .stroke_base
                 .as_ref()
@@ -1306,7 +1317,7 @@ impl PixelCraft {
                         }
                     };
                     paint_image_brush_using(
-                        &mut self.doc,
+                        &mut self.session.doc,
                         (target.0, target.1, axes),
                         p,
                         ImageBrushDab {
@@ -1320,7 +1331,7 @@ impl PixelCraft {
                 }
             } else {
                 paint_brush_using(
-                    &mut self.doc,
+                    &mut self.session.doc,
                     (target.0, target.1, axes),
                     p,
                     color,
@@ -1387,7 +1398,11 @@ impl PixelCraft {
     }
 
     pub(super) fn tool_ink(&self) -> PaintInk {
-        if self.tool_supports_ink() && self.doc.layers[self.layer].tileset.is_none() {
+        if self.tool_supports_ink()
+            && self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_none()
+        {
             self.power
                 .preferences
                 .tool_inks
@@ -1412,7 +1427,11 @@ impl PixelCraft {
     }
 
     pub(super) fn drawing_ink_ui(&mut self, ui: &mut egui::Ui) {
-        if !self.tool_supports_ink() || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.tool_supports_ink()
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             return;
         }
         let original = self.tool_ink();
@@ -1451,7 +1470,10 @@ impl PixelCraft {
 
     pub(super) fn fill_controls(&mut self, ui: &mut egui::Ui) {
         let wand = self.tool == Tool::Wand;
-        let cell_fill = !wand && self.doc.layers[self.layer].tileset.is_some();
+        let cell_fill = !wand
+            && self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some();
         let options = if wand {
             &mut self.power.preferences.wand_flood
         } else {
@@ -1482,32 +1504,41 @@ impl PixelCraft {
     }
 
     pub(super) fn pick_tile(&mut self, p: (i32, i32)) -> bool {
-        let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
+        let Some((geometry, x, y)) =
+            self.session
+                .doc
+                .tile_at_point(self.session.layer, self.session.frame, p)
+        else {
             return false;
         };
-        let tile = self.doc.layers[self.layer].tile_cels[self.frame][y * geometry.columns + x];
+        let tile = self.session.doc.layers[self.session.layer].tile_cels[self.session.frame]
+            [y * geometry.columns + x];
         let tile_id = tile & TILE_ID_MASK;
         if tile_id == 0 {
             self.status = "Empty tile cell".into();
         } else {
-            self.selected_tile = tile;
+            self.session.selected_tile = tile;
             self.status = format!("Picked tile {tile_id}");
         }
         true
     }
 
     pub(super) fn power_fill(&mut self, p: (i32, i32), color: Pixel) {
-        if let Some(tileset) = self.doc.layers[self.layer].tileset {
+        if let Some(tileset) = self.session.doc.layers[self.session.layer].tileset {
             if self.tile_pixel_mode.is_some() {
                 self.status = "Switch to Place tiles to fill tile cells".into();
                 return;
             }
-            let Some((geometry, x, y)) = self.doc.tile_at_point(self.layer, self.frame, p) else {
+            let Some((geometry, x, y)) =
+                self.session
+                    .doc
+                    .tile_at_point(self.session.layer, self.session.frame, p)
+            else {
                 return;
             };
-            let cells = &self.doc.layers[self.layer].tile_cels[self.frame];
-            let tile = &self.doc.tilesets[tileset];
-            let has_selection = self.selection.is_some() || self.studio.mask.is_some();
+            let cells = &self.session.doc.layers[self.session.layer].tile_cels[self.session.frame];
+            let tile = &self.session.doc.tilesets[tileset];
+            let has_selection = self.session.selection.is_some() || self.session.mask.is_some();
             let [left, top, width, height] = self.selection_bounds().map(i64::from);
             let matches = flood_tiles(
                 cells,
@@ -1531,34 +1562,43 @@ impl PixelCraft {
                     })
                 },
             );
-            if let Err(error) =
-                self.doc
-                    .paint_matching_tiles(self.layer, self.frame, self.selected_tile, &matches)
-            {
+            if let Err(error) = self.session.doc.paint_matching_tiles(
+                self.session.layer,
+                self.session.frame,
+                self.session.selected_tile,
+                &matches,
+            ) {
                 self.status = error;
             }
             return;
         }
-        let color = self.doc.snapped_color(self.frame, color);
+        let color = self.session.doc.snapped_color(self.session.frame, color);
         let ink = self.tool_ink();
         let hits = flood_raster(
-            &self.doc,
-            (self.layer, self.frame),
+            &self.session.doc,
+            (self.session.layer, self.session.frame),
             p,
             (self.power.fill_tolerance, !self.power.fill_global),
             self.drawing_axes(),
             self.flood_options(false),
             |index| {
                 self.selected(
-                    (index % self.doc.width) as i32,
-                    (index / self.doc.width) as i32,
+                    (index % self.session.doc.width) as i32,
+                    (index / self.session.doc.width) as i32,
                 )
             },
         );
         for (i, hit) in hits.into_iter().enumerate() {
             if hit {
-                let original = self.doc.layers[self.layer].cels[self.frame][i];
-                ink.draw(&mut self.doc, (self.layer, self.frame), i, original, color);
+                let original =
+                    self.session.doc.layers[self.session.layer].cels[self.session.frame][i];
+                ink.draw(
+                    &mut self.session.doc,
+                    (self.session.layer, self.session.frame),
+                    i,
+                    original,
+                    color,
+                );
             }
         }
     }
@@ -1571,9 +1611,9 @@ impl PixelCraft {
                 .as_ref()
                 .map_or((0, 0), |mask| (mask.origin[0], mask.origin[1]));
             self.power.mode = BrushMode::Selection;
-            self.selection = None;
-            self.studio.mask = None;
-            self.studio.polygon.clear();
+            self.session.selection = None;
+            self.session.mask = None;
+            self.session.polygon.clear();
             self.tool = Tool::Pencil;
             self.status = "Selection captured as a brush, including transparent pixels".into();
         }
@@ -1592,9 +1632,13 @@ impl PixelCraft {
 
     pub(super) fn poll_reference_sources(&mut self, ctx: &egui::Context) {
         if self.power.reference_edit.is_some_and(|index| {
-            self.doc.references.get(index).is_none_or(|reference| {
-                reference.options.locked || !reference.visible || reference.floating
-            })
+            self.session
+                .doc
+                .references
+                .get(index)
+                .is_none_or(|reference| {
+                    reference.options.locked || !reference.visible || reference.floating
+                })
         }) {
             self.power.reference_edit = None;
             self.power.reference_drag = None;
@@ -1685,7 +1729,7 @@ impl PixelCraft {
             None
         };
         let result = import_reference(&path).and_then(|mut reference| {
-            let mut next = self.doc.clone();
+            let mut next = self.session.doc.clone();
             if let Some(index) = replace {
                 let old = &next.references[index];
                 reference.x = old.x;
@@ -1712,7 +1756,7 @@ impl PixelCraft {
             } else {
                 "Import reference image"
             });
-            self.doc = next;
+            self.session.doc = next;
             self.power.reference_check_due = Instant::now();
             Ok(())
         });
@@ -1747,8 +1791,8 @@ impl PixelCraft {
             }
         });
         let mut remove = None;
-        for index in 0..self.doc.references.len() {
-            let mut reference = self.doc.references[index].clone();
+        for index in 0..self.session.doc.references.len() {
+            let mut reference = self.session.doc.references[index].clone();
             let available = self.reference_available(&reference);
             ui.push_id(("reference-options", index), |ui| {
                 ui.separator();
@@ -1766,7 +1810,7 @@ impl PixelCraft {
                     });
                     if ui.pc_button("Relink or refresh…").clicked() {
                         self.pick_reference_file(true, Some(index));
-                        reference = self.doc.references[index].clone();
+                        reference = self.session.doc.references[index].clone();
                     }
                 }
                 ui.horizontal(|ui| {
@@ -1834,15 +1878,15 @@ impl PixelCraft {
                     });
                     if ui.pc_button("Fit to canvas").clicked() {
                         let [width, height] = reference.display_dimensions();
-                        let ratio =
-                            (self.doc.width as f32 / width).min(self.doc.height as f32 / height);
+                        let ratio = (self.session.doc.width as f32 / width)
+                            .min(self.session.doc.height as f32 / height);
                         reference.set_display_width(width * ratio);
                         if !preserve {
                             reference.set_display_height(height * ratio);
                         }
                         let [width, height] = reference.display_dimensions();
-                        reference.x = (self.doc.width as f32 - width) / 2.;
-                        reference.y = (self.doc.height as f32 - height) / 2.;
+                        reference.x = (self.session.doc.width as f32 - width) / 2.;
+                        reference.y = (self.session.doc.height as f32 - height) / 2.;
                     }
                 });
                 ui.add(egui::Slider::new(&mut reference.opacity, 0..=255).text("Opacity"));
@@ -1854,25 +1898,25 @@ impl PixelCraft {
                     .add_enabled_ui(available, |ui| ui.pc_button("Copy to layer").clicked())
                     .inner
                 {
-                    let mut next = self.doc.clone();
-                    match reference_to_layer(&mut next, &reference, self.frame) {
+                    let mut next = self.session.doc.clone();
+                    match reference_to_layer(&mut next, &reference, self.session.frame) {
                         Ok(()) => {
                             self.remember_action("Copy reference to layer");
-                            self.doc = next;
-                            self.layer = self.doc.layers.len() - 1;
+                            self.session.doc = next;
+                            self.session.layer = self.session.doc.layers.len() - 1;
                         }
                         Err(error) => self.status = error,
                     }
                 }
             });
-            if reference != self.doc.references[index] {
+            if reference != self.session.doc.references[index] {
                 self.remember_action("Edit reference image");
-                self.doc.references[index] = reference;
+                self.session.doc.references[index] = reference;
             }
         }
         if let Some(index) = remove {
             self.remember_action("Remove reference image");
-            self.doc.references.remove(index);
+            self.session.doc.references.remove(index);
             self.power.reference_edit = None;
             self.power.reference_drag = None;
         }
@@ -2330,7 +2374,7 @@ impl PixelCraft {
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("hex");
             if export {
                 let kind = ExportKind::Palette {
-                    colors: self.doc.palette.clone(),
+                    colors: self.session.doc.palette.clone(),
                     extension: ext.into(),
                 };
                 self.start_export_recipe(
@@ -2345,12 +2389,12 @@ impl PixelCraft {
             }
             let result = (|| {
                 let palette = crate::api::productivity::load_palette(&path)?;
-                let mut candidate = self.doc.clone();
+                let mut candidate = self.session.doc.clone();
                 candidate.import_palette(palette)?;
                 candidate.palette_names.clear();
                 candidate.validate()?;
                 self.remember_action("Import palette");
-                self.doc = candidate;
+                self.session.doc = candidate;
                 Ok::<_, String>(())
             })();
             self.status = match result {
@@ -2406,7 +2450,7 @@ impl PixelCraft {
                     ui.pc_selectable_value(&mut options.shape, shape, shape.label());
                 }
             });
-        let has_matrix = self.doc.dithering.is_some();
+        let has_matrix = self.session.doc.dithering.is_some();
         ui.label("Pattern");
         let pattern = if options.pattern == GradientPattern::Installed && !has_matrix {
             GradientPattern::Smooth
@@ -2436,13 +2480,15 @@ impl PixelCraft {
         let dy = (b.1 - a.1) as f32;
         let length_squared = dx * dx + dy * dy;
         if length_squared == 0.
-            || !self.doc.editable(self.layer)
-            || self.doc.layers[self.layer].tileset.is_some()
+            || !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
         {
             return;
         }
         let options = self.power.preferences.gradient;
-        let thresholds = options.pattern.thresholds(&self.doc);
+        let thresholds = options.pattern.thresholds(&self.session.doc);
         let mut start = if self.gesture_button.is_some() {
             self.stroke_color
         } else {
@@ -2455,9 +2501,13 @@ impl PixelCraft {
             end[..3].copy_from_slice(&start[..3]);
         }
         let stops = [start, end];
-        let indexed_stops: Option<[(Pixel, u8); 2]> =
-            (thresholds.is_some() && self.doc.color_mode == ColorMode::Indexed).then(|| {
-                let palette = self.doc.editing_palette(self.layer, self.frame);
+        let indexed_stops: Option<[(Pixel, u8); 2]> = (thresholds.is_some()
+            && self.session.doc.color_mode == ColorMode::Indexed)
+            .then(|| {
+                let palette = self
+                    .session
+                    .doc
+                    .editing_palette(self.session.layer, self.session.frame);
                 let mut preferred = [Some(self.palette_index), self.secondary_palette_index];
                 if self.secondary_stroke() {
                     preferred.swap(0, 1);
@@ -2467,8 +2517,10 @@ impl PixelCraft {
                     let slot = preferred[stop]
                         .filter(|&index| palette.get(index) == Some(&color))
                         .unwrap_or_else(|| {
-                            if color[3] == 0 && !self.doc.layers[self.layer].background {
-                                self.doc.transparent_index.min(palette.len() - 1)
+                            if color[3] == 0
+                                && !self.session.doc.layers[self.session.layer].background
+                            {
+                                self.session.doc.transparent_index.min(palette.len() - 1)
                             } else {
                                 nearest(color, &palette)
                             }
@@ -2477,8 +2529,8 @@ impl PixelCraft {
                 })
             });
         let [left, top, width, height] = self.selection_bounds();
-        let stride = self.doc.width;
-        for y in top.max(0)..(top + height).min(self.doc.height as i32) {
+        let stride = self.session.doc.width;
+        for y in top.max(0)..(top + height).min(self.session.doc.height as i32) {
             for x in left.max(0)..(left + width).min(stride as i32) {
                 if !self.selected(x, y) {
                     continue;
@@ -2495,8 +2547,13 @@ impl PixelCraft {
                     let selected_stop = usize::from(t >= threshold);
                     if let Some(indexed) = &indexed_stops {
                         let (color, slot) = indexed[selected_stop];
-                        self.doc
-                            .restore_pixel(self.layer, self.frame, index, color, Some(slot));
+                        self.session.doc.restore_pixel(
+                            self.session.layer,
+                            self.session.frame,
+                            index,
+                            color,
+                            Some(slot),
+                        );
                         continue;
                     }
                     stops[selected_stop]
@@ -2505,7 +2562,9 @@ impl PixelCraft {
                         (start[c] as f32 * (1. - t) + end[c] as f32 * t).round() as u8
                     })
                 };
-                self.doc.set_pixel(self.layer, self.frame, index, color);
+                self.session
+                    .doc
+                    .set_pixel(self.session.layer, self.session.frame, index, color);
             }
         }
     }
@@ -2556,8 +2615,8 @@ impl PixelCraft {
 
     pub(super) fn pick_color(&mut self, (x, y): (i32, i32), secondary: bool) {
         let sample = self.power.preferences.eyedropper.source.sample(
-            &self.doc,
-            (self.layer, self.frame),
+            &self.session.doc,
+            (self.session.layer, self.session.frame),
             (x, y),
             self.power.preferences.sample_references,
             |reference| self.reference_available(reference),
@@ -2575,8 +2634,8 @@ impl PixelCraft {
     ) {
         let current = if secondary { self.bg } else { self.fg };
         let Some((color, slot)) = self.power.preferences.eyedropper.channel.apply(
-            &self.doc,
-            (self.layer, self.frame),
+            &self.session.doc,
+            (self.session.layer, self.session.frame),
             current,
             sample,
             authored_index,
@@ -2606,8 +2665,8 @@ impl PixelCraft {
         behind: bool,
         show_floating: bool,
     ) {
-        for i in 0..self.doc.references.len() {
-            let r = self.doc.references[i].clone();
+        for i in 0..self.session.doc.references.len() {
+            let r = self.session.doc.references[i].clone();
             if !r.visible
                 || (if r.floating {
                     behind || !show_floating
@@ -2692,7 +2751,7 @@ impl PixelCraft {
                         });
                     if !open {
                         self.remember_action("Dock reference image");
-                        self.doc.references[i].floating = false;
+                        self.session.doc.references[i].floating = false;
                     }
                 }
                 continue;
@@ -2756,7 +2815,7 @@ impl PixelCraft {
                         continue;
                     };
                     let delta = (pointer - origin) / pixel_size;
-                    let reference = &mut self.doc.references[i];
+                    let reference = &mut self.session.doc.references[i];
                     if ui.input(|i| i.modifiers.shift) {
                         let new = (scale + delta.x / r.width as f32).clamp(0.01, 1000.);
                         if let Some(old_y) = &mut reference.options.scale_y {
@@ -2774,7 +2833,8 @@ impl PixelCraft {
             }
         }
         self.power.reference_textures.retain(|(p, _)| {
-            self.doc
+            self.session
+                .doc
                 .references
                 .iter()
                 .any(|r| r.pixels.shares_storage(p))
@@ -2825,10 +2885,10 @@ impl PixelCraft {
 
     fn sync_live_revision(&mut self) {
         if self.power.bridge_snapshot.as_ref().is_none_or(|snapshot| {
-            snapshot != &self.doc || !snapshot.same_editor_targets(&self.doc)
+            snapshot != &self.session.doc || !snapshot.same_editor_targets(&self.session.doc)
         }) || self.power.bridge_tab != self.active_tab
         {
-            self.power.bridge_snapshot = Some(self.doc.clone());
+            self.power.bridge_snapshot = Some(self.session.doc.clone());
             self.power.bridge_tab = self.active_tab;
             self.power.bridge_generation += 1;
         }
@@ -2856,7 +2916,9 @@ impl PixelCraft {
             "live-edit" | "live-commands" | "live-create" | "live-undo" | "live-redo"
         );
         let saving = matches!(op, "live-save" | "live-save-as");
-        if let Err(error) = automation::verify_document_target(&self.doc, &request.arguments) {
+        if let Err(error) =
+            automation::verify_document_target(&self.session.doc, &request.arguments)
+        {
             let _ = request.response.send(Err(error));
             return None;
         }
@@ -2885,21 +2947,22 @@ impl PixelCraft {
             return None;
         }
         if op == "live-cel-targets" {
-            let result =
-                automation::inspect_cel_page(&self.doc, &request.arguments).map(|mut result| {
+            let result = automation::inspect_cel_page(&self.session.doc, &request.arguments).map(
+                |mut result| {
                     result["revision"] = serde_json::json!(revision);
                     result
-                });
+                },
+            );
             let _ = request.response.send(result);
             return None;
         }
         if matches!(op, "live-inspect" | "live-undo" | "live-redo") {
             let destination = match op {
-                "live-undo" => self.undo.last(),
-                "live-redo" => self.redo.last(),
+                "live-undo" => self.session.undo.last(),
+                "live-redo" => self.session.redo.last(),
                 _ => None,
             };
-            let doc = destination.map_or(&self.doc, |entry| &entry.doc);
+            let doc = destination.map_or(&self.session.doc, |entry| &entry.doc);
             let reply_revision = if op == "live-inspect" {
                 revision
             } else {
@@ -2932,7 +2995,7 @@ impl PixelCraft {
             request.project_root = self.live_save_root.clone();
             request.project_identity = self.live_save_root_identity;
         }
-        Some((self.doc.clone(), revision, self.frame))
+        Some((self.session.doc.clone(), revision, self.session.frame))
     }
 
     fn prepare_live_request(
@@ -3085,7 +3148,7 @@ impl PixelCraft {
                         return Err("The current project path changed while saving".into());
                     }
                     let result = save.write()?;
-                    self.saved = *snapshot;
+                    self.session.saved = *snapshot;
                     self.add_recent(path.clone());
                     self.path = Some(path);
                     self.live_save_root = prepared.request.project_root.clone();
@@ -3102,13 +3165,13 @@ impl PixelCraft {
                 return Err("Editor is busy; finish the active operation first".into());
             }
             if prepared.request.operation == "live-create" {
-                let previous = self.doc.clone();
+                let previous = self.session.doc.clone();
                 self.open_document(next, None);
                 self.push_undo(previous, "MCP new sprite");
                 self.status = "Assistant created an untitled sprite — Ctrl+Z to undo".into();
-            } else if next != self.doc || !next.same_editor_targets(&self.doc) {
+            } else if next != self.session.doc || !next.same_editor_targets(&self.session.doc) {
                 self.remember_action("MCP edit");
-                self.doc = next;
+                self.session.doc = next;
                 self.clamp();
                 self.status = "Assistant edited the sprite — Ctrl+Z to undo".into();
             }
@@ -3808,7 +3871,7 @@ mod bridge_tests {
         let original_tab = a.active_tab;
         let before = a.doc.clone();
         a.selection = Some((0, 0, 0, 0));
-        a.studio.mask = Some((vec![true, false, false, false]).into());
+        a.session.mask = Some((vec![true, false, false, false]).into());
         let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
         let args = serde_json::json!({"revision":info["revision"],"commands":[
             {"op":"add-group","name":"Effects"},
@@ -3843,7 +3906,7 @@ mod bridge_tests {
         a.undo();
         assert_eq!(a.doc, before);
         assert_eq!(
-            a.studio.mask.as_deref(),
+            a.session.mask.as_deref(),
             Some([true, false, false, false].as_slice())
         );
         let info = request(&mut a, "live-inspect", serde_json::json!({}), false).unwrap();
@@ -4396,7 +4459,7 @@ mod smarter_fill_tests {
             "wand kept its active-layer defaults"
         );
         app.selection = None;
-        app.studio.mask = None;
+        app.session.mask = None;
 
         let ink = [248, 30, 40, 255];
         app.remember();

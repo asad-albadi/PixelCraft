@@ -193,7 +193,7 @@ impl PixelCraft {
         let target = (!matches!(purpose, FilePathPurpose::Open)).then(|| {
             let frame = matches!(purpose, FilePathPurpose::ImportLayer)
                 || matches!(&purpose, FilePathPurpose::Export {kind,..} if !matches!(kind.as_str(),"gif"|"mp4"|"fli"|"flc"|"png-sequence"|"baked-ase"|"sheet"));
-            (self.doc.editor_id.runtime_key(),frame.then(||self.doc.frame_export_id(self.frame)))
+            (self.session.doc.editor_id.runtime_key(),frame.then(||self.session.doc.frame_export_id(self.session.frame)))
         });
         self.file_path = Some(FilePathDialog {
             purpose,
@@ -212,8 +212,10 @@ impl PixelCraft {
     pub(super) fn file_path_dialog(&mut self, ctx: &egui::Context) {
         let mut dialog = self.file_path.take().unwrap();
         if dialog.target.is_some_and(|(document, frame)| {
-            document != self.doc.editor_id.runtime_key()
-                || frame.is_some_and(|frame| frame != self.doc.frame_export_id(self.frame))
+            document != self.session.doc.editor_id.runtime_key()
+                || frame.is_some_and(|frame| {
+                    frame != self.session.doc.frame_export_id(self.session.frame)
+                })
         }) {
             self.pending = None;
             self.status = "File dialog closed because the active document or frame changed".into();
@@ -296,9 +298,9 @@ impl PixelCraft {
             }
             if let Some(scale)=&mut dialog.scale {
                 Self::export_scale_value_ui(ui,scale);
-                let samples=if matches!(&dialog.purpose,FilePathPurpose::Export {kind,..} if kind=="sheet") {self.doc.durations.len()} else {1};
-                let mut width=self.doc.width.saturating_mul(samples).saturating_mul(*scale);
-                let mut height=self.doc.height.saturating_mul(*scale);
+                let samples=if matches!(&dialog.purpose,FilePathPurpose::Export {kind,..} if kind=="sheet") {self.session.doc.durations.len()} else {1};
+                let mut width=self.session.doc.width.saturating_mul(samples).saturating_mul(*scale);
+                let mut height=self.session.doc.height.saturating_mul(*scale);
                 if matches!(&dialog.purpose,FilePathPurpose::Export {kind,..} if kind=="mp4") {width=width.next_multiple_of(2);height=height.next_multiple_of(2);}
                 ui.small(format!("{width} × {height} pixels"));
             }

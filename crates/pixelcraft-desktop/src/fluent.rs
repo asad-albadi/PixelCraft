@@ -507,10 +507,10 @@ impl PixelCraft {
         let mut reorder = None;
         ui.collapsing("Document palette", |ui| {
             ui.small("Shift-click selects a range. Ctrl/Cmd-click toggles a swatch.");
-            let palette = if self.doc.color_mode == ColorMode::Indexed {
-                self.doc.editing_palette(self.layer, self.frame)
+            let palette = if self.session.doc.color_mode == ColorMode::Indexed {
+                self.session.doc.editing_palette(self.session.layer, self.session.frame)
             } else {
-                self.doc.palette_for(self.frame).to_vec()
+                self.session.doc.palette_for(self.session.frame).to_vec()
             };
             let side = 22.;
             let spacing = ui.spacing().item_spacing.x;
@@ -832,22 +832,22 @@ impl PixelCraft {
         egui::Frame::NONE.inner_margin(egui::Margin::symmetric(10, 0)).show(ui, |ui| {
             let old_zoom = self.preview_settings.zoom;
             let now = ui.input(|input| input.time);
-            if self.doc.durations.len() <= 1 {
+            if self.session.doc.durations.len() <= 1 {
                 self.preview_playback = None;
             }
-            let large = self.doc.width * self.doc.height > 2_000_000;
+            let large = self.session.doc.width * self.session.doc.height > 2_000_000;
             // Poll the outstanding request before advancing its clock. A slow
             // detached render must get a presentation, even after its deadline.
             if large && let Some(playback) = &self.preview_playback {
-                let frame = playback.frame.min(self.doc.durations.len() - 1);
+                let frame = playback.frame.min(self.session.doc.durations.len() - 1);
                 self.update_preview_texture(ui.ctx(), frame);
             }
             if let Some(playback) = &mut self.preview_playback {
                 if large {
                     let ready = self.preview_frame == Some(playback.frame) && self.preview.is_some();
-                    playback.update_presented(now, &self.doc.durations, ready);
+                    playback.update_presented(now, &self.session.doc.durations, ready);
                 } else {
-                    playback.update(now, &self.doc.durations);
+                    playback.update(now, &self.session.doc.durations);
                 }
             }
             let controls = ui.horizontal(|ui| {
@@ -865,7 +865,7 @@ impl PixelCraft {
                     }).response.on_hover_text("Fit the whole sprite, or zoom in physical pixels. Drag artwork to pan.");
                 let playing = self.preview_playback.as_ref()
                     .is_some_and(|playback| matches!(playback.time, PreviewTime::Playing(_)));
-                let play = ui.add_enabled_ui(self.doc.durations.len() > 1, |ui| {
+                let play = ui.add_enabled_ui(self.session.doc.durations.len() > 1, |ui| {
                     let (icon, label) = if playing {
                         ("pause", "Pause preview animation")
                     } else {
@@ -879,7 +879,7 @@ impl PixelCraft {
                     if let Some(playback) = &mut self.preview_playback {
                         playback.toggle(now);
                     } else {
-                        self.preview_playback = Some(PreviewPlayback::new(self.frame, now, &self.doc.durations, self.playback_speed));
+                        self.preview_playback = Some(PreviewPlayback::new(self.session.frame, now, &self.session.doc.durations, self.playback_speed));
                     }
                 }
             });
@@ -893,7 +893,7 @@ impl PixelCraft {
                 }
                 playback.frame
             } else {
-                self.frame
+                self.session.frame
             };
             self.update_preview_texture(ui.ctx(), frame);
             let (r, response) = ui.allocate_exact_size(
@@ -973,7 +973,7 @@ impl PixelCraft {
                 if !heading(ui, "Properties") {
                     return;
                 }
-                let mut opacity = self.doc.layers[self.layer].opacity;
+                let mut opacity = self.session.doc.layers[self.session.layer].opacity;
                 ui.horizontal(|ui| {
                     ui.label("Opacity");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -990,13 +990,13 @@ impl PixelCraft {
                         .changed()
                     {
                         self.remember_action("Change layer opacity");
-                        self.doc.layers[self.layer].opacity = opacity;
+                        self.session.doc.layers[self.session.layer].opacity = opacity;
                     }
                 });
                 ui.add_space(4.);
                 ui.horizontal(|ui| {
                     ui.label("Blend");
-                    let mut blend = self.doc.layers[self.layer].blend;
+                    let mut blend = self.session.doc.layers[self.session.layer].blend;
                     egui::ComboBox::from_id_salt("inspector_blend")
                         .width((ui.available_width() - 20.).max(90.))
                         .selected_text(format!("{blend:?}"))
@@ -1005,9 +1005,9 @@ impl PixelCraft {
                                 ui.pc_selectable_value(&mut blend, b, format!("{b:?}"));
                             }
                         });
-                    if blend != self.doc.layers[self.layer].blend {
+                    if blend != self.session.doc.layers[self.session.layer].blend {
                         self.remember_action("Change layer blend mode");
-                        self.doc.layers[self.layer].blend = blend;
+                        self.session.doc.layers[self.session.layer].blend = blend;
                     }
                 });
                 ui.add_space(8.);
@@ -1118,7 +1118,7 @@ impl PixelCraft {
                 .range(MIN_BRUSH_SIZE..=MAX_BRUSH_SIZE)
                 .suffix(" px"),
         );
-        let mut shape = self.doc.brush_shape;
+        let mut shape = self.session.doc.brush_shape;
         egui::ComboBox::from_id_salt("brush_shape")
             .width(90.)
             .selected_text(format!("{shape:?}"))
@@ -1133,9 +1133,9 @@ impl PixelCraft {
                     ui.pc_selectable_value(&mut shape, v, format!("{v:?}"));
                 }
             });
-        if shape != self.doc.brush_shape {
+        if shape != self.session.doc.brush_shape {
             self.remember_action("Change brush shape");
-            self.doc.brush_shape = shape;
+            self.session.doc.brush_shape = shape;
         }
         if matches!(self.tool, Tool::BlurBrush | Tool::JumbleBrush) {
             ui.label("Strength");
@@ -1151,7 +1151,9 @@ impl PixelCraft {
                 self.brush_library_ui(ui);
             }
             if matches!(self.tool, Tool::Pencil | Tool::Eraser)
-                && self.doc.layers[self.layer].tileset.is_none()
+                && self.session.doc.layers[self.session.layer]
+                    .tileset
+                    .is_none()
             {
                 ui.menu_button("Dynamics", |ui| self.brush_dynamics_controls(ui));
             }

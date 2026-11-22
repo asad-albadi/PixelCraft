@@ -3,6 +3,7 @@ mod ase_properties;
 pub mod atlas;
 pub mod color;
 pub mod contributions;
+pub mod editor;
 pub mod extensions;
 pub mod formats;
 pub mod interchange;

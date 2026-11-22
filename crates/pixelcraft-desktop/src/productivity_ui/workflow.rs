@@ -69,40 +69,43 @@ impl PixelCraft {
         true
     }
     pub(crate) fn current_property_target(&self) -> Option<(u64, u64, u32, usize, usize)> {
-        let layer = self.doc.layers.get(self.layer)?;
-        self.doc.durations.get(self.frame)?;
+        let layer = self.session.doc.layers.get(self.session.layer)?;
+        self.session.doc.durations.get(self.session.frame)?;
         Some((
-            self.doc.editor_id.runtime_key(),
+            self.session.doc.editor_id.runtime_key(),
             layer.editor_id.runtime_key(),
-            self.doc.frame_export_id(self.frame),
-            self.layer,
-            self.frame,
+            self.session.doc.frame_export_id(self.session.frame),
+            self.session.layer,
+            self.session.frame,
         ))
     }
     pub(crate) fn capture_property_tile(&mut self) -> Result<(), String> {
-        let (ax, ay, bx, by) = self.selection.unwrap_or((
+        let (ax, ay, bx, by) = self.session.selection.unwrap_or((
             0,
             0,
-            self.tile_size.min(self.doc.width) as i32 - 1,
-            self.tile_size.min(self.doc.height) as i32 - 1,
+            self.tile_size.min(self.session.doc.width) as i32 - 1,
+            self.tile_size.min(self.session.doc.height) as i32 - 1,
         ));
         let (left, top, right, bottom) = (
             ax.min(bx).max(0),
             ay.min(by).max(0),
-            ax.max(bx).min(self.doc.width as i32 - 1),
-            ay.max(by).min(self.doc.height as i32 - 1),
+            ax.max(bx).min(self.session.doc.width as i32 - 1),
+            ay.max(by).min(self.session.doc.height as i32 - 1),
         );
         if left > right || top > bottom {
             return Err("The selection does not overlap the canvas".into());
         }
         let (width, height) = ((right - left + 1) as usize, (bottom - top + 1) as usize);
-        let pixels = self.doc.layer_pixels(self.layer, self.frame);
+        let pixels = self
+            .session
+            .doc
+            .layer_pixels(self.session.layer, self.session.frame);
         let mut captured = Vec::with_capacity(width * height);
         for y in top..=bottom {
-            let start = y as usize * self.doc.width + left as usize;
+            let start = y as usize * self.session.doc.width + left as usize;
             captured.extend_from_slice(&pixels[start..start + width]);
         }
-        let mut edited = self.doc.clone();
+        let mut edited = self.session.doc.clone();
         edited.tilesets.push(Tileset {
             editor_id: Default::default(),
             name: "Captured tile".into(),
@@ -112,8 +115,8 @@ impl PixelCraft {
         });
         edited.validate()?;
         self.remember_action("Capture selection as tile");
-        self.doc = edited;
-        self.selected_tile = 1;
+        self.session.doc = edited;
+        self.session.selected_tile = 1;
         Ok(())
     }
     pub(super) fn workflow_dialog(&mut self, ctx: &egui::Context) {
@@ -181,17 +184,17 @@ impl PixelCraft {
             }
             WorkflowPage::Palette => {
                 self.palette_arrangement_ui(ui);
-                let mut wrap = self.doc.wraparound;
-                let mut snap = self.doc.palette_snap;
+                let mut wrap = self.session.doc.wraparound;
+                let mut snap = self.session.doc.palette_snap;
                 ui.pc_checkbox(&mut wrap, "Wrap drawing & fill across canvas edges");
                 ui.pc_checkbox(
                     &mut snap,
                     "Snap pencil, fill & shapes to palette in RGB mode",
                 );
-                if wrap != self.doc.wraparound || snap != self.doc.palette_snap {
+                if wrap != self.session.doc.wraparound || snap != self.session.doc.palette_snap {
                     self.remember_action("Change drawing options");
-                    self.doc.wraparound = wrap;
-                    self.doc.palette_snap = snap;
+                    self.session.doc.wraparound = wrap;
+                    self.session.doc.palette_snap = snap;
                 }
                 ui.small("The seamless canvas uses the axes selected under View.");
                 ui.horizontal(|ui| {
@@ -394,7 +397,9 @@ mod tests {
                 app.power.property_target,
                 Some((
                     app.doc.editor_id.runtime_key(),
-                    app.doc.layers[app.layer].editor_id.runtime_key(),
+                    app.session.doc.layers[app.session.layer]
+                        .editor_id
+                        .runtime_key(),
                     app.doc.frame_export_id(app.frame),
                     app.layer,
                     app.frame
@@ -603,7 +608,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = PixelCraft::with_context(&ctx, None);
         app.open_property_destination("layer-properties");
-        app.doc.layers[app.layer].editor_id = EditorId::default();
+        app.session.doc.layers[app.session.layer].editor_id = EditorId::default();
         frame(&mut app, &ctx, vec![]);
         assert!(
             !app.properties_open,

@@ -66,23 +66,27 @@ impl PixelCraft {
             "repeat-export" if !self.can_repeat_export() => {
                 Some("No repeatable export is available for this document")
             }
-            "undo" if self.undo.is_empty() => Some("Nothing to undo"),
-            "redo" if self.redo.is_empty() => Some("Nothing to redo"),
-            "deleteframe" if self.doc.durations.len() <= 1 => {
+            "undo" if self.session.undo.is_empty() => Some("Nothing to undo"),
+            "redo" if self.session.redo.is_empty() => Some("Nothing to redo"),
+            "deleteframe" if self.session.doc.durations.len() <= 1 => {
                 Some("A sprite must keep at least one frame")
             }
-            "deletelayer" if self.doc.layers.len() <= 1 => {
+            "deletelayer" if self.session.doc.layers.len() <= 1 => {
                 Some("A sprite must keep at least one layer")
             }
-            "clear" if !self.doc.editable(self.layer) => {
+            "clear" if !self.session.doc.editable(self.session.layer) => {
                 Some("The active layer is locked or not editable")
             }
-            "clear" if self.doc.layers[self.layer].tileset.is_some() => {
+            "clear"
+                if self.session.doc.layers[self.session.layer]
+                    .tileset
+                    .is_some() =>
+            {
                 Some("Clear is unavailable for tilemap layers")
             }
             "flipx" | "flipy" | "cut" | "paste" | "rotate" | "selectionflipx"
             | "selectionflipy"
-                if !self.doc.editable(self.layer) =>
+                if !self.session.doc.editable(self.session.layer) =>
             {
                 Some("The active layer is locked or not editable")
             }
@@ -90,7 +94,7 @@ impl PixelCraft {
             | "new-sprite-from-selection"
             | "grid-from-selection"
             | "export-selection-mask"
-                if self.selection.is_none() =>
+                if self.session.selection.is_none() =>
             {
                 Some("Select an area first")
             }
@@ -278,28 +282,28 @@ impl PixelCraft {
         self.command_search = CommandSearch {
             open: true,
             focus: true,
-            document: Some(self.doc.editor_id.runtime_key()),
+            document: Some(self.session.doc.editor_id.runtime_key()),
             tab: self.active_tab,
             layer: self
                 .doc
                 .layers
-                .get(self.layer)
+                .get(self.session.layer)
                 .map(|l| l.editor_id.runtime_key()),
-            frame: self.doc.frame_export_id(self.frame),
+            frame: self.session.doc.frame_export_id(self.session.frame),
             ..Default::default()
         };
     }
 
     fn command_search_context_current(&self) -> bool {
-        self.command_search.document == Some(self.doc.editor_id.runtime_key())
+        self.command_search.document == Some(self.session.doc.editor_id.runtime_key())
             && self.command_search.tab == self.active_tab
             && self.command_search.layer
                 == self
                     .doc
                     .layers
-                    .get(self.layer)
+                    .get(self.session.layer)
                     .map(|l| l.editor_id.runtime_key())
-            && self.command_search.frame == self.doc.frame_export_id(self.frame)
+            && self.command_search.frame == self.session.doc.frame_export_id(self.session.frame)
     }
 
     fn execute_catalog_command(&mut self, ctx: &egui::Context, id: &str) -> bool {

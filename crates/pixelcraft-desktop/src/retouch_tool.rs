@@ -19,7 +19,7 @@ impl PixelCraft {
         } else {
             (Retouch::Jumble, "Jumble brush")
         };
-        let cel = (self.layer, self.frame);
+        let cel = (self.session.layer, self.session.frame);
         let strength = ((u16::from(self.retouch_strength) * 255 + 50) / 100) as u8;
         if strength == 0 {
             return;
@@ -27,7 +27,7 @@ impl PixelCraft {
         let brush = RetouchBrush {
             mode,
             size: self.brush,
-            shape: self.doc.brush_shape,
+            shape: self.session.doc.brush_shape,
             strength,
             wrap: self.drawing_axes(),
             mirrors: [
@@ -36,8 +36,8 @@ impl PixelCraft {
             ],
             seed: self.power.bridge_generation,
         };
-        let mask = self.selection.map(|_| self.canvas_selection_mask());
-        match RetouchStroke::new(&self.doc, cel, brush, mask) {
+        let mask = self.session.selection.map(|_| self.canvas_selection_mask());
+        match RetouchStroke::new(&self.session.doc, cel, brush, mask) {
             Ok(stroke) => {
                 self.remember_action(label);
                 self.gesture_canvas = Some(pane);
@@ -50,7 +50,7 @@ impl PixelCraft {
                     generation: self.power.bridge_generation,
                 });
                 let gesture = self.retouch_gesture.as_ref().unwrap();
-                gesture.stroke.paint(&mut self.doc, point, point);
+                gesture.stroke.paint(&mut self.session.doc, point, point);
             }
             Err(error) => self.status = error,
         }
@@ -60,14 +60,14 @@ impl PixelCraft {
         let Some(gesture) = &self.retouch_gesture else {
             return;
         };
-        if gesture.cel != (self.layer, self.frame)
+        if gesture.cel != (self.session.layer, self.session.frame)
             || gesture.generation != self.power.bridge_generation
         {
             self.cancel_gesture();
             return;
         }
         if let Some(last) = self.last.filter(|&last| last != point) {
-            gesture.stroke.paint(&mut self.doc, last, point);
+            gesture.stroke.paint(&mut self.session.doc, last, point);
         }
         self.last = Some(point);
     }

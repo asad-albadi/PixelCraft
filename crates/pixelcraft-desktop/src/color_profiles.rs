@@ -52,9 +52,9 @@ impl PixelCraft {
                     dialog.pending = None;
                     match result {
                         Ok(next) => {
-                            if next != self.doc {
+                            if next != self.session.doc {
                                 self.remember_action(label);
-                                self.doc = next;
+                                self.session.doc = next;
                             }
                             self.status = label.into();
                             return;
@@ -72,7 +72,7 @@ impl PixelCraft {
         let mut operation = None;
         let mut cancel = false;
         let close = fluent::modal_dialog(ctx, "Color Profile", |ui| {
-            let current = match self.doc.color_profile.first().copied() {
+            let current = match self.session.doc.color_profile.first().copied() {
                 Some(2) => "Embedded ICC profile",
                 Some(1)
                     if self
@@ -140,7 +140,7 @@ impl PixelCraft {
                 } else {
                     "Assign color profile"
                 };
-                let input = self.doc.clone();
+                let input = self.session.doc.clone();
                 let selected = dialog.selected.clone();
                 let ctx = ctx.clone();
                 let cancelled = Arc::new(AtomicBool::new(false));

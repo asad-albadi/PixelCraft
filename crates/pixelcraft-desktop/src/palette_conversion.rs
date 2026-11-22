@@ -98,16 +98,17 @@ impl PixelCraft {
             limit: 32,
             all_frames: false,
             generated: None,
-            transparent: if self.doc.color_mode == ColorMode::Indexed {
-                self.doc.transparent_index.min(255)
+            transparent: if self.session.doc.color_mode == ColorMode::Indexed {
+                self.session.doc.transparent_index.min(255)
             } else {
-                self.doc
+                self.session
+                    .doc
                     .palette
                     .iter()
                     .position(|color| color[3] == 0)
                     .unwrap_or(0)
             },
-            matrix: if self.doc.dithering.is_some() {
+            matrix: if self.session.doc.dithering.is_some() {
                 GradientPattern::Installed
             } else {
                 GradientPattern::Smooth
@@ -260,9 +261,9 @@ impl PixelCraft {
                 ui.label(used);
                 ui.add(egui::DragValue::new(&mut dialog.transparent).range(0..=255).prefix("Transparent slot "));
                 ui.small("Slot numbers start at 0. The transparent entry moves to this slot.");
-                let candidate = dialog.generated.as_ref().unwrap_or(&self.doc.palette);
+                let candidate = dialog.generated.as_ref().unwrap_or(&self.session.doc.palette);
                 if candidate.len() == 256
-                    && (dialog.generated.is_some() || self.doc.color_mode != ColorMode::Indexed)
+                    && (dialog.generated.is_some() || self.session.doc.color_mode != ColorMode::Indexed)
                     && !candidate.iter().any(|color| color[3] == 0)
                 {
                     ui.small("The palette is full. The selected slot will be replaced with transparency.");
@@ -272,7 +273,7 @@ impl PixelCraft {
                 };
                 egui::ComboBox::from_label("Conversion dithering").selected_text(if dialog.diffusion { "Floyd-Steinberg" } else { label(dialog.matrix) }).show_ui(ui, |ui| {
                     for pattern in [GradientPattern::Smooth, GradientPattern::Bayer2, GradientPattern::Bayer4, GradientPattern::Bayer8, GradientPattern::Installed] {
-                        ui.add_enabled_ui(pattern != GradientPattern::Installed || self.doc.dithering.is_some(), |ui| {
+                        ui.add_enabled_ui(pattern != GradientPattern::Installed || self.session.doc.dithering.is_some(), |ui| {
                             if ui.selectable_label(!dialog.diffusion && dialog.matrix == pattern, label(pattern)).clicked() {
                                 dialog.matrix = pattern;
                                 dialog.diffusion = false;
@@ -366,18 +367,18 @@ impl PixelCraft {
     }
 
     fn commit_palette_document(&mut self, doc: Box<Document>, label: &'static str) {
-        if self.doc != *doc {
+        if self.session.doc != *doc {
             self.remember_action(label);
-            self.doc = *doc;
+            self.session.doc = *doc;
             self.palette_index = self
                 .doc
-                .palette_for(self.frame)
+                .palette_for(self.session.frame)
                 .iter()
                 .position(|&color| color == self.fg)
                 .unwrap_or(0);
             self.secondary_palette_index = self
                 .doc
-                .palette_for(self.frame)
+                .palette_for(self.session.frame)
                 .iter()
                 .position(|&color| color == self.bg);
         }
@@ -415,7 +416,7 @@ impl PixelCraft {
             } else {
                 IndexedFit::Default
             },
-            frame: self.frame,
+            frame: self.session.frame,
             display: self.display_profile.bytes.clone(),
         })
     }
@@ -478,7 +479,11 @@ impl PixelCraft {
         let request = self.palette_request(dialog);
         let previewing = request.is_some() && !dialog.applying;
         let source = if previewing {
-            match self.doc.conversion_frame_snapshot(self.frame) {
+            match self
+                .session
+                .doc
+                .conversion_frame_snapshot(self.session.frame)
+            {
                 Ok(snapshot) => snapshot,
                 Err(error) => {
                     dialog.error = Some(error);
@@ -486,13 +491,13 @@ impl PixelCraft {
                 }
             }
         } else {
-            self.doc.clone()
+            self.session.doc.clone()
         };
-        let tile_frame = if previewing { 0 } else { self.frame };
+        let tile_frame = if previewing { 0 } else { self.session.frame };
         let frames = if dialog.all_frames {
             0..=source.durations.len() - 1
         } else {
-            self.frame..=self.frame
+            self.session.frame..=self.session.frame
         };
         let palette = dialog.generated.clone();
         let matrix = dialog.matrix.matrix(&source);

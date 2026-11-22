@@ -128,7 +128,7 @@ pub(super) struct CanvasTransform {
 
 impl PixelCraft {
     fn canvas_transform_timeline(&self) -> Option<CelSelection> {
-        (self.selected_cels.is_some() || self.timeline_anchor.is_some())
+        (self.session.selected_cels.is_some() || self.session.timeline_anchor.is_some())
             .then(|| self.timeline_cel_selection())
     }
 
@@ -137,13 +137,13 @@ impl PixelCraft {
         let timeline = self.canvas_transform_timeline();
         let targets: Arc<[_]> = match &timeline {
             Some(selection) => selection.cells().collect(),
-            None => Arc::new([(self.layer, self.frame)]),
+            None => Arc::new([(self.session.layer, self.session.frame)]),
         };
         if targets.is_empty()
             || targets.iter().any(|&(layer, frame)| {
-                frame >= self.doc.durations.len()
-                    || !self.doc.editable(layer)
-                    || self.doc.layers[layer].tileset.is_some()
+                frame >= self.session.doc.durations.len()
+                    || !self.session.doc.editable(layer)
+                    || self.session.doc.layers[layer].tileset.is_some()
             })
         {
             self.status = "Choose cels in unlocked image layers".into();
@@ -159,12 +159,16 @@ impl PixelCraft {
             }
             self.selection_bounds()
         } else {
-            let (mut left, mut top, mut right, mut bottom) =
-                (self.doc.width as i32, self.doc.height as i32, 0, 0);
+            let (mut left, mut top, mut right, mut bottom) = (
+                self.session.doc.width as i32,
+                self.session.doc.height as i32,
+                0,
+                0,
+            );
             for &(layer, frame) in targets.iter() {
-                self.doc.layers[layer].cels[frame].visit_nonclear(|index, _| {
-                    let x = (index % self.doc.width) as i32;
-                    let y = (index / self.doc.width) as i32;
+                self.session.doc.layers[layer].cels[frame].visit_nonclear(|index, _| {
+                    let x = (index % self.session.doc.width) as i32;
+                    let y = (index / self.session.doc.width) as i32;
                     left = left.min(x);
                     top = top.min(y);
                     right = right.max(x + 1);
@@ -180,8 +184,8 @@ impl PixelCraft {
         self.canvas_transform = Some(CanvasTransform {
             tab: self.active_tab,
             generation: self.power.bridge_generation,
-            frame: self.frame,
-            layer: self.layer,
+            frame: self.session.frame,
+            layer: self.session.layer,
             timeline,
             targets,
             bounds,
@@ -216,8 +220,8 @@ impl PixelCraft {
         if self.playing
             || state.tab != self.active_tab
             || state.generation != self.power.bridge_generation
-            || state.frame != self.frame
-            || state.layer != self.layer
+            || state.frame != self.session.frame
+            || state.layer != self.session.layer
             || state.timeline != self.canvas_transform_timeline()
         {
             self.status = "Canvas transform cancelled".into();
@@ -250,9 +254,9 @@ impl PixelCraft {
                         Ok(Output::Preview(_)) => {}
                         Ok(Output::Commit(doc, mask)) => {
                             self.remember_action("Transform cels");
-                            self.doc = *doc;
+                            self.session.doc = *doc;
                             if let Some(mask) = mask {
-                                self.studio.polygon.clear();
+                                self.session.polygon.clear();
                                 self.set_selection_mask(mask);
                             }
                             self.status = format!("Transformed {} cels", state.targets.len());
@@ -270,7 +274,7 @@ impl PixelCraft {
         if let Some(request) = state.wanted
             && state.completed != Some(request)
         {
-            let mut doc = self.doc.clone();
+            let mut doc = self.session.doc.clone();
             let (active_layer, frame) = (state.layer, state.frame);
             let use_rotsprite = request.finish && state.rotsprite;
             let bounds = state.bounds;
@@ -400,7 +404,7 @@ impl PixelCraft {
             data.insert_temp(egui::Id::new("canvas-transform-cancel"), cancel);
         });
         let step = self.canvas_pixel_size();
-        let grid = self.doc.drawing_grid();
+        let grid = self.session.doc.drawing_grid();
         let snap_to_grid = self.snap_to_grid;
         let accent = self.colors().accent;
         let Some(state) = &mut self.canvas_transform else {

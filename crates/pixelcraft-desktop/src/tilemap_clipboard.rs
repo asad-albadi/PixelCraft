@@ -952,39 +952,44 @@ fn build_tile_paste(
 
 impl PixelCraft {
     pub(super) fn uses_tilemap_clipboard(&self) -> bool {
-        self.doc.layers[self.layer].tileset.is_some() && self.tile_pixel_mode.is_none()
+        self.session.doc.layers[self.session.layer]
+            .tileset
+            .is_some()
+            && self.tile_pixel_mode.is_none()
     }
 
     pub(super) fn copy_tilemap(&mut self, cut: bool) -> Result<(), String> {
         self.tile_clipboard_work = None;
         self.tile_paste_work = None;
-        if cut && !self.doc.editable(self.layer) {
+        if cut && !self.session.doc.editable(self.session.layer) {
             return Err("Choose an editable tile layer".into());
         }
         let site = TileCopySite {
-            layer: self.layer,
-            frame: self.frame,
+            layer: self.session.layer,
+            frame: self.session.frame,
             bounds: self.selection_bounds(),
-            mask: self.studio.mask.clone(),
-            polygon: self.studio.polygon.clone(),
-            selected: self.selection.is_some(),
+            mask: self.session.mask.clone(),
+            polygon: self.session.polygon.clone(),
+            selected: self.session.selection.is_some(),
         };
-        let set = &self.doc.tilesets[self.doc.layers[self.layer]
+        let set = &self.session.doc.tilesets[self.session.doc.layers[self.session.layer]
             .tileset
             .ok_or("Choose a tile layer")?];
         let pixels = set
             .width
             .saturating_mul(set.height)
             .saturating_mul(set.tiles.len())
-            .saturating_add(self.doc.layers[self.layer].tile_cels[self.frame].len());
+            .saturating_add(
+                self.session.doc.layers[self.session.layer].tile_cels[self.session.frame].len(),
+            );
         if pixels <= 65_536 {
-            let region = selected_tile_cells(&self.doc, &site, || false)?;
+            let region = selected_tile_cells(&self.session.doc, &site, || false)?;
             let (clip, result) = build_tile_clipboard(
-                &self.doc,
-                self.layer,
-                self.frame,
+                &self.session.doc,
+                self.session.layer,
+                self.session.frame,
                 region,
-                self.selection.is_some(),
+                self.session.selection.is_some(),
                 cut,
                 || false,
             )?;
@@ -993,7 +998,7 @@ impl PixelCraft {
         }
         self.clipboard_target = None;
         let target = self.clipboard_destination(PasteMode::InPlace);
-        let doc = self.doc.clone();
+        let doc = self.session.doc.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&cancelled);
         let (tx, receiver) = mpsc::channel();
@@ -1031,7 +1036,7 @@ impl PixelCraft {
     fn finish_tile_copy(&mut self, clip: Clipboard, result: Option<Box<Document>>, cut: bool) {
         if let Some(result) = result {
             self.remember_action("Cut tiles");
-            self.doc = *result;
+            self.session.doc = *result;
         }
         self.store_clipboard(clip, if cut { "Cut tiles" } else { "Copied tiles" });
     }
@@ -1093,18 +1098,18 @@ impl PixelCraft {
                 .saturating_mul(clip.h)
                 .saturating_mul(tile_height)
         } else {
-            let definitions =
-                self.doc
-                    .tilesets
-                    .iter()
-                    .fold(self.doc.logical_pixels(), |total, set| {
-                        total.saturating_add(
-                            set.width
-                                .saturating_mul(set.height)
-                                .saturating_mul(set.tiles.len()),
-                        )
-                    });
-            self.doc
+            let definitions = self.session.doc.tilesets.iter().fold(
+                self.session.doc.logical_pixels(),
+                |total, set| {
+                    total.saturating_add(
+                        set.width
+                            .saturating_mul(set.height)
+                            .saturating_mul(set.tiles.len()),
+                    )
+                },
+            );
+            self.session
+                .doc
                 .layers
                 .iter()
                 .flat_map(|layer| &layer.tile_cels)
@@ -1123,21 +1128,22 @@ impl PixelCraft {
             .saturating_add(destination_pixels);
         let site = TilePasteSite {
             mode,
-            layer: self.layer,
-            frame: self.frame,
+            layer: self.session.layer,
+            frame: self.session.frame,
             bounds: self.selection_bounds(),
-            origin: self.selection.map_or([0, 0], |(x, y, _, _)| [x, y]),
-            selected: self.selection.is_some(),
+            origin: self.session.selection.map_or([0, 0], |(x, y, _, _)| [x, y]),
+            selected: self.session.selection.is_some(),
         };
         if pixels <= 65_536 {
-            if let Some((doc, layer)) = build_tile_paste(&self.doc, &site, clip, || false)? {
+            if let Some((doc, layer)) = build_tile_paste(&self.session.doc, &site, clip, || false)?
+            {
                 self.finish_tile_paste(mode, doc, layer);
             }
             return Ok(());
         }
         self.clipboard_target = None;
         let target = self.clipboard_destination(mode);
-        let doc = self.doc.clone();
+        let doc = self.session.doc.clone();
         let clip = clip.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&cancelled);
@@ -1164,8 +1170,8 @@ impl PixelCraft {
             } else {
                 "Paste tiles"
             });
-            self.doc = *doc;
-            self.layer = layer;
+            self.session.doc = *doc;
+            self.session.layer = layer;
             self.status = if mode == PasteMode::Reference {
                 "Pasted as a reference image"
             } else {

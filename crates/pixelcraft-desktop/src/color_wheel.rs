@@ -164,7 +164,7 @@ impl PixelCraft {
                 if secondary {
                     let index = self
                         .doc
-                        .palette_for(self.frame)
+                        .palette_for(self.session.frame)
                         .iter()
                         .position(|&swatch| swatch == color);
                     self.set_secondary_color(color, index);

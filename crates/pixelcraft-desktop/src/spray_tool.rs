@@ -18,7 +18,11 @@ impl PixelCraft {
         button: egui::PointerButton,
         ctx: &egui::Context,
     ) {
-        if !self.doc.editable(self.layer) || self.doc.layers[self.layer].tileset.is_some() {
+        if !self.session.doc.editable(self.session.layer)
+            || self.session.doc.layers[self.session.layer]
+                .tileset
+                .is_some()
+        {
             self.status = "Choose an unlocked image layer to spray".into();
             return;
         }
@@ -27,8 +31,8 @@ impl PixelCraft {
         self.gesture_button = Some(button);
         let time = ctx.input(|i| i.time);
         self.spray_stroke = Some(SprayStroke {
-            layer: self.layer,
-            frame: self.frame,
+            layer: self.session.layer,
+            frame: self.session.frame,
             generation: self.power.bridge_generation,
             pattern: SprayPattern::new(
                 time.to_bits() ^ self.power.bridge_generation,
@@ -45,7 +49,11 @@ impl PixelCraft {
             return;
         };
         if (stroke.layer, stroke.frame, stroke.generation)
-            != (self.layer, self.frame, self.power.bridge_generation)
+            != (
+                self.session.layer,
+                self.session.frame,
+                self.power.bridge_generation,
+            )
         {
             self.cancel_gesture();
             return;
@@ -63,7 +71,7 @@ impl PixelCraft {
             let axes = self.drawing_axes();
             let (mirror_x, mirror_y) = (self.studio.mirror_x, self.studio.mirror_y);
             let (symmetry_x, symmetry_y) = (self.symmetry_axis(0), self.symmetry_axis(1));
-            self.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
+            self.session.doc.drawing_index = self.drawing_palette_index(self.stroke_color);
             stroke.pattern.emit(
                 previous,
                 point,
@@ -79,14 +87,15 @@ impl PixelCraft {
                             .into_iter()
                             .take(1 + usize::from(mirror_y))
                         {
-                            if let Some((px, py)) =
-                                axes.position((self.doc.width, self.doc.height), (px, py))
-                                && self.selected(px, py)
+                            if let Some((px, py)) = axes.position(
+                                (self.session.doc.width, self.session.doc.height),
+                                (px, py),
+                            ) && self.selected(px, py)
                             {
-                                let index = py as usize * self.doc.width + px as usize;
-                                self.doc.set_pixel(
-                                    self.layer,
-                                    self.frame,
+                                let index = py as usize * self.session.doc.width + px as usize;
+                                self.session.doc.set_pixel(
+                                    self.session.layer,
+                                    self.session.frame,
                                     index,
                                     self.stroke_color,
                                 );
@@ -95,7 +104,7 @@ impl PixelCraft {
                     }
                 },
             );
-            self.doc.drawing_index = None;
+            self.session.doc.drawing_index = None;
             ctx.request_repaint_after(Duration::from_secs_f64(
                 stroke
                     .pattern

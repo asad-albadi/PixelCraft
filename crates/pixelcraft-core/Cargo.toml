@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+emath = "0.36.2"
 sha2 = "0.10.9"
 image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg", "ico", "qoi", "tga", "webp"] }
 color_quant = "1.1.0"
