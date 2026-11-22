@@ -2,7 +2,8 @@
 
 PixelCraft has one public executable and a compatibility library at the repository
 root. The internal Cargo workspace separates reusable editing from desktop UI and
-automation transports. This restructuring adds no mobile application or FFI.
+automation transports. The Android tablet preview adds a separate Flutter host
+and a bounded native editing ABI without changing the desktop executable.
 
 | Package | Responsibility |
 | --- | --- |
@@ -11,6 +12,7 @@ automation transports. This restructuring adds no mobile application or FFI.
 | `pixelcraft-automation` | Validated commands, inspection, revisions, batches and export orchestration |
 | `pixelcraft-cli` | Existing CLI argument parsing and shared-operation dispatch |
 | `pixelcraft-mcp` | Existing MCP JSON-RPC, opt-in live bridge and transport checks |
+| `pixelcraft-ffi` | Bounded, versioned C ABI around core editing for the Android tablet preview |
 | `pixelcraft-desktop` | Existing egui editor, native platform services, updates and window integration |
 
 Adapters depend on shared commands and core. Core does not depend on the desktop,
@@ -80,3 +82,11 @@ lockfile entry. About metadata and installer/package versions then stay aligned.
 No external dependency versions or checksums changed during restructuring.
 The dependency advisory snapshot's list includes the new internal package names;
 the advisory records themselves were not refreshed or altered.
+
+## Android tablet preview
+
+`flutter/pixelcraft_mobile` is an Android-only preview host. Its Dart worker owns
+all native sessions and buffer lifetimes; `pixelcraft-ffi` depends only on core
+and JSON serialization. Android platform storage handles private atomic Save and
+the document picker. The desktop remains egui; CLI and MCP remain desktop/headless
+adapters and do not run inside this preview. See the [preview instructions](../flutter/pixelcraft_mobile/README.md).

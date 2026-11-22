@@ -16,8 +16,8 @@
 
 - [x] Baseline/setup: open tablet, branch from merged main, document scope and record workspace tests.
 - [x] Native boundary: test-first bounded project decoder and FFI handles/strokes/history/round trips; add Android target libc gate, x86_64/arm64 build script and header. Run host/Android builds and independent code/security review.
-- [ ] Tablet application: Flutter worker/bridge, canvas and gestures, responsive controls, native private storage and document picker; widget tests and platform error handling. Build/install and inspect on the visible emulator, reviewing/fixing findings.
-- [ ] Integration: emulator-driven drawing/Undo/save/reopen, memory/latency observations and screenshots. Complete desktop, CLI/MCP and strict lint regressions; record limitations and review results. Keep tablet open with working app.
+- [x] Tablet application: Flutter worker/bridge, canvas and gestures, responsive controls, native private storage and document picker; widget tests and platform error handling. Build/install and inspect on the visible emulator, reviewing/fixing findings.
+- [x] Integration: emulator-driven drawing/Undo/save/reopen, memory/latency observations and screenshots. Complete desktop, CLI/MCP and strict lint regressions; record limitations and review results. Keep tablet open with working app.
 
 ## Evidence and decisions
 
@@ -34,3 +34,8 @@ Native batch: baseline 811 tests passed; bounded decoder 2 tests and native ABI
 built. Independent review found runtime sparse allocation growth and save/reopen
 budget mismatch; both fixed and covered by rollback/round-trip tests. Final
 native review found no blockers. Desktop limits retain their original defaults.
+
+Final evidence: ../../android-tablet-poc-validation.md. Android integration,
+7 Flutter tests, analyzer, 818 workspace tests, strict workspace lint, standalone,
+headless CLI/MCP and all 3 opt-in live tests pass. Review findings fixed; no
+remaining PoC blockers in final source re-review. Full issue #29 remains open.
