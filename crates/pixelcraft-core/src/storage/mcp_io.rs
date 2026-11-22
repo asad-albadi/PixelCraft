@@ -77,7 +77,7 @@ fn expected_source(source: &Path) -> io::Result<Option<FileIdentity>> {
         .transpose()
 }
 
-pub(crate) fn open(path: impl AsRef<Path>) -> io::Result<File> {
+pub fn open(path: impl AsRef<Path>) -> io::Result<File> {
     let path = path.as_ref();
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.open_read(path)) {
@@ -90,11 +90,11 @@ pub(crate) fn open(path: impl AsRef<Path>) -> io::Result<File> {
     File::open(path)
 }
 
-pub(crate) fn create(path: impl AsRef<Path>) -> io::Result<File> {
+pub fn create(path: impl AsRef<Path>) -> io::Result<File> {
     create_impl(path.as_ref(), false)
 }
 
-pub(crate) fn create_new(path: impl AsRef<Path>) -> io::Result<File> {
+pub fn create_new(path: impl AsRef<Path>) -> io::Result<File> {
     create_impl(path.as_ref(), true)
 }
 
@@ -122,17 +122,17 @@ fn create_impl(path: &Path, exclusive: bool) -> io::Result<File> {
     }
 }
 
-pub(crate) fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
+pub fn read(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     let mut result = vec![];
     open(path)?.read_to_end(&mut result)?;
     Ok(result)
 }
 
-pub(crate) fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
+pub fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> io::Result<()> {
     create(path)?.write_all(bytes.as_ref())
 }
 
-pub(crate) fn metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
+pub fn metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
     let path = path.as_ref();
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.metadata(path)) {
@@ -145,7 +145,7 @@ pub(crate) fn metadata(path: impl AsRef<Path>) -> io::Result<Metadata> {
     fs::symlink_metadata(path)
 }
 
-pub(crate) fn children(path: &Path) -> io::Result<Vec<PathBuf>> {
+pub fn children(path: &Path) -> io::Result<Vec<PathBuf>> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| {
         guard
@@ -157,7 +157,7 @@ pub(crate) fn children(path: &Path) -> io::Result<Vec<PathBuf>> {
     fs::read_dir(path)?.map(|entry| Ok(entry?.path())).collect()
 }
 
-pub(crate) fn create_dir(path: &Path) -> io::Result<()> {
+pub fn create_dir(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.create_dir(path)) {
         return result;
@@ -169,7 +169,7 @@ pub(crate) fn create_dir(path: &Path) -> io::Result<()> {
     fs::create_dir(path)
 }
 
-pub(super) fn create_staging_dir(path: &Path) -> io::Result<Option<FileIdentity>> {
+pub fn create_staging_dir(path: &Path) -> io::Result<Option<FileIdentity>> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.create_directory_identity(path))
     {
@@ -192,7 +192,7 @@ pub(super) fn create_staging_dir(path: &Path) -> io::Result<Option<FileIdentity>
     Ok(None)
 }
 
-pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
+pub fn create_dir_all(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.ensure_directory(path)) {
         return result;
@@ -204,7 +204,7 @@ pub(crate) fn create_dir_all(path: &Path) -> io::Result<()> {
     fs::create_dir_all(path)
 }
 
-pub(crate) fn directory_identity(path: &Path) -> io::Result<(u64, u64)> {
+pub fn directory_identity(path: &Path) -> io::Result<(u64, u64)> {
     #[cfg(not(any(windows, target_os = "linux")))]
     let _ = path;
     #[cfg(windows)]
@@ -221,7 +221,7 @@ pub(crate) fn directory_identity(path: &Path) -> io::Result<(u64, u64)> {
     ))
 }
 
-pub(crate) fn remove_staging(
+pub fn remove_staging(
     path: &Path,
     expected: Option<(u64, u64)>,
     known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
@@ -260,7 +260,7 @@ pub(crate) fn remove_staging(
     fs::remove_dir_all(path)
 }
 
-pub(crate) fn remove_dir(path: &Path) -> io::Result<()> {
+pub fn remove_dir(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.remove_dir(path)) {
         return result;
@@ -272,7 +272,7 @@ pub(crate) fn remove_dir(path: &Path) -> io::Result<()> {
     fs::remove_dir(path)
 }
 
-pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
+pub fn remove_file(path: &Path) -> io::Result<()> {
     #[cfg(windows)]
     if let Some(result) = super::mcp_access::windows(|guard| guard.remove_file(path)) {
         return result;
@@ -284,7 +284,7 @@ pub(crate) fn remove_file(path: &Path) -> io::Result<()> {
     fs::remove_file(path)
 }
 
-pub(crate) fn rename(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn rename(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(any(windows, target_os = "linux"))]
     let expected = expected_source(source)?;
     #[cfg(windows)]
@@ -302,7 +302,7 @@ pub(crate) fn rename(source: &Path, destination: &Path) -> io::Result<()> {
     fs::rename(source, destination)
 }
 
-pub(crate) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(any(windows, target_os = "linux"))]
     let expected = expected_source(source)?;
     #[cfg(windows)]
@@ -341,7 +341,7 @@ pub(crate) fn publish_new(source: &Path, destination: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 thread_local! {static NO_HARD_LINKS:std::cell::Cell<bool>=const{std::cell::Cell::new(false)};}
-pub(crate) fn hard_link(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn hard_link(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(test)]
     if NO_HARD_LINKS.get() {
         return Err(io::Error::new(
@@ -367,7 +367,7 @@ pub(crate) fn hard_link(source: &Path, destination: &Path) -> io::Result<()> {
     fs::hard_link(source, destination)
 }
 
-pub(crate) fn exists(path: &Path) -> io::Result<bool> {
+pub fn exists(path: &Path) -> io::Result<bool> {
     match metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -375,7 +375,7 @@ pub(crate) fn exists(path: &Path) -> io::Result<bool> {
     }
 }
 
-pub(crate) fn directory_path(path: &Path) -> io::Result<PathBuf> {
+pub fn directory_path(path: &Path) -> io::Result<PathBuf> {
     #[cfg(target_os = "linux")]
     if let Some(result) = super::mcp_linux::directory_path(path) {
         return result;
@@ -383,16 +383,16 @@ pub(crate) fn directory_path(path: &Path) -> io::Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-pub(crate) fn copy(source: &Path, destination: &Path) -> io::Result<()> {
+pub fn copy(source: &Path, destination: &Path) -> io::Result<()> {
     io::copy(&mut open(source)?, &mut create_new(destination)?).map(|_| ())
 }
 
-pub(crate) fn open_image(path: impl AsRef<Path>) -> image::ImageResult<image::DynamicImage> {
+pub fn open_image(path: impl AsRef<Path>) -> image::ImageResult<image::DynamicImage> {
     let path = path.as_ref();
     image_reader(path)?.decode()
 }
 
-pub(crate) fn image_reader(path: &Path) -> io::Result<image::ImageReader<BufReader<File>>> {
+pub fn image_reader(path: &Path) -> io::Result<image::ImageReader<BufReader<File>>> {
     let mut reader = image::ImageReader::new(BufReader::new(open(path)?));
     if let Some(format) = path
         .extension()
@@ -403,15 +403,12 @@ pub(crate) fn image_reader(path: &Path) -> io::Result<image::ImageReader<BufRead
     Ok(reader)
 }
 
-pub(crate) fn write_image(
-    path: impl AsRef<Path>,
-    image: &image::RgbaImage,
-) -> image::ImageResult<()> {
+pub fn write_image(path: impl AsRef<Path>, image: &image::RgbaImage) -> image::ImageResult<()> {
     let path = path.as_ref();
     write_image_as(path, image, image::ImageFormat::from_path(path)?)
 }
 
-pub(crate) fn write_image_as(
+pub fn write_image_as(
     path: impl AsRef<Path>,
     pixels: &image::RgbaImage,
     format: image::ImageFormat,

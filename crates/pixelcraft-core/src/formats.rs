@@ -1,17 +1,19 @@
-use crate::automation::mcp_io;
 use crate::model::*;
+use crate::storage::mcp_io;
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
-pub(crate) mod flic;
+#[doc(hidden)]
+pub mod flic;
 mod pcx;
 mod png_raster;
 mod psd;
 mod raster;
 mod vector;
-pub(crate) use raster::{RasterFormat, raster_format, validate_raster_size, write_raster_image};
+#[doc(hidden)]
+pub use raster::{RasterFormat, raster_format, validate_raster_size, write_raster_image};
 
 const PROJECT_MAGIC_V1: &[u8] = b"PIXEL-WORKSHOP\0\x01";
 const PROJECT_MAGIC: &[u8] = b"PIXEL-WORKSHOP\0\x02";
@@ -1609,7 +1611,7 @@ fn load_ase_path(
     check_path: &impl Fn(&Path) -> Result<(), String>,
 ) -> Result<Document, String> {
     check_path(path)?;
-    let path = if crate::automation::mcp_access::restricted() {
+    let path = if crate::storage::mcp_access::restricted() {
         path.to_path_buf()
     } else {
         path.canonicalize()
@@ -1650,7 +1652,8 @@ pub fn load(path: &Path) -> Result<Document, String> {
     load_with_path_check(path, &|_| Ok(()))
 }
 
-pub(crate) fn load_with_path_check(
+#[doc(hidden)]
+pub fn load_with_path_check(
     path: &Path,
     check_path: &impl Fn(&Path) -> Result<(), String>,
 ) -> Result<Document, String> {
@@ -1754,7 +1757,7 @@ fn write_project_bytes(
     overwrite: bool,
     confirmed: bool,
 ) -> Result<(), String> {
-    crate::automation::write_editor_file_authorized(
+    crate::storage::write_editor_file_authorized(
         path,
         overwrite,
         confirmed.then_some(path),
@@ -1765,7 +1768,8 @@ fn write_project_bytes(
 pub fn export_png(path: &Path, d: &Document, f: usize, sheet: bool) -> Result<(), String> {
     export_raster_scaled(path, d, f, sheet, 1)
 }
-pub(crate) fn export_png_region(
+#[doc(hidden)]
+pub fn export_png_region(
     path: &Path,
     doc: &Document,
     frame: usize,
@@ -1895,7 +1899,8 @@ pub fn export_gif_frames_scaled(
     encode_gif(path, d, repeat, frames, scale, |_, _| Ok(()))
 }
 
-pub(crate) fn export_gif_progress(
+#[doc(hidden)]
+pub fn export_gif_progress(
     path: &Path,
     d: &Document,
     scale: usize,
@@ -1942,7 +1947,8 @@ fn encode_gif(
     Ok(())
 }
 
-pub(crate) fn animation_dimensions(d: &Document, scale: usize) -> Result<(usize, usize), String> {
+#[doc(hidden)]
+pub fn animation_dimensions(d: &Document, scale: usize) -> Result<(usize, usize), String> {
     let w = d.width.saturating_mul(scale);
     let h = d.height.saturating_mul(scale);
     if w == 0 || h == 0 || w > MAX_DIMENSION || h > MAX_DIMENSION || w * h > MAX_PIXELS {
@@ -1956,7 +1962,8 @@ pub fn export_mp4(path: &Path, d: &Document, scale: usize) -> Result<(), String>
     export_mp4_progress(path, d, scale, |_, _| Ok(()))
 }
 
-pub(crate) fn export_mp4_progress(
+#[doc(hidden)]
+pub fn export_mp4_progress(
     path: &Path,
     d: &Document,
     scale: usize,
@@ -1966,10 +1973,10 @@ pub(crate) fn export_mp4_progress(
     d.validate()?;
     let (width, height) = animation_dimensions(d, scale)?;
     let size = format!("{width}x{height}");
-    let restricted_root = crate::automation::mcp_access::active_root();
+    let restricted_root = crate::storage::mcp_access::active_root();
     let resolve = move || -> std::io::Result<Command> {
         if let Some(root) = restricted_root {
-            let executable = crate::automation::mcp_access::find_ffmpeg(&root)?;
+            let executable = crate::storage::mcp_access::find_ffmpeg(&root)?;
             let mut command = Command::new(&executable);
             command.current_dir(executable.parent().unwrap());
             Ok(command)
@@ -1978,7 +1985,7 @@ pub(crate) fn export_mp4_progress(
         }
     };
     #[cfg(target_os = "linux")]
-    let command = crate::automation::mcp_linux::with_codec_runtime(resolve)?;
+    let command = crate::storage::mcp_linux::with_codec_runtime(resolve)?;
     #[cfg(not(target_os = "linux"))]
     let command = resolve();
     let mut command = command.map_err(|e| e.to_string())?;
@@ -1987,7 +1994,7 @@ pub(crate) fn export_mp4_progress(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
-    let restricted = crate::automation::mcp_access::restricted();
+    let restricted = crate::storage::mcp_access::restricted();
     command
         .args([
             "-hide_banner",
@@ -2034,7 +2041,7 @@ pub(crate) fn export_mp4_progress(
         command.arg(path).stdout(Stdio::null());
     }
     #[cfg(target_os = "linux")]
-    let launch = crate::automation::mcp_linux::with_codec_runtime(move || command.spawn())?;
+    let launch = crate::storage::mcp_linux::with_codec_runtime(move || command.spawn())?;
     #[cfg(not(target_os = "linux"))]
     let launch = command.spawn();
     let mut child =
@@ -2261,13 +2268,30 @@ fn write_png_metadata(path: &Path, d: &Document) -> Result<(), String> {
             }
         }
     }
-    if crate::automation::mcp_access::restricted() {
+    if crate::storage::mcp_access::restricted() {
         // The staged PNG is already present. Replace it with a newly created
         // file so even a swapped hardlink cannot be opened for truncation.
         write_project_bytes(path, out, true, false)
     } else {
         mcp_io::write(path, out).map_err(|e| e.to_string())
     }
+}
+
+/// Encode frames into a caller-owned staging folder; publication belongs to the caller.
+pub fn encode_editor_sequence(path: &Path, doc: &Document, scale: usize) -> Result<(), String> {
+    doc.validate()?;
+    animation_dimensions(doc, scale)?;
+    mcp_io::create_dir_all(path).map_err(|e| e.to_string())?;
+    for frame in 0..doc.durations.len() {
+        export_png_region(
+            &path.join(format!("frame-{:04}.png", frame + 1)),
+            doc,
+            frame,
+            [0, 0, doc.width, doc.height],
+            scale,
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

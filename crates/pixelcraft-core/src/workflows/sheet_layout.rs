@@ -9,7 +9,8 @@ pub(super) struct SheetPlacement {
     pub dimensions: [usize; 2],
 }
 
-pub(crate) fn validate_sheet_dimensions(options: &SheetOptions) -> Result<(), String> {
+#[doc(hidden)]
+pub fn validate_sheet_dimensions(options: &SheetOptions) -> Result<(), String> {
     scaled_image_dimensions(
         options.width.unwrap_or(1),
         options.height.unwrap_or(1),

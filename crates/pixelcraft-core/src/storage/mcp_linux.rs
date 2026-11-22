@@ -47,7 +47,7 @@ thread_local! {
     static ACTIVE: RefCell<Option<(Arc<Project>, mpsc::Sender<RuntimeJob>)>> = const { RefCell::new(None) };
 }
 
-pub(super) struct Project {
+pub struct Project {
     path: PathBuf,
     dir: File,
     rules: Option<File>,
@@ -84,7 +84,7 @@ fn open(dir: RawFd, path: &Path, flags: libc::c_int, resolve: u64) -> io::Result
 }
 
 impl Project {
-    pub(super) fn new(path: &Path) -> Result<Arc<Self>, String> {
+    pub fn new(path: &Path) -> Result<Arc<Self>, String> {
         let unavailable =
             |e| format!("Restricted MCP requires Linux openat2 and Landlock ABI 3 or newer: {e}");
         let dir = open(
@@ -141,7 +141,7 @@ impl Project {
     }
 
     /// Trusted editor encoders need anchored file I/O, not a new kernel sandbox requirement.
-    pub(super) fn new_editor(path: &Path) -> Result<Arc<Self>, String> {
+    pub fn new_editor(path: &Path) -> Result<Arc<Self>, String> {
         let dir = open(
             libc::AT_FDCWD,
             path,
@@ -158,7 +158,7 @@ impl Project {
         }))
     }
 
-    pub(super) fn active(path: &Path) -> Option<Arc<Self>> {
+    pub fn active(path: &Path) -> Option<Arc<Self>> {
         ACTIVE.with_borrow(|active| {
             active
                 .as_ref()
@@ -167,11 +167,11 @@ impl Project {
         })
     }
 
-    pub(super) fn identity(&self) -> Option<(u64, u64)> {
+    pub fn identity(&self) -> Option<(u64, u64)> {
         Some(self.identity)
     }
 
-    pub(super) fn check(&self, relative: &Path, allow_missing: bool) -> Result<(), String> {
+    pub fn check(&self, relative: &Path, allow_missing: bool) -> Result<(), String> {
         let mut candidate = relative;
         loop {
             let path = if candidate.as_os_str().is_empty() {
@@ -198,7 +198,7 @@ impl Project {
         }
     }
 
-    pub(super) fn run<T: Send>(
+    pub fn run<T: Send>(
         self: &Arc<Self>,
         operation: impl FnOnce() -> Result<T, String> + Send,
     ) -> Result<T, String> {
@@ -269,7 +269,7 @@ fn anchored_parent(project: &Project, path: &Path) -> io::Result<(File, CString)
         CString::new(name.as_bytes()).map_err(io::Error::other)?,
     ))
 }
-pub(super) fn create_directory(path: &Path, mode: libc::mode_t) -> Option<io::Result<(u64, u64)>> {
+pub fn create_directory(path: &Path, mode: libc::mode_t) -> Option<io::Result<(u64, u64)>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -288,7 +288,7 @@ pub(super) fn create_directory(path: &Path, mode: libc::mode_t) -> Option<io::Re
         })())
     })
 }
-pub(super) fn ensure_directory(path: &Path) -> Option<io::Result<()>> {
+pub fn ensure_directory(path: &Path) -> Option<io::Result<()>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -316,7 +316,7 @@ pub(super) fn ensure_directory(path: &Path) -> Option<io::Result<()>> {
         })())
     })
 }
-pub(super) fn remove_entry(path: &Path, directory: bool) -> Option<io::Result<()>> {
+pub fn remove_entry(path: &Path, directory: bool) -> Option<io::Result<()>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -333,7 +333,7 @@ pub(super) fn remove_entry(path: &Path, directory: bool) -> Option<io::Result<()
     })
 }
 
-pub(super) fn open_read(path: &Path) -> Option<io::Result<File>> {
+pub fn open_read(path: &Path) -> Option<io::Result<File>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -362,7 +362,7 @@ pub(super) fn open_read(path: &Path) -> Option<io::Result<File>> {
     })
 }
 
-pub(super) fn create(path: &Path) -> Option<io::Result<File>> {
+pub fn create(path: &Path) -> Option<io::Result<File>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -377,7 +377,7 @@ pub(super) fn create(path: &Path) -> Option<io::Result<File>> {
     })
 }
 
-pub(super) fn metadata(path: &Path) -> Option<io::Result<std::fs::Metadata>> {
+pub fn metadata(path: &Path) -> Option<io::Result<std::fs::Metadata>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -398,7 +398,7 @@ pub(super) fn metadata(path: &Path) -> Option<io::Result<std::fs::Metadata>> {
     })
 }
 
-pub(super) fn directory_path(path: &Path) -> Option<io::Result<PathBuf>> {
+pub fn directory_path(path: &Path) -> Option<io::Result<PathBuf>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some((|| {
@@ -430,7 +430,7 @@ fn directory_identity_of(dir: &File) -> io::Result<(u64, u64)> {
     Ok((metadata.dev(), metadata.ino()))
 }
 
-pub(super) fn directory_identity(path: &Path) -> Option<io::Result<(u64, u64)>> {
+pub fn directory_identity(path: &Path) -> Option<io::Result<(u64, u64)>> {
     ACTIVE.with_borrow(|active| {
         let (project, _) = active.as_ref()?;
         Some(
@@ -512,7 +512,7 @@ fn remove_tracked_files(
     Ok(())
 }
 
-pub(super) fn remove_owned_dir_all(
+pub fn remove_owned_dir_all(
     path: &Path,
     expected: (u64, u64),
     known_child: Option<(&std::ffi::OsStr, (u64, u64))>,
@@ -548,7 +548,7 @@ pub(super) fn remove_owned_dir_all(
     })
 }
 
-pub(super) fn publish(
+pub fn publish(
     source: &Path,
     destination: &Path,
     replace: bool,
@@ -625,11 +625,11 @@ pub(crate) fn with_codec_runtime<T: Send + 'static>(
         .map_err(|_| "The codec runtime worker stopped".to_string())
 }
 
-pub(crate) fn is_restricted() -> bool {
+pub fn is_restricted() -> bool {
     ACTIVE.with_borrow(Option::is_some)
 }
 
-pub(super) fn active_root() -> Option<PathBuf> {
+pub fn active_root() -> Option<PathBuf> {
     ACTIVE.with_borrow(|active| active.as_ref().map(|(project, _)| project.path.clone()))
 }
 

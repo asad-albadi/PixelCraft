@@ -4,13 +4,15 @@ use image::RgbaImage;
 use serde_json::{Value, json};
 use std::ops::RangeInclusive;
 
-pub(crate) struct SheetCrop<'a> {
+#[doc(hidden)]
+pub struct SheetCrop<'a> {
     pub size: [usize; 2],
     pub name: &'a str,
     pub keys: &'a [&'a SliceKey],
 }
 
-pub(crate) struct SplitSheetWork {
+#[doc(hidden)]
+pub struct SplitSheetWork {
     pub samples: usize,
     pub source_pixels: usize,
     pub cropped_pixels: usize,
@@ -19,7 +21,8 @@ pub(crate) struct SplitSheetWork {
     pub layer_label_bytes: usize,
 }
 
-pub(crate) fn split_sheet_work(
+#[doc(hidden)]
+pub fn split_sheet_work(
     source: &Document,
     options: &SheetOptions,
     extrude: usize,
@@ -37,7 +40,8 @@ pub(crate) fn split_sheet_work(
     })
 }
 
-pub(crate) fn pack_split_sheet(
+#[doc(hidden)]
+pub fn pack_split_sheet(
     source: &Document,
     options: &SheetOptions,
     extrude: usize,

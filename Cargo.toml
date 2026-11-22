@@ -5,7 +5,13 @@ edition = "2024"
 authors = ["Asad"]
 license = "MIT"
 
+[workspace]
+members = ["crates/pixelcraft-core"]
+default-members = [".", "crates/pixelcraft-core"]
+resolver = "3"
+
 [dependencies]
+pixelcraft-core = { path = "crates/pixelcraft-core" }
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu", "x11", "wayland"] }
 arboard = "3.6.1"
 sha2 = "0.10.9"

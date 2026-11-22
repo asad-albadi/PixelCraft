@@ -1,12 +1,13 @@
 mod encode;
-pub(crate) use encode::{dimensions, export};
+#[doc(hidden)]
+pub use encode::{dimensions, export};
 
 use crate::{
-    automation::mcp_io,
     model::{
         CelMeta, ColorMode, DEFAULT_DURATION, Document, MAX_DIMENSION, MAX_DOCUMENT_PIXELS,
         MAX_PIXELS, Pixel,
     },
+    storage::mcp_io,
 };
 use std::{
     io::{BufReader, Read, Seek, SeekFrom},

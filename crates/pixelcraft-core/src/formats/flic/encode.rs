@@ -1,8 +1,8 @@
 use super::{FLC, FLI, FRAME, HEADER_SIZE, io_text};
 use crate::{
-    automation::mcp_io,
     formats::{animation_dimensions, raster::on_white},
     model::{ColorMode, Document, MAX_DOCUMENT_PIXELS, Pixel},
+    storage::mcp_io,
 };
 use std::{
     collections::HashMap,
@@ -65,16 +65,14 @@ fn plan(doc: &Document, scale: usize, classic: bool) -> Result<([usize; 2], Timi
     Ok(([width, height], timing))
 }
 
-pub(crate) fn dimensions(
-    doc: &Document,
-    scale: usize,
-    classic: bool,
-) -> Result<(usize, usize), String> {
+#[doc(hidden)]
+pub fn dimensions(doc: &Document, scale: usize, classic: bool) -> Result<(usize, usize), String> {
     let ([width, height], _) = plan(doc, scale, classic)?;
     Ok((width, height))
 }
 
-pub(crate) fn export(
+#[doc(hidden)]
+pub fn export(
     path: &Path,
     doc: &Document,
     scale: usize,

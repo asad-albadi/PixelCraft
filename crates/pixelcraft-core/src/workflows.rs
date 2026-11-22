@@ -2,6 +2,8 @@ use crate::model::*;
 use image::{Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+#[doc(hidden)]
+pub use sheet_layout::validate_sheet_dimensions;
 use std::{borrow::Cow, ops::RangeInclusive};
 
 mod affine;
@@ -17,10 +19,9 @@ pub mod selection;
 mod sheet_layout;
 mod sheet_split;
 pub mod spray;
-pub(crate) use sheet_layout::{
-    uniform_sheet_area, uniform_sheet_dimensions, validate_sheet_dimensions,
-};
-pub(crate) use sheet_split::{SheetCrop, pack_split_sheet, split_sheet_work};
+pub(crate) use sheet_layout::{uniform_sheet_area, uniform_sheet_dimensions};
+#[doc(hidden)]
+pub use sheet_split::{SheetCrop, pack_split_sheet, split_sheet_work};
 mod sprite_resize;
 mod sprite_transform;
 
@@ -595,7 +596,8 @@ pub fn ramp_interpolated(a: Pixel, b: Pixel, n: usize, space: RampInterpolation)
         .collect()
 }
 /// Export explicit layers with their ancestors. Groups include visible descendants.
-pub(crate) fn filter_layers_for_export<'a>(
+#[doc(hidden)]
+pub fn filter_layers_for_export<'a>(
     d: &'a Document,
     layers: Option<&[usize]>,
 ) -> Result<Cow<'a, Document>, String> {
@@ -708,7 +710,8 @@ impl SheetOptions {
         self.trim || self.trim_by_grid
     }
 
-    pub(crate) fn frames_for(&self, doc: &Document) -> Result<RangeInclusive<usize>, String> {
+    #[doc(hidden)]
+    pub fn frames_for(&self, doc: &Document) -> Result<RangeInclusive<usize>, String> {
         let last = doc
             .durations
             .len()
@@ -732,7 +735,8 @@ impl SheetOptions {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct SheetSpacing {
+#[doc(hidden)]
+pub struct SheetSpacing {
     border: usize,
     gap: usize,
     inner: usize,
@@ -740,7 +744,8 @@ pub(crate) struct SheetSpacing {
 }
 
 impl SheetSpacing {
-    pub(crate) fn new(options: &SheetOptions, extrude: usize) -> Result<Self, String> {
+    #[doc(hidden)]
+    pub fn new(options: &SheetOptions, extrude: usize) -> Result<Self, String> {
         let legacy = options.padding.min(256);
         let spacing = Self {
             border: options.border_padding.unwrap_or(legacy),

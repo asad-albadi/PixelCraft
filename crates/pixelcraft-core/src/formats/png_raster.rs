@@ -1,6 +1,6 @@
 use crate::{
-    automation::mcp_io,
     model::{CLEAR, ColorMode, Document, MAX_DIMENSION, MAX_DOCUMENT_PIXELS, MAX_PIXELS, Pixel},
+    storage::mcp_io,
 };
 use image::Pixel as _;
 use png::{BitDepth, BlendOp, ColorType, DisposeOp};

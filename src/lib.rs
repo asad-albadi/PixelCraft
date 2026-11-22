@@ -1,18 +1,5 @@
-pub mod extensions;
-pub mod formats;
-pub mod model;
-
-mod ase_properties;
-
-pub mod color;
-pub mod contributions;
-
-pub mod updates;
-
-pub mod interchange;
-pub mod workflows;
-
-pub mod atlas;
+//! Compatibility facade for the PixelCraft public Rust API.
+pub use pixelcraft_core::*;
 pub mod automation;
 mod automation_paint;
-pub mod productivity;
+pub mod updates;

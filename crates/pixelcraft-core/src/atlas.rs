@@ -379,7 +379,7 @@ pub fn save_packed_atlas_with_metadata(
 ) -> Result<(), String> {
     let (image, meta) = packed;
     let write_image =
-        || crate::automation::mcp_io::write_image(path, image).map_err(|e| e.to_string());
+        || crate::storage::mcp_io::write_image(path, image).map_err(|e| e.to_string());
     if metadata == AtlasMetadata::None {
         return write_image();
     }

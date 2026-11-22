@@ -1,6 +1,6 @@
 use crate::{
-    automation::mcp_io,
     model::{ColorMode, Document, MAX_DIMENSION, MAX_PIXELS, Pixel},
+    storage::mcp_io,
 };
 use image::RgbaImage;
 use std::{

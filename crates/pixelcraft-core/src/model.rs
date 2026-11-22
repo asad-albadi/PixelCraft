@@ -3685,7 +3685,8 @@ impl Document {
         Ok(())
     }
 
-    pub(crate) fn draw_pixel(&mut self, l: usize, f: usize, i: usize, color: Pixel, index: u8) {
+    #[doc(hidden)]
+    pub fn draw_pixel(&mut self, l: usize, f: usize, i: usize, color: Pixel, index: u8) {
         let indexed = self.color_mode == ColorMode::Indexed;
         let creates_index = indexed && index as usize != self.transparent_index;
         let initial_indices = || vec![self.transparent_index as u8; self.width * self.height];

@@ -1,6 +1,6 @@
 //! Shared drawing and interchange operations for the editor and headless tools.
-use crate::automation::mcp_io;
 use crate::model::*;
+use crate::storage::mcp_io;
 use crate::{formats, interchange, workflows::SheetOptions};
 use image::RgbaImage;
 use serde::{Deserialize, Serialize};
@@ -507,7 +507,8 @@ pub fn paint_brush_on_axes(
     paint_brush_with_ink_on_axes(d, (l, f, axes), p, color, size, o, |_, _, source| source);
 }
 
-pub(crate) fn paint_brush_with_ink(
+#[doc(hidden)]
+pub fn paint_brush_with_ink(
     d: &mut Document,
     (l, f): (usize, usize),
     p: (i32, i32),
@@ -1652,7 +1653,8 @@ pub fn expand_atlas_inputs(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     expand_atlas_inputs_with_path_check(inputs, |_| Ok(()))
 }
 
-pub(crate) fn expand_atlas_inputs_with_path_check(
+#[doc(hidden)]
+pub fn expand_atlas_inputs_with_path_check(
     inputs: &[PathBuf],
     check_path: impl Fn(&Path) -> Result<(), String>,
 ) -> Result<Vec<PathBuf>, String> {

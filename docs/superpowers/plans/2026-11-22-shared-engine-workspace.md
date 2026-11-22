@@ -23,9 +23,9 @@ Preserve executable/test discovery; run headless checks through the root binary.
 
 ## Batch checklist
 
-- [ ] Baseline: record HEAD, suite totals and CLI help. Add a failing workspace
+- [x] Baseline: record HEAD, suite totals and CLI help. Add a failing workspace
   boundary check using Cargo metadata for required members and dependency edges.
-- [ ] Core: move library engine modules to `crates/pixelcraft-core/src`; extract
+- [x] Core: move library engine modules to `crates/pixelcraft-core/src`; extract
   storage from `src/automation/{mcp_io,mcp_access,mcp_linux,mcp_windows,mcp_files,
   editor_output}.rs` and generic staging from `src/automation.rs`. Retain root
   reexports. Move static codec linking with codecs; keep icon resource on binary.
@@ -53,3 +53,9 @@ asking the user to approve the same restructuring again.
 Baseline: `46576e1c15009e79bbc1021fb3321f7a100ce0f6`; Rust 1.95.0;
 `cargo test --locked`: 806 passed, 0 failed, 16 opt-in tests ignored.
 Full log: `/tmp/pixelcraft-27-baseline-tests.log` (local evidence, not portable).
+
+Batch core: full workspace suite retained 806 passing tests and 16 opt-in ignores;
+strict all-target workspace Clippy passed. Existing CLI help is byte-identical.
+Independent review confirmed one guard state and unchanged staging semantics.
+Moved a cross-layer tile command regression to root integration tests; kept
+codec broker private. Default workspace members include moved unit/security tests.

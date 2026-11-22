@@ -357,7 +357,7 @@ mod sequence_validation_tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         crate::model::DOCUMENT_VALIDATIONS.set(0);
-        crate::automation::encode_editor_sequence(&root, &doc, 1).unwrap();
+        crate::formats::encode_editor_sequence(&root, &doc, 1).unwrap();
         let validations = crate::model::DOCUMENT_VALIDATIONS.get();
         std::fs::remove_dir_all(root).unwrap();
         assert_eq!(

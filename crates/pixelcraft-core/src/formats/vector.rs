@@ -1,4 +1,4 @@
-use crate::{automation::mcp_io, model::Pixel};
+use crate::{model::Pixel, storage::mcp_io};
 use image::RgbaImage;
 use std::{
     collections::BTreeMap,

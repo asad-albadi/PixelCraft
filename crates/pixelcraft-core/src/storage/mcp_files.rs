@@ -5,7 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub(super) fn project_root(path: &Path) -> Result<PathBuf, String> {
+pub fn project_root(path: &Path) -> Result<PathBuf, String> {
     let root = path
         .canonicalize()
         .map_err(|e| format!("Invalid project root {}: {e}", path.display()))?;
@@ -43,7 +43,7 @@ fn same_component(a: Component<'_>, b: Component<'_>) -> bool {
     a == b
 }
 
-pub(super) fn project_suffix<'a>(
+pub fn project_suffix<'a>(
     root: &Path,
     path: &'a Path,
 ) -> Result<std::path::Components<'a>, String> {
@@ -75,13 +75,13 @@ pub(super) fn project_suffix<'a>(
     Ok(suffix)
 }
 
-pub(super) struct Files<'a> {
-    pub(super) root: Option<&'a Path>,
-    pub(super) overwrite: bool,
+pub struct Files<'a> {
+    pub root: Option<&'a Path>,
+    pub overwrite: bool,
 }
 
 impl Files<'_> {
-    pub(super) fn resolve(root: Option<&Path>, path: PathBuf) -> PathBuf {
+    pub fn resolve(root: Option<&Path>, path: PathBuf) -> PathBuf {
         let Some(root) = root else {
             return path;
         };
@@ -94,7 +94,7 @@ impl Files<'_> {
         root.join(path)
     }
 
-    pub(super) fn check_read(&self, path: &Path) -> Result<(), String> {
+    pub fn check_read(&self, path: &Path) -> Result<(), String> {
         self.check_path(path, false)?;
         if self.root.is_some() && !mcp_io::metadata(path).map_err(|e| e.to_string())?.is_file() {
             if mcp_io::open(path).is_ok() {
@@ -105,7 +105,7 @@ impl Files<'_> {
         Ok(())
     }
 
-    pub(super) fn check_atlas_input(&self, path: &Path) -> Result<(), String> {
+    pub fn check_atlas_input(&self, path: &Path) -> Result<(), String> {
         self.check_path(path, false)?;
         if self.root.is_some() {
             let metadata = mcp_io::metadata(path).map_err(|e| e.to_string())?;
@@ -119,7 +119,7 @@ impl Files<'_> {
         Ok(())
     }
 
-    pub(super) fn check_write(&self, path: &Path) -> Result<(), String> {
+    pub fn check_write(&self, path: &Path) -> Result<(), String> {
         self.check_path(path, true)
     }
 
@@ -154,7 +154,7 @@ impl Files<'_> {
         Err("Restricted MCP filesystem access was not established".into())
     }
 
-    pub(super) fn check_file(&self, path: &Path) -> Result<(), String> {
+    pub fn check_file(&self, path: &Path) -> Result<(), String> {
         self.check_write(path)?;
         match mcp_io::metadata(path) {
             Ok(_) if !self.overwrite => Err(format!(
@@ -170,7 +170,7 @@ impl Files<'_> {
         }
     }
 
-    pub(super) fn write_file<T>(
+    pub fn write_file<T>(
         &self,
         output: &Path,
         encode: impl FnOnce(&Path) -> Result<T, String>,
@@ -180,7 +180,7 @@ impl Files<'_> {
 
     // The encoder writes into a private staging directory. Validate the whole
     // output set up front and publish only after all the files have encoded.
-    pub(super) fn write_files<T>(
+    pub fn write_files<T>(
         &self,
         output: &Path,
         files: &[PathBuf],
@@ -189,7 +189,7 @@ impl Files<'_> {
     ) -> Result<T, String> {
         self.write_files_authorized(output, files, directory, None, encode)
     }
-    pub(super) fn write_files_authorized<T>(
+    pub fn write_files_authorized<T>(
         &self,
         output: &Path,
         files: &[PathBuf],
@@ -245,7 +245,7 @@ impl Files<'_> {
     }
 }
 
-pub(super) fn publish_files(
+pub fn publish_files(
     prepared: &PreparedExport,
     files: &[PathBuf],
     directory: bool,

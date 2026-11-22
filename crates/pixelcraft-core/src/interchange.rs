@@ -1,4 +1,4 @@
-use crate::automation::mcp_io;
+use crate::storage::mcp_io;
 use crate::{model::*, workflows::*};
 use image::AnimationDecoder;
 use serde_json::{Value, json};
@@ -12,7 +12,8 @@ use std::{
 mod sheet_templates;
 mod tileset_atlas;
 pub use tileset_atlas::{TilesetAtlasEntry, TilesetAtlasLayout, TilesetAtlasScope, tileset_atlas};
-pub(crate) use tileset_atlas::{plan_tileset_atlas, render_tileset_atlas};
+#[doc(hidden)]
+pub use tileset_atlas::{plan_tileset_atlas, render_tileset_atlas};
 
 pub fn from_frames(
     frames: impl Iterator<Item = Result<image::Frame, image::ImageError>>,
@@ -169,7 +170,8 @@ pub(crate) fn export_sheet_with_previous(
     export_sheet_extruded(path, previous_path, d, o, 0)
 }
 
-pub(crate) fn export_sheet_extruded(
+#[doc(hidden)]
+pub fn export_sheet_extruded(
     path: &Path,
     previous_path: &Path,
     d: &Document,
@@ -265,7 +267,8 @@ pub fn export_sheet_for_slice_with_previous(
     )
 }
 
-pub(crate) struct SliceSheet<'a> {
+#[doc(hidden)]
+pub struct SliceSheet<'a> {
     slice: &'a SpriteSlice,
     first: usize,
     last: usize,
@@ -275,7 +278,8 @@ pub(crate) struct SliceSheet<'a> {
     samples: usize,
 }
 
-pub(crate) fn plan_slice_sheets<'a>(
+#[doc(hidden)]
+pub fn plan_slice_sheets<'a>(
     d: &'a Document,
     o: &SheetOptions,
     extrude: usize,
@@ -527,7 +531,8 @@ mod slice_sheet_limits {
 }
 
 impl SliceSheet<'_> {
-    pub(crate) fn export(
+    #[doc(hidden)]
+    pub fn export(
         &self,
         path: &Path,
         previous_path: &Path,
@@ -660,7 +665,8 @@ impl SliceSheet<'_> {
     }
 }
 
-pub(crate) fn preflight_sheet_export(
+#[doc(hidden)]
+pub fn preflight_sheet_export(
     path: &Path,
     doc: &Document,
     options: &SheetOptions,
@@ -1265,7 +1271,7 @@ pub fn load_webp(path: &Path) -> Result<Document, String> {
             .ok_or("WebP import requires the libwebpdemux runtime on this system")
     };
     #[cfg(target_os = "linux")]
-    let lib = crate::automation::mcp_linux::with_codec_runtime(load_runtime)??;
+    let lib = crate::storage::mcp_linux::with_codec_runtime(load_runtime)??;
     #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
     let lib = load_runtime()?;
     use std::ffi::c_void;

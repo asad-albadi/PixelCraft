@@ -1,7 +1,7 @@
 use super::{pcx, vector};
 use crate::{
-    automation::mcp_io,
     model::{Document, MAX_DIMENSION, MAX_PIXELS},
+    storage::mcp_io,
 };
 use image::{DynamicImage, ImageDecoder, ImageFormat, RgbaImage};
 use std::{
@@ -51,14 +51,16 @@ fn decode(decoder: impl ImageDecoder) -> Result<Document, String> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RasterFormat {
+#[doc(hidden)]
+pub enum RasterFormat {
     Standard(ImageFormat),
     Pcx,
     Svg,
     Css,
 }
 
-pub(crate) fn raster_format(extension: &str) -> Option<RasterFormat> {
+#[doc(hidden)]
+pub fn raster_format(extension: &str) -> Option<RasterFormat> {
     if extension.eq_ignore_ascii_case("pcx") {
         return Some(RasterFormat::Pcx);
     }
@@ -82,7 +84,8 @@ pub(crate) fn raster_format(extension: &str) -> Option<RasterFormat> {
     .then_some(RasterFormat::Standard(format))
 }
 
-pub(crate) fn validate_raster_size(
+#[doc(hidden)]
+pub fn validate_raster_size(
     format: RasterFormat,
     width: usize,
     height: usize,
@@ -103,7 +106,8 @@ pub(crate) fn validate_raster_size(
     Ok(())
 }
 
-pub(crate) fn write_raster_image(
+#[doc(hidden)]
+pub fn write_raster_image(
     path: &Path,
     image: &RgbaImage,
     format: RasterFormat,

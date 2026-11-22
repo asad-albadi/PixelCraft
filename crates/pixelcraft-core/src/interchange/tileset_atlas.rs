@@ -38,7 +38,8 @@ pub fn tileset_atlas(
     Ok((image, layout))
 }
 
-pub(crate) fn plan_tileset_atlas(
+#[doc(hidden)]
+pub fn plan_tileset_atlas(
     doc: &Document,
     scope: TilesetAtlasScope<'_>,
     columns: Option<usize>,
@@ -124,7 +125,8 @@ pub(crate) fn plan_tileset_atlas(
     })
 }
 
-pub(crate) fn render_tileset_atlas(doc: &Document, layout: &TilesetAtlasLayout) -> RgbaImage {
+#[doc(hidden)]
+pub fn render_tileset_atlas(doc: &Document, layout: &TilesetAtlasLayout) -> RgbaImage {
     let mut image = RgbaImage::new(layout.width as u32, layout.height as u32);
     for entry in &layout.tilesets {
         let set = &doc.tilesets[entry.index];
