@@ -65,3 +65,8 @@ passed. Released v0.11.0 and refactored executable return identical initialize
 responses and full MCP tool schemas; CLI help remains byte-identical. Independent
 review compared command bodies, live bridge, root guards and response limits: no
 remaining actionable findings. Deadline tests moved to the MCP crate.
+
+Batch desktop relocation: all 806 tests pass (16 opt-in ignores), strict workspace
+Clippy and normal root build pass. Dependency boundary check is green. CLI help
+remains byte-identical. Review fixed author metadata and release-specific test
+selectors so native/UI checks cannot silently select the empty launcher target.

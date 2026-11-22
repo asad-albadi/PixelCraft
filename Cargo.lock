@@ -2378,39 +2378,20 @@ dependencies = [
 name = "pixelcraft"
 version = "0.11.0"
 dependencies = [
- "arboard",
  "base64",
- "clipboard-win",
- "color_quant",
- "eframe",
  "flate2",
  "image",
- "libc",
- "libloading",
  "moxcms",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
  "pixelcraft-automation",
  "pixelcraft-cli",
  "pixelcraft-core",
+ "pixelcraft-desktop",
  "pixelcraft-mcp",
  "png",
- "raw-window-handle",
- "rfd",
  "roxmltree",
- "semver",
  "serde",
  "serde_json",
  "sha2",
- "ureq",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "windows-sys 0.61.2",
- "wl-clipboard-rs",
- "x11rb",
- "zbus",
 ]
 
 [[package]]
@@ -2451,6 +2432,45 @@ dependencies = [
  "serde_json",
  "sha2",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pixelcraft-desktop"
+version = "0.11.0"
+dependencies = [
+ "arboard",
+ "base64",
+ "clipboard-win",
+ "color_quant",
+ "eframe",
+ "flate2",
+ "image",
+ "libc",
+ "libloading",
+ "moxcms",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "pixelcraft-automation",
+ "pixelcraft-cli",
+ "pixelcraft-core",
+ "pixelcraft-mcp",
+ "png",
+ "raw-window-handle",
+ "rfd",
+ "roxmltree",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ureq",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+ "windows-sys 0.61.2",
+ "wl-clipboard-rs",
+ "x11rb",
+ "zbus",
 ]
 
 [[package]]
