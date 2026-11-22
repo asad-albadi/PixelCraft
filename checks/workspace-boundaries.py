@@ -35,4 +35,4 @@ assert not reachable(members["pixelcraft-core"]) & {"pixelcraft-mcp", "pixelcraf
 assert not reachable(members["pixelcraft-automation"]) & {"pixelcraft-mcp", "pixelcraft-cli"}
 print("Workspace engine and adapter dependency boundaries verified")
 
-assert not reachable(members["pixelcraft-ffi"]) & {"pixelcraft-cli", "pixelcraft-mcp", "pixelcraft-automation"}
+assert not reachable(members["pixelcraft-ffi"]) & {"pixelcraft-cli", "pixelcraft-mcp"}

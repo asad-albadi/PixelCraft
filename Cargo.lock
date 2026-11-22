@@ -2478,6 +2478,7 @@ dependencies = [
 name = "pixelcraft-ffi"
 version = "0.11.0"
 dependencies = [
+ "pixelcraft-automation",
  "pixelcraft-core",
  "serde_json",
 ]
