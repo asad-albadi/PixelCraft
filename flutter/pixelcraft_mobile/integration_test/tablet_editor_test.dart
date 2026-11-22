@@ -1,4 +1,6 @@
 import 'dart:ui' as ui;
+import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:pixelcraft_mobile/editor_controller.dart';
 import 'package:pixelcraft_mobile/main.dart';
+import 'package:pixelcraft_mobile/widgets/advanced_tools.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -139,7 +142,13 @@ void main() {
       editor.dismissError();
       await tester.runAsync(() => editor.save());
       await finish();
-      await tester.tap(find.byTooltip('Change appearance'));
+      if (find.byTooltip('Change appearance').evaluate().isNotEmpty) {
+        await tester.tap(find.byTooltip('Change appearance'));
+      } else {
+        await tester.tap(find.byTooltip('File actions'));
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.text('Change appearance'));
+      }
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
@@ -352,7 +361,13 @@ void main() {
       });
       await tester.pumpWidget(PixelCraftApp(controller: editor));
       await tester.pump(const Duration(milliseconds: 150));
-      await tester.tap(find.byTooltip('Zen drawing mode'));
+      if (find.byTooltip('Zen drawing mode').evaluate().isNotEmpty) {
+        await tester.tap(find.byTooltip('Zen drawing mode'));
+      } else {
+        await tester.tap(find.byTooltip('File actions'));
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.text('Zen drawing mode'));
+      }
       await tester.pump(const Duration(milliseconds: 150));
       expect(editor.zen, true);
       expect(find.text('Preview'), findsNothing);
@@ -372,7 +387,229 @@ void main() {
       await tester.tap(find.byKey(const Key('exit-zen')));
       await tester.pump(const Duration(milliseconds: 150));
       expect(editor.zen, false);
+      if (find.text('Preview').evaluate().isEmpty) {
+        await tester.tap(find.byTooltip('Colors and layers'));
+        await tester.pump(const Duration(milliseconds: 300));
+      }
       expect(find.text('Preview'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'Android native formats retain artwork and deterministic animation metadata',
+    (tester) async {
+      final editor = EditorController();
+      addTearDown(() async {
+        editor.dispose();
+        await editor.native.close();
+      });
+      await tester.runAsync(() async {
+        await EditorController.storage.invokeMethod<void>('recoveryClear');
+        await editor.initialize();
+        await editor.newDocument(demo: true);
+        await editor.edits([
+          {'op': 'set-frame', 'name': 'idle_01', 'duration': 80},
+          {
+            'op': 'add-tag',
+            'tag': {
+              'name': 'idle',
+              'from': 0,
+              'to': 3,
+              'direction': 0,
+              'repeat': 0,
+              'color': [64, 200, 180],
+            },
+          },
+        ]);
+        Future<Uint8List> output(int format) async {
+          final response = await editor.native.send(
+            'request',
+            op: 24,
+            a: format,
+          );
+          return (response['project'] as TransferableTypedData)
+              .materialize()
+              .asUint8List();
+        }
+
+        final original =
+            (await editor.native.send('request', op: 5))['project']
+                as TransferableTypedData;
+        final saved = original.materialize().asUint8List();
+        final metadata = jsonDecode(utf8.decode(await output(5))) as Map;
+        expect(metadata['meta']['image'], 'PixelCraft-sheet.png');
+        expect(jsonEncode(metadata), contains('idle_01'));
+        expect((await output(4)).take(8), [137, 80, 78, 71, 13, 10, 26, 10]);
+        for (final format in [1, 2, 3]) {
+          await editor.native.send('request', op: 6, input: saved);
+          await editor.command(2);
+          final bytes = await output(format);
+          await editor.native.send('request', op: 23, a: format, input: bytes);
+          await editor.command(2);
+          expect(editor.width, 48);
+          expect(editor.height, 48);
+          expect(editor.state['frames'], format == 1 ? 1 : 4);
+          if (format == 3) {
+            expect(editor.state['layers'].length, 3);
+            expect(editor.state['tags'][0]['name'], 'idle');
+          }
+        }
+        final before = editor.state['revision'];
+        var rejected = false;
+        try {
+          await editor.native.send(
+            'request',
+            op: 23,
+            a: 1,
+            input: Uint8List.fromList([137, 80, 78, 71]),
+          );
+        } catch (_) {
+          rejected = true;
+        }
+        expect(rejected, true, reason: 'Malformed PNG must be rejected');
+        await editor.command(2);
+        expect(editor.state['revision'], before);
+        expect(editor.error, isNull);
+      });
+      await tester.pumpWidget(PixelCraftApp(controller: editor));
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'Indexed tiles and embedded references remain editable after Android save and Undo',
+    (tester) async {
+      final editor = EditorController();
+      addTearDown(() async {
+        editor.dispose();
+        await editor.native.close();
+      });
+      await tester.runAsync(() async {
+        await EditorController.storage.invokeMethod<void>('recoveryClear');
+        await editor.initialize();
+        await editor.newDocument(demo: true);
+        await editor.edits([
+          {'op': 'convert-indexed'},
+        ]);
+        expect(editor.state['mode'], 'Indexed');
+        final png =
+            (await editor.native.send('request', op: 24, a: 1))['project']
+                as TransferableTypedData;
+        await editor.command(
+          26,
+          a: editor.state['revision'] as int,
+          input: png.materialize().asUint8List(),
+        );
+        expect(editor.referenceImages.length, 1);
+        await editor.advanced(
+          'reference-set',
+          extra: {
+            'index': 0,
+            'x': 2,
+            'y': 3,
+            'scale': .5,
+            'opacity': 128,
+            'visible': true,
+          },
+        );
+        await editor.advanced(
+          'create-tileset',
+          extra: {'tile_width': 8, 'tile_height': 8, 'hide_source': true},
+        );
+        expect(editor.activeTileset, 0);
+        editor.selectTile(0);
+        editor.begin(const Offset(4, 4));
+        await editor.settle();
+        expect(editor.error, isNull);
+        await editor.save();
+        await editor.newDocument();
+        await editor.open();
+        expect(editor.state['mode'], 'Indexed');
+        expect(editor.state['tilesets'].length, 1);
+        expect(editor.referenceImages.length, 1);
+        await editor.advanced('reference-remove', extra: {'index': 0});
+        expect(editor.referenceImages, isEmpty);
+        await editor.command(3);
+        expect(editor.referenceImages.length, 1);
+      });
+      await tester.pumpWidget(PixelCraftApp(controller: editor));
+      await tester.pump(const Duration(milliseconds: 150));
+      final context = tester.element(find.byType(Scaffold).first);
+      showAdvancedTools(context, editor);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Document tools'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
+    'Bounded 256px editing and playback stay responsive without history mutation',
+    (tester) async {
+      final editor = EditorController();
+      addTearDown(() async {
+        editor.dispose();
+        await editor.native.close();
+      });
+      await tester.runAsync(() async {
+        await EditorController.storage.invokeMethod<void>('recoveryClear');
+        await editor.initialize();
+        await editor.command(0, a: 256, b: 256);
+        final watch = Stopwatch()..start();
+        editor.begin(const Offset(0, 0));
+        for (var i = 1; i < 256; i++) {
+          editor.move(Offset(i.toDouble(), i.toDouble()));
+        }
+        await editor.end();
+        watch.stop();
+        debugPrint('ANDROID_STROKE_256_MS=${watch.elapsedMilliseconds}');
+        expect(watch.elapsedMilliseconds, lessThan(10000));
+        expect(editor.state['undo'], 1);
+        await editor.command(3);
+        await editor.command(4);
+        for (var i = 0; i < 3; i++) {
+          await editor.addFrame(duplicate: true);
+          await editor.edits([
+            {
+              'op': 'fill',
+              'x': 0,
+              'y': 255,
+              'color': [50 + i * 30, 80, 120, 255],
+            },
+          ]);
+        }
+        await editor.edits([
+          {
+            'op': 'set-range-duration',
+            'range': {
+              'first_layer': 0,
+              'last_layer': 0,
+              'first_frame': 0,
+              'last_frame': 3,
+            },
+            'duration': 17,
+          },
+        ]);
+        final target = editor.state['frame'], history = editor.state['undo'];
+        var renders = 0;
+        void rendered() {
+          renders++;
+        }
+
+        editor.canvasUpdates.addListener(rendered);
+        await editor.startPlayback();
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+        await editor.stopPlayback();
+        editor.canvasUpdates.removeListener(rendered);
+        debugPrint('ANDROID_PLAYBACK_256_RENDERS_800MS=$renders');
+        expect(renders, greaterThan(1));
+        expect(editor.state['frame'], target);
+        expect(editor.state['undo'], history);
+        expect(editor.error, isNull);
+      });
+      await tester.pumpWidget(PixelCraftApp(controller: editor));
+      await tester.pump(const Duration(milliseconds: 150));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
     },

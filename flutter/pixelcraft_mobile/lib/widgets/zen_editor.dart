@@ -4,6 +4,8 @@ import '../editor_controller.dart';
 import 'color_dialog.dart';
 import 'pixel_canvas.dart';
 import 'document_tools.dart';
+import 'export_options.dart';
+import 'advanced_tools.dart';
 
 /// Canvas-only presentation; owns no artwork or history.
 class ZenEditor extends StatelessWidget {
@@ -124,6 +126,10 @@ class ZenEditor extends StatelessWidget {
                 const PopupMenuDivider(),
                 const PopupMenuItem(value: 'fit', child: Text('Fit canvas')),
                 const PopupMenuItem(
+                  value: 'selection',
+                  child: Text('Selection options…'),
+                ),
+                const PopupMenuItem(
                   value: 'layers',
                   child: Text('Layer options…'),
                 ),
@@ -132,6 +138,14 @@ class ZenEditor extends StatelessWidget {
                   child: Text('Frame options…'),
                 ),
                 const PopupMenuItem(value: 'save', child: Text('Save')),
+                const PopupMenuItem(
+                  value: 'export',
+                  child: Text('Export & share…'),
+                ),
+                const PopupMenuItem(
+                  value: 'advanced',
+                  child: Text('Document tools…'),
+                ),
                 if (!compact)
                   PopupMenuItem(
                     value: 'side',
@@ -150,12 +164,18 @@ class ZenEditor extends StatelessWidget {
                 switch (action) {
                   case 'fit':
                     editor.fitCanvas();
+                  case 'selection':
+                    showDocumentTools(context, editor, tab: 3);
                   case 'layers':
                     showDocumentTools(context, editor, tab: 0);
                   case 'frames':
                     showDocumentTools(context, editor, tab: 1);
                   case 'save':
                     editor.save();
+                  case 'export':
+                    showExportOptions(context, editor);
+                  case 'advanced':
+                    showAdvancedTools(context, editor);
                   case 'side':
                     editor.setZenControlsLeft(!editor.zenControlsLeft);
                 }
@@ -210,6 +230,15 @@ class ZenEditor extends StatelessWidget {
                   left: editor.zenControlsLeft ? 12 : null,
                   right: editor.zenControlsLeft ? null : 12,
                   child: Center(child: strip),
+                ),
+              if (editor.importing)
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: FilledButton.tonal(
+                    onPressed: editor.cancelImport,
+                    child: const Text('Cancel import'),
+                  ),
                 ),
               if (editor.loadingFile)
                 const Positioned(

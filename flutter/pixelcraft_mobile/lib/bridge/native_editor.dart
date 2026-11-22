@@ -144,6 +144,7 @@ void _worker(List<Object> init) {
     return;
   }
   var session = 0;
+  var strokeSize = 1;
   parent.send(commands.sendPort);
   commands.listen((message) {
     final command = Map<String, dynamic>.from(message as Map);
@@ -162,6 +163,11 @@ void _worker(List<Object> init) {
         return;
       }
       if (command['action'] == 'stroke') {
+        final phase = command['phase'] as int, size = command['size'] as int;
+        if ((phase == 1 || phase == 2) && size != strokeSize) {
+          native.read(native.request(session, 31, size, 0, 0));
+        }
+        if (phase != 3) strokeSize = size;
         final status = native.stroke(
           session,
           command['phase'] as int,
@@ -199,6 +205,17 @@ void _worker(List<Object> init) {
       }
       final state = native.read(native.request(session, 2, 0, 0, 0));
       result['state'] = jsonDecode(utf8.decode(state.$2));
+      if (command['action'] != 'preview' &&
+          [0, 1, 3, 4, 6, 16, 23, 25, 26, 29].contains(command['op'])) {
+        final refs = (result['state'] as Map)['references'] as List? ?? [];
+        result['referenceRgba'] = [
+          for (var i = 0; i < refs.length; i++)
+            TransferableTypedData.fromList([
+              native.read(native.request(session, 27, i, 0, 0)).$2,
+            ]),
+        ];
+      }
+
       final frame = native.read(
         native.request(
           session,
@@ -215,6 +232,11 @@ void _worker(List<Object> init) {
       }
       parent.send(result);
     } catch (error) {
+      if (command['action'] == 'stroke' && session != 0) {
+        try {
+          native.stroke(session, 3, 0, 0, 1);
+        } catch (_) {}
+      }
       parent.send({'id': command['id'], 'error': error.toString()});
     } finally {
       if (input != 0) native.free(input);

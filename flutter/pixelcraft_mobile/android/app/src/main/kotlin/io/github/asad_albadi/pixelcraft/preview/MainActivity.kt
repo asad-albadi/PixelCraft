@@ -7,6 +7,9 @@ import android.provider.OpenableColumns
 import android.provider.DocumentsContract
 import android.net.Uri
 import androidx.core.content.FileProvider
+import android.content.res.AssetFileDescriptor
+import android.os.CancellationSignal
+import android.os.OperationCanceledException
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
@@ -17,9 +20,31 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 class MainActivity : FlutterActivity() {
     private val io = Executors.newSingleThreadExecutor()
+    // External providers cannot occupy the private project/recovery worker. All provider
+    // pools have fixed thread counts and bounded queues, including cancellation IPC.
+    private val providerIo = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(1))
+    private val providerReadIo = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, SynchronousQueue<Runnable>())
+    private val providerCancelIo = ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(2))
+    private class ProviderRead(val result: MethodChannel.Result) {
+        val signal = CancellationSignal()
+        val canceled = AtomicBoolean(false)
+        val descriptor = AtomicReference<AssetFileDescriptor?>(null)
+        fun checkCanceled() {
+            if (canceled.get()) throw OperationCanceledException()
+            signal.throwIfCanceled()
+        }
+    }
+    private var activeRead: ProviderRead? = null
     private val main = Handler(Looper.getMainLooper())
     private var pending: MethodChannel.Result? = null
     private var copyBytes: ByteArray? = null
@@ -63,10 +88,14 @@ class MainActivity : FlutterActivity() {
                     val key = call.argument<String>("key") ?: getSharedPreferences("projects", MODE_PRIVATE).getString("last", null) ?: error("Save a project first")
                     mapOf("key" to key, "bytes" to readBounded(project(key).inputStream()))
                 }
-                "savedExportFolder" -> work(result) {
+                "cancelOpenDocument" -> {
+                    cancelOpenRead()
+                    result.success(null)
+                }
+                "savedExportFolder" -> work(result, executor = providerIo) {
                     savedFolder()?.let { folderLabel(it) }
                 }
-                "clearExportFolder" -> work(result) {
+                "clearExportFolder" -> work(result, executor = providerIo) {
                     val preferences = getSharedPreferences("exportFolders", MODE_PRIVATE)
                     val previous = preferences.getString("uri", null)?.let { Uri.parse(it) }
                     if (previous != null) releaseFolder(previous)
@@ -92,7 +121,7 @@ class MainActivity : FlutterActivity() {
                     val returnName = call.argument<Any>("returnName") == true
                     val export = try { ExportPolicy.validate(call.argument<ByteArray>("bytes"), call.argument<String>("name"), call.argument<String>("mime")) }
                     catch (error: Exception) { result.error("export", error.message, null); return@setMethodCallHandler }
-                    work(result) {
+                    work(result, executor = providerIo) {
                         val tree = savedFolder() ?: error("Choose an export folder again; its write permission is unavailable")
                         val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
                         // createDocument creates a copy; providers choose how duplicate names are disambiguated.
@@ -136,6 +165,10 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "openDocument", "saveCopy", "exportDocument" -> {
+                    if (call.method == "openDocument" && activeRead != null) {
+                        result.error("busy", "The previous document provider read is still finishing", null)
+                        return@setMethodCallHandler
+                    }
                     if (pending != null) { result.error("busy", "A file picker is already open", null); return@setMethodCallHandler }
                     val export = if (call.method == "exportDocument") {
                         try { ExportPolicy.validate(call.argument<ByteArray>("bytes"), call.argument<String>("name"), call.argument<String>("mime")) }
@@ -176,11 +209,13 @@ class MainActivity : FlutterActivity() {
         val directory = File(filesDir, "projects").apply { mkdirs() }
         return File(directory, "$key.pixel")
     }
-    private fun readBounded(input: java.io.InputStream): ByteArray = input.use { stream ->
+    private fun readBounded(input: java.io.InputStream, checkCanceled: () -> Unit = {}): ByteArray = input.use { stream ->
         val output = ByteArrayOutputStream()
         val buffer = ByteArray(32768)
         while (true) {
+            checkCanceled()
             val count = stream.read(buffer)
+            checkCanceled()
             if (count < 0) break
             require(output.size() + count <= maxBytes) { "File exceeds the preview limit" }
             output.write(buffer, 0, count)
@@ -201,11 +236,12 @@ class MainActivity : FlutterActivity() {
             check(entries.removeAt(0).deleteRecursively()) { "Could not clean export cache" }
         }
     }
-    private fun work(result: MethodChannel.Result, completion: ((Any?) -> Unit)? = null, action: () -> Any?) {
+    private fun work(result: MethodChannel.Result, completion: ((Any?) -> Unit)? = null,
+                     executor: ExecutorService = io, action: () -> Any?) {
         if (closed) { result.error("closed", "Editor closed", null); return }
         running.add(result)
         try {
-            io.execute {
+            executor.execute {
                 try {
                     val value = action()
                     main.post {
@@ -220,7 +256,66 @@ class MainActivity : FlutterActivity() {
             }
         } catch (error: Exception) {
             running.remove(result)
-            result.error("closed", "Editor closed", null)
+            result.error(if (closed) "closed" else "busy", if (closed) "Editor closed" else "Document provider is busy", null)
+        }
+    }
+    private fun cancelOpenRead() {
+        val read = activeRead ?: return
+        // Complete the original call on the main thread immediately. Late worker replies
+        // are suppressed, while activeRead stays occupied until that worker actually exits.
+        if (!read.canceled.compareAndSet(false, true)) return
+        if (running.remove(read.result)) read.result.success(null)
+        // Closing the descriptor must not wait behind a provider's blocked cancel IPC.
+        dispatchCancellation { read.signal.cancel() }
+        dispatchCancellation { read.descriptor.getAndSet(null)?.close() }
+    }
+    private fun dispatchCancellation(action: () -> Unit) {
+        try { providerCancelIo.execute { try { action() } catch (_: Exception) { } } }
+        catch (_: java.util.concurrent.RejectedExecutionException) {
+            // Broken providers can retain cancellation workers. Local cancellation still
+            // completes immediately; the bounded read loop/finally closes on unblocking.
+        }
+    }
+    private fun openProviderDocument(result: MethodChannel.Result, uri: Uri) {
+        if (closed) { result.error("closed", "Editor closed", null); return }
+        if (activeRead != null) { result.error("busy", "Document provider is still reading", null); return }
+        val read = ProviderRead(result)
+        activeRead = read
+        running.add(result)
+        try {
+            providerReadIo.execute {
+                var value: Any? = null
+                var failure: Exception? = null
+                try {
+                    read.checkCanceled()
+                    val descriptor = contentResolver.openAssetFileDescriptor(uri, "r", read.signal)
+                        ?: error("Cannot read this document")
+                    read.descriptor.set(descriptor)
+                    read.checkCanceled()
+                    val bytes = readBounded(descriptor.createInputStream(), read::checkCanceled)
+                    read.checkCanceled()
+                    val name = documentName(uri, read.signal)
+                    read.checkCanceled()
+                    value = mapOf("bytes" to bytes, "name" to name)
+                } catch (error: Exception) { failure = error }
+                finally {
+                    try { read.descriptor.getAndSet(null)?.close() }
+                    catch (error: Exception) { if (failure == null) failure = error }
+                }
+                main.post {
+                    if (activeRead === read) activeRead = null
+                    if (running.remove(result)) {
+                        val error = failure
+                        if (read.canceled.get() || error is OperationCanceledException) result.success(null)
+                        else if (error != null) result.error("storage", error.message ?: "Cannot read this document", null)
+                        else result.success(value)
+                    }
+                }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            activeRead = null
+            running.remove(result)
+            result.error("busy", "Document provider is busy", null)
         }
     }
     private fun savedFolder(): Uri? {
@@ -266,8 +361,8 @@ class MainActivity : FlutterActivity() {
             ?: error("Provider did not report the saved document name")
         return mapOf("name" to name)
     }
-    private fun documentName(uri: android.net.Uri): String? = try {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+    private fun documentName(uri: android.net.Uri, signal: CancellationSignal? = null): String? = try {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null, signal)?.use { cursor ->
             if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.length <= 255 } else null
         }
     } catch (_: Exception) { null }
@@ -283,11 +378,10 @@ class MainActivity : FlutterActivity() {
         if (resultCode != Activity.RESULT_OK || uri == null) { result.success(null); return }
         try { ExportPolicy.requireContentScheme(uri.scheme) }
         catch (error: IllegalArgumentException) { result.error("picker", error.message, null); return }
-        work(result) {
+        if (requestCode == 9001) { openProviderDocument(result, uri); return }
+        work(result, executor = providerIo) {
             if (requestCode == 9003) {
                 rememberFolder(uri, data.flags)
-            } else if (requestCode == 9001) {
-                mapOf("bytes" to readBounded(contentResolver.openInputStream(uri) ?: error("Cannot read this document")), "name" to documentName(uri))
             } else {
                 contentResolver.openOutputStream(uri, "w").use { stream ->
                     check(stream != null) { "Cannot write this document" }
@@ -300,11 +394,16 @@ class MainActivity : FlutterActivity() {
     }
     override fun onDestroy() {
         closed = true
+        cancelOpenRead()
         running.forEach { it.error("closed", "Editor closed during file operation", null) }
         running.clear()
         pending?.error("closed", "File picker closed with the editor", null)
         pending = null; copyBytes = null; copyReturnName = false
         io.shutdown()
+        providerIo.shutdownNow()
+        providerReadIo.shutdownNow()
+        // The already queued cancellation must be allowed to run after destruction.
+        providerCancelIo.shutdown()
         super.onDestroy()
     }
 }

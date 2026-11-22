@@ -15,10 +15,23 @@ import 'animation/playback_clock.dart';
 class EditorController extends ChangeNotifier {
   final NativeEditor native;
   final RecoveryStore recovery;
+  List<ui.Image> referenceImages = [];
+  int selectedTile = 1;
   Uint8List? _recoverable;
   bool get recoveryPending => _recoverable != null || _recoveryReadFailed;
   Timer? _autosave;
   bool _initializing = false;
+  bool importing = false;
+  int _importGeneration = 0;
+  void cancelImport() {
+    if (!importing) return;
+    _importGeneration++;
+    storage.invokeMethod<dynamic>('cancelOpenDocument').ignore();
+    importing = false;
+    status = "Cancelling import…";
+    _notify();
+  }
+
   bool _suppressRecovery = false;
   bool _discardHandoff = false;
   bool _recoveryReadFailed = false;
@@ -73,8 +86,23 @@ class EditorController extends ChangeNotifier {
     'Vertical',
   ].indexOf(state['brush_shape'] as String? ?? 'Round').clamp(0, 4);
   bool filled = false;
+  bool stylusPressure = false;
+  bool _pressureStroke = false;
+  int _strokeSize = 1;
+  void setStylusPressure(bool enabled) {
+    if (!drawing && !busy) {
+      stylusPressure = enabled;
+      _notify();
+    }
+  }
+
+  int pressureSize(double? pressure) => pressure == null || !pressure.isFinite
+      ? brush
+      : (brush * (.25 + .75 * pressure.clamp(0, 1))).round().clamp(1, 32);
+
   Offset? gestureStart, gestureEnd;
-  bool get _discreteTool => !['Draw', 'Erase', 'Pan'].contains(tool);
+  String gestureTool = 'Draw';
+  bool get _discreteTool => !['Draw', 'Erase', 'Pan'].contains(gestureTool);
   List<int> get rgba => [
     (color >> 16) & 255,
     (color >> 8) & 255,
@@ -228,6 +256,10 @@ class EditorController extends ChangeNotifier {
             if (!quiet) _notify();
             complete.complete(result);
           } catch (e) {
+            if (_disposed || (accept != null && !accept())) {
+              complete.complete(null);
+              return;
+            }
             final message = e.toString().replaceFirst('Bad state: ', '');
             try {
               final restored = await native.send('request', op: 2);
@@ -256,15 +288,15 @@ class EditorController extends ChangeNotifier {
     bool Function()? accept,
   }) async {
     if (accept != null && !accept()) return;
-    state = Map<String, dynamic>.from(result['state'] as Map);
+    final nextState = Map<String, dynamic>.from(result['state'] as Map);
     final pixels = (result['rgba'] as TransferableTypedData)
         .materialize()
         .asUint8List();
     final decoded = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       pixels,
-      width,
-      height,
+      nextState['width'] as int,
+      nextState['height'] as int,
       ui.PixelFormat.rgba8888,
       decoded.complete,
     );
@@ -275,19 +307,44 @@ class EditorController extends ChangeNotifier {
       final done = Completer<ui.Image>();
       ui.decodeImageFromPixels(
         extra.materialize().asUint8List(),
-        width,
-        height,
+        nextState['width'] as int,
+        nextState['height'] as int,
         ui.PixelFormat.rgba8888,
         done.complete,
       );
       onion = await done.future;
     }
 
+    List<ui.Image>? nextReferences;
+    if (result['referenceRgba'] is List) {
+      nextReferences = [];
+      final metadata = nextState['references'] as List? ?? [];
+      final raw = result['referenceRgba'] as List;
+      for (var i = 0; i < raw.length; i++) {
+        final done = Completer<ui.Image>();
+        ui.decodeImageFromPixels(
+          (raw[i] as TransferableTypedData).materialize().asUint8List(),
+          metadata[i]['width'] as int,
+          metadata[i]['height'] as int,
+          ui.PixelFormat.rgba8888,
+          done.complete,
+        );
+        nextReferences.add(await done.future);
+      }
+    }
     if (_disposed || (accept != null && !accept())) {
       next.dispose();
       onion?.dispose();
+      for (final image in nextReferences ?? <ui.Image>[]) {
+        image.dispose();
+      }
       return;
     }
+    state = nextState;
+    final oldReferences = nextReferences == null
+        ? <ui.Image>[]
+        : referenceImages;
+    if (nextReferences != null) referenceImages = nextReferences;
     final previous = image;
     final oldOnion = onionImage;
     image = next;
@@ -296,6 +353,9 @@ class EditorController extends ChangeNotifier {
     // Keep the previous image alive through the current paint frame.
     Future<void>.delayed(const Duration(milliseconds: 100), () {
       previous?.dispose();
+      for (final image in oldReferences) {
+        image.dispose();
+      }
       oldOnion?.dispose();
     });
   }
@@ -326,8 +386,26 @@ class EditorController extends ChangeNotifier {
   }
 
   int _rgba = 0;
-  void begin(Offset point) {
-    if (_disposed || !ready || busy || drawing || tool == 'Pan') return;
+  void begin(Offset point, {bool eraser = false, double? pressure}) {
+    if (_disposed || !ready || busy || drawing || (tool == 'Pan' && !eraser)) {
+      return;
+    }
+    if (activeTileset != null && ['Draw', 'Erase'].contains(tool)) {
+      unawaited(
+        advanced(
+          'paint-tile',
+          extra: {
+            'x': point.dx.toInt(),
+            'y': point.dy.toInt(),
+            'tile': eraser || tool == 'Erase' ? 0 : selectedTile,
+          },
+        ),
+      );
+      return;
+    }
+    _pressureStroke = stylusPressure && pressure != null;
+    _strokeSize = _pressureStroke ? pressureSize(pressure) : brush;
+    gestureTool = eraser ? 'Erase' : tool;
     drawing = true;
     status = 'Drawing';
     if (_discreteTool) {
@@ -337,14 +415,14 @@ class EditorController extends ChangeNotifier {
       return;
     }
     _points.clear();
-    final argb = tool == 'Erase' ? 0 : color;
+    final argb = gestureTool == 'Erase' ? 0 : color;
     _rgba =
         ((argb >> 16) & 255) |
         (((argb >> 8) & 255) << 8) |
         ((argb & 255) << 16) |
         (((argb >> 24) & 255) << 24);
     final strokeColor = _rgba;
-    final size = brush;
+    final size = _strokeSize;
     unawaited(
       _enqueue(
         () => native.send(
@@ -361,8 +439,11 @@ class EditorController extends ChangeNotifier {
     _notify();
   }
 
-  void move(Offset point) {
+  void move(Offset point, {double? pressure}) {
     if (_disposed || !drawing) return;
+    if (_pressureStroke && pressure != null) {
+      _strokeSize = pressureSize(pressure);
+    }
     if (_discreteTool) {
       gestureEnd = point;
       canvasUpdates.value++;
@@ -384,7 +465,7 @@ class EditorController extends ChangeNotifier {
           phase: 1,
           input: _packet(points),
           color: _rgba,
-          size: brush,
+          size: _strokeSize,
         ),
         quiet: true,
       ).whenComplete(() => _flushing = false),
@@ -398,7 +479,7 @@ class EditorController extends ChangeNotifier {
       drawing = false;
       gestureStart = null;
       gestureEnd = null;
-      if (tool == 'Select') {
+      if (gestureTool == 'Select') {
         await selectionAction(
           'select',
           extra: {
@@ -410,7 +491,7 @@ class EditorController extends ChangeNotifier {
             ],
           },
         );
-      } else if (tool == 'Eyedropper') {
+      } else if (gestureTool == 'Eyedropper') {
         final result = await _enqueue(
           () => native.send(
             'request',
@@ -426,7 +507,7 @@ class EditorController extends ChangeNotifier {
         }
       } else {
         await edits([
-          if (tool == 'Fill')
+          if (gestureTool == 'Fill')
             {
               'op': 'fill',
               'x': from.dx.toInt(),
@@ -436,7 +517,7 @@ class EditorController extends ChangeNotifier {
           else
             {
               'op': 'shape',
-              'kind': tool.toLowerCase(),
+              'kind': gestureTool.toLowerCase(),
               'x': from.dx.toInt(),
               'y': from.dy.toInt(),
               'x2': to.dx.toInt(),
@@ -459,7 +540,7 @@ class EditorController extends ChangeNotifier {
         phase: 2,
         input: _packet(points),
         color: _rgba,
-        size: brush,
+        size: _strokeSize,
       ),
     );
     if (result != null) {
@@ -690,6 +771,8 @@ class EditorController extends ChangeNotifier {
     }
     _discardHandoff = false;
     busy = true;
+    importing = true;
+    final generation = ++_importGeneration;
     status = 'Opening…';
     _notify();
     try {
@@ -697,17 +780,41 @@ class EditorController extends ChangeNotifier {
         picker ? 'openDocument' : 'reopen',
         {'key': savedKey},
       );
-      if (loaded == null) {
+      if (loaded == null || generation != _importGeneration) {
         status = 'Open cancelled';
         return;
       }
       final bytes = loaded['bytes'] as Uint8List;
+      final prepared = await _enqueue(
+        () => native.send(
+          'request',
+          op: 28,
+          a: importFormat(bytes),
+          input: bytes,
+        ),
+        accept: () => generation == _importGeneration,
+      );
+      if (prepared == null || generation != _importGeneration) {
+        final failure = error;
+        await _enqueue(() => native.send('request', op: 30));
+        error = failure ?? error;
+        if (generation != _importGeneration) status = 'Open cancelled';
+        return;
+      }
+      // Commit is the short atomic boundary; cancellation is offered while preparing.
+      importing = false;
+      _notify();
       final result = await _enqueue(
-        () => native.send('request', op: 6, input: bytes),
+        () => native.send('request', op: 29, a: state['revision'] as int),
       );
       if (result != null) {
         savedKey = loaded['key'] as String?;
-        title = picker ? 'Imported sprite' : 'Saved sprite';
+        final name = loaded['name'] as String?;
+        title = picker
+            ? (name == null
+                  ? 'Imported sprite'
+                  : name.substring(0, math.min(128, name.length)))
+            : 'Saved sprite';
         documentGeneration++;
         status = 'Project reopened';
         _scheduleRecovery();
@@ -715,6 +822,261 @@ class EditorController extends ChangeNotifier {
     } catch (e) {
       error = 'Could not open: $e';
       status = 'Your current canvas is unchanged';
+    } finally {
+      importing = false;
+      busy = false;
+      _scheduleRecovery();
+      _notify();
+    }
+  }
+
+  int? get activeTileset {
+    final layers = state['layers'] as List? ?? [];
+    final layer = state['layer'] as int? ?? 0;
+    return layer < layers.length ? layers[layer]['tileset'] as int? : null;
+  }
+
+  void selectTile(int tile) {
+    selectedTile = tile;
+    _notify();
+  }
+
+  Future<void> advanced(
+    String action, {
+    Map<String, dynamic> extra = const {},
+  }) async {
+    if (busy || drawing || !ready) return;
+    final result = await _enqueue(
+      () => native.send(
+        'request',
+        op: 25,
+        input: Uint8List.fromList(
+          utf8.encode(
+            jsonEncode({
+              'revision': state['revision'],
+              'action': action,
+              ...extra,
+            }),
+          ),
+        ),
+      ),
+    );
+    if (result != null) {
+      status = 'Edit complete';
+      _scheduleRecovery();
+    }
+  }
+
+  Future<void> importReference() async {
+    if (busy || drawing || !ready) return;
+    final sourceGeneration = documentGeneration;
+    await flushRecovery();
+    if (_disposed ||
+        busy ||
+        drawing ||
+        !ready ||
+        sourceGeneration != documentGeneration) {
+      return;
+    }
+    busy = true;
+    importing = true;
+    final generation = ++_importGeneration;
+    _notify();
+    try {
+      final loaded = await storage.invokeMapMethod<String, dynamic>(
+        'openDocument',
+      );
+      if (loaded == null || generation != _importGeneration) {
+        status = 'Reference import cancelled';
+        return;
+      }
+      final bytes = loaded['bytes'] as Uint8List;
+      if (importFormat(bytes) != 1) {
+        throw StateError('Choose a PNG image for an embedded reference');
+      }
+      importing = false;
+      _notify();
+      final result = await _enqueue(
+        () => native.send(
+          'request',
+          op: 26,
+          a: state['revision'] as int,
+          input: bytes,
+        ),
+      );
+      if (result != null) {
+        status = 'Reference added';
+        _scheduleRecovery();
+      }
+    } catch (e) {
+      error = 'Could not add reference: $e';
+    } finally {
+      importing = false;
+      busy = false;
+      _scheduleRecovery();
+      _notify();
+    }
+  }
+
+  static int importFormat(Uint8List bytes) {
+    bool starts(List<int> signature) =>
+        bytes.length >= signature.length &&
+        List.generate(
+          signature.length,
+          (i) => bytes[i],
+        ).asMap().entries.every((e) => e.value == signature[e.key]);
+    if (starts([137, 80, 78, 71, 13, 10, 26, 10])) return 1;
+    if (starts([71, 73, 70, 56, 55, 97]) || starts([71, 73, 70, 56, 57, 97])) {
+      return 2;
+    }
+    if (bytes.length >= 128 && bytes[4] == 0xe0 && bytes[5] == 0xa5) return 3;
+    return 0;
+  }
+
+  String? exportFolder;
+  String? _sheetImageName, _sheetFolder;
+  int? _sheetRevision;
+  bool get sheetMetadataReady =>
+      _sheetImageName != null &&
+      _sheetFolder == exportFolder &&
+      _sheetRevision == state['revision'];
+  void _forgetSheetPair() {
+    _sheetImageName = null;
+    _sheetRevision = null;
+    _sheetFolder = null;
+  }
+
+  Future<void> loadExportFolder() async {
+    try {
+      exportFolder = await storage.invokeMethod<String>('savedExportFolder');
+      _notify();
+    } catch (_) {
+      /* A missing grant is handled by the next export. */
+    }
+  }
+
+  Future<void> chooseExportFolder() async {
+    if (busy || drawing) return;
+    busy = true;
+    _notify();
+    try {
+      final label = await storage.invokeMethod<String>('chooseExportFolder');
+      if (label != null) {
+        exportFolder = label;
+        _forgetSheetPair();
+      }
+    } catch (e) {
+      error = 'Could not choose export folder: $e';
+    } finally {
+      busy = false;
+      _notify();
+    }
+  }
+
+  Future<void> clearExportFolder() async {
+    if (busy || drawing) return;
+    busy = true;
+    _notify();
+    try {
+      await storage.invokeMethod<void>('clearExportFolder');
+      exportFolder = null;
+      _forgetSheetPair();
+    } catch (e) {
+      error = 'Could not forget export folder: $e';
+    } finally {
+      busy = false;
+      _notify();
+    }
+  }
+
+  /// Export never acknowledges a native save or changes the dirty baseline.
+  Future<void> exportArtwork(int format, {bool share = false}) async {
+    if (busy || drawing || !ready) return;
+    final entries = {
+      1: ('PixelCraft.png', 'image/png'),
+      2: ('PixelCraft.gif', 'image/gif'),
+      3: ('PixelCraft.aseprite', 'application/octet-stream'),
+      4: ('PixelCraft-sheet.png', 'image/png'),
+      5: ('PixelCraft-sheet.json', 'application/json'),
+    };
+    final entry = entries[format];
+    if (entry == null) return;
+    if (!share && format == 4 && exportFolder == null) {
+      await chooseExportFolder();
+      if (exportFolder == null) return;
+    }
+    if (!share && format == 5 && !sheetMetadataReady) {
+      error = 'Save the sprite sheet PNG first, then save its matching JSON to the same folder.';
+      _notify();
+      return;
+    }
+    final sourceGeneration = documentGeneration;
+    await flushRecovery();
+    if (_disposed ||
+        busy ||
+        drawing ||
+        !ready ||
+        sourceGeneration != documentGeneration) {
+      return;
+    }
+    if (!share && format == 5 && !sheetMetadataReady) {
+      error = 'Save the sprite sheet PNG again before exporting matching JSON.';
+      _notify();
+      return;
+    }
+    busy = true;
+    status = share ? 'Preparing share…' : 'Exporting…';
+    _notify();
+    try {
+      final result = await _enqueue(
+        () => native.send('request', op: 24, a: format),
+      );
+      if (result == null) return;
+      var bytes = (result['project'] as TransferableTypedData)
+          .materialize()
+          .asUint8List();
+      var name = entry.$1;
+      if (format == 5 && !share) {
+        final metadata = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+        (metadata['meta'] as Map)['image'] = _sheetImageName;
+        bytes = Uint8List.fromList(utf8.encode(jsonEncode(metadata)));
+        name =
+            '${_sheetImageName!.substring(0, _sheetImageName!.lastIndexOf('.'))}.json';
+      }
+      final done = await storage.invokeMethod<dynamic>(
+        share
+            ? 'shareDocument'
+            : exportFolder == null
+            ? 'exportDocument'
+            : 'exportToFolder',
+        {
+          'bytes': bytes,
+          'name': name,
+          'mime': entry.$2,
+          if (format == 4 && !share) 'returnName': true,
+        },
+      );
+      if (format == 4 && !share && done is Map) {
+        final actual = done['name'] as String?;
+        if (actual == null ||
+            !RegExp(r'^[A-Za-z0-9][A-Za-z0-9 _().-]{0,119}$')
+                .hasMatch(actual) ||
+            actual.contains('..') ||
+            !actual.toLowerCase().endsWith('.png')) {
+          throw StateError(
+            'PNG saved, but its provider filename cannot be paired safely. Choose a short PNG basename.',
+          );
+        }
+        _sheetImageName = actual;
+        _sheetRevision = state['revision'] as int;
+        _sheetFolder = exportFolder;
+      }
+      status = done == true || done is Map
+          ? (share ? 'Share chooser opened' : 'Export saved')
+          : 'Export cancelled';
+    } catch (e) {
+      error = 'Could not export: $e';
+      status = 'Your artwork is still open';
     } finally {
       busy = false;
       _scheduleRecovery();
@@ -957,6 +1319,9 @@ class EditorController extends ChangeNotifier {
     _autosave?.cancel();
     image?.dispose();
     onionImage?.dispose();
+    for (final image in referenceImages) {
+      image.dispose();
+    }
     canvasUpdates.dispose();
     canvasTransform.dispose();
     unawaited(native.close());

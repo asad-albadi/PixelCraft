@@ -3,8 +3,10 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 
 import '../editor_controller.dart';
+import 'document_tools.dart';
 
 class PixelCanvas extends StatefulWidget {
   final EditorController editor;
@@ -16,6 +18,8 @@ class PixelCanvas extends StatefulWidget {
 class _PixelCanvasState extends State<PixelCanvas> {
   late final transform = widget.editor.canvasTransform;
   final Set<int> pointers = {};
+  int? stylusPointer;
+  bool mousePan = false;
   int get generation => editor.canvasDocumentGeneration;
   set generation(int value) => editor.canvasDocumentGeneration = value;
   Size get viewport => editor.canvasViewport;
@@ -31,6 +35,16 @@ class _PixelCanvasState extends State<PixelCanvas> {
   void fit(Size size) {
     editor.canvasViewport = size;
     editor.fitCanvas();
+  }
+
+  double? pressure(PointerEvent event) {
+    if (event.kind != ui.PointerDeviceKind.stylus &&
+        event.kind != ui.PointerDeviceKind.invertedStylus) {
+      return null;
+    }
+    final range = event.pressureMax - event.pressureMin;
+    if (!range.isFinite || range <= 0 || !event.pressure.isFinite) return null;
+    return ((event.pressure - event.pressureMin) / range).clamp(0, 1);
   }
 
   Offset? pixel(Offset local) {
@@ -94,36 +108,70 @@ class _PixelCanvasState extends State<PixelCanvas> {
                 child: Listener(
                   key: const Key('pixel-canvas'),
                   onPointerDown: (e) {
+                    final erasing =
+                        e.kind == ui.PointerDeviceKind.invertedStylus ||
+                        (e.kind == ui.PointerDeviceKind.stylus &&
+                            (e.buttons & kPrimaryStylusButton) != 0);
+                    final pen =
+                        e.kind == ui.PointerDeviceKind.stylus ||
+                        e.kind == ui.PointerDeviceKind.invertedStylus;
+                    if (stylusPointer != null &&
+                        e.kind == ui.PointerDeviceKind.touch) {
+                      return;
+                    }
+                    if (e.kind == ui.PointerDeviceKind.mouse &&
+                        (e.buttons & kPrimaryMouseButton) == 0 &&
+                        (e.buttons & kMiddleMouseButton) == 0) {
+                      return;
+                    }
+                    if (pen) stylusPointer = e.pointer;
+                    mousePan =
+                        e.kind == ui.PointerDeviceKind.mouse &&
+                        (e.buttons & kMiddleMouseButton) != 0;
                     pointers.add(e.pointer);
+                    setState(() {});
                     if (pointers.length > 1) {
                       unawaited(editor.cancel());
                       setState(() {});
-                    } else if (editor.tool != 'Pan') {
+                    } else if (!mousePan && (editor.tool != 'Pan' || erasing)) {
                       final p = pixel(e.localPosition);
-                      if (p != null) editor.begin(p);
+                      if (p != null) {
+                        editor.begin(p, eraser: erasing, pressure: pressure(e));
+                      }
                     }
                   },
                   onPointerMove: (e) {
-                    if (pointers.length == 1 && editor.tool != 'Pan') {
+                    if (pointers.contains(e.pointer) &&
+                        pointers.length == 1 &&
+                        !mousePan &&
+                        editor.drawing) {
                       final p = pixel(e.localPosition);
-                      if (p != null) editor.move(p);
+                      if (p != null) editor.move(p, pressure: pressure(e));
                     }
                   },
                   onPointerUp: (e) {
-                    pointers.remove(e.pointer);
+                    if (!pointers.remove(e.pointer)) return;
+                    if (stylusPointer == e.pointer) stylusPointer = null;
+                    mousePan = false;
                     if (editor.drawing) unawaited(editor.end());
                     setState(() {});
                   },
                   onPointerCancel: (e) {
-                    pointers.remove(e.pointer);
+                    if (!pointers.remove(e.pointer)) return;
+                    if (stylusPointer == e.pointer) stylusPointer = null;
+                    mousePan = false;
                     unawaited(editor.cancel());
                     setState(() {});
                   },
                   child: InteractiveViewer(
                     transformationController: transform,
                     constrained: false,
-                    panEnabled: editor.tool == 'Pan' || pointers.length > 1,
-                    scaleEnabled: true,
+                    panEnabled:
+                        !(editor.drawing && stylusPointer != null) &&
+                        (mousePan ||
+                            editor.tool == 'Pan' ||
+                            pointers.length > 1),
+                    scaleEnabled: stylusPointer == null,
                     minScale: .1,
                     maxScale: 40,
                     boundaryMargin: const EdgeInsets.all(2000),
@@ -137,21 +185,82 @@ class _PixelCanvasState extends State<PixelCanvas> {
                           Theme.of(context).brightness == Brightness.dark,
                           editor.gestureStart,
                           editor.gestureEnd,
-                          editor.tool,
+                          editor.drawing ? editor.gestureTool : editor.tool,
                           Color(editor.color),
                           editor.selection,
+                          [
+                            for (
+                              var i = 0;
+                              i < editor.referenceImages.length;
+                              i++
+                            )
+                              (
+                                editor.referenceImages[i],
+                                Map<String, dynamic>.from(
+                                  (editor.state['references'] as List)[i],
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
                   ),
                 ),
               ),
+              if (editor.selection != null)
+                Positioned(
+                  top: editor.zen ? 64 : 36,
+                  left: 8,
+                  right: 8,
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: Material(
+                      elevation: 3,
+                      borderRadius: BorderRadius.circular(12),
+                      color: Theme.of(context).colorScheme.surfaceContainer,
+                      child: Wrap(
+                        children: [
+                          for (final item in [
+                            ('Copy selection', 'copy', Icons.copy_outlined),
+                            ('Cut selection', 'cut', Icons.content_cut),
+                            ('Paste', 'paste', Icons.content_paste),
+                            ('Flip selection', 'flip-x', Icons.flip),
+                            ('Rotate selection', 'rotate', Icons.rotate_right),
+                            ('Deselect', 'deselect', Icons.deselect),
+                          ])
+                            IconButton(
+                              tooltip: item.$1,
+                              onPressed:
+                                  editor.busy ||
+                                      editor.drawing ||
+                                      (item.$2 == 'paste' &&
+                                          editor.state['has_clipboard'] != true)
+                                  ? null
+                                  : () => editor.selectionAction(item.$2),
+                              icon: Icon(item.$3),
+                            ),
+                          IconButton(
+                            tooltip: 'Selection options',
+                            onPressed: editor.busy || editor.drawing
+                                ? null
+                                : () => showDocumentTools(
+                                    context,
+                                    editor,
+                                    tab: 3,
+                                  ),
+                            icon: const Icon(Icons.more_horiz),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
               if (!editor.zen)
                 Positioned(
                   top: 12,
                   left: 14,
                   child: Text(
-                    '${editor.width} × ${editor.height} px  /  RGBA',
+                    '${editor.width} × ${editor.height} px  /  ${editor.state['mode'] ?? 'RGBA'}',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -197,6 +306,7 @@ class _CanvasPainter extends CustomPainter {
   final String tool;
   final Color preview;
   final Rect? selection;
+  final List<(ui.Image, Map<String, dynamic>)> references;
   _CanvasPainter(
     this.image,
     this.grid,
@@ -206,6 +316,7 @@ class _CanvasPainter extends CustomPainter {
     this.tool = '',
     this.preview = Colors.white,
     this.selection,
+    this.references = const [],
   ]);
   @override
   void paint(Canvas canvas, Size size) {
@@ -226,6 +337,29 @@ class _CanvasPainter extends CustomPainter {
         );
       }
     }
+    void drawReferences(bool behind) {
+      for (final item in references) {
+        final r = item.$2, im = item.$1;
+        if (r['visible'] != true || (r['behind'] == true) != behind) continue;
+        final scale = (r['scale'] as num).toDouble(),
+            sy = (r['scale_y'] as num?)?.toDouble() ?? scale;
+        canvas.drawImageRect(
+          im,
+          Rect.fromLTWH(0, 0, im.width.toDouble(), im.height.toDouble()),
+          Rect.fromLTWH(
+            (r['x'] as num) * 8,
+            (r['y'] as num) * 8,
+            im.width * 8 * scale,
+            im.height * 8 * sy,
+          ),
+          Paint()
+            ..color = Color.fromARGB(r['opacity'] as int, 255, 255, 255)
+            ..filterQuality = FilterQuality.none,
+        );
+      }
+    }
+
+    drawReferences(true);
     if (image != null) {
       canvas.drawImageRect(
         image!,
@@ -234,6 +368,7 @@ class _CanvasPainter extends CustomPainter {
         Paint()..filterQuality = FilterQuality.none,
       );
     }
+    drawReferences(false);
     if (from != null &&
         to != null &&
         ['Line', 'Rectangle', 'Ellipse', 'Select'].contains(tool)) {
@@ -296,6 +431,7 @@ class _CanvasPainter extends CustomPainter {
   @override
   bool shouldRepaint(_CanvasPainter old) =>
       old.image != image ||
+      old.references != references ||
       old.grid != grid ||
       old.dark != dark ||
       old.from != from ||

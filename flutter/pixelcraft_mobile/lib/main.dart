@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,6 +8,10 @@ import 'widgets/color_dialog.dart';
 import 'widgets/document_tools.dart';
 import 'widgets/pixel_canvas.dart';
 import 'widgets/zen_editor.dart';
+import 'widgets/timeline_panel.dart';
+import 'widgets/export_options.dart';
+import 'widgets/advanced_tools.dart';
+import 'widgets/editor_keyboard.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -70,9 +73,12 @@ class _PixelCraftAppState extends State<PixelCraftApp>
           bodySmall: TextStyle(fontSize: 12),
         ),
       ),
-      home: EditorScreen(
+      home: EditorKeyboard(
         editor: editor,
-        toggleTheme: () => setState(() => dark = !dark),
+        child: EditorScreen(
+          editor: editor,
+          toggleTheme: () => setState(() => dark = !dark),
+        ),
       ),
     ),
   );
@@ -139,6 +145,10 @@ class EditorScreen extends StatelessWidget {
         canPop: !editor.zen && !editor.dirty && !editor.drawing && !editor.busy,
         onPopInvokedWithResult: (didPop, _) async {
           if (didPop) return;
+          if (editor.importing) {
+            editor.cancelImport();
+            return;
+          }
           if (editor.zen) {
             await editor.exitZen();
             return;
@@ -232,6 +242,14 @@ class EditorScreen extends StatelessWidget {
                             PopupMenuButton<String>(
                               tooltip: 'File actions',
                               onSelected: (action) async {
+                                if (action == 'export') {
+                                  showExportOptions(context, editor);
+                                  return;
+                                }
+                                if (action == 'advanced') {
+                                  showAdvancedTools(context, editor);
+                                  return;
+                                }
                                 if (action == 'copy') {
                                   await editor.save(copy: true);
                                   return;
@@ -260,13 +278,19 @@ class EditorScreen extends StatelessWidget {
                                 for (final entry in [
                                   ('zen', 'Zen drawing mode', Icons.fullscreen),
                                   (
+                                    'export',
+                                    'Export & share…',
+                                    Icons.ios_share,
+                                  ),
+                                  ('advanced', 'Document tools…', Icons.tune),
+                                  (
                                     'new',
                                     'New 64 × 64 sprite',
                                     Icons.note_add_outlined,
                                   ),
                                   (
                                     'open',
-                                    'Open .pixel file…',
+                                    'Open sprite or image…',
                                     Icons.folder_open_outlined,
                                   ),
                                   (
@@ -306,6 +330,18 @@ class EditorScreen extends StatelessWidget {
                           ],
                         ),
                       ),
+                      if (editor.importing)
+                        MaterialBanner(
+                          content: const Text(
+                            'Preparing import. Your current artwork stays open until it is ready.',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: editor.cancelImport,
+                              child: const Text('Cancel import'),
+                            ),
+                          ],
+                        ),
                       if (editor.recoveryPending)
                         MaterialBanner(
                           content: const Text(
@@ -356,7 +392,8 @@ class EditorScreen extends StatelessWidget {
                       Expanded(
                         child: LayoutBuilder(
                           builder: (context, box) {
-                            final wide = box.maxWidth >= 850;
+                            final wide =
+                                box.maxWidth >= 850 && box.maxHeight >= 480;
                             return Row(
                               children: [
                                 if (wide)
@@ -435,227 +472,10 @@ class EditorScreen extends StatelessWidget {
                                           ),
                                         ),
                                       ),
-                                      Container(
-                                        height: math.max(
-                                          76,
-                                          MediaQuery.textScalerOf(context)
-                                                  .scale(42) +
-                                              30,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          border: Border(
-                                            top: BorderSide(
-                                              color: Theme.of(context)
-                                                  .dividerColor,
-                                            ),
-                                          ),
-                                        ),
-                                        child: Row(
-                                          children: [
-                                            const SizedBox(width: 12),
-                                            IconButton(
-                                              tooltip: editor.playing
-                                                  ? 'Stop animation'
-                                                  : 'Play animation',
-                                              onPressed: editor.playing
-                                                  ? () => editor.stopPlayback()
-                                                  : available
-                                                  ? () => editor.startPlayback()
-                                                  : null,
-                                              icon: Icon(
-                                                editor.playing
-                                                    ? Icons.stop
-                                                    : Icons.play_arrow,
-                                              ),
-                                            ),
-                                            SizedBox(
-                                              width: 82,
-                                              child: DropdownButton<double>(
-                                                isExpanded: true,
-                                                value: editor.playbackSpeed,
-                                                items: [
-                                                  for (final speed in [
-                                                    .25,
-                                                    .5,
-                                                    1.0,
-                                                    2.0,
-                                                    4.0,
-                                                  ])
-                                                    DropdownMenuItem(
-                                                      value: speed,
-                                                      child: Text(
-                                                        '$speed×',
-                                                        style: const TextStyle(
-                                                          fontSize: 12,
-                                                        ),
-                                                      ),
-                                                    ),
-                                                ],
-                                                onChanged: editor.playing
-                                                    ? null
-                                                    : (v) {
-                                                        if (v != null) {
-                                                          editor
-                                                              .setPlaybackSpeed(
-                                                                v,
-                                                              );
-                                                        }
-                                                      },
-                                              ),
-                                            ),
-                                            if (wide) ...[
-                                              TextButton.icon(
-                                                onPressed: available
-                                                    ? () => showDocumentTools(
-                                                        context,
-                                                        editor,
-                                                        tab: 1,
-                                                      )
-                                                    : null,
-                                                icon: const Icon(
-                                                  Icons.view_timeline_outlined,
-                                                  size: 18,
-                                                ),
-                                                label: const Text('Frame…'),
-                                              ),
-                                              TextButton.icon(
-                                                onPressed: available
-                                                    ? () => showDocumentTools(
-                                                        context,
-                                                        editor,
-                                                        tab: 0,
-                                                      )
-                                                    : null,
-                                                icon: const Icon(
-                                                  Icons.layers_outlined,
-                                                  size: 18,
-                                                ),
-                                                label: const Text('Layer…'),
-                                              ),
-                                            ] else
-                                              PopupMenuButton<int>(
-                                                tooltip:
-                                                    'Frame and layer options',
-                                                enabled: available,
-                                                onSelected: (tab) =>
-                                                    showDocumentTools(
-                                                      context,
-                                                      editor,
-                                                      tab: tab,
-                                                    ),
-                                                itemBuilder: (_) => [
-                                                  const PopupMenuItem(
-                                                    value: 1,
-                                                    child: Text(
-                                                      'Frame options…',
-                                                    ),
-                                                  ),
-                                                  const PopupMenuItem(
-                                                    value: 0,
-                                                    child: Text(
-                                                      'Layer options…',
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            if (!compact)
-                                              const Padding(
-                                                padding: EdgeInsets.only(
-                                                  right: 12,
-                                                ),
-                                                child: Text('Frames'),
-                                              ),
-                                            Expanded(
-                                              child: ListView.separated(
-                                                scrollDirection:
-                                                    Axis.horizontal,
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      vertical: 10,
-                                                    ),
-                                                itemCount:
-                                                    (editor.state['frames']
-                                                            as num?)
-                                                        ?.toInt() ??
-                                                    0,
-                                                separatorBuilder: (_, _) =>
-                                                    const SizedBox(width: 8),
-                                                itemBuilder: (context, index) => Semantics(
-                                                  label: 'Frame ${index + 1}',
-                                                  selected:
-                                                      (editor.previewFrame ??
-                                                          editor
-                                                              .state['frame']) ==
-                                                      index,
-                                                  child: OutlinedButton(
-                                                    onLongPress: available
-                                                        ? () async {
-                                                            await editor
-                                                                .command(
-                                                                  9,
-                                                                  a: index,
-                                                                );
-                                                            if (context
-                                                                    .mounted &&
-                                                                editor.error ==
-                                                                    null) {
-                                                              showDocumentTools(
-                                                                context,
-                                                                editor,
-                                                                tab: 1,
-                                                              );
-                                                            }
-                                                          }
-                                                        : null,
-                                                    style: OutlinedButton.styleFrom(
-                                                      minimumSize: const Size(
-                                                        64,
-                                                        48,
-                                                      ),
-                                                      backgroundColor:
-                                                          (editor.previewFrame ??
-                                                                  editor
-                                                                      .state['frame']) ==
-                                                              index
-                                                          ? Theme.of(context)
-                                                                .colorScheme
-                                                                .primaryContainer
-                                                          : null,
-                                                      shape: RoundedRectangleBorder(
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              6,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                    onPressed: available
-                                                        ? () => editor.command(
-                                                            9,
-                                                            a: index,
-                                                          )
-                                                        : null,
-                                                    child: Column(
-                                                      mainAxisAlignment:
-                                                          MainAxisAlignment
-                                                              .center,
-                                                      children: [
-                                                        Text('${index + 1}'),
-                                                        Text(
-                                                          '${editor.state['durations'][index]} ms',
-                                                          style:
-                                                              const TextStyle(
-                                                                fontSize: 10,
-                                                              ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                          ],
-                                        ),
+                                      TimelinePanel(
+                                        editor: editor,
+                                        allowExpanded:
+                                            wide && box.maxHeight >= 480,
                                       ),
                                     ],
                                   ),
@@ -708,6 +528,17 @@ class EditorScreen extends StatelessWidget {
                                             icon: Icon(tool.$1),
                                           ),
                                         ),
+                                      IconButton(
+                                        tooltip: 'Selection options',
+                                        onPressed: available
+                                            ? () => showDocumentTools(
+                                                context,
+                                                editor,
+                                                tab: 3,
+                                              )
+                                            : null,
+                                        icon: const Icon(Icons.tune),
+                                      ),
                                       const Padding(
                                         padding: EdgeInsets.only(bottom: 14),
                                         child: Icon(
@@ -915,6 +746,7 @@ class Inspector extends StatelessWidget {
                           builder: (c) => StatefulBuilder(
                             builder: (c, update) => AlertDialog(
                               title: const Text('Brush and shapes'),
+                              scrollable: true,
                               content: SizedBox(
                                 width: 280,
                                 child: Column(
@@ -946,6 +778,17 @@ class Inspector extends StatelessWidget {
                                       },
                                     ),
                                     SwitchListTile(
+                                      title: const Text('Stylus pressure'),
+                                      subtitle: const Text(
+                                        'Vary brush size with pressure. Off keeps crisp, constant pixel sizes.',
+                                      ),
+                                      value: editor.stylusPressure,
+                                      onChanged: (v) {
+                                        editor.setStylusPressure(v);
+                                        if (c.mounted) update(() {});
+                                      },
+                                    ),
+                                    SwitchListTile(
                                       title: const Text('Filled shapes'),
                                       value: editor.filled,
                                       onChanged: (v) {
@@ -973,7 +816,7 @@ class Inspector extends StatelessWidget {
                       ? () => showDocumentTools(context, editor)
                       : null,
                   icon: const Icon(Icons.layers_outlined, size: 18),
-                  label: const Text('Sprite tools…'),
+                  label: const Text('Layers…'),
                 ),
                 Text('Layers', style: Theme.of(context).textTheme.titleSmall),
                 const SizedBox(height: 8),
