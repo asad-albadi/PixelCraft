@@ -70,6 +70,18 @@
 
 ## Get started
 
+### Android test preview
+
+A tablet-first Android interface now shares PixelCraft's Rust editing engine.
+Phones use compact controls and sheets. The preview includes drawing, editable
+layers/cels, selections, animation/tags, supported file interchange, tilemaps,
+embedded references, recovery and Zen mode. See the [Android build instructions,
+feature/format matrix and limits](flutter/pixelcraft_mobile/README.md),
+[emulator validation](docs/android-tablet-poc-validation.md) and
+[progress tracker](docs/android-progress.md). Test APKs are debug builds for
+64-bit ARM/x86 Android 7.0+; physical device/stylus acceptance is still pending.
+
+
 ### Windows installer (future releases)
 
 Future tagged releases will include `PixelCraft-<version>-x86_64-Setup.exe` beside the Linux AppImage, with a SHA-256 checksum. On Windows 10/11 x64, open the installer, choose the install location and optional desktop shortcut, then launch PixelCraft from the Start menu. Installation is per user and requires no administrator access. Install newer versions over the existing installation; remove PixelCraft through Windows Settings → Apps. Uninstall keeps your projects, preferences and extensions in your user profile. Working OpenGL drivers are required. Installers are currently unsigned, so Windows may show a publisher warning.

@@ -5,21 +5,21 @@ an estimate of effort or elapsed time. Only implementation **and** verification
 complete a milestone. Physical-device evidence cannot be inferred from emulator
 results. Stay on `feature/tablet-android-proof-of-concept`, preserve desktop/CLI/MCP.
 
-Current: **29% (4/14)**.
+Current: **93% (13/14)**.
 
 - [x] 1. Shared Rust bridge, tablet canvas, drawing and Undo/Redo.
 - [x] 2. Desktop-compatible saves and Android file picker.
 - [x] 3. Autosave and recovery after interruptions.
 - [x] 4. Brushes, colors, fill, shapes and eyedropper.
-- [ ] 5. Selections, clipboard and transforms.
-- [ ] 6. Layer and cel editing.
-- [ ] 7. Frame editing, animation playback and tags.
-- [ ] 8. Image import, export and sharing.
-- [ ] 9. Indexed colors, tilemaps and reference images.
-- [ ] 10. Phone layouts, keyboard/mouse/stylus input and accessibility.
-- [ ] 11. Performance, cancellation and mobile memory limits.
-- [ ] 12. Android build automation, test APKs and upgrade checks.
-- [ ] 13. Complete workflow tests, visual checks, reviews and desktop/CLI/MCP regressions.
+- [x] 5. Selections, clipboard and transforms.
+- [x] 6. Layer and cel editing.
+- [x] 7. Frame editing, animation playback and tags.
+- [x] 8. Image import, export and sharing.
+- [x] 9. Indexed colors, tilemaps and reference images.
+- [x] 10. Phone layouts, keyboard/mouse/stylus input and accessibility.
+- [x] 11. Performance, cancellation and mobile memory limits.
+- [x] 12. Android build automation, test APKs and upgrade checks.
+- [x] 13. Complete workflow tests, visual checks, reviews and desktop/CLI/MCP regressions.
 - [ ] 14. Physical tablet/phone and stylus validation.
 
 ## Design and execution
@@ -86,3 +86,93 @@ Device verification: all five API 35 tablet integration tests pass, including
 real pointer drawing in Zen, one-step Undo, visible Exit and normal Preview
 restoration. Other cases exercise durable save/reopen, recovery, Rust tools,
 selection transforms, linked cels, names/tags/timing and read-only playback.
+
+## Selection, layer/cel and animation batch
+
+Milestones 5–7 pass native and actual tablet workflow tests: selection clipboard,
+flip/rotate/crop; layer/cel edits and links; frame names, timings, tags and
+read-only playback. The bottom timeline now displays selectable layer/frame
+intersections with inline visibility/lock and per-layer menus. Frame/Layer buttons
+open context-specific panels, not the rejected four-tab property form. Selection
+actions sit beside the canvas with an explicit path to all options. Preview stays
+bottom-left. Tablet normal UI and layer panel inspected after reinstalling.
+
+Review fixes: eye/lock preserve active drawing target; properties Apply disables
+during autosave; selection options remain reachable; timeline scales header/cell
+geometry with large text and scrolls labels/cells together. Regression tests
+cover each behavior. Most recent workspace regression: 835 passed,16 ignored;
+this precedes final advanced adapter changes and is rerun at the final gate.
+
+## Bounded formats and advanced documents
+
+Native and tablet integration now verify PNG/APNG/GIF/ASE decode/encode and
+matching sheet metadata; failed imports preserve artwork. Staged imports permit
+cancellation before atomic commit without losing Undo or dirty state. The tablet
+exported a 48×48 RGBA PNG through SAF and showed the actual Android share preview.
+Persisted export-folder and repeated-sheet pairing validation is the remaining
+file-workflow gate before milestone 8 is ticked.
+
+Milestone 9 verified: indexed conversions, populated tilemap creation/stamping,
+embedded references with transforms/visibility/opacity/conversion/removal, native
+save/reopen and Undo. Existing Rust model/workflows implement all artwork edits.
+Limits and deliberate interchange differences are in the mobile README. Eight
+tablet workflows now pass. The performance probe measured a 256-point stroke on
+a 256×256 canvas at 10 ms and 50 decoded canvas updates during 800 ms of playback;
+these are emulator worker/update measurements, NOT physical drawing latency or
+display-presentation FPS guarantees. Phone validation continues separately.
+
+## Phone, input, performance and delivery gates
+
+Milestones 10–12 complete for the agreed emulator phase: Pixel 7 API35 runs all
+eight workflows as well as the tablet. Phone controls open through compact menus
+and inspector sheets. Widget layouts cover narrow and short windows, large text,
+color/reference dialogs and Zen. Hardware keyboard, primary/middle mouse input,
+synthetic stylus eraser/barrel/pressure and pen-versus-touch ownership are covered.
+Pressure is optional/off by default; physical stylus validation is still milestone14.
+
+Import cancellation stages a bounded candidate and commits only after an accepted
+revision; cancellation preserves exact artwork/history/dirty baseline. Stroke
+points remain batched and only canvas/Preview repaint during live drawing. Logical
+raster/buffer/history budgets are tested; they are not guarantees of total process
+RSS. Phone 256-point/256px stroke probe:15 ms,50 decoded canvas updates/800ms; tablet
+probe:10 ms,50 updates. These are not display-presentation FPS measurements.
+
+CI universal debug APK workflow added with pinned tools, read-only permissions,
+no production keys, bothABIs,16KiB ELF/ZIP checks and signature verification. Local
+universal build/verification passed. Both emulators updated with install -r and
+retained private projects. CI's fresh debug keys can prevent cross-run updates;
+this limitation and safe export-before-uninstall guidance are documented. Remote
+CI is configured, not claimed executed. Physical devices/store/AAB stay deferred.
+
+## Final emulator-phase gate
+
+Milestones8 and13 now pass. Actual folder selection/grant persists through process
+restart, Forget removes the stored grant, and repeated sheet exports bind JSON to
+the provider's real PNG filename. A changed artwork revision requires exporting
+PNG again before JSON. PNG exports and share previews verified visually; file
+provider errors/revocation and cancellation are covered by policy/controller tests.
+No live cloud-provider account validation is claimed.
+
+Final:843 Rust tests passed/16 existing ignored; strict workspace Clippy, format
+and boundaries passed;36 Flutter tests and clean analysis;8 tablet+8 phone
+integration workflows passed; desktop standalone checks passed. Universal debug
+APK built and verified for both64-bit ABIs/ELF+ZIP16KiB/signature, installed on
+both emulators. Reviews have no remaining known material finding after fixes.
+
+Only milestone14 (real tablet/phone/stylus validation) remains deferred by the
+user. This is93% of the agreed milestone tracker, not full desktop feature parity
+or a claim that issue29's hardware definition of done is met. Keep issue29 open.
+Remote CI is configured but has not been triggered by this local-only work.
+
+The completion audit temporarily reopened milestone13 for provider cancellation; the fix and verification are recorded below.
+
+Completion audit fix: Cancel now completes a pending provider-read request
+immediately and suppresses late callbacks; bounded provider read/write/cancel
+workers are separate from private Save/recovery. A provider ignoring cancellation
+may retain its single read worker, but cannot block cancellation feedback/private
+storage. New opens report busy until that worker exits. Recovery is flushed
+before reference import/export. Post-flush availability/document-generation guards
+prevent duplicate operations and disposed editors opening pickers. The pending-
+provider and recovery-write race regressions failed before fixes and now pass.
+Final full Flutter suite:36 passed, analysis clean. Tablet8/8 rerun passed with
+provider cancellation changes; phone8/8 passed for the same core workflows.

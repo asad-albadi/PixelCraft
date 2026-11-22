@@ -1,8 +1,58 @@
-# Android tablet proof-of-concept validation
+# Android validation — functional emulator phase and PoC
 
 Issue: #29. Branch: `feature/tablet-android-proof-of-concept`.
-Date: 2026-11-22. This records the first tablet milestone, not completion of the
-Android port or validation on physical hardware.
+Date: 2026-11-22. The current emulator phase is verified; physical tablet/phone
+and stylus acceptance remains explicitly deferred. The earlier PoC sections below
+are historical evidence, not the current feature matrix. See the mobile README
+for current format support and deliberate initial limits.
+
+## Current functional emulator results
+
+- Rust 1.95 workspace: **843 passed,16 ignored**. Strict workspace Clippy,
+  rustfmt and dependency-boundary checks pass. Desktop standalone checks pass
+  for drawing, native save/open, PNG/sheet/GIF, command edits and preferences.
+- Flutter: **36 tests pass**, analysis clean. Covers colors, controls/layouts,
+  keyboard, mouse/stylus input adaptation, Zen, recovery, lifecycle, playback,
+  cancellation, stale work, export failures and paired filenames.
+- Actual Android integration: **8/8 on API35 Pixel Tablet,8/8 on API35 Pixel7**.
+  Drawing/Undo/Redo/multitouch cancel, compatible save/reopen, recovery, tools,
+  selection transforms, layers/links, frames/tags/timing/playback, native
+  interchange, indexed tiles/references and bounded256px editing pass.
+- Tablet256-point stroke measured10ms; phone15ms. Playback probe observed50
+  decoded canvas updates/800ms. These measure worker/update behavior, not
+  display-presentation FPS or physical pen latency.
+- Visual checks: tablet landscape, layer panel and export panel; phone portrait,
+  landscape and1.5× Android text. Automated narrow/short layouts at2× text.
+  Normal app reinstalled after integration; both emulators remain open.
+- Universal debug APK includes arm64-v8a/x86_64 Flutter and Rust libraries;
+  ELF16KiB alignment, ZIP16KiB alignment and APK v2 signature checks pass.
+  Both emulator updates used install-r and retained private data.
+- Actual SAF PNG export pulled back as48×48 RGBA PNG, then reopened through the
+  cancellable descriptor-based Android picker read. Actual Android share
+  chooser displayed the image with narrowly granted private-cache URI.
+- Selected export folder survived process restart; Forget folder removed saved
+  access. Two same-folder sheet exports produced separate PNG/JSON pairs;
+  each JSON references its actual corresponding provider-disambiguated PNG.
+- Code/security review fixes: bounded off-canvas linkedASE preflight; content-only
+  SAF; correctASE extension; reference geometry/state publication; stale tile
+  selection; eraser/Pan arbitration; active-layer controls; busy properties;
+  import-cancel error preservation; provider filename coordination; responsive provider cancellation and post-recovery operation guards. Regression
+  tests plus actual paired-export files verify these fixes.
+- CI workflow is configured and locally validated, not claimed remotely run.
+  Physical input/device performance, real cloud-provider accounts, production
+  signing/upgrade channel and store/AAB distribution are not claimed tested.
+
+## Current screenshots
+
+![Tablet timeline](screenshots/android-tablet-timeline-dark.png)
+
+![Tablet layers](screenshots/android-tablet-layers-dark.png)
+
+![Phone portrait](screenshots/android-phone-portrait-dark.png)
+
+![Phone landscape with large text and Fit](screenshots/android-phone-landscape-large-text.png)
+
+![Folder export](screenshots/android-folder-export-dark.png)
 
 ## Implemented batches
 
