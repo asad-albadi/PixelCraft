@@ -1,0 +1,12 @@
+[package]
+name = "pixelcraft-ffi"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pixelcraft-core = { path = "../pixelcraft-core" }
+serde_json = { version = "1.0.151", features = ["preserve_order", "raw_value"] }

@@ -2475,6 +2475,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pixelcraft-ffi"
+version = "0.11.0"
+dependencies = [
+ "pixelcraft-core",
+ "serde_json",
+]
+
+[[package]]
 name = "pixelcraft-mcp"
 version = "0.11.0"
 dependencies = [

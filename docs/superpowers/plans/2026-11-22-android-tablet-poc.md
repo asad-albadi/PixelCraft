@@ -14,8 +14,8 @@
 
 ## Batches
 
-- [ ] Baseline/setup: open tablet, branch from merged main, document scope and record workspace tests.
-- [ ] Native boundary: test-first bounded project decoder and FFI handles/strokes/history/round trips; add Android target libc gate, x86_64/arm64 build script and header. Run host/Android builds and independent code/security review.
+- [x] Baseline/setup: open tablet, branch from merged main, document scope and record workspace tests.
+- [x] Native boundary: test-first bounded project decoder and FFI handles/strokes/history/round trips; add Android target libc gate, x86_64/arm64 build script and header. Run host/Android builds and independent code/security review.
 - [ ] Tablet application: Flutter worker/bridge, canvas and gestures, responsive controls, native private storage and document picker; widget tests and platform error handling. Build/install and inspect on the visible emulator, reviewing/fixing findings.
 - [ ] Integration: emulator-driven drawing/Undo/save/reopen, memory/latency observations and screenshots. Complete desktop, CLI/MCP and strict lint regressions; record limitations and review results. Keep tablet open with working app.
 
@@ -28,3 +28,9 @@ The existing tablet initially could not connect to Xwayland because the X0 socke
 path was missing while its X0_ listener remained active. Restored a symlink to
 that active same-user listener and launched the emulator visibly with Qt xcb.
 No emulator data was wiped. Device: emulator-5554, 2560×1600, density 320, API 35.
+
+Native batch: baseline 811 tests passed; bounded decoder 2 tests and native ABI
+5 tests passed; core/FFI strict Clippy passed; x86_64 and arm64 Android libraries
+built. Independent review found runtime sparse allocation growth and save/reopen
+budget mismatch; both fixed and covered by rollback/round-trip tests. Final
+native review found no blockers. Desktop limits retain their original defaults.

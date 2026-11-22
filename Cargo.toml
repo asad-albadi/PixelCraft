@@ -6,8 +6,8 @@ authors = ["Asad"]
 license = "MIT"
 
 [workspace]
-members = ["crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp", "crates/pixelcraft-desktop"]
-default-members = [".", "crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp", "crates/pixelcraft-desktop"]
+members = ["crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp", "crates/pixelcraft-desktop", "crates/pixelcraft-ffi"]
+default-members = [".", "crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp", "crates/pixelcraft-desktop", "crates/pixelcraft-ffi"]
 resolver = "3"
 
 [workspace.package]

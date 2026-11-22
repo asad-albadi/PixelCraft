@@ -18,3 +18,6 @@ Thumbs.db
 # Generated native runtimes (built from verified source).
 /runtime/webp/
 /runtime/macos/
+
+# Android/Flutter generated native editor libraries.
+/flutter/pixelcraft_mobile/android/app/src/main/jniLibs/

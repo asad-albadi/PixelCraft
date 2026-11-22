@@ -322,7 +322,35 @@ pub fn decode_project(b: &[u8]) -> Result<Document, String> {
     decode_project_reader(b)
 }
 
-fn decode_project_reader(mut input: impl Read) -> Result<Document, String> {
+/// Decode native bytes with a host-selected decompressed payload and raster budget.
+/// Desktop entry points retain their existing limits.
+pub fn decode_project_bounded(
+    b: &[u8],
+    payload_bytes: usize,
+    raster_bytes: usize,
+) -> Result<Document, String> {
+    if payload_bytes == 0
+        || payload_bytes > 96 * 1024 * 1024
+        || raster_bytes == 0
+        || raster_bytes > MAX_DOCUMENT_PIXELS * size_of::<Pixel>()
+    {
+        return Err("Invalid native project decode budget".into());
+    }
+    crate::model::with_project_decode_limits(
+        raster_bytes,
+        (raster_bytes / size_of::<CelMeta>()).clamp(1, MAX_CEL_SLOTS),
+        || decode_project_reader_with_limit(b, Some(payload_bytes)),
+    )
+}
+
+fn decode_project_reader(input: impl Read) -> Result<Document, String> {
+    decode_project_reader_with_limit(input, None)
+}
+
+fn decode_project_reader_with_limit(
+    mut input: impl Read,
+    payload_limit: Option<usize>,
+) -> Result<Document, String> {
     let mut magic = [0; PROJECT_MAGIC.len()];
     input
         .read_exact(&mut magic)
@@ -333,20 +361,28 @@ fn decode_project_reader(mut input: impl Read) -> Result<Document, String> {
         _ => return Err("Invalid PixelCraft project version".into()),
     };
     with_project_decode_budget(MAX_DOCUMENT_PIXELS * size_of::<Pixel>(), || {
-        decode_project_payload(input, legacy)
+        decode_project_payload(input, legacy, payload_limit)
     })
 }
 
-fn decode_project_payload(input: impl Read, legacy: bool) -> Result<Document, String> {
+fn decode_project_payload(
+    input: impl Read,
+    legacy: bool,
+    payload_limit: Option<usize>,
+) -> Result<Document, String> {
     // Parse common projects from a byte slice. Keep the streaming path for
     // large projects so decoding does not also retain the whole JSON payload.
     const SLICE_LIMIT: usize = 96 * 1024 * 1024;
+    let slice_limit = payload_limit.unwrap_or(SLICE_LIMIT);
     let mut decoder = ZlibDecoder::new(input);
     let mut prefix = Vec::new();
     (&mut decoder)
-        .take(SLICE_LIMIT as u64 + 1)
+        .take(slice_limit as u64 + 1)
         .read_to_end(&mut prefix)
         .map_err(|e| e.to_string())?;
+    if payload_limit.is_some_and(|limit| prefix.len() > limit) {
+        return Err("Native project exceeds the decompressed payload budget".into());
+    }
     let mut d: Document = match (legacy, prefix.len() <= SLICE_LIMIT) {
         (true, true) => serde_json::from_slice(&prefix).map_err(|e| e.to_string())?,
         (false, true) => serde_json::from_slice::<ProjectV2>(&prefix)
