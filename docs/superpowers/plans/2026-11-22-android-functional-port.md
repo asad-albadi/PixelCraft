@@ -36,4 +36,4 @@ oversized files and native allocations before presenting a feature as complete.
   integration, phone/tablet visual matrix and code/security review loops. Record
   physical-hardware acceptance separately; it requires connected devices.
 
-Emulator-phase validation completed; physical hardware acceptance remains pending in android-progress.md.
+Emulator and physical phone/tablet validation completed; the user confirmed S Pen checks. See android-progress.md for the completed preview milestone tracker and limitations.

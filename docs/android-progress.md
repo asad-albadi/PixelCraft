@@ -5,7 +5,7 @@ an estimate of effort or elapsed time. Only implementation **and** verification
 complete a milestone. Physical-device evidence cannot be inferred from emulator
 results. Stay on `feature/tablet-android-proof-of-concept`, preserve desktop/CLI/MCP.
 
-Current: **93% (13/14)**.
+Current: **100% (14/14 tracked milestones, documented preview scope)**.
 
 - [x] 1. Shared Rust bridge, tablet canvas, drawing and Undo/Redo.
 - [x] 2. Desktop-compatible saves and Android file picker.
@@ -20,7 +20,7 @@ Current: **93% (13/14)**.
 - [x] 11. Performance, cancellation and mobile memory limits.
 - [x] 12. Android build automation, test APKs and upgrade checks.
 - [x] 13. Complete workflow tests, visual checks, reviews and desktop/CLI/MCP regressions.
-- [ ] 14. Physical tablet/phone and stylus validation — phone verified; tablet/stylus pending.
+- [x] 14. Physical tablet/phone and stylus validation — phone/tablet automated workflows passed; S Pen hands-on checks confirmed.
 
 ## Design and execution
 
@@ -192,3 +192,31 @@ it used the newly installed preview's own generated fixtures/private storage.
 Milestone14 is now partially verified: real phone passed; real tablet and physical
 stylus validation still pending. Keep93%(13/14), rather than treating one phone as
 proof of all hardware/input requirements.
+
+## Physical tablet test — 2026-11-22
+
+Samsung SM-X716B, Android16/API36, ARM64,4KiB pages,1600×2560 natural
+resolution at340dpi. Fresh preview install and actual device integration suite:
+**8/8 workflows passed**. The normal universal build was restored afterward.
+Worker probe:15ms for the256-point/256px stroke and50 decoded canvas updates/
+800ms of playback; not an end-to-end pen latency or presentation-FPS claim.
+A64×64 raster test canvas was prepared,8px brush selected and pressure explicitly
+enabled. Physical S Pen checks were subsequently completed by the user; see
+the hands-on result below.
+
+## Hardware gate completed — 2026-11-22
+
+After enabling an8px pressure brush on the tablet's64×64 raster canvas, the user
+confirmed **all hands-on checks pass**: light/firm pressure changes line width;
+palm resting while drawing causes no stray marks or unwanted panning; S Pen
+button drawing erases; Undo/Redo and two-finger zoom/pan behave correctly. These
+are user-confirmed physical pen observations, not synthetic-event or instrumented
+latency claims. The user's drawing was retained and no further device controls
+were applied after handing over the pen check.
+
+Together with the physical phone8/8 and tablet8/8 integration runs, milestone14
+is complete for this documented preview scope. All14 tracked milestones are now
+verified. This does not claim full desktop parity, universal Android-device
+coverage, production signing/store readiness, live cloud-provider validation or
+remotely executed CI. Those limits remain in the feature matrix and validation
+record. No implementation changes were needed for these physical-device runs.

@@ -79,7 +79,7 @@ embedded references, recovery and Zen mode. See the [Android build instructions,
 feature/format matrix and limits](flutter/pixelcraft_mobile/README.md),
 [emulator validation](docs/android-tablet-poc-validation.md) and
 [progress tracker](docs/android-progress.md). Test APKs are debug builds for
-64-bit ARM/x86 Android 7.0+; physical phone workflows have been verified; tablet/stylus acceptance is still pending.
+64-bit ARM/x86 Android 7.0+; physical phone/tablet workflows and hands-on S Pen checks have been verified for the documented preview scope.
 
 
 ### Windows installer (future releases)

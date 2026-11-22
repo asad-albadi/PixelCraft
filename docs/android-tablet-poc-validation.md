@@ -2,7 +2,7 @@
 
 Issue: #29. Branch: `feature/tablet-android-proof-of-concept`.
 Date: 2026-11-22. The current emulator phase is verified; physical tablet/phone
-and stylus acceptance remains explicitly deferred. The earlier PoC sections below
+and stylus acceptance was subsequently verified in the physical-device sections below. The earlier PoC sections below
 are historical evidence, not the current feature matrix. See the mobile README
 for current format support and deliberate initial limits.
 
@@ -61,8 +61,24 @@ Worker probe: 256-point stroke on a 256×256 canvas took 25 ms; playback produce
 not end-to-end physical touch latency or presentation FPS. Automated pointer events
 on a physical device do not prove stylus/palm/pressure hardware behavior. No test
 failures or observed crashes in this run. No application code change was needed.
-Real tablet and stylus validation remain pending; milestone 14 is partially met.
+Real tablet and stylus validation was subsequently completed in the section below.
 No phone screenshots containing personal system UI were added to the repository.
+
+## Physical tablet verification — 2026-11-22
+
+Samsung SM-X716B, Android 16/API 36, ARM64, 4 KiB pages, natural 1600×2560,
+340 dpi. All **8/8 integration workflows passed on the actual tablet**. Normal
+universal debug APK restored afterward; no existing preview data was present
+before the fresh install. Worker probe: 15 ms for the 256-point/256px stroke,
+50 decoded canvas updates/800 ms playback. These do not measure display FPS or
+physical tip-to-pixel latency. S Pen is available; a 64×64, 8px pressure-enabled
+canvas was prepared for hands-on pressure, button, palm and navigation validation.
+The user subsequently confirmed all manual checks pass: light/firm pressure
+changes brush width, palm resting while drawing produces no stray marks/panning,
+S Pen button drawing erases, Undo/Redo works, and two-finger zoom/pan works. This
+completes milestone 14 for the documented preview scope alongside the physical
+phone run. Pen behavior is user-confirmed, not an instrumented latency or FPS
+measurement. The user's drawing was preserved. No code fixes were needed.
 
 ## Current screenshots
 
@@ -76,7 +92,7 @@ No phone screenshots containing personal system UI were added to the repository.
 
 ![Folder export](screenshots/android-folder-export-dark.png)
 
-## Implemented batches
+## Historical PoC: implemented batches
 
 1. Versioned native ABI around the shared Rust `EditorSession`: bounded input,
    numeric session/buffer handles, stroke transactions, Undo/Redo, native project
@@ -88,11 +104,11 @@ No phone screenshots containing personal system UI were added to the repository.
    worker failure reporting, fixed canvas geometry during editing, widget and
    real-emulator tests, both themes, cross-host project verification.
 
-## Environment
+## Historical PoC environment
 
 Flutter 3.47.9 / Dart 3.13.7, Rust 1.95.0, Java 17, Android NDK 28.2.13676358.
 Both x86_64 and arm64-v8a native libraries compile at minimum API 24 with 16 KiB
-ELF load alignment requested by the linker. Only x86_64 runtime was exercised.
+ELF load alignment requested by the linker. Only x86_64 runtime was exercised in this initial PoC; later ARM64 hardware results are above.
 Pixel Tablet API 35 emulator: 2560 × 1600 physical, density 320, 1280 × 800 logical.
 No emulator user data was wiped. The visible emulator remains running.
 
@@ -101,9 +117,9 @@ same AVD with SwiftShader restored it without clearing data. The system UI brief
 reported an ANR during software-rendered startup. The subsequent integration run
 and normal application worked. Debug/software-rendered startup showed skipped
 frames; this is not evidence of production rendering performance. Physical-device
-latency, pressure and memory acceptance are still pending.
+latency, pressure and memory acceptance were pending at this PoC stage; later hardware results and measurement limits are recorded above.
 
-## Results
+## Historical PoC results
 
 | Check | Result |
 | --- | --- |
@@ -194,4 +210,4 @@ visible; Back restores the editor. Emulator left open in Zen for manual testing.
 pass, including touch drawing/Undo in Zen and returning to normal Preview.
 Review fixes cover canceling an in-progress draft on Exit and retaining pixel
 visibility settings. No remaining Zen-specific review findings. Physical device
-and stylus ergonomics remain deferred, as requested.
+and stylus checks were deferred for this early batch; subsequent hardware results are above.

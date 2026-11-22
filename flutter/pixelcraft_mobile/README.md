@@ -3,7 +3,10 @@
 Tablet-first Flutter interface using the existing Rust core through a bounded C
 ABI and one serialized worker. Phones use compact sheets and the same engine.
 Desktop, CLI and MCP retain their existing entry points. Android does not host
-or invoke the CLI/MCP server. A Pixel 10 Pro XL on Android 17 passed all eight integration workflows; physical tablet/stylus acceptance remains pending.
+or invoke the CLI/MCP server. A Pixel 10 Pro XL (Android 17) and Samsung SM-X716B
+tablet (Android 16) each passed all eight integration workflows. The user confirmed
+the tablet's physical S Pen pressure, palm rejection, button erasing and navigation
+checks.
 
 ## Build and install
 
@@ -112,4 +115,4 @@ See [progress](../../docs/android-progress.md),
 [validation](../../docs/android-tablet-poc-validation.md), and
 [UX research](../../docs/android-tablet-ux-research.md). A physical Pixel 10 Pro XL (Android 17) also passed all eight integration workflows.
 Emulator/automated checks do not establish end-to-end finger latency, physical
-tablet performance, stylus ergonomics or pressure hardware behavior. Issue #29 stays open until that acceptance evidence exists.
+tablet performance, stylus ergonomics or pressure hardware behavior. The tracked preview hardware gate has passed; this is not a production/store or full desktop-parity claim.
