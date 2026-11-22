@@ -31,12 +31,12 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft.png">
-    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-light.png">
-    <img src="shots/pixelcraft-light.png" alt="PixelCraft at 1920×1080 showing the mushroom garden sprite, color swatches, drawing tools, sprite preview, layers, and animation timeline" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft-devices-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-devices-light.png">
+    <img src="shots/pixelcraft-devices-light.png" alt="Real PixelCraft screenshots in laptop, Android tablet and phone device frames, each showing the editable mushroom garden sample" width="100%">
   </picture>
   <br>
-  <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
+  <sub>PixelCraft on desktop and in the Android preview. Real app captures in illustrative device frames; Full HD composition.</sub>
 </p>
 
 <p align="center">
@@ -50,6 +50,15 @@
 </p>
 
 ## Features
+
+<details>
+  <summary>See the desktop editor at Full HD</summary>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft.png">
+    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-light.png">
+    <img src="shots/pixelcraft-light.png" alt="Updated PixelCraft desktop editor at 1920×1080 showing the garden sample, inspector, drawing tools, bottom-left preview and animation timeline" width="100%">
+  </picture>
+</details>
 
 <table>
   <tr>
