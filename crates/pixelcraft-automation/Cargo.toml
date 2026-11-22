@@ -1,0 +1,13 @@
+[package]
+name = "pixelcraft-automation"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+pixelcraft-core = { path = "../pixelcraft-core" }
+serde_json = { version = "1.0.151", features = ["preserve_order", "raw_value"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+base64 = "0.23.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "gif", "bmp", "jpeg", "ico", "qoi", "tga", "webp"] }
+flate2 = "1.1.10"

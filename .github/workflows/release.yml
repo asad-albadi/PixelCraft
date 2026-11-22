@@ -51,9 +51,10 @@ jobs:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
           XDG_CONFIG_HOME: ${{ runner.temp }}/pixelcraft-native-config
         run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          python3 checks/workspace-boundaries.py
+          cargo fmt --all --check
+          cargo clippy --workspace --locked --all-targets -- -D warnings
+          cargo test --workspace --locked
           cargo build --release --locked
           python3 checks/no-lua-runtime.py target/release/pixelcraft
           target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
@@ -62,8 +63,8 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
-          xvfb-run -a cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
-          env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a cargo test --locked --bin pixelcraft x11_packed_tilemap_cross_process_roundtrip -- --ignored --nocapture
+          xvfb-run -a cargo test --locked -p pixelcraft-desktop --lib native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
+          env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET xvfb-run -a cargo test --locked -p pixelcraft-desktop --lib x11_packed_tilemap_cross_process_roundtrip -- --ignored --nocapture
           WGPU_BACKEND=metal xvfb-run -a bash checks/graphical-startup.sh target/release/pixelcraft "$RUNNER_TEMP/fallback-linux"
           grep -F 'restarting with OpenGL' "$RUNNER_TEMP/fallback-linux/startup.log"
 
@@ -95,7 +96,7 @@ jobs:
             cat "$RUNNER_TEMP/clipboard-sway.log"
             exit 1
           fi
-          cargo test --locked --bin pixelcraft wayland_packed_tilemap_cross_process_roundtrip -- --ignored --nocapture
+          cargo test --locked -p pixelcraft-desktop --lib wayland_packed_tilemap_cross_process_roundtrip -- --ignored --nocapture
 
       - name: Set artifact version
         shell: bash
@@ -258,7 +259,7 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
         run: |
-          cargo test --locked
+          cargo test --workspace --locked
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
@@ -273,13 +274,15 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
-          cargo fmt --check
+          python checks/workspace-boundaries.py
+          if ($LASTEXITCODE -ne 0) { throw 'Workspace boundaries failed' }
+          cargo fmt --all --check
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
-          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --workspace --locked --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Strict lint failed' }
-          cargo test --locked --bin pixelcraft native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
+          cargo test --locked -p pixelcraft-desktop --lib native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Native clipboard failed' }
-          cargo test --locked --bin pixelcraft packed_tilemap_cross_process_roundtrip -- --ignored --nocapture --test-threads=1
+          cargo test --locked -p pixelcraft-desktop --lib packed_tilemap_cross_process_roundtrip -- --ignored --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Packed clipboard failed' }
           ./checks/graphics-fallback.ps1
 
@@ -297,7 +300,7 @@ jobs:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-ui-data
           PIXELCRAFT_UI_REVIEW_DIR: ${{ runner.temp }}/pixelcraft-ui-review
         run: |
-          cargo test --locked --bin pixelcraft ui_icon_tests -- --nocapture
+          cargo test --locked -p pixelcraft-desktop --lib ui_icon_tests -- --nocapture
           if ($LASTEXITCODE -ne 0) { throw 'Windows UI checks failed' }
       - name: Upload Windows UI snapshots
         if: always()

@@ -2378,6 +2378,67 @@ dependencies = [
 name = "pixelcraft"
 version = "0.11.0"
 dependencies = [
+ "base64",
+ "flate2",
+ "image",
+ "moxcms",
+ "pixelcraft-automation",
+ "pixelcraft-cli",
+ "pixelcraft-core",
+ "pixelcraft-desktop",
+ "pixelcraft-mcp",
+ "png",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "pixelcraft-automation"
+version = "0.11.0"
+dependencies = [
+ "base64",
+ "flate2",
+ "image",
+ "pixelcraft-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "pixelcraft-cli"
+version = "0.11.0"
+dependencies = [
+ "pixelcraft-automation",
+ "pixelcraft-core",
+ "serde_json",
+]
+
+[[package]]
+name = "pixelcraft-core"
+version = "0.11.0"
+dependencies = [
+ "base64",
+ "color_quant",
+ "emath",
+ "flate2",
+ "image",
+ "libc",
+ "libloading",
+ "moxcms",
+ "png",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pixelcraft-desktop"
+version = "0.11.0"
+dependencies = [
  "arboard",
  "base64",
  "clipboard-win",
@@ -2391,6 +2452,10 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "pixelcraft-automation",
+ "pixelcraft-cli",
+ "pixelcraft-core",
+ "pixelcraft-mcp",
  "png",
  "raw-window-handle",
  "rfd",
@@ -2407,6 +2472,16 @@ dependencies = [
  "wl-clipboard-rs",
  "x11rb",
  "zbus",
+]
+
+[[package]]
+name = "pixelcraft-mcp"
+version = "0.11.0"
+dependencies = [
+ "pixelcraft-automation",
+ "pixelcraft-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

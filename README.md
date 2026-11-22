@@ -121,6 +121,8 @@ cargo build --release
 cargo run --release
 ```
 
+The repository is a Cargo workspace with a shared Rust engine and separate desktop, CLI and MCP layers. The executable and existing automation commands are unchanged. See [Workspace architecture](docs/workspace-architecture.md) for the crate layout, development checks and versioning.
+
 
 The first build downloads dependencies. After Cargo has cached them, add `--offline` to build or run without network access. The release executable is `target/release/pixelcraft` on Linux or `target/release/pixelcraft.exe` on Windows.
 

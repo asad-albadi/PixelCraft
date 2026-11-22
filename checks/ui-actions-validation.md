@@ -12,7 +12,7 @@ Validated on the Linux build host on 2026-11-12.
 
 ## Windows status
 
-Native Windows execution is pending: this host is Linux, with no Windows runtime or runner attached. No native Windows results are claimed. The Windows release workflow now explicitly runs `cargo test --locked --bin pixelcraft ui_icon_tests -- --nocapture` and uploads theme/scale PNGs as `PixelCraft-Windows-UI-review`.
+Native Windows execution is pending: this host is Linux, with no Windows runtime or runner attached. No native Windows results are claimed. The Windows release workflow now explicitly runs `cargo test --locked -p pixelcraft-desktop --lib ui_icon_tests -- --nocapture` and uploads theme/scale PNGs as `PixelCraft-Windows-UI-review`.
 
 On a Windows machine, run the release workflow (or its Windows prerequisites followed by that test command). For final native window-system verification, launch the editor at Windows display scaling 100%, 150% and 200%, in both light and dark themes. At each setting:
 
