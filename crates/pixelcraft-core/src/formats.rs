@@ -7,8 +7,10 @@ use std::{
 };
 #[doc(hidden)]
 pub mod flic;
+mod mobile;
 mod pcx;
 mod png_raster;
+pub use mobile::{decode_mobile_format, encode_mobile_format};
 mod psd;
 mod raster;
 mod vector;
@@ -1951,12 +1953,29 @@ fn encode_gif(
     repeat: u16,
     frames: impl IntoIterator<Item = usize>,
     scale: usize,
+    progress: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<(), String> {
+    encode_gif_to(
+        || mcp_io::create(path).map_err(|e| e.to_string()),
+        d,
+        repeat,
+        frames,
+        scale,
+        progress,
+    )
+}
+
+fn encode_gif_to<W: Write>(
+    output: impl FnOnce() -> Result<W, String>,
+    d: &Document,
+    repeat: u16,
+    frames: impl IntoIterator<Item = usize>,
+    scale: usize,
     mut progress: impl FnMut(usize, usize) -> Result<(), String>,
 ) -> Result<(), String> {
     d.validate()?;
     animation_dimensions(d, scale)?;
-    let file = mcp_io::create(path).map_err(|e| e.to_string())?;
-    let mut enc = image::codecs::gif::GifEncoder::new(file);
+    let mut enc = image::codecs::gif::GifEncoder::new(output()?);
     enc.set_repeat(if repeat == 0 {
         image::codecs::gif::Repeat::Infinite
     } else {

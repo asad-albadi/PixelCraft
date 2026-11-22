@@ -13,9 +13,24 @@ use std::{
 
 pub(super) fn load(path: &Path, require_animation: bool) -> Result<Document, String> {
     let file = mcp_io::open(path).map_err(|e| e.to_string())?;
-    let mut reader = png::Decoder::new(BufReader::new(file))
-        .read_info()
-        .map_err(|e| e.to_string())?;
+    decode_reader(BufReader::new(file), require_animation, None)
+}
+
+pub(super) fn decode_reader<R: BufRead + Seek>(
+    mut input: R,
+    require_animation: bool,
+    bounds: Option<(usize, usize, usize)>,
+) -> Result<Document, String> {
+    let start = input.stream_position().map_err(|e| e.to_string())?;
+    let mut decoder = png::Decoder::new(&mut input);
+    if bounds.is_some() {
+        decoder.set_limits(png::Limits {
+            bytes: 8 * 1024 * 1024,
+        });
+        decoder.set_ignore_text_chunk(true);
+        decoder.set_ignore_iccp_chunk(true);
+    }
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
     let info = reader.info();
     let (width, height) = (info.width as usize, info.height as usize);
     if width == 0
@@ -30,16 +45,44 @@ pub(super) fn load(path: &Path, require_animation: bool) -> Result<Document, Str
     if require_animation && animation.is_none() {
         return Err("Not an animated PNG".into());
     }
+    if let Some((side, frames, raster)) = bounds {
+        let count = animation.map_or(1, |a| a.num_frames as usize);
+        let bytes_per_pixel = if info.color_type == ColorType::Indexed {
+            5
+        } else {
+            4
+        };
+        if width > side
+            || height > side
+            || count == 0
+            || count > frames
+            || width
+                .saturating_mul(height)
+                .saturating_mul(count)
+                .saturating_mul(bytes_per_pixel)
+                > raster
+        {
+            return Err("PNG exceeds bounded canvas, frame or raster limits".into());
+        }
+    }
     if info.color_type != ColorType::Indexed {
         let grayscale = matches!(
             info.color_type,
             ColorType::Grayscale | ColorType::GrayscaleAlpha
         );
         drop(reader);
+        input
+            .seek(std::io::SeekFrom::Start(start))
+            .map_err(|e| e.to_string())?;
+        let decoder = image_decoder(input, bounds)?;
         let mut doc = if animation.is_some() {
-            crate::interchange::load_animation(path)?
+            use image::AnimationDecoder;
+            crate::interchange::from_frames_bounded(
+                decoder.apng().map_err(|e| e.to_string())?.into_frames(),
+                bounds,
+            )?
         } else {
-            super::raster::load_static(path, "png")?
+            super::raster::decode(decoder)?
         };
         if grayscale {
             doc.color_mode = ColorMode::Grayscale;
@@ -56,7 +99,17 @@ pub(super) fn load(path: &Path, require_animation: bool) -> Result<Document, Str
             animation.num_frames as usize,
         )? {
             Some(doc) => Ok(doc),
-            None => crate::interchange::load_animation(path),
+            None => {
+                input
+                    .seek(std::io::SeekFrom::Start(start))
+                    .map_err(|e| e.to_string())?;
+                use image::AnimationDecoder;
+                let decoder = image_decoder(input, bounds)?;
+                crate::interchange::from_frames_bounded(
+                    decoder.apng().map_err(|e| e.to_string())?.into_frames(),
+                    bounds,
+                )
+            }
         };
     }
     let size = reader
@@ -70,6 +123,19 @@ pub(super) fn load(path: &Path, require_animation: bool) -> Result<Document, Str
     set_palette(&mut doc, palette);
     doc.validate()?;
     Ok(doc)
+}
+
+fn image_decoder<R: BufRead + Seek>(
+    input: R,
+    bounds: Option<(usize, usize, usize)>,
+) -> Result<image::codecs::png::PngDecoder<R>, String> {
+    let mut limits = image::Limits::no_limits();
+    if let Some((side, _, _)) = bounds {
+        limits.max_image_width = Some(side as u32);
+        limits.max_image_height = Some(side as u32);
+        limits.max_alloc = Some(8 * 1024 * 1024);
+    }
+    image::codecs::png::PngDecoder::with_limits(input, limits).map_err(|e| e.to_string())
 }
 
 fn rgba_palette(info: &png::Info<'_>) -> Result<Vec<Pixel>, String> {
@@ -296,6 +362,24 @@ pub(super) fn write(
     image: &image::RgbaImage,
     scale: usize,
 ) -> Result<bool, String> {
+    write_to(
+        || mcp_io::create(path).map_err(|e| e.to_string()),
+        doc,
+        frames,
+        origin,
+        image,
+        scale,
+    )
+}
+
+pub(super) fn write_to<W: std::io::Write>(
+    output: impl FnOnce() -> Result<W, String>,
+    doc: &Document,
+    frames: &[usize],
+    origin: [usize; 2],
+    image: &image::RgbaImage,
+    scale: usize,
+) -> Result<bool, String> {
     let (color, samples, palette) = match doc.color_mode {
         ColorMode::Grayscale => {
             let Some((color, samples)) = grayscale_samples(image) else {
@@ -312,7 +396,7 @@ pub(super) fn write(
         _ => return Ok(false),
     };
     write_samples(
-        path,
+        output()?,
         [image.width(), image.height()],
         color,
         &samples,
@@ -324,6 +408,24 @@ pub(super) fn write(
 
 pub(super) fn write_sheet(
     path: &Path,
+    doc: &Document,
+    options: &crate::workflows::SheetOptions,
+    metadata: &Value,
+    image: &image::RgbaImage,
+    extrude: usize,
+) -> Result<Option<ColorType>, String> {
+    write_sheet_to(
+        || mcp_io::create(path).map_err(|e| e.to_string()),
+        doc,
+        options,
+        metadata,
+        image,
+        extrude,
+    )
+}
+
+pub(super) fn write_sheet_to<W: std::io::Write>(
+    output: impl FnOnce() -> Result<W, String>,
     doc: &Document,
     options: &crate::workflows::SheetOptions,
     metadata: &Value,
@@ -350,7 +452,7 @@ pub(super) fn write_sheet(
         ColorMode::Rgba => return Ok(None),
     };
     write_samples(
-        path,
+        output()?,
         [image.width(), image.height()],
         color,
         &samples,
@@ -382,7 +484,7 @@ fn grayscale_samples(image: &image::RgbaImage) -> Option<(ColorType, Vec<u8>)> {
 }
 
 fn write_samples(
-    path: &Path,
+    output: impl std::io::Write,
     [width, height]: [u32; 2],
     color: ColorType,
     samples: &[u8],
@@ -390,8 +492,7 @@ fn write_samples(
     scale: usize,
 ) -> Result<(), String> {
     let (width, height) = (width as usize, height as usize);
-    let file = mcp_io::create(path).map_err(|e| e.to_string())?;
-    let mut enc = png::Encoder::new(file, (width * scale) as u32, (height * scale) as u32);
+    let mut enc = png::Encoder::new(output, (width * scale) as u32, (height * scale) as u32);
     enc.set_color(color);
     enc.set_depth(BitDepth::Eight);
     if let Some(palette) = palette {

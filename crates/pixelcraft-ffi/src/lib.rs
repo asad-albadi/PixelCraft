@@ -9,7 +9,9 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+mod advanced;
 mod commands;
+mod formats_mobile;
 mod recovery;
 mod selection;
 
@@ -34,6 +36,7 @@ struct MobileSession {
     revision: u32,
     raster_pixels: usize,
     clipboard: Option<selection::RasterClipboard>,
+    prepared_import: Option<(u32, Document)>,
 }
 #[derive(Default)]
 struct Registry {
@@ -115,6 +118,7 @@ impl Registry {
                     revision: 1,
                     raster_pixels: RASTER_BUDGET / 4,
                     clipboard: None,
+                    prepared_import: None,
                 },
             );
             return Ok((
@@ -128,7 +132,7 @@ impl Registry {
             .sessions
             .get_mut(&h)
             .ok_or("Editor session is closed")?;
-        if session.stroke.is_some() && !matches!(op, 2 | 7 | 21) {
+        if session.stroke.is_some() && !matches!(op, 2 | 7 | 21 | 30 | 31) {
             return Err("Finish the active stroke first".into());
         }
         match op {
@@ -142,6 +146,26 @@ impl Registry {
                 session.revision = revision;
             }
             2 => {}
+            31 => {
+                if !(1..=32).contains(&a) {
+                    return Err("Stroke size must be 1 to 32".into());
+                }
+                session.stroke.as_mut().ok_or("No active stroke")?.size = a as i32;
+            }
+            28 => {
+                formats_mobile::prepare(session, a, &input)?;
+                return Ok((
+                    serde_json::to_vec(&json!({"prepared":true})).map_err(|e| e.to_string())?,
+                    6,
+                ));
+            }
+            29 => formats_mobile::commit_prepared(session, a)?,
+            30 => {
+                session.prepared_import = None;
+            }
+            25 => advanced::apply(session, &input)?,
+            26 => advanced::import_reference(session, a, &input)?,
+            27 => return Ok((advanced::preview(session, a)?, 2)),
             3 => {
                 let next = session.next_revision()?;
                 session
@@ -155,6 +179,13 @@ impl Registry {
                 session.revision = next;
             }
             5 => return Ok((encode_mobile(&session.editor.doc)?, 3)),
+            23 => formats_mobile::import(session, a, &input)?,
+            24 => {
+                return Ok((
+                    formats::encode_mobile_format(a, &session.editor.doc, session.editor.frame)?,
+                    3,
+                ));
+            }
             20 => selection::apply(session, &input)?,
             17 => commands::apply(session, &input)?,
             18 => {
@@ -317,6 +348,7 @@ fn document(op: u32, width: u32, height: u32, bytes: &[u8]) -> Result<Document, 
     Ok(doc)
 }
 fn check_document(doc: &Document) -> Result<(), String> {
+    advanced::check(doc)?;
     if doc.width > MAX_SIDE
         || doc.height > MAX_SIDE
         || doc.layers.len() > 32
@@ -369,7 +401,7 @@ impl MobileSession {
             .ok_or_else(|| "Editor revision exhausted; save and reopen".into())
     }
     fn state(&self, h: u64) -> Value {
-        json!({"session":h,"revision":self.revision,"width":self.editor.doc.width,"height":self.editor.doc.height,"frame":self.editor.frame,"frames":self.editor.doc.durations.len(),"durations":self.editor.doc.durations,"tags":self.editor.doc.tags,"mode":self.editor.doc.color_mode,"palette":self.editor.doc.palette,"palette_names":self.editor.doc.palette_names,"frame_names":(0..self.editor.doc.durations.len()).map(|f|self.editor.doc.frame_name(f).unwrap_or("")).collect::<Vec<_>>(),"layer":self.editor.layer,"layers":self.editor.doc.layers.iter().map(|l| json!({"name":l.name,"visible":l.visible,"locked":l.locked,"group":l.group,"opacity":l.opacity,"linked":l.cel_meta[self.editor.frame].artwork_link.and_then(|id|l.cel_meta.iter().enumerate().find(|(f,m)|*f!=self.editor.frame&&m.artwork_link==Some(id)).map(|(f,_)|f)),"blend":l.blend})).collect::<Vec<_>>(),"undo":self.editor.undo.len(),"redo":self.editor.redo.len(),"brush_shape":self.editor.doc.brush_shape,"selection":self.editor.selection,"has_clipboard":self.clipboard.is_some(),"dirty":self.editor.doc != self.editor.saved})
+        json!({"session":h,"revision":self.revision,"width":self.editor.doc.width,"height":self.editor.doc.height,"frame":self.editor.frame,"frames":self.editor.doc.durations.len(),"durations":self.editor.doc.durations,"tags":self.editor.doc.tags,"mode":self.editor.doc.color_mode,"palette":self.editor.doc.palette,"palette_names":self.editor.doc.palette_names,"frame_names":(0..self.editor.doc.durations.len()).map(|f|self.editor.doc.frame_name(f).unwrap_or("")).collect::<Vec<_>>(),"references":self.editor.doc.references.iter().enumerate().map(|(index,r)|json!({"index":index,"name":r.name,"width":r.width,"height":r.height,"x":r.x,"y":r.y,"scale":r.scale,"scale_y":r.options.scale_y,"behind":r.behind,"floating":r.floating,"opacity":r.opacity,"visible":r.visible,"locked":r.options.locked})).collect::<Vec<_>>(),"tilesets":self.editor.doc.tilesets.iter().enumerate().map(|(index,t)|json!({"index":index,"name":t.name,"width":t.width,"height":t.height,"count":t.tiles.len()})).collect::<Vec<_>>(),"layer":self.editor.layer,"layers":self.editor.doc.layers.iter().map(|l| json!({"tileset":l.tileset,"name":l.name,"visible":l.visible,"locked":l.locked,"group":l.group,"opacity":l.opacity,"linked":l.cel_meta[self.editor.frame].artwork_link.and_then(|id|l.cel_meta.iter().enumerate().find(|(f,m)|*f!=self.editor.frame&&m.artwork_link==Some(id)).map(|(f,_)|f)),"blend":l.blend})).collect::<Vec<_>>(),"undo":self.editor.undo.len(),"redo":self.editor.redo.len(),"brush_shape":self.editor.doc.brush_shape,"selection":self.editor.selection,"has_clipboard":self.clipboard.is_some(),"dirty":self.editor.doc != self.editor.saved})
     }
     fn stroke(
         &mut self,
@@ -591,6 +623,7 @@ mod quota_tests {
             revision: 1,
             raster_pixels: RASTER_BUDGET / 4,
             clipboard: None,
+            prepared_import: None,
         };
         let original = session.editor.doc.clone();
         session.stroke(0, &[(1, 1)], u32::MAX, 1).unwrap();
@@ -614,6 +647,7 @@ mod quota_tests {
             revision: 1,
             raster_pixels: 32,
             clipboard: None,
+            prepared_import: None,
         };
         session.stroke(0, &[(0, 0)], u32::MAX, 1).unwrap();
         let before = session.editor.doc.clone();

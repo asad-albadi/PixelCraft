@@ -190,6 +190,7 @@ mod tests {
             revision: 1,
             raster_pixels: RASTER_BUDGET / 4,
             clipboard: None,
+            prepared_import: None,
         }
     }
     #[test]

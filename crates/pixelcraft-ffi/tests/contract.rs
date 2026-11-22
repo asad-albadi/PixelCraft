@@ -213,3 +213,244 @@ fn playback_renders_frames_without_changing_edit_target_and_uses_core_tag_order(
     assert_eq!(sequence["durations"], serde_json::json!([125, 75]));
     pc_session_close(h);
 }
+
+#[test]
+fn mobile_formats_export_reimport_and_fail_atomically() {
+    let _test = TEST.lock().unwrap();
+    let h = state(0, 1, 0, 0, 0)["session"].as_u64().unwrap();
+    let before = state(h, 2, 0, 0, 0);
+    let pixels = bytes(pc_request(h, 7, 0, 0, 0)).1;
+    for format in 1..=5 {
+        let (kind, encoded) = bytes(pc_request(h, 24, format, 0, 0));
+        assert_eq!(
+            kind,
+            3,
+            "format {format}: {}",
+            String::from_utf8_lossy(&encoded)
+        );
+        assert!(!encoded.is_empty());
+        assert_eq!(bytes(pc_request(h, 24, format, 0, 0)).1, encoded);
+        if format <= 3 {
+            let data = input(&encoded);
+            let imported = state(h, 23, format, 0, data);
+            assert_eq!(imported["dirty"], false);
+            assert_eq!(imported["undo"], 0);
+            assert_eq!(imported["width"], before["width"]);
+            assert_eq!(bytes(pc_request(h, 7, 0, 0, 0)).1, pixels);
+            pc_buffer_free(data);
+        }
+    }
+    let snapshot = state(h, 2, 0, 0, 0);
+    let malformed = input(b"malformed");
+    for format in 1..=4 {
+        assert_eq!(bytes(pc_request(h, 23, format, 0, malformed)).0, 0);
+        assert_eq!(state(h, 2, 0, 0, 0), snapshot);
+    }
+    let mut oversized =
+        pixelcraft_core::formats::encode_ase(&pixelcraft_core::model::Document::new(1, 1)).unwrap();
+    oversized[8..10].copy_from_slice(&257u16.to_le_bytes());
+    let oversized = input(&oversized);
+    assert_eq!(bytes(pc_request(h, 23, 3, 0, oversized)).0, 0);
+    assert_eq!(state(h, 2, 0, 0, 0), snapshot);
+    pc_buffer_free(oversized);
+    assert_eq!(bytes(pc_request(0, 23, 1, 0, malformed)).0, 0);
+    pc_buffer_free(malformed);
+    pc_session_close(h);
+}
+
+#[test]
+fn advanced_tiles_references_are_atomic_undoable_and_persisted() {
+    let _test = TEST.lock().unwrap();
+    let h = state(0, 0, 8, 8, 0)["session"].as_u64().unwrap();
+    let packet = input(br#"{"revision":1,"commands":[{"op":"shape","layer":0,"frame":0,"kind":"line","x":0,"y":0,"x2":0,"y2":0,"color":[255,0,0,255]}]}"#);
+    let current = state(h, 17, 0, 0, packet);
+    pc_buffer_free(packet);
+    let act = |value: Value| {
+        let packet = input(&serde_json::to_vec(&value).unwrap());
+        let result = state(h, 25, 0, 0, packet);
+        pc_buffer_free(packet);
+        result
+    };
+    let tiled = act(
+        serde_json::json!({"revision":current["revision"],"action":"create-tileset","tile_width":4,"tile_height":4}),
+    );
+    assert_eq!(tiled["layer"], 1);
+    assert_eq!(tiled["layers"][1]["tileset"], 0);
+    assert_eq!(tiled["tilesets"][0]["count"], 1);
+    let painted = act(
+        serde_json::json!({"revision":tiled["revision"],"action":"paint-tile","x":4,"y":0,"tile":1}),
+    );
+    assert_eq!(
+        &bytes(pc_request(h, 7, 0, 0, 0)).1[4 * 4..5 * 4],
+        &[255, 0, 0, 255]
+    );
+    let png = bytes(pc_request(h, 24, 1, 0, 0)).1;
+    let packet = input(&png);
+    let reference = state(
+        h,
+        26,
+        painted["revision"].as_u64().unwrap() as u32,
+        0,
+        packet,
+    );
+    pc_buffer_free(packet);
+    assert_eq!(reference["references"][0]["width"], 8);
+    assert_eq!(bytes(pc_request(h, 27, 0, 0, 0)).0, 2);
+    let updated = act(
+        serde_json::json!({"revision":reference["revision"],"action":"reference-set","index":0,"x":1.0,"y":2.0,"scale":2.0,"opacity":128,"visible":true}),
+    );
+    assert_eq!(updated["references"][0]["opacity"], 128);
+    let saved = bytes(pc_request(h, 5, 0, 0, 0)).1;
+    let packet = input(&saved);
+    let reopened = state(h, 6, 0, 0, packet);
+    pc_buffer_free(packet);
+    assert_eq!(reopened["references"], updated["references"]);
+    assert_eq!(reopened["tilesets"], updated["tilesets"]);
+    let converted = act(
+        serde_json::json!({"revision":reopened["revision"],"action":"reference-to-layer","index":0}),
+    );
+    assert_eq!(converted["layers"].as_array().unwrap().len(), 3);
+    let removed = act(
+        serde_json::json!({"revision":converted["revision"],"action":"reference-remove","index":0}),
+    );
+    assert!(removed["references"].as_array().unwrap().is_empty());
+    assert_eq!(
+        state(h, 3, 0, 0, 0)["references"].as_array().unwrap().len(),
+        1
+    );
+    let snapshot = state(h, 2, 0, 0, 0);
+    let packet = input(br#"{"revision":0,"action":"reference-remove","index":0}"#);
+    assert_eq!(bytes(pc_request(h, 25, 0, 0, packet)).0, 0);
+    pc_buffer_free(packet);
+    assert_eq!(state(h, 2, 0, 0, 0), snapshot);
+    let packet = input(b"malformed");
+    assert_eq!(
+        bytes(pc_request(
+            h,
+            26,
+            snapshot["revision"].as_u64().unwrap() as u32,
+            0,
+            packet
+        ))
+        .0,
+        0
+    );
+    pc_buffer_free(packet);
+    assert_eq!(state(h, 2, 0, 0, 0), snapshot);
+    pc_session_close(h);
+}
+
+#[test]
+fn prepared_import_cancels_preserves_active_state_and_rejects_stale_commit() {
+    let _test = TEST.lock().unwrap();
+    let h = state(0, 1, 0, 0, 0)["session"].as_u64().unwrap();
+    state(h, 9, 1, 0, 0);
+    let selected = state(h, 2, 0, 0, 0);
+    let edit=input(&serde_json::to_vec(&serde_json::json!({"revision":selected["revision"],"commands":[{"op":"set-frame","frame":1,"duration":120}]})).unwrap());
+    let before = state(h, 17, 0, 0, edit);
+    pc_buffer_free(edit);
+    let project =
+        pixelcraft_core::formats::encode_project(&pixelcraft_core::model::Document::new(3, 2))
+            .unwrap();
+    let project = input(&project);
+    let original_artwork = bytes(pc_request(h, 5, 0, 0, 0)).1;
+    let (kind, prepared) = bytes(pc_request(h, 28, 0, 0, project));
+    assert_eq!(kind, 6, "{}", String::from_utf8_lossy(&prepared));
+    assert_eq!(state(h, 2, 0, 0, 0), before);
+    assert_eq!(bytes(pc_request(h, 5, 0, 0, 0)).1, original_artwork);
+    assert_eq!(bytes(pc_request(h, 28, 0, 0, project)).0, 0);
+    assert_eq!(state(h, 2, 0, 0, 0), before);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&prepared).unwrap()["prepared"],
+        true
+    );
+    assert_eq!(state(h, 2, 0, 0, 0), before);
+    assert_eq!(bytes(pc_request(h, 28, 0, 0, project)).0, 0);
+    assert_eq!(state(h, 30, 0, 0, 0), before);
+    assert_eq!(
+        bytes(pc_request(
+            h,
+            29,
+            before["revision"].as_u64().unwrap() as u32,
+            0,
+            0
+        ))
+        .0,
+        0
+    );
+    assert_eq!(state(h, 2, 0, 0, 0), before);
+    assert_eq!(bytes(pc_request(h, 5, 0, 0, 0)).1, original_artwork);
+    assert_eq!(
+        bytes(pc_request(
+            h,
+            29,
+            before["revision"].as_u64().unwrap() as u32,
+            0,
+            0
+        ))
+        .0,
+        0
+    );
+    assert_eq!(bytes(pc_request(h, 28, 0, 0, project)).0, 6);
+    let changed = state(h, 3, 0, 0, 0);
+    assert_eq!(
+        bytes(pc_request(
+            h,
+            29,
+            changed["revision"].as_u64().unwrap() as u32,
+            0,
+            0
+        ))
+        .0,
+        0
+    );
+    assert_eq!(state(h, 2, 0, 0, 0), changed);
+    state(h, 30, 0, 0, 0);
+    let malformed = input(b"not artwork");
+    assert_eq!(bytes(pc_request(h, 28, 1, 0, malformed)).0, 0);
+    assert_eq!(state(h, 2, 0, 0, 0), changed);
+    assert_eq!(bytes(pc_request(h, 28, 0, 0, project)).0, 6);
+    let imported = state(h, 29, changed["revision"].as_u64().unwrap() as u32, 0, 0);
+    assert_eq!(imported["width"], 3);
+    assert_eq!(imported["height"], 2);
+    assert_eq!(imported["dirty"], false);
+    assert_eq!(imported["undo"], 0);
+    assert_eq!(imported["redo"], 0);
+    assert_eq!(imported["frame"], 0);
+    assert_eq!(imported["layer"], 0);
+    pc_buffer_free(project);
+    pc_buffer_free(malformed);
+    pc_session_close(h);
+}
+
+#[test]
+fn variable_pressure_segments_keep_one_undo_step_and_cancel_all() {
+    let _test = TEST.lock().unwrap();
+    let h = state(0, 0, 16, 16, 0)["session"].as_u64().unwrap();
+    assert_eq!(bytes(pc_request(h, 31, 3, 0, 0)).0, 0);
+    let start = input(&[2i32.to_le_bytes(), 2i32.to_le_bytes()].concat());
+    let end = input(&[8i32.to_le_bytes(), 8i32.to_le_bytes()].concat());
+    assert_eq!(pc_stroke(h, 0, start, u32::MAX, 1), 0);
+    let before = state(h, 2, 0, 0, 0);
+    assert_eq!(bytes(pc_request(h, 31, 0, 0, 0)).0, 0);
+    assert_eq!(bytes(pc_request(h, 31, 33, 0, 0)).0, 0);
+    assert_eq!(state(h, 31, 3, 0, 0), before);
+    assert_eq!(pc_stroke(h, 1, end, u32::MAX, 1), 0);
+    assert_eq!(
+        &bytes(pc_request(h, 7, 0, 0, 0)).1[(8 * 16 + 9) * 4..(8 * 16 + 10) * 4],
+        &[255, 255, 255, 255]
+    );
+    assert_eq!(pc_stroke(h, 2, 0, 0, 1), 0);
+    assert_eq!(state(h, 2, 0, 0, 0)["undo"], 1);
+    state(h, 3, 0, 0, 0);
+    let original = bytes(pc_request(h, 7, 0, 0, 0)).1;
+    assert_eq!(pc_stroke(h, 0, start, u32::MAX, 1), 0);
+    state(h, 31, 5, 0, 0);
+    assert_eq!(pc_stroke(h, 1, end, u32::MAX, 1), 0);
+    assert_eq!(pc_stroke(h, 3, 0, 0, 1), 0);
+    assert_eq!(bytes(pc_request(h, 7, 0, 0, 0)).1, original);
+    assert_eq!(state(h, 2, 0, 0, 0)["undo"], 0);
+    pc_buffer_free(start);
+    pc_buffer_free(end);
+    pc_session_close(h);
+}
