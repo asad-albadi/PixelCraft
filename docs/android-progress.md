@@ -20,7 +20,7 @@ Current: **93% (13/14)**.
 - [x] 11. Performance, cancellation and mobile memory limits.
 - [x] 12. Android build automation, test APKs and upgrade checks.
 - [x] 13. Complete workflow tests, visual checks, reviews and desktop/CLI/MCP regressions.
-- [ ] 14. Physical tablet/phone and stylus validation.
+- [ ] 14. Physical tablet/phone and stylus validation — phone verified; tablet/stylus pending.
 
 ## Design and execution
 
@@ -176,3 +176,19 @@ prevent duplicate operations and disposed editors opening pickers. The pending-
 provider and recovery-write race regressions failed before fixes and now pass.
 Final full Flutter suite:36 passed, analysis clean. Tablet8/8 rerun passed with
 provider cancellation changes; phone8/8 passed for the same core workflows.
+
+## Physical phone test — 2026-11-22
+
+Pixel10 ProXL, Android17/API37, ARM64,4KiB pages,1080×2404 at390dpi. Fresh
+preview installation followed by the actual native/Flutter integration suite:
+**8/8 workflows passed**. The normal universal APK was restored afterward.
+Portrait and landscape/Fit layouts were inspected on the device; original auto-
+rotation and font settings were restored. The256-point/256px worker probe took
+25ms and playback produced46 decoded canvas updates/800ms. These do not measure
+end-to-end finger latency or display-presentation FPS. No crashes observed in the
+automated run. No user files were opened or modified by the integration suite;
+it used the newly installed preview's own generated fixtures/private storage.
+
+Milestone14 is now partially verified: real phone passed; real tablet and physical
+stylus validation still pending. Keep93%(13/14), rather than treating one phone as
+proof of all hardware/input requirements.

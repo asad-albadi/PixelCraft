@@ -42,6 +42,28 @@ for current format support and deliberate initial limits.
   Physical input/device performance, real cloud-provider accounts, production
   signing/upgrade channel and store/AAB distribution are not claimed tested.
 
+## Physical phone verification — 2026-11-22
+
+Pixel 10 Pro XL, Android 17/API 37, ARM64, 4 KiB pages, 1080×2404 at 390 dpi.
+The preview was not installed in the checked profile before testing. Installed
+the universal debug APK, ran the actual Rust/Flutter integration suite on ARM64,
+then restored the normal universal app build: **8/8 workflows passed**.
+
+The checks cover drawing, Undo/Redo, multitouch cancellation, private save/reopen,
+recovery, shapes/fill/colors, selection transforms, layers/linked cels, frame names,
+tags/timing/playback, native interchange, indexed tiles/references, and bounded
+256px editing. Portrait and landscape/Fit layouts were visually inspected on the
+phone. Original auto-rotation, stored rotation and font-scale settings restored.
+The suite used generated preview fixtures rather than personal phone files.
+
+Worker probe: 256-point stroke on a 256×256 canvas took 25 ms; playback produced
+46 decoded canvas updates/800 ms. These are debug worker/update measurements,
+not end-to-end physical touch latency or presentation FPS. Automated pointer events
+on a physical device do not prove stylus/palm/pressure hardware behavior. No test
+failures or observed crashes in this run. No application code change was needed.
+Real tablet and stylus validation remain pending; milestone 14 is partially met.
+No phone screenshots containing personal system UI were added to the repository.
+
 ## Current screenshots
 
 ![Tablet timeline](screenshots/android-tablet-timeline-dark.png)
