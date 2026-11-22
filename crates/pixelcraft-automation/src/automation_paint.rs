@@ -768,7 +768,7 @@ mod tests {
     use serde_json::json;
 
     fn apply(doc: &Document, command: Value) -> Result<Document, String> {
-        crate::automation::apply_command_batch(doc, &json!({"commands":[command]}))
+        crate::apply_command_batch(doc, &json!({"commands":[command]}))
     }
 
     #[test]

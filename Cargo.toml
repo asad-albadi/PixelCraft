@@ -6,12 +6,15 @@ authors = ["Asad"]
 license = "MIT"
 
 [workspace]
-members = ["crates/pixelcraft-core"]
-default-members = [".", "crates/pixelcraft-core"]
+members = ["crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp"]
+default-members = [".", "crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp"]
 resolver = "3"
 
 [dependencies]
 pixelcraft-core = { path = "crates/pixelcraft-core" }
+pixelcraft-automation = { path = "crates/pixelcraft-automation" }
+pixelcraft-cli = { path = "crates/pixelcraft-cli" }
+pixelcraft-mcp = { path = "crates/pixelcraft-mcp" }
 eframe = { version = "0.36.2", default-features = false, features = ["accesskit", "default_fonts", "glow", "wgpu", "x11", "wayland"] }
 arboard = "3.6.1"
 sha2 = "0.10.9"

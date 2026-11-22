@@ -30,7 +30,7 @@ Preserve executable/test discovery; run headless checks through the root binary.
   editor_output}.rs` and generic staging from `src/automation.rs`. Retain root
   reexports. Move static codec linking with codecs; keep icon resource on binary.
   Run workspace boundary check, core tests and root compatibility tests.
-- [ ] Adapters: move shared command/export interpretation to automation;
+- [x] Adapters: move shared command/export interpretation to automation;
   `run_cli` and parsing to CLI; JSON-RPC/live bridge to MCP. Preserve public root
   automation reexports and existing wire schemas. Run full file/live/headless
   automation regression suite. Review security boundary changes.
@@ -59,3 +59,9 @@ strict all-target workspace Clippy passed. Existing CLI help is byte-identical.
 Independent review confirmed one guard state and unchanged staging semantics.
 Moved a cross-layer tile command regression to root integration tests; kept
 codec broker private. Default workspace members include moved unit/security tests.
+
+Batch adapters: 806 tests passed, 16 opt-in ignores; strict workspace Clippy
+passed. Released v0.11.0 and refactored executable return identical initialize
+responses and full MCP tool schemas; CLI help remains byte-identical. Independent
+review compared command bodies, live bridge, root guards and response limits: no
+remaining actionable findings. Deadline tests moved to the MCP crate.

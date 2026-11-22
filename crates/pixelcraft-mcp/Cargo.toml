@@ -1,0 +1,11 @@
+[package]
+name = "pixelcraft-mcp"
+version = "0.11.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+pixelcraft-core = { path = "../pixelcraft-core" }
+pixelcraft-automation = { path = "../pixelcraft-automation" }
+serde_json = { version = "1.0.151", features = ["preserve_order", "raw_value"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
