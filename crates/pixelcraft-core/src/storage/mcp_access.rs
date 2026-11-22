@@ -81,7 +81,9 @@ mod windows_access {
 }
 
 #[cfg(windows)]
-pub use windows_access::{Project, is_restricted, windows};
+pub(super) use windows_access::windows;
+#[cfg(windows)]
+pub use windows_access::{Project, is_restricted};
 
 #[cfg(not(any(target_os = "linux", windows)))]
 pub struct Project;

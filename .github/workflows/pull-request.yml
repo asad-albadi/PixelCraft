@@ -37,9 +37,10 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-pr-data
         run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          python3 checks/workspace-boundaries.py
+          cargo fmt --all --check
+          cargo clippy --workspace --locked --all-targets -- -D warnings
+          cargo test --workspace --locked
 
   windows:
     name: Windows checks and startup
@@ -56,14 +57,16 @@ jobs:
         run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
       - name: Build static WebP
         run: ./packaging/build-windows-webp.ps1
+      - name: Verify workspace boundaries
+        run: python checks/workspace-boundaries.py
       - name: Format
-        run: cargo +1.95.0 fmt --check
+        run: cargo +1.95.0 fmt --all --check
       - name: Lint
-        run: cargo +1.95.0 clippy --locked --all-targets -- -D warnings
+        run: cargo +1.95.0 clippy --workspace --locked --all-targets -- -D warnings
       - name: Test
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-pr-data
-        run: cargo +1.95.0 test --locked
+        run: cargo +1.95.0 test --workspace --locked
       - name: Build application
         run: |
           cargo +1.95.0 build --locked

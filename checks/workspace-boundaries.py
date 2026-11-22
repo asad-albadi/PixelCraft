@@ -4,12 +4,18 @@ import json
 import subprocess
 
 metadata = json.loads(subprocess.check_output(
-    ["cargo", "metadata", "--locked", "--format-version", "1"], text=True))
+    ["cargo", "+1.95.0", "metadata", "--locked", "--format-version", "1"], text=True))
 packages = {p["id"]: p for p in metadata["packages"]}
 members = {packages[i]["name"]: i for i in metadata["workspace_members"]}
 required = {"pixelcraft", "pixelcraft-core", "pixelcraft-automation",
             "pixelcraft-cli", "pixelcraft-mcp", "pixelcraft-desktop"}
 assert required <= members.keys(), f"Missing workspace members: {required - members.keys()}"
+versions = {packages[i]["version"] for i in metadata["workspace_members"]}
+assert len(versions) == 1, f"Workspace package versions drifted: {versions}"
+assert set(metadata["workspace_default_members"]) == set(metadata["workspace_members"]), "Default checks would skip workspace members"
+binaries = [(packages[i]["name"], t["name"]) for i in metadata["workspace_members"]
+            for t in packages[i]["targets"] if "bin" in t["kind"]]
+assert binaries == [("pixelcraft", "pixelcraft")], f"Public executable layout changed: {binaries}"
 edges = {n["id"]: n["dependencies"] for n in metadata["resolve"]["nodes"]}
 
 def reachable(start):

@@ -37,10 +37,10 @@ Preserve executable/test discovery; run headless checks through the root binary.
 - [x] Desktop and editing: move GUI modules into desktop; root launcher calls its
   entry point. Extract shared selection, stroke and history state/operations with
   regressions; desktop must use them. Run all desktop UI tests and history checks.
-- [ ] Integration: update CI test targets, build scripts and embedded asset paths;
+- [x] Integration: update CI test targets, build scripts and embedded asset paths;
   keep root default commands and `target/{debug,release}/pixelcraft`. Update
   developer docs and test workspace/package metadata and build packaging paths.
-- [ ] Final: formatting, strict workspace all-target Clippy, complete tests,
+- [x] Final local verification: formatting, strict workspace all-target Clippy, complete tests,
   live tests, headless checks, standalone and graphical verification. Independent
   code/security reviews, fix findings, rerun affected checks and record evidence.
 
@@ -78,3 +78,17 @@ tests pass, 16 opt-in ignores; strict all-target Clippy and normal build pass.
 New headless session tests were red before the API existed, then green. Review
 found and fixed initial tile selection and intermediate active-tag invalidation;
 the tag regression was observed failing before the observer fix, then passed.
+
+Batch integration: all versions inherit the root workspace version; one executable
+and complete default test membership are enforced by the boundary check. CI and
+native test selectors follow the moved implementations. README and source links
+are updated. Final local suite: 811 pass, 16 opt-in ignores; 57 core-only tests,
+3 live bridge tests, 2 native X11 clipboard tests, strict workspace Clippy,
+formatting, CLI/MCP headless and restricted standalone checks pass. Native Full HD
+light/dark captures match v0.11.0 pixel-for-pixel. Four dialog checks report pass
+and produced 64 size/theme/scaling captures, with representative visual inspection.
+Independent final code and security reviews found no remaining actionable issues.
+
+Hosted platform checks and all-package preview acceptance are tracked in the PR,
+not inferred from local results. See docs/workspace-validation-2026-11-22.md for
+reproduction details and the pre-existing offline advisory snapshot limitation.

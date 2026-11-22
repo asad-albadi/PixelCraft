@@ -51,9 +51,10 @@ jobs:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
           XDG_CONFIG_HOME: ${{ runner.temp }}/pixelcraft-native-config
         run: |
-          cargo fmt --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
+          python3 checks/workspace-boundaries.py
+          cargo fmt --all --check
+          cargo clippy --workspace --locked --all-targets -- -D warnings
+          cargo test --workspace --locked
           cargo build --release --locked
           python3 checks/no-lua-runtime.py target/release/pixelcraft
           target/release/pixelcraft --standalone-check "$RUNNER_TEMP/pixelcraft-native-check"
@@ -258,7 +259,7 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-native-data
         run: |
-          cargo test --locked
+          cargo test --workspace --locked
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --release --locked
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
@@ -273,9 +274,10 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
-          cargo fmt --check
+          python3 checks/workspace-boundaries.py
+          cargo fmt --all --check
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
-          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --workspace --locked --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { throw 'Strict lint failed' }
           cargo test --locked -p pixelcraft-desktop --lib native_clipboard_roundtrip -- --ignored --nocapture --test-threads=1
           if ($LASTEXITCODE -ne 0) { throw 'Native clipboard failed' }

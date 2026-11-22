@@ -1,6 +1,6 @@
 [package]
 name = "pixelcraft"
-version = "0.11.0"
+version.workspace = true
 edition = "2024"
 authors = ["Asad"]
 license = "MIT"
@@ -9,6 +9,9 @@ license = "MIT"
 members = ["crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp", "crates/pixelcraft-desktop"]
 default-members = [".", "crates/pixelcraft-core", "crates/pixelcraft-automation", "crates/pixelcraft-cli", "crates/pixelcraft-mcp", "crates/pixelcraft-desktop"]
 resolver = "3"
+
+[workspace.package]
+version = "0.11.0"
 
 [dependencies]
 pixelcraft-core = { path = "crates/pixelcraft-core" }

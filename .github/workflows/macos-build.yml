@@ -37,9 +37,10 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-macos-test-data
         run: |
-          cargo +1.95.0 fmt --check
-          cargo +1.95.0 clippy --locked --all-targets -- -D warnings
-          cargo +1.95.0 test --release --locked --all-targets
+          python3 checks/workspace-boundaries.py
+          cargo +1.95.0 fmt --all --check
+          cargo +1.95.0 clippy --workspace --locked --all-targets -- -D warnings
+          cargo +1.95.0 test --workspace --release --locked --all-targets
           cargo +1.95.0 build --release --locked
           python3 checks/no-lua-runtime.py target/release/pixelcraft
       - name: Stage and archive the macOS application
