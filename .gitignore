@@ -21,3 +21,6 @@ Thumbs.db
 
 # Android/Flutter generated native editor libraries.
 /flutter/pixelcraft_mobile/android/app/src/main/jniLibs/
+
+# Python check helpers
+__pycache__/

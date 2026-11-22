@@ -1,7 +1,12 @@
 package io.github.asad_albadi.pixelcraft.preview
 
 import android.app.Activity
+import android.content.ClipData
 import android.content.Intent
+import android.provider.OpenableColumns
+import android.provider.DocumentsContract
+import android.net.Uri
+import androidx.core.content.FileProvider
 import android.os.Handler
 import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
@@ -18,7 +23,10 @@ class MainActivity : FlutterActivity() {
     private val main = Handler(Looper.getMainLooper())
     private var pending: MethodChannel.Result? = null
     private var copyBytes: ByteArray? = null
-    private val maxBytes = 8 * 1024 * 1024
+    private var copyReturnName = false
+    private val maxBytes = ExportPolicy.MAX_BYTES
+    private val running = mutableSetOf<MethodChannel.Result>()
+    private var closed = false
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "pixelcraft/storage").setMethodCallHandler { call, result ->
@@ -55,24 +63,101 @@ class MainActivity : FlutterActivity() {
                     val key = call.argument<String>("key") ?: getSharedPreferences("projects", MODE_PRIVATE).getString("last", null) ?: error("Save a project first")
                     mapOf("key" to key, "bytes" to readBounded(project(key).inputStream()))
                 }
-                "openDocument", "saveCopy" -> {
+                "savedExportFolder" -> work(result) {
+                    savedFolder()?.let { folderLabel(it) }
+                }
+                "clearExportFolder" -> work(result) {
+                    val preferences = getSharedPreferences("exportFolders", MODE_PRIVATE)
+                    val previous = preferences.getString("uri", null)?.let { Uri.parse(it) }
+                    if (previous != null) releaseFolder(previous)
+                    check(preferences.edit().remove("uri").commit()) { "Could not forget export folder" }
+                    null
+                }
+                "chooseExportFolder" -> {
                     if (pending != null) { result.error("busy", "A file picker is already open", null); return@setMethodCallHandler }
                     pending = result
-                    val save = call.method == "saveCopy"
-                    copyBytes = if (save) call.argument<ByteArray>("bytes") else null
+                    try {
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                        }
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(intent, 9003)
+                    } catch (error: Exception) {
+                        pending = null
+                        result.error("picker", error.message, null)
+                    }
+                }
+                "exportToFolder" -> {
+                    val returnName = call.argument<Any>("returnName") == true
+                    val export = try { ExportPolicy.validate(call.argument<ByteArray>("bytes"), call.argument<String>("name"), call.argument<String>("mime")) }
+                    catch (error: Exception) { result.error("export", error.message, null); return@setMethodCallHandler }
+                    work(result) {
+                        val tree = savedFolder() ?: error("Choose an export folder again; its write permission is unavailable")
+                        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+                        // createDocument creates a copy; providers choose how duplicate names are disambiguated.
+                        val document = DocumentsContract.createDocument(contentResolver, parent, export.mime, export.name)
+                            ?: error("Provider could not create a new export")
+                        ExportPolicy.requireContentScheme(document.scheme)
+                        require(document.authority == tree.authority) { "Provider returned an unexpected document authority" }
+                        contentResolver.openOutputStream(document, "w").use { stream ->
+                            check(stream != null) { "Cannot write this export" }
+                            stream.write(export.bytes)
+                            stream.flush()
+                        }
+                        // Preserve the provider document even if a write fails partway through.
+                        exportResult(document, returnName)
+                    }
+                }
+                "shareDocument" -> {
+                    val export = try { ExportPolicy.validate(call.argument<ByteArray>("bytes"), call.argument<String>("name"), call.argument<String>("mime")) }
+                    catch (error: Exception) { result.error("export", error.message, null); return@setMethodCallHandler }
+                    work(result, completion = { value ->
+                        val file = value as File
+                        val uri = FileProvider.getUriForFile(this, "$packageName.exports", file)
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = export.mime
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            clipData = ClipData.newUri(contentResolver, export.name, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        startActivity(Intent.createChooser(send, "Share ${export.name}").apply {
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        })
+                        // The chooser opened; Android does not report whether a recipient saved it.
+                        result.success(true)
+                    }) {
+                        val directory = File(cacheDir, "exports").apply { check(mkdirs() || isDirectory) }
+                        cleanupExports(directory)
+                        val entry = File(directory, UUID.randomUUID().toString()).apply { check(mkdir()) }
+                        val file = File(entry, export.name)
+                        publish(file, export.bytes)
+                        file
+                    }
+                }
+                "openDocument", "saveCopy", "exportDocument" -> {
+                    if (pending != null) { result.error("busy", "A file picker is already open", null); return@setMethodCallHandler }
+                    val export = if (call.method == "exportDocument") {
+                        try { ExportPolicy.validate(call.argument<ByteArray>("bytes"), call.argument<String>("name"), call.argument<String>("mime")) }
+                        catch (error: Exception) { result.error("export", error.message, null); return@setMethodCallHandler }
+                    } else null
+                    pending = result
+                    copyReturnName = call.method == "exportDocument" && call.argument<Any>("returnName") == true
+                    val save = call.method != "openDocument"
+                    copyBytes = if (save) export?.bytes ?: call.argument<ByteArray>("bytes") else null
                     if (save && (copyBytes == null || copyBytes!!.size > maxBytes)) {
-                        pending = null; copyBytes = null; result.error("size", "Project exceeds the preview file limit", null); return@setMethodCallHandler
+                        pending = null; copyBytes = null; copyReturnName = false; result.error("size", "Project exceeds the preview file limit", null); return@setMethodCallHandler
                     }
                     try {
                         val intent = Intent(if (save) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
-                            type = if (save) "application/octet-stream" else "*/*"
-                            if (save) putExtra(Intent.EXTRA_TITLE, "PixelCraft.pixel")
+                            type = if (save) export?.mime ?: "application/octet-stream" else "*/*"
+                            if (save) putExtra(Intent.EXTRA_TITLE, export?.name ?: "PixelCraft.pixel")
                         }
                         @Suppress("DEPRECATION")
                         startActivityForResult(intent, if (save) 9002 else 9001)
                     } catch (error: Exception) {
-                        pending = null; copyBytes = null; result.error("picker", error.message, null)
+                        pending = null; copyBytes = null; copyReturnName = false; result.error("picker", error.message, null)
                     }
                 }
                 else -> result.notImplemented()
@@ -102,37 +187,123 @@ class MainActivity : FlutterActivity() {
         }
         output.toByteArray()
     }
-    private fun work(result: MethodChannel.Result, action: () -> Any?) {
-        io.execute {
-            try { val value = action(); main.post { result.success(value) } }
-            catch (error: Exception) { main.post { result.error("storage", error.message ?: "File operation failed", null) } }
+    // Cache exports stay available after chooser launch, including chooser/recipient failures.
+    // Cleanup runs only before the next share; at most 32 exports / 64 MiB remain.
+    private fun cleanupExports(directory: File) {
+        val entries = directory.listFiles()?.sortedBy { it.lastModified() }?.toMutableList() ?: return
+        val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+        entries.filter { it.lastModified() < cutoff }.forEach { entry ->
+            check(entry.deleteRecursively()) { "Could not clean old export" }
+            entries.remove(entry)
+        }
+        fun size(): Long = entries.sumOf { entry -> entry.walkTopDown().filter { it.isFile }.sumOf { it.length() } }
+        while (entries.size >= 32 || size() + maxBytes > 64L * 1024 * 1024) {
+            check(entries.removeAt(0).deleteRecursively()) { "Could not clean export cache" }
         }
     }
+    private fun work(result: MethodChannel.Result, completion: ((Any?) -> Unit)? = null, action: () -> Any?) {
+        if (closed) { result.error("closed", "Editor closed", null); return }
+        running.add(result)
+        try {
+            io.execute {
+                try {
+                    val value = action()
+                    main.post {
+                        if (running.remove(result)) {
+                            try { if (completion == null) result.success(value) else completion(value) }
+                            catch (error: Exception) { result.error("storage", error.message ?: "File operation failed", null) }
+                        }
+                    }
+                } catch (error: Exception) {
+                    main.post { if (running.remove(result)) result.error("storage", error.message ?: "File operation failed", null) }
+                }
+            }
+        } catch (error: Exception) {
+            running.remove(result)
+            result.error("closed", "Editor closed", null)
+        }
+    }
+    private fun savedFolder(): Uri? {
+        val value = getSharedPreferences("exportFolders", MODE_PRIVATE).getString("uri", null) ?: return null
+        val uri = Uri.parse(value)
+        if (uri.scheme != "content" || !DocumentsContract.isTreeUri(uri)) return null
+        return uri.takeIf { contentResolver.persistedUriPermissions.any { grant -> grant.uri == uri && grant.isWritePermission } }
+    }
+    private fun folderLabel(tree: Uri): String {
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
+        return documentName(root)?.takeIf { it.isNotBlank() } ?: "Selected export folder"
+    }
+    private fun releaseFolder(uri: Uri) {
+        // Release only the URI recorded by this feature, never other persisted app grants.
+        val grant = contentResolver.persistedUriPermissions.firstOrNull { it.uri == uri } ?: return
+        val flags = (if (grant.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+            (if (grant.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+        if (flags != 0) contentResolver.releasePersistableUriPermission(uri, flags)
+    }
+    private fun rememberFolder(uri: Uri, returnedFlags: Int): String {
+        ExportPolicy.requireContentScheme(uri.scheme)
+        require(DocumentsContract.isTreeUri(uri)) { "Provider did not return a document tree" }
+        val flags = returnedFlags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        require(flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0 &&
+            returnedFlags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0) { "Provider did not grant persistent folder write access" }
+        contentResolver.takePersistableUriPermission(uri, flags)
+        check(contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }) { "Folder write permission was not persisted" }
+        val preferences = getSharedPreferences("exportFolders", MODE_PRIVATE)
+        val previous = preferences.getString("uri", null)?.let { Uri.parse(it) }
+        if (!preferences.edit().putString("uri", uri.toString()).commit()) {
+            if (previous != uri) releaseFolder(uri)
+            error("Could not remember export folder")
+        }
+        if (previous != null && previous != uri) {
+            // The new choice is already saved; a revoked old grant must not hide its success.
+            try { releaseFolder(previous) } catch (_: SecurityException) { }
+        }
+        return folderLabel(uri)
+    }
+    private fun exportResult(uri: Uri, returnName: Boolean): Any {
+        if (!returnName) return true
+        val name = documentName(uri)?.takeIf { it.isNotBlank() }
+            ?: error("Provider did not report the saved document name")
+        return mapOf("name" to name)
+    }
+    private fun documentName(uri: android.net.Uri): String? = try {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.length <= 255 } else null
+        }
+    } catch (_: Exception) { null }
     @Deprecated("Android document picker result")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != 9001 && requestCode != 9002) return
+        if (requestCode != 9001 && requestCode != 9002 && requestCode != 9003) return
         val result = pending ?: return
         pending = null
         val bytes = copyBytes; copyBytes = null
+        val returnName = copyReturnName; copyReturnName = false
         val uri = data?.data
         if (resultCode != Activity.RESULT_OK || uri == null) { result.success(null); return }
+        try { ExportPolicy.requireContentScheme(uri.scheme) }
+        catch (error: IllegalArgumentException) { result.error("picker", error.message, null); return }
         work(result) {
-            if (requestCode == 9001) {
-                mapOf("bytes" to readBounded(contentResolver.openInputStream(uri) ?: error("Cannot read this document")))
+            if (requestCode == 9003) {
+                rememberFolder(uri, data.flags)
+            } else if (requestCode == 9001) {
+                mapOf("bytes" to readBounded(contentResolver.openInputStream(uri) ?: error("Cannot read this document")), "name" to documentName(uri))
             } else {
                 contentResolver.openOutputStream(uri, "w").use { stream ->
                     check(stream != null) { "Cannot write this document" }
                     stream.write(bytes ?: error("Missing export bytes")); stream.flush()
                 }
                 // A provider may expose an existing document. Never delete it on a write failure.
-                true
+                exportResult(uri, returnName)
             }
         }
     }
     override fun onDestroy() {
+        closed = true
+        running.forEach { it.error("closed", "Editor closed during file operation", null) }
+        running.clear()
         pending?.error("closed", "File picker closed with the editor", null)
-        pending = null; copyBytes = null
+        pending = null; copyBytes = null; copyReturnName = false
         io.shutdown()
         super.onDestroy()
     }

@@ -1,0 +1,92 @@
+name: Android test APK
+
+on:
+  pull_request:
+  push:
+    branches: ['main', 'master', 'feature/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixelcraft-android-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug-apk:
+    name: Universal debug APK (tablet testing)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-android-ci-data
+      ANDROID_NDK_VERSION: '28.2.13676358'
+      ANDROID_BUILD_TOOLS_VERSION: '36.0.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Select Java 17 and install Android tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$JAVA_HOME_17_X64"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          sdkmanager "platforms;android-36" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+      - name: Install pinned Flutter SDK from verified official archive
+        run: python3 checks/android-ci-flutter.py "$RUNNER_TEMP/flutter-sdk"
+      - name: Install Rust and Android targets
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+          rustup target add --toolchain 1.95.0 x86_64-linux-android aarch64-linux-android
+      - name: Verify native engine and workspace boundaries
+        run: |
+          python3 checks/android-ci-apk-test.py
+          python3 checks/workspace-boundaries.py
+          cargo +1.95.0 fmt --all --check
+          cargo +1.95.0 clippy --locked -p pixelcraft-core -p pixelcraft-automation -p pixelcraft-ffi --all-targets -- -D warnings
+          cargo +1.95.0 test --locked -p pixelcraft-core -p pixelcraft-automation -p pixelcraft-ffi
+      - name: Resolve locked mobile dependencies
+        working-directory: flutter/pixelcraft_mobile
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze and test mobile editor
+        working-directory: flutter/pixelcraft_mobile
+        run: |
+          flutter analyze --no-pub
+          flutter test --no-pub
+      - name: Build universal debug APK for arm64 and x86_64
+        working-directory: flutter/pixelcraft_mobile
+        run: flutter build apk --debug --no-pub --target-platform android-arm64,android-x64
+      - name: Verify APK native libraries, 16 KiB alignment, and debug signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=flutter/pixelcraft_mobile/build/app/outputs/flutter-apk/app-debug.apk
+          tools="$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          python3 checks/android-ci-apk.py "$apk"
+          "$tools/zipalign" -c -P 16 -v 4 "$apk"
+          "$tools/apksigner" verify --verbose --print-certs "$apk"
+          mkdir -p dist/android-test
+          cp "$apk" dist/android-test/PixelCraft-Android-universal-DEBUG-TEST.apk
+          (cd dist/android-test && sha256sum *.apk > SHA256SUMS)
+          cat > dist/android-test/TEST-ONLY.txt <<'NOTICE'
+          PixelCraft Android tablet preview: universal DEBUG TEST APK.
+          Includes arm64-v8a and x86_64 native engines. Minimum Android API 24.
+          Signed with the disposable CI debug key, not a production signing key.
+          Debug keys may differ between runs; an update may require uninstalling
+          the earlier test build, which removes its private saved projects.
+          Export projects before uninstalling to preserve your artwork.
+          CI checks do not replace physical tablet, stylus, or performance testing.
+          NOTICE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: PixelCraft-Android-universal-DEBUG-TEST-${{ github.run_number }}
+          path: dist/android-test/
+          if-no-files-found: error
+          retention-days: 14
