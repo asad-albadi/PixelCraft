@@ -26,6 +26,8 @@ both code and security. Findings addressed before proceeding:
 - Include moved unit/security tests in default workspace checks; update native
   UI/clipboard selectors to the desktop library so they cannot pass with no tests.
 - Preserve desktop author metadata and the initial selected tile of 1.
+- Fail Windows packaging immediately when workspace boundary verification fails;
+  PowerShell must not let a later successful command overwrite its exit status.
 - Preserve active-tag invalidation at every intermediate Undo/Redo jump state.
   The new tag-crossing regression failed before the observer fix and passed after.
 

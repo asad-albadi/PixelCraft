@@ -274,7 +274,8 @@ jobs:
         env:
           PIXELCRAFT_HOME: ${{ runner.temp }}/pixelcraft-clipboard-data
         run: |
-          python3 checks/workspace-boundaries.py
+          python checks/workspace-boundaries.py
+          if ($LASTEXITCODE -ne 0) { throw 'Workspace boundaries failed' }
           cargo fmt --all --check
           if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
           cargo clippy --workspace --locked --all-targets -- -D warnings
