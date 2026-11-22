@@ -23,6 +23,21 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "pixelcraft/storage").setMethodCallHandler { call, result ->
             when (call.method) {
+                "recoveryRead" -> work(result) {
+                    val file = File(filesDir, "recovery.snapshot")
+                    if (file.exists()) readBounded(file.inputStream()) else null
+                }
+                "recoveryWrite" -> work(result) {
+                    val bytes = call.argument<ByteArray>("bytes") ?: error("Missing recovery bytes")
+                    require(bytes.size <= maxBytes) { "Recovery exceeds the mobile file budget" }
+                    publish(File(filesDir, "recovery.snapshot"), bytes)
+                    null
+                }
+                "recoveryClear" -> work(result) {
+                    val file = File(filesDir, "recovery.snapshot")
+                    check(!file.exists() || file.delete()) { "Could not discard recovery" }
+                    null
+                }
                 "save" -> work(result) {
                     val bytes = call.argument<ByteArray>("bytes") ?: error("Missing project bytes")
                     require(bytes.size <= maxBytes) { "Project exceeds the preview file limit" }
@@ -63,6 +78,13 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+    private fun publish(destination: File, bytes: ByteArray) {
+        val temporary = File.createTempFile(".pixelcraft-", ".tmp", destination.parentFile)
+        try {
+            FileOutputStream(temporary).use { stream -> stream.write(bytes); stream.fd.sync() }
+            check(temporary.renameTo(destination)) { "Could not publish recovery" }
+        } finally { temporary.delete() }
     }
     private fun project(key: String): File {
         require(Regex("[a-fA-F0-9-]{36}").matches(key)) { "Invalid project identity" }

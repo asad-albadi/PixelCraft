@@ -1,24 +1,61 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 
 import 'bridge/native_editor.dart';
+import 'storage/recovery_store.dart';
+import 'animation/playback_clock.dart';
 
 class EditorController extends ChangeNotifier {
   final NativeEditor native;
+  final RecoveryStore recovery;
+  Uint8List? _recoverable;
+  bool get recoveryPending => _recoverable != null || _recoveryReadFailed;
+  Timer? _autosave;
+  bool _initializing = false;
+  bool _suppressRecovery = false;
+  bool _discardHandoff = false;
+  bool _recoveryReadFailed = false;
+  bool get canRestoreRecovery => _recoverable != null;
+  bool get recoveryResolving => _fileBusy;
+  String? _lastRecoveryIdentity;
+  Future<void> _recoveryWork = Future.value();
   static const storage = MethodChannel('pixelcraft/storage');
   Map<String, dynamic> state = {};
   ui.Image? image;
+  ui.Image? onionImage;
+  bool get onionSkin => native.onion;
+  final canvasUpdates = ValueNotifier<int>(0);
+  bool get loadingFile => _initializing || _fileBusy;
   String status = 'Opening your canvas…';
   String? error;
   String title = 'Moonlit garden';
   String? savedKey;
   bool _fileBusy = false;
+  bool playing = false;
+  bool _startingPlayback = false;
+  bool _foreground = true;
+  Future<void>? _stoppingPlayback;
+  double playbackSpeed = 1;
+  int? previewFrame;
+  int _playGeneration = 0;
+  Timer? _playTimer;
+  final _playClock = Stopwatch();
   int _pendingActions = 0;
-  bool get busy => _fileBusy || _pendingActions > 0;
+  bool get busy =>
+      playing ||
+      _startingPlayback ||
+      _initializing ||
+      _fileBusy ||
+      _pendingActions > 0 ||
+      recoveryPending ||
+      _discardHandoff;
   set busy(bool value) => _fileBusy = value;
   bool drawing = false;
   bool _disposed = false;
@@ -28,10 +65,103 @@ class EditorController extends ChangeNotifier {
   Future<void> _queue = Future.value();
   int color = 0xfff7e6b6;
   int brush = 1;
+  int get brushShape => [
+    'Round',
+    'Square',
+    'Diamond',
+    'Horizontal',
+    'Vertical',
+  ].indexOf(state['brush_shape'] as String? ?? 'Round').clamp(0, 4);
+  bool filled = false;
+  Offset? gestureStart, gestureEnd;
+  bool get _discreteTool => !['Draw', 'Erase', 'Pan'].contains(tool);
+  List<int> get rgba => [
+    (color >> 16) & 255,
+    (color >> 8) & 255,
+    color & 255,
+    (color >> 24) & 255,
+  ];
+  List<(String, int)> get namedColors {
+    final palette = state['palette'] as List? ?? [];
+    final names = state['palette_names'] as List? ?? [];
+    return [
+      for (var i = 0; i < names.length && i < palette.length; i++)
+        if ((names[i] as String).isNotEmpty)
+          (
+            names[i] as String,
+            ((palette[i][3] as int) << 24) |
+                ((palette[i][0] as int) << 16) |
+                ((palette[i][1] as int) << 8) |
+                (palette[i][2] as int),
+          ),
+    ];
+  }
+
   String tool = 'Draw';
+  Rect? get selection {
+    final bounds = state['selection'] as List?;
+    if (bounds == null) return null;
+    return Rect.fromLTRB(
+      (bounds[0] as num).toDouble(),
+      (bounds[1] as num).toDouble(),
+      (bounds[2] as num).toDouble() + 1,
+      (bounds[3] as num).toDouble() + 1,
+    );
+  }
+
   int documentGeneration = 0;
-  EditorController({NativeEditor? backend})
-    : native = backend ?? NativeEditor();
+  bool zen = false;
+  bool pixelGrid = false;
+  void togglePixelGrid() {
+    pixelGrid = !pixelGrid;
+    _notify();
+  }
+
+  Future<void> exitZen() async {
+    await cancel();
+    if (!_disposed) setZen(false);
+  }
+
+  bool zenControlsLeft = false;
+  bool timelineExpanded = true;
+  final canvasTransform = TransformationController();
+  Size canvasViewport = Size.zero, canvasDocumentSize = Size.zero;
+  int canvasDocumentGeneration = -1;
+  void setZen(bool enabled) {
+    if (enabled && (drawing || busy || !ready)) return;
+    if (zen == enabled) return;
+    zen = enabled;
+    _notify();
+  }
+
+  void setZenControlsLeft(bool left) {
+    zenControlsLeft = left;
+    _notify();
+  }
+
+  void setTimelineExpanded(bool expanded) {
+    timelineExpanded = expanded;
+    _notify();
+  }
+
+  void fitCanvas() {
+    final size = canvasViewport;
+    if (size.isEmpty) return;
+    final scale =
+        math.min(size.width / (width * 8), size.height / (height * 8)) * .76;
+    canvasTransform.value = Matrix4.identity()
+      ..translateByDouble(
+        (size.width - width * 8 * scale) / 2,
+        (size.height - height * 8 * scale) / 2,
+        0,
+        1,
+      )
+      ..scaleByDouble(scale, scale, 1, 1);
+  }
+
+  EditorController({NativeEditor? backend, RecoveryStore? recoveryStore})
+    : native = backend ?? NativeEditor(),
+      recovery = recoveryStore ?? RecoveryStore();
   int get width => (state['width'] as num?)?.toInt() ?? 48;
   int get height => (state['height'] as num?)?.toInt() ?? 48;
   bool get dirty => state['dirty'] == true;
@@ -50,22 +180,37 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    _initializing = true;
+    _notify();
     try {
       await native.start();
       await command(1);
+      try {
+        _recoverable = await recovery.read();
+        if (recoveryPending) status = 'Unsaved artwork is available to recover';
+      } catch (e) {
+        _recoveryReadFailed = true;
+        error = 'Recovery could not be read: $e';
+      }
+      _notify();
     } catch (e) {
       error = e.toString();
       status = 'Could not open the editor';
+      _notify();
+    } finally {
+      _initializing = false;
       _notify();
     }
   }
 
   Future<Map<String, dynamic>?> _enqueue(
-    Future<Map<String, dynamic>> Function() action,
-  ) {
+    Future<Map<String, dynamic>> Function() action, {
+    bool Function()? accept,
+    bool quiet = false,
+  }) {
     final complete = Completer<Map<String, dynamic>?>();
     _pendingActions++;
-    _notify();
+    if (!quiet) _notify();
     _queue = _queue
         .then((_) async {
           if (_disposed) {
@@ -74,13 +219,13 @@ class EditorController extends ChangeNotifier {
           }
           try {
             final result = await action();
-            if (_disposed) {
+            if (_disposed || (accept != null && !accept())) {
               complete.complete(null);
               return;
             }
-            await _apply(result);
+            await _apply(result, accept: accept);
             error = null;
-            _notify();
+            if (!quiet) _notify();
             complete.complete(result);
           } catch (e) {
             final message = e.toString().replaceFirst('Bad state: ', '');
@@ -101,12 +246,16 @@ class EditorController extends ChangeNotifier {
         })
         .whenComplete(() {
           _pendingActions--;
-          _notify();
+          if (!quiet || (_pendingActions == 0 && !drawing)) _notify();
         });
     return complete.future;
   }
 
-  Future<void> _apply(Map<String, dynamic> result) async {
+  Future<void> _apply(
+    Map<String, dynamic> result, {
+    bool Function()? accept,
+  }) async {
+    if (accept != null && !accept()) return;
     state = Map<String, dynamic>.from(result['state'] as Map);
     final pixels = (result['rgba'] as TransferableTypedData)
         .materialize()
@@ -120,17 +269,35 @@ class EditorController extends ChangeNotifier {
       decoded.complete,
     );
     final next = await decoded.future;
-    if (_disposed) {
+    ui.Image? onion;
+    final extra = result['onion'] as TransferableTypedData?;
+    if (extra != null) {
+      final done = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        extra.materialize().asUint8List(),
+        width,
+        height,
+        ui.PixelFormat.rgba8888,
+        done.complete,
+      );
+      onion = await done.future;
+    }
+
+    if (_disposed || (accept != null && !accept())) {
       next.dispose();
+      onion?.dispose();
       return;
     }
     final previous = image;
+    final oldOnion = onionImage;
     image = next;
+    onionImage = onion;
+    canvasUpdates.value++;
     // Keep the previous image alive through the current paint frame.
-    Future<void>.delayed(
-      const Duration(milliseconds: 100),
-      () => previous?.dispose(),
-    );
+    Future<void>.delayed(const Duration(milliseconds: 100), () {
+      previous?.dispose();
+      oldOnion?.dispose();
+    });
   }
 
   Future<void> command(
@@ -142,7 +309,10 @@ class EditorController extends ChangeNotifier {
     final result = await _enqueue(
       () => native.send('request', op: operation, a: a, b: b, input: input),
     );
-    if (result != null) status = 'Ready to draw';
+    if (result != null) {
+      status = 'Ready to draw';
+      _scheduleRecovery();
+    }
     _notify();
   }
 
@@ -157,8 +327,15 @@ class EditorController extends ChangeNotifier {
 
   int _rgba = 0;
   void begin(Offset point) {
-    if (!ready || busy || drawing || tool == 'Pan') return;
+    if (_disposed || !ready || busy || drawing || tool == 'Pan') return;
     drawing = true;
+    status = 'Drawing';
+    if (_discreteTool) {
+      gestureStart = point;
+      gestureEnd = point;
+      canvasUpdates.value++;
+      return;
+    }
     _points.clear();
     final argb = tool == 'Erase' ? 0 : color;
     _rgba =
@@ -177,6 +354,7 @@ class EditorController extends ChangeNotifier {
           color: strokeColor,
           size: size,
         ),
+        quiet: true,
       ),
     );
     _timer = Timer.periodic(const Duration(milliseconds: 16), (_) => _flush());
@@ -184,7 +362,12 @@ class EditorController extends ChangeNotifier {
   }
 
   void move(Offset point) {
-    if (!drawing) return;
+    if (_disposed || !drawing) return;
+    if (_discreteTool) {
+      gestureEnd = point;
+      canvasUpdates.value++;
+      return;
+    }
     if (_points.length >= 256) _points.removeLast();
     if (_points.isEmpty || _points.last != point) _points.add(point);
   }
@@ -203,12 +386,69 @@ class EditorController extends ChangeNotifier {
           color: _rgba,
           size: brush,
         ),
+        quiet: true,
       ).whenComplete(() => _flushing = false),
     );
   }
 
   Future<void> end() async {
     if (!drawing) return;
+    if (_discreteTool) {
+      final from = gestureStart!, to = gestureEnd!;
+      drawing = false;
+      gestureStart = null;
+      gestureEnd = null;
+      if (tool == 'Select') {
+        await selectionAction(
+          'select',
+          extra: {
+            'bounds': [
+              from.dx.toInt(),
+              from.dy.toInt(),
+              to.dx.toInt(),
+              to.dy.toInt(),
+            ],
+          },
+        );
+      } else if (tool == 'Eyedropper') {
+        final result = await _enqueue(
+          () => native.send(
+            'request',
+            op: 19,
+            a: to.dx.toInt(),
+            b: to.dy.toInt(),
+          ),
+        );
+        if (result != null) {
+          final c = result['value']['color'] as List;
+          color = (c[3] << 24) | (c[0] << 16) | (c[1] << 8) | c[2];
+          tool = 'Draw';
+        }
+      } else {
+        await edits([
+          if (tool == 'Fill')
+            {
+              'op': 'fill',
+              'x': from.dx.toInt(),
+              'y': from.dy.toInt(),
+              'color': rgba,
+            }
+          else
+            {
+              'op': 'shape',
+              'kind': tool.toLowerCase(),
+              'x': from.dx.toInt(),
+              'y': from.dy.toInt(),
+              'x2': to.dx.toInt(),
+              'y2': to.dy.toInt(),
+              'color': rgba,
+              'filled': filled,
+            },
+        ]);
+      }
+      _notify();
+      return;
+    }
     drawing = false;
     _timer?.cancel();
     final points = List<Offset>.of(_points);
@@ -222,18 +462,128 @@ class EditorController extends ChangeNotifier {
         size: brush,
       ),
     );
-    if (result != null) status = 'Stroke complete';
+    if (result != null) {
+      status = 'Stroke complete';
+      _scheduleRecovery();
+    }
     _notify();
   }
 
   Future<void> cancel() async {
     if (!drawing) return;
     drawing = false;
+    if (_discreteTool) {
+      gestureStart = null;
+      gestureEnd = null;
+      _notify();
+      return;
+    }
     _timer?.cancel();
     _points.clear();
     await _enqueue(() => native.send('stroke', phase: 3));
     status = 'Ready to draw';
     _notify();
+  }
+
+  Future<void> edits(List<Map<String, dynamic>> commands) async {
+    if (busy || drawing || !ready) return;
+    final layer = state['layer'], frame = state['frame'];
+    final result = await _enqueue(
+      () => native.send(
+        'request',
+        op: 17,
+        input: Uint8List.fromList(
+          utf8.encode(
+            jsonEncode({
+              'revision': state['revision'],
+              'commands': [
+                for (final c in commands)
+                  {'layer': layer, 'frame': frame, ...c},
+              ],
+            }),
+          ),
+        ),
+      ),
+    );
+    if (result != null) {
+      status = 'Edit complete';
+      _scheduleRecovery();
+    }
+    _notify();
+  }
+
+  Future<void> setBrushShape(int value) async {
+    if (busy || drawing) return;
+    await command(18, a: value);
+  }
+
+  void setFilled(bool value) {
+    filled = value;
+    _notify();
+  }
+
+  Future<void> addNamedColor(String name, int value) async {
+    await edits([
+      {
+        'op': 'palette-entry',
+        'name': name,
+        'color': [
+          (value >> 16) & 255,
+          (value >> 8) & 255,
+          value & 255,
+          (value >> 24) & 255,
+        ],
+      },
+    ]);
+    if (error == null) setColor(value);
+  }
+
+  Future<void> selectionAction(
+    String action, {
+    Map<String, dynamic> extra = const {},
+  }) async {
+    if (busy || drawing || !ready) return;
+    final dimensions = (width, height);
+    final result = await _enqueue(
+      () => native.send(
+        'request',
+        op: 20,
+        input: Uint8List.fromList(
+          utf8.encode(
+            jsonEncode({
+              'revision': state['revision'],
+              'action': action,
+              ...extra,
+            }),
+          ),
+        ),
+      ),
+    );
+    if (result != null) {
+      if (dimensions != (width, height)) documentGeneration++;
+      status = 'Selection updated';
+      _scheduleRecovery();
+    }
+    _notify();
+  }
+
+  Future<void> addLayer({bool group = false}) async {
+    final index = (state['layers'] as List).length;
+    await edits([
+      {
+        'op': group ? 'add-group' : 'add-layer',
+        'name': group ? 'Group' : 'Layer ${index + 1}',
+      },
+    ]);
+    if (error == null) await command(10, a: index);
+  }
+
+  Future<void> addFrame({bool duplicate = false}) async {
+    final frame = (state['frame'] as int) + 1;
+    await edits([
+      {'op': 'add-frame', 'duplicate': duplicate},
+    ]);
+    if (error == null) await command(9, a: frame);
   }
 
   void setTool(String value) {
@@ -259,7 +609,14 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> newDocument({bool demo = false}) async {
-    if (busy || drawing) return;
+    if (_initializing ||
+        _fileBusy ||
+        _pendingActions > 0 ||
+        recoveryPending ||
+        drawing) {
+      return;
+    }
+    _discardHandoff = false;
     busy = true;
     _notify();
     try {
@@ -271,9 +628,11 @@ class EditorController extends ChangeNotifier {
         title = demo ? 'Moonlit garden' : 'Untitled';
         documentGeneration++;
         status = 'New canvas ready';
+        _scheduleRecovery();
       }
     } finally {
       busy = false;
+      _scheduleRecovery();
       _notify();
     }
   }
@@ -307,7 +666,11 @@ class EditorController extends ChangeNotifier {
       final ack = await _enqueue(
         () => native.send('request', op: 12, a: revision),
       );
-      if (ack != null) status = copy ? 'Copy saved' : 'Saved on this tablet';
+      if (ack != null) {
+        status = copy ? 'Copy saved' : 'Saved on this tablet';
+        await recovery.clear();
+        _lastRecoveryIdentity = null;
+      }
     } catch (e) {
       error = 'Could not save: $e';
       status = 'Your artwork is still open';
@@ -318,7 +681,14 @@ class EditorController extends ChangeNotifier {
   }
 
   Future<void> open({bool picker = false}) async {
-    if (busy || drawing) return;
+    if (_initializing ||
+        _fileBusy ||
+        _pendingActions > 0 ||
+        recoveryPending ||
+        drawing) {
+      return;
+    }
+    _discardHandoff = false;
     busy = true;
     status = 'Opening…';
     _notify();
@@ -340,22 +710,255 @@ class EditorController extends ChangeNotifier {
         title = picker ? 'Imported sprite' : 'Saved sprite';
         documentGeneration++;
         status = 'Project reopened';
+        _scheduleRecovery();
       }
     } catch (e) {
       error = 'Could not open: $e';
       status = 'Your current canvas is unchanged';
     } finally {
       busy = false;
+      _scheduleRecovery();
       _notify();
     }
+  }
+
+  void _scheduleRecovery() {
+    _autosave?.cancel();
+    if (!_disposed && !recoveryPending && !_initializing) {
+      _suppressRecovery = false;
+      _autosave = Timer(
+        const Duration(milliseconds: 800),
+        () => unawaited(flushRecovery()),
+      );
+    }
+  }
+
+  Future<void> flushRecovery() {
+    _autosave?.cancel();
+    _recoveryWork = _recoveryWork.then((_) async {
+      if (_disposed ||
+          _initializing ||
+          _suppressRecovery ||
+          recoveryPending ||
+          !ready) {
+        return;
+      }
+      if (playing) {
+        _scheduleRecovery();
+        return;
+      }
+      await settle();
+      if (_disposed || recoveryPending || drawing || _fileBusy) {
+        _scheduleRecovery();
+        return;
+      }
+      final generation = documentGeneration;
+      final revision = (state['revision'] as num).toInt();
+      final identity =
+          '$generation:$revision:$dirty:${state['frame']}:${state['layer']}:${state['brush_shape']}';
+      if (identity == _lastRecoveryIdentity) return;
+      try {
+        if (dirty) {
+          final result = await _enqueue(() => native.send('request', op: 15));
+          if (result == null ||
+              generation != documentGeneration ||
+              _disposed ||
+              _suppressRecovery) {
+            return;
+          }
+          await recovery.write(
+            (result['recovery'] as TransferableTypedData)
+                .materialize()
+                .asUint8List(),
+          );
+        } else {
+          await recovery.clear();
+        }
+        _lastRecoveryIdentity = identity;
+      } catch (e) {
+        error = 'Autosave failed. Use Save to protect your artwork: $e';
+        _notify();
+      }
+    });
+    return _recoveryWork;
+  }
+
+  Future<void> resolveRecovery({required bool restore}) async {
+    if (!recoveryPending || _fileBusy) return;
+    _fileBusy = true;
+    _notify();
+    try {
+      if (!restore) {
+        try {
+          await recovery.clear();
+          _recoverable = null;
+          _recoveryReadFailed = false;
+          status = 'Recovery discarded';
+        } catch (e) {
+          error = 'Could not discard recovery: $e';
+        }
+      } else {
+        final result = await _enqueue(
+          () => native.send('request', op: 16, input: _recoverable),
+        );
+        if (result != null) {
+          _recoverable = null;
+          savedKey = null;
+          title = 'Recovered sprite';
+          documentGeneration++;
+          status = 'Recovered unsaved artwork — Save to keep a project copy';
+        }
+      }
+    } finally {
+      _fileBusy = false;
+      _notify();
+    }
+  }
+
+  Future<bool> discardRecovery() async {
+    _suppressRecovery = true;
+    _discardHandoff = true;
+    _notify();
+    _autosave?.cancel();
+    try {
+      await _recoveryWork;
+      await recovery.clear();
+      _lastRecoveryIdentity = null;
+      return true;
+    } catch (e) {
+      _discardHandoff = false;
+      _scheduleRecovery();
+      error = 'Could not discard recovery: $e';
+      _notify();
+      return false;
+    }
+  }
+
+  Future<void> setOnionSkin(bool enabled) async {
+    if (busy || drawing) return;
+    native.onion = enabled;
+    await command(2);
+  }
+
+  Future<void> startPlayback({int? tag}) async {
+    if (busy || drawing || !ready || !_foreground) return;
+    final generation = ++_playGeneration;
+    _startingPlayback = true;
+    _notify();
+    await flushRecovery();
+    if (generation != _playGeneration || !_foreground || _disposed) {
+      return;
+    }
+    final info = await _enqueue(
+      () => native.send('request', op: 22, a: tag ?? 0, b: tag == null ? 0 : 1),
+    );
+    if (info == null ||
+        _disposed ||
+        generation != _playGeneration ||
+        !_foreground) {
+      if (generation == _playGeneration) {
+        _startingPlayback = false;
+        _notify();
+      }
+      return;
+    }
+    final data = info['value'] as Map;
+    final schedule = PlaybackClock(
+      List<int>.from(data['sequence'] as List),
+      List<int>.from(data['durations'] as List),
+      speed: playbackSpeed,
+      repeat: data['repeat'] as int,
+    );
+    _startingPlayback = false;
+    playing = true;
+    _playClock
+      ..reset()
+      ..start();
+    status = 'Playing animation';
+    _notify();
+    Future<void> tick() async {
+      if (!playing || _disposed || generation != _playGeneration) return;
+      final step = schedule.sample(_playClock.elapsed);
+      if (step.finished) {
+        await stopPlayback();
+        return;
+      }
+      if (previewFrame != step.frame) {
+        final result = await _enqueue(
+          () => native.send('preview', a: step.frame),
+          accept: () => playing && generation == _playGeneration,
+        );
+        if (result == null) {
+          if (playing && generation == _playGeneration) await stopPlayback();
+          return;
+        }
+        if (!playing || generation != _playGeneration) return;
+        previewFrame = step.frame;
+        _notify();
+      }
+      final now = schedule.sample(_playClock.elapsed);
+      _playTimer = Timer(
+        now.finished || now.frame != previewFrame
+            ? const Duration(milliseconds: 1)
+            : now.wait,
+        () => unawaited(tick()),
+      );
+    }
+
+    unawaited(tick());
+  }
+
+  Future<void> stopPlayback() {
+    _playGeneration++;
+    _startingPlayback = false;
+    if (!playing) {
+      _notify();
+      return _stoppingPlayback ?? Future.value();
+    }
+    playing = false;
+    _playTimer?.cancel();
+    _playClock.stop();
+    previewFrame = null;
+    final stopped = command(2).whenComplete(() {
+      _stoppingPlayback = null;
+      _notify();
+    });
+    _stoppingPlayback = stopped;
+    return stopped;
+  }
+
+  void setPlaybackSpeed(double speed) {
+    if (!playing) {
+      playbackSpeed = speed;
+      _notify();
+    }
+  }
+
+  void resume() {
+    _foreground = true;
+  }
+
+  Future<void> pause() async {
+    _foreground = false;
+    await stopPlayback();
+    await cancel();
+    await flushRecovery();
   }
 
   Future<void> settle() => _queue;
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
+    _playGeneration++;
+    _playTimer?.cancel();
+    _playClock.stop();
     _timer?.cancel();
+    _autosave?.cancel();
     image?.dispose();
+    onionImage?.dispose();
+    canvasUpdates.dispose();
+    canvasTransform.dispose();
     unawaited(native.close());
     super.dispose();
   }

@@ -107,3 +107,19 @@ preview. Keep issue #29 open.
 ![Android tablet preview, dark](screenshots/android-tablet-preview-dark.png)
 
 ![Android tablet preview, light](screenshots/android-tablet-preview-light.png)
+
+## Zen drawing mode (2026-11-22)
+
+The normal debug app was reinstalled after integration tests and visually
+inspected on the running tablet emulator. Zen hides the inspector, preview,
+timeline and app bar, retaining essential drawing controls and an explicit exit.
+The canvas remains centered with its zoom preserved. System navigation remains
+visible; Back restores the editor. Emulator left open in Zen for manual testing.
+
+![Android tablet Zen mode](screenshots/android-tablet-zen-dark.png)
+
+20 Flutter tests and analysis pass. Five actual tablet integration workflows
+pass, including touch drawing/Undo in Zen and returning to normal Preview.
+Review fixes cover canceling an in-progress draft on Exit and retaining pixel
+visibility settings. No remaining Zen-specific review findings. Physical device
+and stylus ergonomics remain deferred, as requested.

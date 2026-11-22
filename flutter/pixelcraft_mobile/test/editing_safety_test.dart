@@ -119,6 +119,11 @@ void main() {
     expect(editor.drawing, false);
     expect(editor.busy, true);
     expect(
+      find.byType(LinearProgressIndicator),
+      findsNothing,
+      reason: 'Drawing must not show application-wide file loading',
+    );
+    expect(
       tester.getRect(canvas),
       viewport,
       reason: 'Pending work must not resize the canvas',

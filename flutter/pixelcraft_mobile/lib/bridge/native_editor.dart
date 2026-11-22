@@ -14,6 +14,8 @@ class NativeEditor {
   final Map<int, Completer<Map<String, dynamic>>> _pending = {};
   int _next = 0;
   bool _closed = false;
+  bool onion = false;
+  Future<void>? _closeFuture;
   bool _closing = false;
   bool _started = false;
   String? _fatal;
@@ -97,6 +99,7 @@ class NativeEditor {
     _pending[id] = result;
     port.send({
       'id': id,
+      'onion': onion,
       'action': action,
       'op': op,
       'a': a,
@@ -109,7 +112,8 @@ class NativeEditor {
     return result.future;
   }
 
-  Future<void> close() async {
+  Future<void> close() => _closeFuture ??= _close();
+  Future<void> _close() async {
     if (_closed || _closing) return;
     _closing = true;
     try {
@@ -171,7 +175,7 @@ void _worker(List<Object> init) {
             'Cannot draw there. Choose an unlocked image layer or a smaller project.',
           );
         }
-      } else {
+      } else if (command['action'] != 'preview') {
         final response = native.read(
           native.request(
             session,
@@ -185,14 +189,30 @@ void _worker(List<Object> init) {
           final state =
               jsonDecode(utf8.decode(response.$2)) as Map<String, dynamic>;
           session = (state['session'] as num).toInt();
+        } else if (response.$1 == 6) {
+          result['value'] = jsonDecode(utf8.decode(response.$2));
+        } else if (response.$1 == 5) {
+          result['recovery'] = TransferableTypedData.fromList([response.$2]);
         } else if (response.$1 == 3) {
           result['project'] = TransferableTypedData.fromList([response.$2]);
         }
       }
       final state = native.read(native.request(session, 2, 0, 0, 0));
       result['state'] = jsonDecode(utf8.decode(state.$2));
-      final frame = native.read(native.request(session, 7, 0, 0, 0));
+      final frame = native.read(
+        native.request(
+          session,
+          7,
+          command['action'] == 'preview' ? command['a'] as int : 0,
+          command['action'] == 'preview' ? 1 : 0,
+          0,
+        ),
+      );
       result['rgba'] = TransferableTypedData.fromList([frame.$2]);
+      if (command['onion'] == true && command['action'] != 'preview') {
+        final image = native.read(native.request(session, 21, 1, 1, 0));
+        result['onion'] = TransferableTypedData.fromList([image.$2]);
+      }
       parent.send(result);
     } catch (error) {
       parent.send({'id': command['id'], 'error': error.toString()});

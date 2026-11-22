@@ -63,3 +63,26 @@ findings. Selection adapter and document management are the next active batch.
 
 User decision: use emulators for now; physical hardware milestone14 explicitly
 deferred. Keep the denominator14 and report at most93% until that evidence exists.
+
+## Zen and tablet UX batch (2026-11-22)
+
+Added opt-in Zen presentation: canvas plus Exit, Undo/Redo, pencil, eraser, color,
+brush size and a temporary tool menu. Colors/Preview/timeline are hidden until
+exit; artwork, active edit target, history, grid visibility and zoom/pan survive.
+Android Back and visible Exit cancel any draft before restoring the normal UI.
+Controls can move left/right on tablets and wrap on narrow/short screens. System
+navigation stays available. This is part of milestone 10, which remains open for
+broader input/accessibility checks, not a separate completion milestone.
+
+Research and source links: android-tablet-ux-research.md. Findings about hidden
+exit and missing Undo are qualitative user reports, not population-wide evidence.
+20 Flutter tests pass, including Zen view/grid preservation, Back, explicit Exit
+during a shape, overlay touch isolation and narrow/short large-text layouts.
+Flutter analysis is clean. Review found and fixed explicit-exit draft cancellation
+and grid reset; reviewer rechecked both with no remaining Zen-specific findings.
+Emulator interaction verification is recorded separately after the device run.
+
+Device verification: all five API 35 tablet integration tests pass, including
+real pointer drawing in Zen, one-step Undo, visible Exit and normal Preview
+restoration. Other cases exercise durable save/reopen, recovery, Rust tools,
+selection transforms, linked cels, names/tags/timing and read-only playback.
