@@ -39,7 +39,7 @@ The icon uses PixelCraft's existing pixel P emblem. The feature graphic uses tha
 ## Before submission
 
 1. Settle the permanent application ID and release signing, and build the signed production AAB. Store copy does not change the current preview package identity.
-2. Review and host the privacy policy at a stable public URL, then enter its URL in Play Console. The app menu now includes an offline Privacy policy view. The draft file is not a published URL.
+2. Review the privacy policy and merge PR #30 to publish `PRIVACY.md` on main, then enter its public GitHub URL in Play Console. The app menu opens that page in the browser; there is no bundled policy. Reading it requires a browser connection, while PixelCraft itself needs no additional Internet permission.
 3. Confirm developer/account details, audience ages, IARC rating and Data safety answers in Console. These forms have not been submitted or preselected here.
 4. Review the final release's dependencies and merged permissions before making privacy declarations.
 5. Run release-build checks and confirm that these screenshots still match the signed build.

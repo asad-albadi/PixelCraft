@@ -20,6 +20,10 @@ When you explicitly share an export, Android gives the receiving app temporary r
 
 The Android app does not include advertising, an analytics service, a PixelCraft account system or a built-in crash-reporting service. It does not request your contacts, location, camera or microphone for its editing features. Google Play, Android and device vendors may separately provide diagnostics or store services under their own policies.
 
+## External links
+
+The Privacy policy menu entry opens this policy on GitHub in your browser. The browser and GitHub handle that page request under their own settings and privacy policies. Reading the online policy requires an internet connection; PixelCraft does not download or bundle the policy itself.
+
 ## Support
 
 If you email support or submit a public GitHub issue, the information you choose to provide is handled to respond to your request. GitHub issues are public; avoid including private artwork, passwords or personal information you do not want to publish. Email and GitHub are separate services with their own policies.

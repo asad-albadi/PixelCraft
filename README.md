@@ -296,7 +296,7 @@ Pull requests run formatting, strict Clippy, and Rust tests on Linux, Windows, a
 
 PixelCraft is licensed under the [MIT License](LICENSE).
 
-Read the [Android privacy policy](PRIVACY.md), also available offline from the app menu under **Privacy policy**, for details about local artwork storage, file sharing, backups and support contact information.
+Read the [Android privacy policy](PRIVACY.md), also linked from the app menu under **Privacy policy** (opens in your browser), for details about local artwork storage, file sharing, backups and support contact information.
 
 **Made via [CraftAnything](https://github.com/storytold/craft-anything) by [ArtCraft](https://getartcraft.com/).** Craft Anything provided the workflow used to study the reference application, build this independent editor and check the result.
 

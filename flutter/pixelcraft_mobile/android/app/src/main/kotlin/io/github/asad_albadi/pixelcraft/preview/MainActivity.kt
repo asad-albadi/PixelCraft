@@ -54,6 +54,19 @@ class MainActivity : FlutterActivity() {
     private var closed = false
     override fun configureFlutterEngine(engine: FlutterEngine) {
         super.configureFlutterEngine(engine)
+        MethodChannel(engine.dartExecutor.binaryMessenger, "pixelcraft/links").setMethodCallHandler { call, result ->
+            if (call.method != "privacyPolicy") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            try {
+                val page = Uri.parse("https://github.com/asad-albadi/PixelCraft/blob/main/PRIVACY.md")
+                startActivity(Intent(Intent.ACTION_VIEW, page).addCategory(Intent.CATEGORY_BROWSABLE))
+                result.success(null)
+            } catch (error: Exception) {
+                result.error("browser", "Could not open the browser", null)
+            }
+        }
         MethodChannel(engine.dartExecutor.binaryMessenger, "pixelcraft/storage").setMethodCallHandler { call, result ->
             when (call.method) {
                 "recoveryRead" -> work(result) {

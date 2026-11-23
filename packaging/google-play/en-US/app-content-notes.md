@@ -23,7 +23,7 @@ No account is created, so an in-app account-deletion workflow is not applicable 
 - Confirm the developer identity exactly as displayed by the existing Play account.
 - Choose target audience age groups; this package does not select ages or claim Families compliance.
 - Complete the IARC content-rating questionnaire honestly. The included garden artwork is nonviolent; the app is a general drawing tool, not a hosted user-content service. The rating is assigned by the questionnaire, not this draft.
-- Publish the reviewed privacy policy at a stable, publicly accessible URL and enter its URL in Play Console. An offline copy is now available from the app menu under Privacy policy. The Markdown draft is not a hosted policy URL.
+- Publish the reviewed policy by merging `PRIVACY.md` onto main, then enter its public GitHub URL in Play Console. The app menu opens that URL through Android's browser; no copy is bundled and no Internet permission is added to the app.
 - Confirm the permanent app ID and signing strategy before creating the production Play app/build.
 - Build/sign the release AAB; verify versionCode, target API, native-library alignment and release behavior. Current screenshots depict the real preview app's UI, not a signed production build.
 - Recheck declarations whenever dependencies, permissions, network services or monetization change.

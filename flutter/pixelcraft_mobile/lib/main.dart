@@ -244,7 +244,7 @@ class EditorScreen extends StatelessWidget {
                               tooltip: 'File actions',
                               onSelected: (action) async {
                                 if (action == 'privacy') {
-                                  await showPrivacyPolicy(context);
+                                  await openPrivacyPolicy(context);
                                   return;
                                 }
                                 if (action == 'export') {
