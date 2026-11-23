@@ -23,6 +23,6 @@ Create a tileset from your artwork, stamp tiles, and add embedded image referenc
 CURRENT ANDROID LIMITS
 This early Android version supports canvases up to 256 x 256 pixels, 32 layers and 64 frames, with file and memory limits. It does not yet include every desktop feature. Keep backups of important work, especially before changing between test and release builds.
 
-PixelCraft is free and open source under the MIT License.
+PixelCraft is published by AstralHive and is free and open source under the MIT License.
 Source, documentation and feedback: https://github.com/asad-albadi/PixelCraft
 Support: asad.badi@astralhive.om

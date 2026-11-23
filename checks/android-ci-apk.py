@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check a universal debug APK contains both 64-bit engines with 16 KiB ELF LOADs.
+"""Check a universal APK contains both 64-bit engines with 16 KiB ELF LOADs.
 
 ZIP page alignment and APK signatures are checked separately with Android SDK tools.
 """

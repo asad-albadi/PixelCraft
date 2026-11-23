@@ -12,6 +12,10 @@
 .env
 .env.*
 !.env.example
+*.jks
+*.keystore
+**/key.properties
+**/signing-credentials.json
 .DS_Store
 Thumbs.db
 

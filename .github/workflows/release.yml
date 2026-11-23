@@ -347,8 +347,17 @@ jobs:
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
     uses: ./.github/workflows/macos-build.yml
 
+  android:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.windows_only }}
+    uses: ./.github/workflows/android-release.yml
+    secrets:
+      PIXELCRAFT_ANDROID_KEYSTORE_BASE64: ${{ secrets.PIXELCRAFT_ANDROID_KEYSTORE_BASE64 }}
+      PIXELCRAFT_ANDROID_STORE_PASSWORD: ${{ secrets.PIXELCRAFT_ANDROID_STORE_PASSWORD }}
+      PIXELCRAFT_ANDROID_KEY_ALIAS: ${{ secrets.PIXELCRAFT_ANDROID_KEY_ALIAS }}
+      PIXELCRAFT_ANDROID_KEY_PASSWORD: ${{ secrets.PIXELCRAFT_ANDROID_KEY_PASSWORD }}
+
   publish:
-    needs: [appimage, windows, macos]
+    needs: [appimage, windows, macos, android]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
@@ -369,6 +378,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: PixelCraft-macOS-x86_64
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: PixelCraft-Android-release
           path: dist
       - name: Publish tagged release
         env:

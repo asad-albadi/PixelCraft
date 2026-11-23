@@ -1,4 +1,4 @@
-package io.github.asad_albadi.pixelcraft.preview
+package om.astralhive.pixelcraft
 
 /** Standalone JVM checks: no emulator or Android runtime is required. */
 object ExportPolicyTest {

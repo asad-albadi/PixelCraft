@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64",
  "flate2",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft-automation"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64",
  "flate2",
@@ -2408,7 +2408,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pixelcraft-automation",
  "pixelcraft-core",
@@ -2417,7 +2417,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft-core"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "base64",
  "color_quant",
@@ -2437,7 +2437,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft-desktop"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "arboard",
  "base64",
@@ -2476,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft-ffi"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pixelcraft-automation",
  "pixelcraft-core",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "pixelcraft-mcp"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "pixelcraft-automation",
  "pixelcraft-core",

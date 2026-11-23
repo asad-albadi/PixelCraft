@@ -50,6 +50,7 @@ jobs:
       - name: Verify native engine and workspace boundaries
         run: |
           python3 checks/android-ci-apk-test.py
+          python3 checks/android-release-test.py
           python3 checks/workspace-boundaries.py
           cargo +1.95.0 fmt --all --check
           cargo +1.95.0 clippy --locked -p pixelcraft-core -p pixelcraft-automation -p pixelcraft-ffi --all-targets -- -D warnings

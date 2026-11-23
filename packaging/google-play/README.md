@@ -10,9 +10,9 @@ Copy each file into its matching Play Console field:
 | --- | --- |
 | `title.txt` | App name — 29/30 characters |
 | `short-description.txt` | Short description — 78/80 characters |
-| `full-description.txt` | Full description — 2,408/4,000 characters |
+| `full-description.txt` | Full description — 2,439/4,000 characters |
 | `release-notes.txt` | What's new — 445/500 characters |
-| `contact-details.json` | Support email, website, free pricing, category suggestion and proposed app ID |
+| `contact-details.json` | Support email, website, free pricing, category suggestion and permanent app ID |
 | `reviewer-instructions.txt` | Optional review instructions; no login required |
 | `asset-alt-text.json` | Accessible descriptions keyed by image path |
 | `privacy-policy-draft.md` | Review and host before using as the app's privacy policy |
@@ -32,15 +32,15 @@ The support contact is **asad.badi@astralhive.om**. Pricing is **free**. The And
 
 Upload screenshot files in filename order. `contact-sheet.png` is for reviewing the whole set, **not** a store screenshot. Screenshots contain only real mobile UI and built-in sample artwork, with no desktop screens, promotional overlays or device frames. They include light and dark appearance, color controls, animation/frame tools, and Zen drawing mode.
 
-Screenshots were taken in API 35 Android emulators. Tablet size classes use actual Android display-size/density overrides, rather than stretching or cropping captures; they are not claims of separate physical 7-inch/10-inch hardware tests. Phone: 1080×1920, 420 dpi. Tablet: 1920×1080, 315 dpi and 2560×1440, 280 dpi. Android's System UI demo mode sets a generic clock/battery and hides notifications. The capture build reports versionName 0.11.0 / versionCode 1 and the preview application ID; the proposed v0.12.0 version/signing work remains uncommitted. Recapture if the final release UI changes.
+Screenshots were taken in API 35 Android emulators. Tablet size classes use actual Android display-size/density overrides, rather than stretching or cropping captures; they are not claims of separate physical 7-inch/10-inch hardware tests. Phone: 1080×1920, 420 dpi. Tablet: 1920×1080, 315 dpi and 2560×1440, 280 dpi. Android's System UI demo mode sets a generic clock/battery and hides notifications. The capture build reports versionName 0.11.0 / versionCode 1 and the preview application ID; production builds use AstralHive’s permanent `om.astralhive.pixelcraft` identity. Recapture if the final release UI changes.
 
 The icon uses PixelCraft's existing pixel P emblem. The feature graphic uses that same brand palette and the garden exported through the shared Rust engine. No AI-generated UI or artwork is used.
 
 ## Before submission
 
-1. Settle the permanent application ID and release signing, and build the signed production AAB. Store copy does not change the current preview package identity.
+1. Use the permanent `om.astralhive.pixelcraft` ID under AstralHive, and enroll the existing signing key in Play App Signing. Production APK/AAB signing is configured; see `../android/README.md`.
 2. Review the privacy policy and merge PR #30 to publish `PRIVACY.md` on main, then enter its public GitHub URL in Play Console. The app menu opens that page in the browser; there is no bundled policy. Reading it requires a browser connection, while PixelCraft itself needs no additional Internet permission.
-3. Confirm developer/account details, audience ages, IARC rating and Data safety answers in Console. These forms have not been submitted or preselected here.
+3. Verify AstralHive’s organization account details, audience ages, IARC rating and Data safety answers in Console. These forms have not been submitted or preselected here.
 4. Review the final release's dependencies and merged permissions before making privacy declarations.
 5. Run release-build checks and confirm that these screenshots still match the signed build.
 

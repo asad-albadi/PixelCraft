@@ -24,13 +24,16 @@ adb install -r build/app/outputs/flutter-apk/app-debug.apk
 Gradle builds arm64-v8a and x86_64 engines. Set `ANDROID_HOME`/`ANDROID_SDK_ROOT`
 and optionally `ANDROID_NDK_HOME` for a nonstandard SDK location. The build helper
 currently requires Linux. Local SDK paths, keys, generated libraries and APKs are
-excluded from Git. The test identity is `io.github.asad_albadi.pixelcraft.preview`.
+excluded from Git. The production identity is `om.astralhive.pixelcraft`, published by AstralHive.
+Debug builds use `om.astralhive.pixelcraft.debug`; older `.preview` builds are separate installations.
 
-The Android test workflow builds and checks a universal **debug test APK**, not a
-production release. Local updates signed with the same debug key preserve private
-saves; CI debug keys can differ across runs, so CI APKs are not a guaranteed
-upgrade channel. Export projects before any uninstall; uninstall removes private
-saves. Production signing/store distribution needs a separate decision.
+The Android test workflow builds a universal **debug test APK** without production
+secrets. Tagged releases use the permanent signing key to build an optimized
+APK and Play App Bundle. See [production signing and backup guidance](../../packaging/android/README.md).
+Debug certificates may differ across CI runs. Export projects before uninstalling
+or moving between preview, debug and production application IDs; private saves
+are not automatically migrated between them. Do not use debug builds as a
+production upgrade channel.
 
 ## Controls and mobile feature matrix
 

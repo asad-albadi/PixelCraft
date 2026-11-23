@@ -1,0 +1,117 @@
+name: Android signed release
+
+on:
+  workflow_call:
+    secrets:
+      PIXELCRAFT_ANDROID_KEYSTORE_BASE64:
+        required: true
+      PIXELCRAFT_ANDROID_STORE_PASSWORD:
+        required: true
+      PIXELCRAFT_ANDROID_KEY_ALIAS:
+        required: true
+      PIXELCRAFT_ANDROID_KEY_PASSWORD:
+        required: true
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixelcraft-android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  signed-release:
+    # Never expose production signing to a pull request or an unmerged branch.
+    if: github.event_name != 'pull_request' && (github.ref_type == 'tag' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      ANDROID_NDK_VERSION: '28.2.13676358'
+      ANDROID_BUILD_TOOLS_VERSION: '36.0.0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select Java 17 and install Android tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PIXELCRAFT_HOME=$RUNNER_TEMP/pixelcraft-android-ci-data" >> "$GITHUB_ENV"
+          test -d "$JAVA_HOME_17_X64"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
+          "$sdkmanager" "platforms;android-36" "build-tools;$ANDROID_BUILD_TOOLS_VERSION" "ndk;$ANDROID_NDK_VERSION"
+      - name: Install pinned Flutter SDK from verified official archive
+        run: python3 checks/android-ci-flutter.py "$RUNNER_TEMP/flutter-sdk"
+      - name: Install Rust and Android targets
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+          rustup target add --toolchain 1.95.0 x86_64-linux-android aarch64-linux-android
+      - name: Verify native engine and workspace boundaries
+        run: |
+          python3 checks/android-ci-apk-test.py
+          python3 checks/android-release-test.py
+          python3 checks/workspace-boundaries.py
+          cargo +1.95.0 fmt --all --check
+          cargo +1.95.0 clippy --locked -p pixelcraft-core -p pixelcraft-automation -p pixelcraft-ffi --all-targets -- -D warnings
+          cargo +1.95.0 test --locked -p pixelcraft-core -p pixelcraft-automation -p pixelcraft-ffi
+      - name: Resolve locked mobile dependencies
+        working-directory: flutter/pixelcraft_mobile
+        run: flutter pub get --enforce-lockfile
+      - name: Analyze and test mobile editor
+        working-directory: flutter/pixelcraft_mobile
+        run: |
+          flutter analyze --no-pub
+          flutter test --no-pub
+      - name: Prepare private signing keystore
+        env:
+          PIXELCRAFT_ANDROID_KEYSTORE_BASE64: ${{ secrets.PIXELCRAFT_ANDROID_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import base64, os
+          from pathlib import Path
+          key = Path(os.environ['RUNNER_TEMP']) / 'pixelcraft-release.jks'
+          data = base64.b64decode(os.environ['PIXELCRAFT_ANDROID_KEYSTORE_BASE64'], validate=True)
+          with os.fdopen(os.open(key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as output:
+              output.write(data)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'PIXELCRAFT_ANDROID_KEYSTORE={key}\n')
+          PYTHON
+      - name: Build and verify signed APK and Play App Bundle
+        env:
+          PIXELCRAFT_ANDROID_STORE_PASSWORD: ${{ secrets.PIXELCRAFT_ANDROID_STORE_PASSWORD }}
+          PIXELCRAFT_ANDROID_KEY_ALIAS: ${{ secrets.PIXELCRAFT_ANDROID_KEY_ALIAS }}
+          PIXELCRAFT_ANDROID_KEY_PASSWORD: ${{ secrets.PIXELCRAFT_ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          arguments=()
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            arguments+=(--version "$GITHUB_REF_NAME")
+          fi
+          python3 checks/build-android-release.py --output dist/android "${arguments[@]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: PixelCraft-Android-release
+          path: dist/android/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary signing keystore
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          (Path(os.environ['RUNNER_TEMP']) / 'pixelcraft-release.jks').unlink(missing_ok=True)
+          PYTHON

@@ -2,7 +2,7 @@
 
 Draft prepared November 23, 2026. Review against the final signed Android build before publication.
 
-PixelCraft is a free, open-source pixel art and animation editor. This policy describes how the Android app handles information.
+PixelCraft is a free, open-source pixel art and animation editor published by AstralHive. This policy describes how the Android app handles information.
 
 ## Artwork and local storage
 

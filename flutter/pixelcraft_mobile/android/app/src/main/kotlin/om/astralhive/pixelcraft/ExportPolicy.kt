@@ -1,4 +1,4 @@
-package io.github.asad_albadi.pixelcraft.preview
+package om.astralhive.pixelcraft
 
 import java.util.Locale
 

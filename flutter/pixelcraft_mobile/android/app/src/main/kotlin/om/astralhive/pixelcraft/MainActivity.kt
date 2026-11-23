@@ -1,4 +1,4 @@
-package io.github.asad_albadi.pixelcraft.preview
+package om.astralhive.pixelcraft
 
 import android.app.Activity
 import android.content.ClipData
