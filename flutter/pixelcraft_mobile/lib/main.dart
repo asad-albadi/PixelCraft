@@ -11,6 +11,7 @@ import 'widgets/zen_editor.dart';
 import 'widgets/timeline_panel.dart';
 import 'widgets/export_options.dart';
 import 'widgets/advanced_tools.dart';
+import 'widgets/privacy_policy.dart';
 import 'widgets/editor_keyboard.dart';
 
 void main() {
@@ -242,6 +243,10 @@ class EditorScreen extends StatelessWidget {
                             PopupMenuButton<String>(
                               tooltip: 'File actions',
                               onSelected: (action) async {
+                                if (action == 'privacy') {
+                                  await showPrivacyPolicy(context);
+                                  return;
+                                }
                                 if (action == 'export') {
                                   showExportOptions(context, editor);
                                   return;
@@ -313,10 +318,18 @@ class EditorScreen extends StatelessWidget {
                                     'Change appearance',
                                     Icons.brightness_6_outlined,
                                   ),
+                                  (
+                                    'privacy',
+                                    'Privacy policy',
+                                    Icons.privacy_tip_outlined,
+                                  ),
                                 ])
                                   PopupMenuItem(
                                     value: entry.$1,
-                                    enabled: available || entry.$1 == 'theme',
+                                    enabled:
+                                        available ||
+                                        entry.$1 == 'theme' ||
+                                        entry.$1 == 'privacy',
                                     child: Row(
                                       children: [
                                         Icon(entry.$3, size: 20),

@@ -46,7 +46,8 @@
   <a href="#projects-and-interchange">File formats</a> ·
   <a href="#independent-extensions-and-storage">Extensions</a> ·
   <a href="#status">Status</a> ·
-  <a href="#license-and-credits">License and credits</a>
+  <a href="#license-and-credits">License and credits</a> ·
+  <a href="PRIVACY.md">Privacy policy</a>
 </p>
 
 ## Features
@@ -295,7 +296,11 @@ Pull requests run formatting, strict Clippy, and Rust tests on Linux, Windows, a
 
 PixelCraft is licensed under the [MIT License](LICENSE).
 
+Read the [Android privacy policy](PRIVACY.md), also available offline from the app menu under **Privacy policy**, for details about local artwork storage, file sharing, backups and support contact information.
+
 **Made via [CraftAnything](https://github.com/storytold/craft-anything) by [ArtCraft](https://getartcraft.com/).** Craft Anything provided the workflow used to study the reference application, build this independent editor and check the result.
+
+The last recorded Craft Anything session was on **November 13, 2026**, with the project at **v0.5.1**. It refined the bottom-left Preview with resizing, Fit and zoom options, panning, and saved preferences. That session recorded 262 passing tests and successful build and startup checks; broader comparisons with the reference application's behavior remained unverified.
 
 PixelCraft was created using [Aseprite](https://github.com/aseprite/aseprite) as its basis and reference for pixel-art editing features, file compatibility. Thank you to the Aseprite developers and contributors.
 

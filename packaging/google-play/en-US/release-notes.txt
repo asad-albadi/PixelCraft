@@ -1,0 +1,9 @@
+PixelCraft comes to Android phones and tablets.
+
+- Draw with pixel tools, named colors and selections.
+- Organize layers and animate with frames, tags and onion skin.
+- Save editable projects and export images, GIFs and sprite sheets.
+- Focus on your artwork in Zen drawing mode.
+- Use touch or a supported stylus, with optional pressure-sensitive brush size.
+
+This early Android version supports up to 256 x 256 pixels, 32 layers and 64 frames.
