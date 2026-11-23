@@ -18,8 +18,18 @@ pub use tileset_atlas::{plan_tileset_atlas, render_tileset_atlas};
 pub fn from_frames(
     frames: impl Iterator<Item = Result<image::Frame, image::ImageError>>,
 ) -> Result<Document, String> {
+    from_frames_bounded(frames, None)
+}
+
+pub(crate) fn from_frames_bounded(
+    frames: impl Iterator<Item = Result<image::Frame, image::ImageError>>,
+    bounds: Option<(usize, usize, usize)>,
+) -> Result<Document, String> {
     let mut doc: Option<Document> = None;
-    for item in frames {
+    for (index, item) in frames.enumerate() {
+        if bounds.is_some_and(|(_, count, _)| index >= count) {
+            return Err("Animation exceeds bounded frame limits".into());
+        }
         let frame = item.map_err(|e| e.to_string())?;
         let (num, den) = frame.delay().numer_denom_ms();
         let im = frame.into_buffer();
@@ -31,6 +41,16 @@ pub fn from_frames(
             || w.saturating_mul(h) > MAX_PIXELS
         {
             return Err("Animation exceeds limits".into());
+        }
+        if bounds.is_some_and(|(side, _, raster)| {
+            w > side
+                || h > side
+                || w.saturating_mul(h)
+                    .saturating_mul(index + 1)
+                    .saturating_mul(4)
+                    > raster
+        }) {
+            return Err("Animation exceeds bounded canvas or raster limits".into());
         }
         if doc.is_none() {
             doc = Some(Document::new(w, h));

@@ -189,6 +189,14 @@ struct ProjectDecodeBudget {
 /// Keep the native wire representation while accounting for allocations across
 /// the entire document, before any shared raster references are restored.
 pub(crate) fn with_project_decode_budget<T>(bytes: usize, decode: impl FnOnce() -> T) -> T {
+    with_project_decode_limits(bytes, MAX_CEL_SLOTS, decode)
+}
+
+pub(crate) fn with_project_decode_limits<T>(
+    bytes: usize,
+    cel_slots: usize,
+    decode: impl FnOnce() -> T,
+) -> T {
     struct ResetBudget;
     impl Drop for ResetBudget {
         fn drop(&mut self) {
@@ -200,7 +208,7 @@ pub(crate) fn with_project_decode_budget<T>(bytes: usize, decode: impl FnOnce() 
     }
     PROJECT_DECODE_BUDGET.set(Some(ProjectDecodeBudget {
         bytes,
-        cel_slots: [MAX_CEL_SLOTS; 3],
+        cel_slots: [cel_slots; 3],
     }));
     let _reset = ResetBudget;
     decode()

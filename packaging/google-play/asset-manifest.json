@@ -1,0 +1,150 @@
+{
+  "prepared_date": "2026-11-23",
+  "language": "en-US",
+  "images": [
+    {
+      "path": "contact-sheet.png",
+      "width": 1600,
+      "height": 1280,
+      "mode": "RGB",
+      "bytes": 216823,
+      "sha256": "d606d7d20cd17db82eb5041d52474df85638e1c197d03db253d5344994ed6329",
+      "upload": false
+    },
+    {
+      "path": "en-US/graphics/feature-graphic-1024x500.png",
+      "width": 1024,
+      "height": 500,
+      "mode": "RGB",
+      "bytes": 23453,
+      "sha256": "e15fc9e8c1dfef11d2e0a585a32e127f3a383f105a0b78cc6fdd3662d63dae9e",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/icon-512.png",
+      "width": 512,
+      "height": 512,
+      "mode": "RGBA",
+      "bytes": 2301,
+      "sha256": "9673c774fd3765518174382d5dd2ca07b64d6319a1dbe71d842d9ebcf66f80c6",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/phone-screenshots/01-editor-dark.png",
+      "width": 1080,
+      "height": 1920,
+      "mode": "RGB",
+      "bytes": 77070,
+      "sha256": "d36d00d47df8f5adbead2cce9548c32985a12468056d69bab1b8085cdcd0f054",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/phone-screenshots/02-frame-tools-dark.png",
+      "width": 1080,
+      "height": 1920,
+      "mode": "RGB",
+      "bytes": 91941,
+      "sha256": "d2dc18842e9c7e74b0c65d59499ecd4902889c67668eb41ca5be4ba598d54962",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/phone-screenshots/03-color-picker-light.png",
+      "width": 1080,
+      "height": 1920,
+      "mode": "RGB",
+      "bytes": 102608,
+      "sha256": "0c65f066170961ecef99a1b6345676b38e1d60680d7b1ae635200b6958096f8b",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/phone-screenshots/04-zen-dark.png",
+      "width": 1080,
+      "height": 1920,
+      "mode": "RGB",
+      "bytes": 28900,
+      "sha256": "2d029f55da9ad4a6406bde211181dca8349ff605da881d84db32ea17eec48706",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/seven-inch-screenshots/01-editor-dark.png",
+      "width": 1920,
+      "height": 1080,
+      "mode": "RGB",
+      "bytes": 72658,
+      "sha256": "d9cc3413fd32b280512dcef62bd75841ec1af69c179fa081a99b91e7190ef06c",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/seven-inch-screenshots/02-editor-light.png",
+      "width": 1920,
+      "height": 1080,
+      "mode": "RGB",
+      "bytes": 64586,
+      "sha256": "a4fa724d0d9e970877e38adf4501721df01ff9e23013efeb4ac160b83aa60b5e",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/seven-inch-screenshots/03-colors-and-preview-light.png",
+      "width": 1920,
+      "height": 1080,
+      "mode": "RGB",
+      "bytes": 62536,
+      "sha256": "eddeb462491a5e3df0b0863d7fcfe300cd0c8dda665abe8ee68ee6e01f12f638",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/seven-inch-screenshots/04-zen-dark.png",
+      "width": 1920,
+      "height": 1080,
+      "mode": "RGB",
+      "bytes": 24469,
+      "sha256": "8613c6907a4ad7a11769cae437a0c642ef81eb5a0c425de34fbd79a80d58e440",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/ten-inch-screenshots/01-editor-dark.png",
+      "width": 2560,
+      "height": 1440,
+      "mode": "RGB",
+      "bytes": 112629,
+      "sha256": "cf9ee5aa9cf9d11c947c340a52e515062d2562c7f0f2549e4a016b29894efd38",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/ten-inch-screenshots/02-editor-light.png",
+      "width": 2560,
+      "height": 1440,
+      "mode": "RGB",
+      "bytes": 91937,
+      "sha256": "b4e4982c0c7d191ede5e492819d5851f80aa962ea5d0a1c7a7fb8b41524ec29f",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/ten-inch-screenshots/03-color-picker-light.png",
+      "width": 2560,
+      "height": 1440,
+      "mode": "RGB",
+      "bytes": 145561,
+      "sha256": "081ddcbcf80bd11b39e2680f3a8d428e11e6154c1760201122b08ee5e07ddb98",
+      "upload": true
+    },
+    {
+      "path": "en-US/graphics/ten-inch-screenshots/04-zen-dark.png",
+      "width": 2560,
+      "height": 1440,
+      "mode": "RGB",
+      "bytes": 28467,
+      "sha256": "30b502e4d6fdd33a7347b884d88b2174aa6242589473910a7ab9beac98662047",
+      "upload": true
+    },
+    {
+      "path": "source/garden-sample.png",
+      "width": 48,
+      "height": 48,
+      "mode": "RGBA",
+      "bytes": 925,
+      "sha256": "3778a85779ce36bc86eb65b0f9e600c4818fe10129074cbb41f6e5e0015c344f",
+      "upload": false
+    }
+  ]
+}

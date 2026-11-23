@@ -1,0 +1,15 @@
+{
+  "support_email": "asad.badi@astralhive.om",
+  "website": "https://github.com/asad-albadi/PixelCraft",
+  "support_url": "https://github.com/asad-albadi/PixelCraft/issues",
+  "price": "free",
+  "category_suggestion": "ART_AND_DESIGN",
+  "contains_ads": false,
+  "in_app_purchases": false,
+  "privacy_policy_url": "https://github.com/asad-albadi/PixelCraft/blob/main/PRIVACY.md",
+  "application_id_in_current_capture_build": "io.github.asad_albadi.pixelcraft.preview",
+  "listing_language": "en-US",
+  "privacy_policy_status": "Public main-branch URL becomes available when PR #30 is merged",
+  "application_id": "om.astralhive.pixelcraft",
+  "developer_name": "AstralHive"
+}

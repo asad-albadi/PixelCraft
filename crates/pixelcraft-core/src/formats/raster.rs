@@ -30,7 +30,7 @@ pub(super) fn load_static(path: &Path, extension: &str) -> Result<Document, Stri
     decode(decoder)
 }
 
-fn decode(decoder: impl ImageDecoder) -> Result<Document, String> {
+pub(super) fn decode(decoder: impl ImageDecoder) -> Result<Document, String> {
     let (w, h) = decoder.dimensions();
     let (w, h) = (w as usize, h as usize);
     if w == 0

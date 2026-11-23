@@ -8,7 +8,7 @@ metadata = json.loads(subprocess.check_output(
 packages = {p["id"]: p for p in metadata["packages"]}
 members = {packages[i]["name"]: i for i in metadata["workspace_members"]}
 required = {"pixelcraft", "pixelcraft-core", "pixelcraft-automation",
-            "pixelcraft-cli", "pixelcraft-mcp", "pixelcraft-desktop"}
+            "pixelcraft-cli", "pixelcraft-mcp", "pixelcraft-desktop", "pixelcraft-ffi"}
 assert required <= members.keys(), f"Missing workspace members: {required - members.keys()}"
 versions = {packages[i]["version"] for i in metadata["workspace_members"]}
 assert len(versions) == 1, f"Workspace package versions drifted: {versions}"
@@ -27,10 +27,12 @@ def reachable(start):
             todo.extend(edges[node])
     return {packages[i]["name"] for i in seen}
 
-for name in ("pixelcraft-core", "pixelcraft-automation", "pixelcraft-cli", "pixelcraft-mcp"):
+for name in ("pixelcraft-core", "pixelcraft-automation", "pixelcraft-cli", "pixelcraft-mcp", "pixelcraft-ffi"):
     deps = reachable(members[name])
     forbidden = {"eframe", "egui", "arboard", "rfd", "pixelcraft-desktop", "pixelcraft"}
     assert not deps & forbidden, f"{name} pulls in desktop dependencies: {deps & forbidden}"
 assert not reachable(members["pixelcraft-core"]) & {"pixelcraft-mcp", "pixelcraft-cli", "pixelcraft-automation"}
 assert not reachable(members["pixelcraft-automation"]) & {"pixelcraft-mcp", "pixelcraft-cli"}
 print("Workspace engine and adapter dependency boundaries verified")
+
+assert not reachable(members["pixelcraft-ffi"]) & {"pixelcraft-cli", "pixelcraft-mcp"}

@@ -1,0 +1,16 @@
+{
+  "icon-512.png": "PixelCraft teal pixel P with a gold square on a dark teal background.",
+  "feature-graphic-1024x500.png": "PixelCraft pixel art editor with the mushroom garden sample and the words Pixel art. Made by you.",
+  "phone-screenshots/01-editor-dark.png": "PixelCraft editor and garden sample in dark mode on a phone.",
+  "phone-screenshots/02-frame-tools-dark.png": "PixelCraft frame tools in dark mode on a phone.",
+  "phone-screenshots/03-color-picker-light.png": "PixelCraft color picker in light mode on a phone.",
+  "phone-screenshots/04-zen-dark.png": "PixelCraft Zen drawing mode with essential drawing tools on a phone.",
+  "seven-inch-screenshots/01-editor-dark.png": "PixelCraft editor and garden sample in dark mode on a tablet.",
+  "seven-inch-screenshots/02-editor-light.png": "PixelCraft editor in light mode on a tablet.",
+  "seven-inch-screenshots/03-colors-and-preview-light.png": "PixelCraft colors and Preview sheet in light mode on a tablet.",
+  "seven-inch-screenshots/04-zen-dark.png": "PixelCraft Zen drawing mode with essential drawing tools on a tablet.",
+  "ten-inch-screenshots/01-editor-dark.png": "PixelCraft editor and garden sample in dark mode on a tablet.",
+  "ten-inch-screenshots/02-editor-light.png": "PixelCraft editor in light mode on a tablet.",
+  "ten-inch-screenshots/03-color-picker-light.png": "PixelCraft color picker in light mode on a tablet.",
+  "ten-inch-screenshots/04-zen-dark.png": "PixelCraft Zen drawing mode with essential drawing tools on a tablet."
+}

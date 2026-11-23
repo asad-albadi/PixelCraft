@@ -31,12 +31,12 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft.png">
-    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-light.png">
-    <img src="shots/pixelcraft-light.png" alt="PixelCraft at 1920×1080 showing the mushroom garden sprite, color swatches, drawing tools, sprite preview, layers, and animation timeline" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft-devices-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-devices-light.png">
+    <img src="shots/pixelcraft-devices-light.png" alt="Real PixelCraft screenshots in laptop, Android tablet and phone device frames, each showing the editable mushroom garden sample" width="100%">
   </picture>
   <br>
-  <sub>The editor with its built-in garden sample: three layers, four frames, and editable pixel artwork.</sub>
+  <sub>PixelCraft on desktop and in the Android preview. Real app captures in illustrative device frames; Full HD composition.</sub>
 </p>
 
 <p align="center">
@@ -46,10 +46,20 @@
   <a href="#projects-and-interchange">File formats</a> ·
   <a href="#independent-extensions-and-storage">Extensions</a> ·
   <a href="#status">Status</a> ·
-  <a href="#license-and-credits">License and credits</a>
+  <a href="#license-and-credits">License and credits</a> ·
+  <a href="PRIVACY.md">Privacy policy</a>
 </p>
 
 ## Features
+
+<details>
+  <summary>See the desktop editor at Full HD</summary>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="shots/pixelcraft.png">
+    <source media="(prefers-color-scheme: light)" srcset="shots/pixelcraft-light.png">
+    <img src="shots/pixelcraft-light.png" alt="Updated PixelCraft desktop editor at 1920×1080 showing the garden sample, inspector, drawing tools, bottom-left preview and animation timeline" width="100%">
+  </picture>
+</details>
 
 <table>
   <tr>
@@ -69,6 +79,18 @@
 
 
 ## Get started
+
+### Android test preview
+
+A tablet-first Android interface now shares PixelCraft's Rust editing engine.
+Phones use compact controls and sheets. The preview includes drawing, editable
+layers/cels, selections, animation/tags, supported file interchange, tilemaps,
+embedded references, recovery and Zen mode. See the [Android build instructions,
+feature/format matrix and limits](flutter/pixelcraft_mobile/README.md),
+[emulator validation](docs/android-tablet-poc-validation.md) and
+[progress tracker](docs/android-progress.md). Test APKs are debug builds for
+64-bit ARM/x86 Android 7.0+; physical phone/tablet workflows and hands-on S Pen checks have been verified for the documented preview scope.
+
 
 ### Windows installer (future releases)
 
@@ -274,7 +296,11 @@ Pull requests run formatting, strict Clippy, and Rust tests on Linux, Windows, a
 
 PixelCraft is licensed under the [MIT License](LICENSE).
 
+Read the [Android privacy policy](PRIVACY.md), also linked from the app menu under **Privacy policy** (opens in your browser), for details about local artwork storage, file sharing, backups and support contact information.
+
 **Made via [CraftAnything](https://github.com/storytold/craft-anything) by [ArtCraft](https://getartcraft.com/).** Craft Anything provided the workflow used to study the reference application, build this independent editor and check the result.
+
+The last recorded Craft Anything session was on **November 13, 2026**, with the project at **v0.5.1**. It refined the bottom-left Preview with resizing, Fit and zoom options, panning, and saved preferences. That session recorded 262 passing tests and successful build and startup checks; broader comparisons with the reference application's behavior remained unverified.
 
 PixelCraft was created using [Aseprite](https://github.com/aseprite/aseprite) as its basis and reference for pixel-art editing features, file compatibility. Thank you to the Aseprite developers and contributors.
 

@@ -1,0 +1,12 @@
+No PixelCraft login, subscription, paid purchase or special access is required.
+
+1. Launch PixelCraft. Open File actions > Open demo artwork if a blank canvas appears.
+2. Draw on the canvas; test Undo/Redo and two-finger zoom/pan.
+3. On a tablet, inspect Colors/Preview on the left and the timeline below. On a phone, use Colors and layers and Frame/Layer sheets.
+4. Use Save for private editable storage. Use File actions > Save a copy to choose a document destination through Android's picker.
+5. Use File actions > Export & share to export an image, GIF, supported ASE or sprite sheet. No cloud account is required; local storage can be selected.
+6. Use File actions > Zen drawing mode, then Exit or Android Back to restore the editor.
+
+Stylus hardware is optional. Pressure-sensitive size is opt-in under Brush options.
+Current Android limits: 256 x 256 pixels, 32 layers, 64 frames; additional file/memory limits apply.
+Contact: asad.badi@astralhive.om
