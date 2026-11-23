@@ -18,8 +18,8 @@
 </p>
 
 <p align="center">
-  <b>Made via <a href="https://github.com/storytold/craft-anything">CraftAnything</a> by <a href="https://getartcraft.com/">ArtCraft</a>.</b><br>
-  An independent project created with Craft Anything's study, build and check workflow.
+  <b>Originally created with <a href="https://github.com/storytold/craft-anything">CraftAnything</a> by <a href="https://getartcraft.com/">ArtCraft</a>.</b><br>
+  Independently developed since, with desktop and Android apps powered by a shared Rust engine.
 </p>
 
 <p align="center">
