@@ -13,6 +13,9 @@
 <p align="center">
   <img alt="Built with Rust" src="https://img.shields.io/badge/built_with-Rust-b7410e?style=flat-square&amp;logo=rust">
   <img alt="Platform: Linux" src="https://img.shields.io/badge/platform-Linux-267477?style=flat-square&amp;logo=linux&amp;logoColor=white">
+  <img alt="Platform: Windows" src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square">
+  <img alt="Platform: macOS" src="https://img.shields.io/badge/platform-macOS-555555?style=flat-square&amp;logo=apple&amp;logoColor=white">
+  <img alt="Platform: Android" src="https://img.shields.io/badge/platform-Android-3DDC84?style=flat-square&amp;logo=android&amp;logoColor=white">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3a3a3a?style=flat-square">
   <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-d69e2e?style=flat-square">
 </p>
