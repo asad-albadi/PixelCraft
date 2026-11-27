@@ -5,7 +5,7 @@
 <h1 align="center">PixelCraft</h1>
 
 <p align="center">
-  <b>Pixel art, sprites and animation, in a standalone desktop editor.</b><br>
+  <b>Pixel art, sprites and animation, on desktop and Android.</b><br>
   Draw frame by frame, build with tiles, and keep your layers editable.<br>
   Open source, local, and yours.
 </p>
@@ -23,6 +23,12 @@
 </p>
 
 <p align="center">
+  <a href="https://play.google.com/store/apps/details?id=om.astralhive.pixelcraft">
+    <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PixelCraft on Google Play" width="200">
+  </a>
+</p>
+
+<p align="center">
   <a href="#get-started"><b>Build and run</b></a> ·
   <a href="https://github.com/storytold/craft-anything">Craft Anything</a> ·
   <a href="https://getartcraft.com/">ArtCraft</a> ·
@@ -36,7 +42,7 @@
     <img src="shots/pixelcraft-devices-light.png" alt="Real PixelCraft screenshots in laptop, Android tablet and phone device frames, each showing the editable mushroom garden sample" width="100%">
   </picture>
   <br>
-  <sub>PixelCraft on desktop and in the Android preview. Real app captures in illustrative device frames; Full HD composition.</sub>
+  <sub>PixelCraft on desktop and Android. Real app captures in illustrative device frames; Full HD composition.</sub>
 </p>
 
 <p align="center">
@@ -80,16 +86,19 @@
 
 ## Get started
 
-### Android test preview
+### Android
+
+Install PixelCraft for free from [Google Play](https://play.google.com/store/apps/details?id=om.astralhive.pixelcraft),
+or download the signed APK from [GitHub Releases](https://github.com/asad-albadi/PixelCraft/releases/latest).
 
 A tablet-first Android interface now shares PixelCraft's Rust editing engine.
-Phones use compact controls and sheets. The preview includes drawing, editable
+Phones use compact controls and sheets. The Android app includes drawing, editable
 layers/cels, selections, animation/tags, supported file interchange, tilemaps,
 embedded references, recovery and Zen mode. See the [Android build instructions,
 feature/format matrix and limits](flutter/pixelcraft_mobile/README.md),
 [emulator validation](docs/android-tablet-poc-validation.md) and
-[progress tracker](docs/android-progress.md). Test APKs are debug builds for
-64-bit ARM/x86 Android 7.0+; physical phone/tablet workflows and hands-on S Pen checks have been verified for the documented preview scope.
+[progress tracker](docs/android-progress.md). Android 7.0+ is supported on
+64-bit ARM/x86 devices; physical phone/tablet workflows and hands-on S Pen checks have been verified for the documented Android scope.
 
 
 ### Windows installer (future releases)
